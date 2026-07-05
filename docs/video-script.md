@@ -1,28 +1,32 @@
-# YouTube tutorial script
+# Promo video script
 
-Target: 3 to 4 minutes. One take per scene, screen recording plus voiceover.
-Record at 1x, keep the app in the dark default theme, volume up so the spoken
-recaps are audible in the video.
+The video is produced and live: about 1 minute 45 seconds, screen recording plus
+voiceover. Tagline: **Fluent in agent. Speaks human.** Record at 1x in the default
+macOS theme, volume up so the spoken updates are audible.
 
 | # | Time | On screen | Narration |
 | --- | --- | --- | --- |
-| 1 | 0:00 | Terminal running a Claude Code task, camera slowly pushes in | "This agent is going to work for the next ten minutes. The question is: what are you going to do, sit here and watch it?" |
-| 2 | 0:15 | Cut to Attaché idle window (monochrome A), then a card arrives and speaks | "This is Attaché. It watches the agents working on your Mac, and when one finishes something, it tells you. Out loud." (let the recap play a few seconds, captions highlighting) |
-| 3 | 0:40 | GitHub Releases page, drag Attache.app to Applications, first launch | "Install is one download. It's signed and notarized, everything runs locally, and there's no account." |
-| 4 | 0:55 | Onboarding: voice pick, personality pick, enable Claude Code source | "Onboarding takes two minutes: pick a voice, pick a personality, and choose which agents it may watch. Nothing is read until you say so." |
-| 5 | 1:20 | Press ⌘K, type a session name, pin it | "Command-K, pin the session you care about. That's the whole setup. Attaché only ever speaks about sessions you pin." |
-| 6 | 1:35 | Agent finishes a turn; recap speaks with karaoke captions; visualizer reacting | "From now on every completed turn arrives like this: a short spoken brief, word-synced captions, and a card filed in the inbox." |
-| 7 | 1:55 | Playback: press S, D, badge shows 1.2x, captions stay locked | "Too slow? D speeds it up, S slows it down, R resets. The captions stay in sync at any speed." |
-| 8 | 2:10 | Step away b-roll; needs-you notification fires; menu bar shows alert; click it | "Here's the part that matters: walk away. When an agent actually needs you, a permission prompt, a question, Attaché interrupts you once, through a real macOS notification that respects Do Not Disturb. Everything else just waits in the inbox." |
-| 9 | 2:40 | ⌘I inbox, play-all digest for a session, skip through cards | "Come back whenever, Command-I, and catch up like voicemail. Play all, skip, replay." |
-| 10 | 3:00 | Settings → Personalities, switch persona; replay same card sounding different; flash a Korean recap with Korean captions | "And you decide how it talks. Tone, attitude, detail, even the language. Same update, completely different delivery." |
-| 11 | 3:25 | Idle window again, menu bar icon, repo page | "Attaché is free and open source, link below. Stop watching terminals. Let them call you." |
+| 1 | 0:00 | Terminal running a Claude Code task, slow push-in | "This agent is going to work for the next ten minutes. Are you going to sit here and watch it?" |
+| 2 | 0:12 | Cut to the idle Attaché window; a card arrives and speaks, captions highlighting word by word | "This is Attaché. It watches the AI agents working on your Mac, and when one finishes something, it tells you. Out loud, in a voice you pick." |
+| 3 | 0:30 | GitHub Releases page, drag Attaché to Applications, first launch opens clean | "One download, signed and notarized. No account. Everything runs locally." |
+| 4 | 0:42 | Onboarding: pick a voice, pick a personality, pick a model, choose which agents it may watch | "Onboarding is two minutes: a voice, a personality, a model, and which agents it may watch. It stays quiet until you say otherwise." |
+| 5 | 0:56 | Press Command-K, filter to a session, pin it | "Command-K, pin the session you care about. Attaché only ever speaks about sessions you pin." |
+| 6 | 1:04 | An agent finishes a turn; the update speaks with word-synced captions; visualizer reacting; press S then D, speed badge changes, captions stay locked | "Every completed turn arrives like this. A short spoken update, synced captions, filed like voicemail. Too slow? Speed it up. The captions stay in sync." |
+| 7 | 1:20 | Step-away b-roll; a needs-you notification fires; menu bar shows the alert; click it | "Walk away. When an agent actually needs you, Attaché interrupts once, through a real macOS notification that respects Do Not Disturb. Everything else waits." |
+| 8 | 1:34 | Command-I inbox; one-shot Recap plays a clustered digest | "Come back whenever. Command-I, and catch up like voicemail, or hit Recap for one spoken summary of everything you missed." |
+| 9 | 1:48 | Command-L: speak a new instruction, confirm the read-back, it delivers to the running session | "Or go live. Talk back by voice and push new direction straight to the agents, on your say-so." |
+| 10 | 2:02 | Settings, Personalities: switch persona and theme; replay the same update sounding different | "You decide how it talks. Tone, attitude, detail, even the language. Same update, completely different delivery." |
+| 11 | 2:14 | Idle window, menu bar icon, repo page, tagline card | "Attaché. Fluent in agent. Speaks human. Free and open source, link below. Stop watching terminals. Let them call you." |
 
 ## Recording checklist
 
-- Fresh profile for the install scenes so onboarding actually shows.
-- Have `scripts/send-event.sh` ready to trigger cards on cue.
-- For scene 8, a Claude Code `AskUserQuestion` or permission prompt triggers
-  the real needs-you flow.
-- Trim silences; the recaps themselves set the pace.
-- Title suggestion: "Your AI agents, out loud. Attaché for macOS in 3 minutes".
+- Fresh profile for the install and onboarding scenes so first-run actually
+  shows.
+- Have `scripts/send-event.sh` ready to trigger updates on cue (it needs the
+  per-launch token at `~/Library/Application Support/Attache/event-token`).
+- For scene 7, a Claude Code permission prompt or question triggers the real
+  needs-you flow.
+- For scene 9, enable two-way on the demo session first, then speak the
+  instruction so the confirm-and-deliver path is genuine.
+- Trim silences; the spoken updates set the pace.
+- Title suggestion: "Your AI agents, out loud. Attaché for macOS."

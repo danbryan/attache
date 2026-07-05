@@ -70,11 +70,11 @@ No Apple certificates needed.
 ## The two settings that matter
 
 - **Voice.** Grab a free macOS Premium voice (System Settings → Accessibility →
-  Spoken Content → Manage Voices — try Ava or Zoe), or paste an ElevenLabs / xAI
+  Spoken Content → Manage Voices, try Ava or Zoe), or paste an ElevenLabs / xAI
   / OpenAI key for studio quality. Set it in **Settings → Voice & Captions**.
 - **Personality.** The text brain that re-narrates your agents. Run a **local
   model free** with [Ollama](https://ollama.com), or plug in a cloud model. Then
-  pick a persona in **Settings → Personalities** — or write your own.
+  pick a persona in **Settings → Personalities**, or write your own.
 
 ## Bring your own brain and voice
 

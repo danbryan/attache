@@ -185,18 +185,13 @@ struct CompanionThemeStop: Equatable, Codable {
 }
 
 enum CompanionTheme: String, CaseIterable, Identifiable {
-    // Brass is the brand default: warm ink, amber accent, cream text.
-    case brass
-    case classic
+    // macOS is the default and leads the list: the accent, highlight, and
+    // gradient defer to the system accent color, so the app looks like a stock
+    // Mac app and follows the user's Appearance and light/dark choice.
+    case macOS
     case cyberpunk
-    case aurora
-    case ember
     case paper
     case highContrast
-    // A native option: the accent, highlight, and gradient defer to the macOS
-    // system accent color, so the app looks like a stock Mac app for users who
-    // prefer that over an opinionated theme.
-    case macOS
     // A user-defined theme; colors come from CustomThemeStore.activeSpec and
     // fall back to Cyberpunk when no spec is active.
     case custom
@@ -213,49 +208,21 @@ enum CompanionTheme: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .brass: return "Brass"
-        case .classic: return "Classic"
+        case .macOS: return "macOS"
         case .cyberpunk: return "Cyberpunk"
-        case .aurora: return "Aurora"
-        case .ember: return "Ember"
         case .paper: return "Paper"
         case .highContrast: return "High Contrast"
-        case .macOS: return "macOS"
         case .custom: return CustomThemeStore.activeSpec?.name ?? "Custom"
         }
     }
 
     var stops: [CompanionThemeStop] {
         switch self {
-        case .brass:
-            return [
-                CompanionThemeStop(red: 0.24, green: 0.15, blue: 0.06),
-                CompanionThemeStop(red: 0.66, green: 0.42, blue: 0.16),
-                CompanionThemeStop(red: 0.909, green: 0.635, blue: 0.298)
-            ]
-        case .classic:
-            return [
-                CompanionThemeStop(red: 0.20, green: 0.18, blue: 0.42),
-                CompanionThemeStop(red: 0.16, green: 0.52, blue: 0.55),
-                CompanionThemeStop(red: 0.92, green: 0.62, blue: 0.32)
-            ]
         case .cyberpunk:
             return [
                 CompanionThemeStop(red: 0.20, green: 0.09, blue: 0.45),
                 CompanionThemeStop(red: 0.58, green: 0.16, blue: 0.78),
                 CompanionThemeStop(red: 0.98, green: 0.26, blue: 0.66)
-            ]
-        case .aurora:
-            return [
-                CompanionThemeStop(red: 0.10, green: 0.20, blue: 0.40),
-                CompanionThemeStop(red: 0.14, green: 0.56, blue: 0.52),
-                CompanionThemeStop(red: 0.52, green: 0.93, blue: 0.66)
-            ]
-        case .ember:
-            return [
-                CompanionThemeStop(red: 0.24, green: 0.10, blue: 0.16),
-                CompanionThemeStop(red: 0.74, green: 0.22, blue: 0.16),
-                CompanionThemeStop(red: 0.98, green: 0.78, blue: 0.34)
             ]
         case .paper:
             return [
@@ -295,28 +262,20 @@ enum CompanionTheme: String, CaseIterable, Identifiable {
     func accentStop(darkScheme: Bool) -> CompanionThemeStop {
         if darkScheme {
             switch self {
-            case .brass: return CompanionThemeStop(red: 0.909, green: 0.635, blue: 0.298)
-            case .classic: return CompanionThemeStop(red: 0.92, green: 0.62, blue: 0.32)
+            case .macOS: return CompanionTheme.systemAccentStop()
             case .cyberpunk: return CompanionThemeStop(red: 0.98, green: 0.26, blue: 0.66)
-            case .aurora: return CompanionThemeStop(red: 0.52, green: 0.93, blue: 0.66)
-            case .ember: return CompanionThemeStop(red: 0.98, green: 0.78, blue: 0.34)
             case .paper: return CompanionThemeStop(red: 0.62, green: 0.66, blue: 0.94)
             case .highContrast: return CompanionThemeStop(red: 1.00, green: 0.84, blue: 0.25)
-            case .macOS: return CompanionTheme.systemAccentStop()
             case .custom:
                 return CustomThemeStore.activeSpec?.accentDark
                     ?? CompanionTheme.cyberpunk.accentStop(darkScheme: true)
             }
         }
         switch self {
-        case .brass: return CompanionThemeStop(red: 0.60, green: 0.35, blue: 0.05)
-        case .classic: return CompanionThemeStop(red: 0.63, green: 0.35, blue: 0.07)
+        case .macOS: return CompanionTheme.systemAccentStop()
         case .cyberpunk: return CompanionThemeStop(red: 0.78, green: 0.08, blue: 0.45)
-        case .aurora: return CompanionThemeStop(red: 0.05, green: 0.45, blue: 0.27)
-        case .ember: return CompanionThemeStop(red: 0.60, green: 0.36, blue: 0.02)
         case .paper: return CompanionThemeStop(red: 0.28, green: 0.31, blue: 0.55)
         case .highContrast: return CompanionThemeStop(red: 0.05, green: 0.22, blue: 0.65)
-        case .macOS: return CompanionTheme.systemAccentStop()
         case .custom:
             return CustomThemeStore.activeSpec?.accentLight
                 ?? CompanionTheme.cyberpunk.accentStop(darkScheme: false)

@@ -12,6 +12,9 @@ let package = Package(
         .executable(name: "Attache", targets: ["AttacheApp"]),
         .library(name: "AttacheCore", targets: ["AttacheCore"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.5.0")
+    ],
     targets: [
         .target(
             name: "AttacheCore",
@@ -22,7 +25,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "AttacheApp",
-            dependencies: ["AttacheCore"],
+            dependencies: [
+                "AttacheCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             resources: [
                 .process("Resources")
             ]

@@ -214,6 +214,15 @@ final class CompanionPersonalityTests: XCTestCase {
         XCTAssertTrue(system.contains("at most 9 sentences"))
     }
 
+    func testStripDashesReplacesEmAndEnDashesWithCommas() {
+        // The model sometimes ignores the no-em-dash instruction; the code strips
+        // them deterministically so captions and speech never show the dash.
+        XCTAssertEqual(CompanionPersonality.stripDashes("brew upgrade — verified end to end"), "brew upgrade, verified end to end")
+        XCTAssertEqual(CompanionPersonality.stripDashes("red–blue"), "red, blue")
+        XCTAssertEqual(CompanionPersonality.stripDashes("no dashes here"), "no dashes here")
+        XCTAssertFalse(CompanionPersonality.stripDashes("a — b — c").contains("—"))
+    }
+
     func testFollowUpPromptHandlesEllipticalSessionQuestions() {
         let card = VoicemailCard(
             id: "card-1",

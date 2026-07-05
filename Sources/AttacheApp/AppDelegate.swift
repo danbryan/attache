@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 import AttacheCore
+import Sparkle
 
 extension Notification.Name {
     static let attacheOpenSettings = Notification.Name("attache.openSettings")
@@ -23,6 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: CompanionWindowController?
     private var settingsWindowController: SettingsWindowController?
     private var cancellables: Set<AnyCancellable> = []
+    // Sparkle keeps the app current without pestering: a quiet background check
+    // and one prompt only when an update is actually available. Feed URL and the
+    // update-signing public key live in Info.plist (set by package-app.sh).
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -103,6 +109,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsItem = NSMenuItem(title: NSLocalizedString("Settings…", comment: ""), action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
         appMenu.addItem(settingsItem)
+        let updatesItem = NSMenuItem(
+            title: NSLocalizedString("Check for Updates…", comment: ""),
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+        updatesItem.target = updaterController
+        appMenu.addItem(updatesItem)
         let inboxItem = NSMenuItem(title: NSLocalizedString("Open Inbox", comment: ""), action: #selector(openInbox), keyEquivalent: "i")
         inboxItem.target = self
         appMenu.addItem(inboxItem)

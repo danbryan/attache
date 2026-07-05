@@ -353,6 +353,19 @@ public enum CompanionPersonality {
         }
     }
 
+    /// Replaces em/en dashes with a comma so spoken text and captions never show
+    /// the dash, even when the model ignores the no-em-dash instruction in the
+    /// prompt. Keeps the pause (comma) and tidies the spacing artifacts.
+    public static func stripDashes(_ text: String) -> String {
+        var s = text
+        for dash in ["—", "–", "―"] {
+            s = s.replacingOccurrences(of: dash, with: ", ")
+        }
+        s = s.replacingOccurrences(of: " ,", with: ",")
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func systemPrompt(
         profilePrompt: String,
         memoryContext: String?,

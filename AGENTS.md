@@ -24,7 +24,7 @@ Launch Readiness"). The working agreement for all agents in this phase:
 Build one user-facing macOS app, not two user-managed apps.
 
 The app should run in the background like a menu bar utility and optionally show
-a translucent companion window. The background bridge and the visible companion
+a translucent Attaché window. The background bridge and the visible Attaché
 surface may be separate internal modules or helper processes later, but the MVP
 should start as one app process.
 

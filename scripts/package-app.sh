@@ -8,7 +8,7 @@ LEGACY_APP_NAME="Codex Companion"
 PRODUCT_NAME="Attache"
 EXECUTABLE_NAME="Attache"
 ICON_NAME="Attache"
-APP_VERSION="${VERSION:-0.1.0}"
+APP_VERSION="${VERSION:-0.1.1}"
 DIST_DIR="$ROOT/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -55,6 +55,18 @@ rm -rf "$APP_DIR" "$DIST_DIR/$LEGACY_APP_NAME.app"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp ".build/$CONFIGURATION/$PRODUCT_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod +x "$MACOS_DIR/$EXECUTABLE_NAME"
+
+# Embed Sparkle so the in-app updater is available at runtime. The framework
+# comes from the resolved SwiftPM artifact; the executable gets an rpath into
+# Contents/Frameworks so dyld can find it.
+SPARKLE_FRAMEWORK="$(find "$ROOT/.build/artifacts" -type d -name "Sparkle.framework" -path "*macos-arm64*" 2>/dev/null | head -1)"
+if [[ -z "$SPARKLE_FRAMEWORK" ]]; then
+  echo "error: Sparkle.framework not found under .build/artifacts (run 'swift build' first)." >&2
+  exit 1
+fi
+mkdir -p "$CONTENTS_DIR/Frameworks"
+cp -R "$SPARKLE_FRAMEWORK" "$CONTENTS_DIR/Frameworks/"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$EXECUTABLE_NAME" 2>/dev/null || true
 # SwiftPM target resources (source logos etc.); Bundle.module finds this
 # bundle inside Contents/Resources.
 if [[ -d ".build/$CONFIGURATION/Attache_AttacheApp.bundle" ]]; then
@@ -103,6 +115,12 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>alert</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Attaché uses speech recognition to show live user transcripts during voice input.</string>
+  <key>SUFeedURL</key>
+  <string>https://attache.fm/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>4GS+Ug0iPkAeiQUOrSJZ3aUNMKcgRfknAzV1eZosKE4=</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
 </dict>
 </plist>
 PLIST
@@ -135,6 +153,19 @@ ENTITLEMENTS
   sign_args=(--force --sign "$CODE_SIGN_IDENTITY" --options runtime --entitlements "$ENTITLEMENTS_FILE")
   if [[ "$CODE_SIGN_TIMESTAMP" == "1" ]]; then
     sign_args+=(--timestamp)
+  fi
+
+  # Re-sign Sparkle's nested code inside-out with the Developer ID and hardened
+  # runtime so the whole bundle notarizes. Preserve the XPC services' sandbox
+  # entitlements. The app signature below then seals over Frameworks.
+  SPARKLE_FW="$CONTENTS_DIR/Frameworks/Sparkle.framework"
+  if [[ -d "$SPARKLE_FW" ]]; then
+    ts_flag=(); [[ "$CODE_SIGN_TIMESTAMP" == "1" ]] && ts_flag=(--timestamp)
+    codesign --force --options runtime "${ts_flag[@]}" --preserve-metadata=entitlements --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
+    codesign --force --options runtime "${ts_flag[@]}" --preserve-metadata=entitlements --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
+    codesign --force --options runtime "${ts_flag[@]}" --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Autoupdate"
+    codesign --force --options runtime "${ts_flag[@]}" --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Updater.app"
+    codesign --force --options runtime "${ts_flag[@]}" --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW"
   fi
 
   codesign "${sign_args[@]}" "$APP_DIR"

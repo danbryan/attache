@@ -1386,7 +1386,7 @@ final class AppModel: ObservableObject {
             // off-main re-enters SwiftUI's body and overflows the stack).
             await MainActor.run {
                 guard let self else { return }
-                let trimmed = recapText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let trimmed = CompanionPersonality.stripDashes(recapText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
                 guard !trimmed.isEmpty else {
                     // The LLM was configured but returned nothing usable: fall
                     // back to the deterministic digest and leave the inbox as is.
@@ -3643,7 +3643,7 @@ final class AppModel: ObservableObject {
         if activeCustomThemeID == id {
             activeCustomThemeID = nil
             CustomThemeStore.activeSpec = nil
-            if theme == .custom { theme = .brass }
+            if theme == .custom { theme = .macOS }
         }
     }
 

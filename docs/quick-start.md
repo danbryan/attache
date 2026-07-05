@@ -1,48 +1,65 @@
 # Quick start
 
-Five minutes from download to your first spoken update.
+From install to your first spoken update in a few minutes. Attaché watches the
+AI coding agents working for you (OpenAI Codex and Claude Code) and briefs you
+out loud, in a voice and personality you choose.
 
 ## 1. Install
 
-Download `Attache.zip` from [Releases](https://github.com/danbryan/attache/releases),
-unzip, drag `Attache.app` to `/Applications`, open it. It is signed and
-notarized; macOS opens it without warnings.
+With Homebrew:
 
-Building from source instead: `git clone`, then `swift run Attache`. No Apple
-certificates needed.
+```bash
+brew install --cask danbryan/tap/attache
+```
+
+Or download the DMG from [Releases](https://github.com/danbryan/attache/releases),
+open it, and drag Attaché to Applications. Either way, open it once and you are
+in.
 
 ## 2. Finish onboarding
 
-The four-step onboarding picks a voice, a personality, and asks which agent
-sources to enable (Codex, Claude Code). Enable the ones you use. Nothing is
-read until you turn a source on.
+Onboarding gets four choices out of the way:
+
+- **A voice.** Any macOS voice, or a cloud voice if you connect one later.
+- **A personality.** How the updates sound. Start with a built-in (Explainer,
+  Big Picture, Inquisitive) and change it whenever.
+- **A model.** The text brain that writes each update. Run it locally with
+  [Ollama](https://ollama.com), or connect a cloud provider (ElevenLabs, xAI,
+  OpenAI, Claude).
+- **The sources it watches.** Turn on Codex, Claude Code, or both. Nothing is
+  read from a source until you enable it.
 
 ## 3. Hear it work
 
-No agent session handy? Send a simulated event from the repo:
-
-```bash
-scripts/send-event.sh
-```
-
-You should hear a spoken recap, see word-synced captions, and find a new card
-in the inbox.
+No agent session running yet? Add a sample voicemail from the menu bar to hear
+how an update sounds: the spoken briefing, the word-synced captions, and a new
+card in the inbox.
 
 ## 4. Point it at real work
 
-Start a Codex or Claude Code session, then press **⌘K** in Attaché and pin the
-session. From now on every completed turn arrives as a spoken update and a
-replayable card. Attaché only ever narrates sessions you pin.
+Start a Codex or Claude Code session, press **Command-K** in Attaché, and pin
+the session. From then on, every completed agent turn arrives as a short spoken
+update and a card you can replay. Attaché only ever speaks about sessions you
+pin, so pin the few you actually care about and ignore the rest.
 
-## 5. The two settings that matter
+When an agent is genuinely blocked and waiting on you, Attaché sends a macOS
+notification that honors your Focus settings. Everything else stays quiet until
+you come back.
 
-- **Voice**: download a free macOS Premium voice (System Settings →
-  Accessibility → Spoken Content → Manage Voices, grab Ava or Zoe), then select
-  it in **Settings → Voice & Captions**. Massive upgrade, zero cost.
-- **Personality**: give it a text brain in **Settings → Model** (free local
-  option: [Ollama](https://ollama.com) with `qwen3`), then pick or write a
-  persona in **Settings → Personalities**. Tone, attitude, detail level, even
-  the language it speaks are yours to define.
+## 5. Catch up with a recap
+
+Open the inbox with **Command-I**. Each card is one agent turn you can play or
+replay. To hear where things stand without playing every card, run a Recap: it
+condenses the updates into one spoken briefing that scales to how much actually
+happened, groups related work, compresses solved problems down to their
+outcomes, and keeps every decision. Use the checkboxes to recap or clear only a
+subset.
+
+## 6. Go live
+
+Press **Command-L** to talk back. Speak a correction or a new direction and
+Attaché pushes it to your agents, so you can steer without switching to the
+terminal.
 
 ## Keys worth learning
 
@@ -50,14 +67,23 @@ replayable card. Attaché only ever narrates sessions you pin.
 | --- | --- |
 | Space | Play or pause the selected card |
 | S / D / R | Slower, faster, reset playback speed |
-| ⌘K | Find and pin sessions |
-| ⌘I | Inbox |
-| ⌘Y | Companion history |
-| ⌘L | Start or end a voice conversation |
-| ⌘/ | All shortcuts |
+| Command-K | Find and pin sessions |
+| Command-I | Inbox |
+| Command-Y | Replay anything you have already heard |
+| Command-L | Go live: talk back to your agents |
+| Command-/ | All shortcuts |
+
+## Make it yours
+
+- **Voices.** For a big step up at no cost, download a macOS Premium voice
+  (System Settings, Accessibility, Spoken Content, Manage Voices; Ava or Zoe are
+  good), then pick it in Settings, Voice & Captions. Or connect a cloud voice.
+- **Personalities.** Write your own in Settings, Personalities. Describe any
+  voice and any attitude you want, including the language it speaks in.
+- **Themes.** The default follows your system accent color. Cyberpunk, Paper,
+  and High Contrast are built in, and you can write and share your own.
 
 ## Next
 
 - [The Attaché mindset](mindset.md), why this is not another dashboard
-- [README](../README.md), the full tour: privacy model, configuration, event bridge
-- [CONTRIBUTING](../CONTRIBUTING.md), share a personality or theme you made
+- [Brand](brand.md), the identity and voice

@@ -569,7 +569,7 @@ final class CompanionPresentationService {
                 text: spokenText
             ), limit: 120)
         }
-        return (summary, spokenText, needsDecision)
+        return (CompanionPersonality.stripDashes(summary), CompanionPersonality.stripDashes(spokenText), needsDecision)
     }
 
     private static func fallbackFollowUpAnswer(
@@ -639,7 +639,7 @@ final class CompanionPresentationService {
         let cleaned = lines
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned
+        return CompanionPersonality.stripDashes(cleaned)
     }
 
     private static func clipped(_ text: String, limit: Int) -> String {

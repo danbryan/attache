@@ -74,7 +74,7 @@ final class CustomThemeTests: XCTestCase {
         let files = try FileManager.default.contentsOfDirectory(
             at: seedsDir, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
-        XCTAssertGreaterThanOrEqual(files.count, 9, "expected the seed set in themes/")
+        XCTAssertGreaterThanOrEqual(files.count, 3, "expected the pruned seed set in themes/ (cyberpunk, paper, high-contrast)")
         for file in files {
             let spec = try CustomThemeStore.decode(Data(contentsOf: file))
             XCTAssertEqual(spec.stops.count, 3, "\(spec.name) needs 3 gradient stops")

@@ -1,329 +1,212 @@
 # Architecture
 
-## MVP Architecture
+Attaché is one native macOS app (pure SwiftPM, no `.xcodeproj`). It watches the
+AI coding agents running on your Mac (OpenAI Codex and Claude Code, CLI and
+desktop) and speaks their work out loud in a voice and personality you choose.
+This is the map a new contributor follows: the two targets, how agent activity
+comes in, how a raw turn becomes a spoken update, and how "Go live" talks back.
 
-The MVP is one macOS app process.
+## Two targets
+
+- **`AttacheCore`** (`Sources/AttacheCore`): pure logic, no AppKit, unit-tested.
+  Transcript parsing, narration coalescing, pipeline ordering and dedup, the
+  SQLite card store, session indexing/tagging/search, caption alignment, and the
+  two-way instruction reply engine (with its safety filter). New logic that can
+  be unit-tested belongs here.
+- **`AttacheApp`** (`Sources/AttacheApp`): the SwiftUI/AppKit app. The menu bar
+  item and windows, the local event server, the session watchers, the
+  presentation-model service and its providers, speech synthesis and playback,
+  the two-way delivery adapters and coordinator, and every view.
+
+`AttacheApp` depends on `AttacheCore`, never the reverse. A third small
+executable, `AttacheUISmoke`, drives the app through the accessibility API for
+the UI smoke harness; it is test scaffolding, not part of the product.
+
+`AppModel` (in `AttacheApp`) is the main-actor hub that wires these pieces
+together and owns the observed UI state.
+
+## The pipeline, end to end
 
 ```text
-Attache.app
-  App shell
-    Menu bar controller
-    Companion window controller
-    Settings controller
-
-  Bridge core
-    Event intake
-    Adapter registry
-    Codex session attachment
-    Companion presentation
-    Card store
-    Companion follow-up questions
-
-  Renderers
-    Echoform renderer
-    Optional avatar renderer
-
-  Speech
-    TTS provider adapter
-    Generated voice audio asset
-    Audio analysis timeline
-    Caption alignment
-    Playback controller
-
-  Storage
-    SQLite database
-    Audio asset directory
+agent activity
+  ├─ HTTP event  (POST /events, token-guarded)   → LocalEventServer
+  └─ pinned session transcript (polled)           → CodexSessionWatcher
+        │
+        ▼
+  EventNormalizer            normalize + validate a NormalizedEvent
+        │
+        ▼
+  NarrationCoalescer         collapse one multi-message agent turn into one turn
+        │
+        ▼
+  CompanionPresentationService  turn raw agent output into a short spoken update
+        │                        in the active personality's voice (pluggable
+        │                        provider: local CLI or HTTP)
+        ▼
+  CardStore (SQLite)         persist a voicemail card (raw text + summary + spoken)
+        │
+        ▼
+  Speech + captions          synthesize audio (ElevenLabs or on-device AVSpeech),
+                             analyze it, play it with word-timed captions
 ```
 
-## Module Boundaries
+### 1. Ingestion: two sources
 
-### App Shell
+`AttacheApp` accepts agent activity two ways, both local:
 
-Owns native macOS behavior:
+- **Event bridge (HTTP).** `LocalEventServer` binds a loopback listener on
+  `127.0.0.1:7531` and accepts `POST /events`. `scripts/send-event.sh` posts a
+  demo event; a Claude Code hook can post real ones. The server is hardened: it
+  requires a per-launch bearer token written to
+  `~/Library/Application Support/Attache/event-token` (mode 0600), rejects any
+  request carrying an `Origin` or a non-loopback `Host` (anti DNS-rebinding),
+  caps body size and concurrent connections, and exposes only an unauthenticated
+  `GET /health`. `POST /cards/<id>/play` and `/cards/<id>/mark-heard` drive
+  playback for integrators.
+- **Session watcher.** `CodexSessionWatcher` polls the on-disk transcripts of the
+  sessions you have pinned, on a ~2s timer, tracking a per-session byte offset so
+  it parses only newly appended JSONL. It reads both vendors' storage: Codex
+  rollouts under `~/.codex/sessions/...` and Claude Code sessions under
+  `~/.claude/projects/<slug>/<id>.jsonl`. It emits a normalized event per
+  completed turn and never re-reads the whole file on the timer. It also raises
+  needs-you attention transitions (see below). `SessionActivityWatcher` is a
+  second, lighter poller that surfaces interstitial "what the agent is doing
+  right now" phrases for the live activity ticker.
 
-- app lifecycle,
-- menu bar item,
-- window creation,
-- transparent window settings,
-- always-on-top or click-through toggles,
-- settings presentation.
+Only pinned sessions are watched. Pin with Command-K; the catalog of active
+sessions refreshes on a low cadence so new sessions appear without a manual
+refresh.
 
-### Bridge Core
+### 2. Normalize and coalesce
 
-Owns agent-facing behavior:
+`EventNormalizer` turns any inbound payload into a validated `NormalizedEvent`
+(non-empty text, stable source/type/title, receipt timestamp for ordering).
+`NarrationCoalescer` then buffers the stream of parsed transcript records and
+collapses a single multi-message agent turn into one `CoalescedTurn`, so a burst
+of assistant messages becomes one spoken recap and one card rather than several.
+It is pure and deterministic (an in-flight buffer plus an idle-poll counter, no
+clock or filesystem), and flushes a turn on a real boundary: a Codex
+`final_answer`, a new human turn, or a quiet window.
 
-- normalized event intake,
-- source and session registry,
-- local Codex session attachment state,
-- companion presentation for raw harness output,
-- voicemail card creation,
-- read and unread state,
-- raw event retention,
-- companion-only follow-up answers from observed context.
+`PipelineOrdering` keeps the timeline sane: presentation is serialized per
+session (a slow model call for an earlier event can't let a later one's card land
+first), while different sessions prepare concurrently, and a late out-of-order
+update is filed read instead of spoken as new.
 
-Bridge core should not depend on any one renderer. Raw harness output should be
-stored, then converted into a card summary and spoken companion update through a
-presentation stage. The presentation stage can call an OpenAI-compatible LLM
-using the user's character prompt, model, provider, and reasoning effort.
-Provider selection is a presentation concern, not a voice concern. The native
-app exposes xAI/Grok, Ollama, LM Studio, Groq, and custom OpenAI-compatible
-providers from Settings -> Personalities. Ollama defaults to `qwen3:7b` on
-`http://127.0.0.1:11434/v1`; LM Studio defaults to
-`http://127.0.0.1:1234/v1`. Local providers do not require API keys.
-When a provider key or local endpoint is available, the app asks the provider
-for model inventory through `/models`, xAI language-model discovery, or
-Ollama's local tags endpoint. Reasoning choices are not universal. They are
-shown only when the model discovery payload or a provider-specific capability
-mapping identifies valid levels for the selected model.
+### 3. Presentation model: pluggable providers
 
-The presentation prompt is a companion-owned conversation, separate from the
-Codex session. It is built as:
+`CompanionPresentationService` is the layer that rewrites raw agent output into a
+short spoken update in the active personality's voice. It builds a prompt from
+the active persona, a bounded durable-memory block, and the observed event, then
+calls a provider selected in Settings. The provider is pluggable
+(`CompanionPresentationProvider`):
 
-- system message: Attaché persona, the current character prompt, and
-  a bounded durable-memory block,
-- user message: observed Codex event metadata and raw Codex output.
+- **Local CLI providers** run a coding agent you are already logged into, as a
+  subprocess, with no API key: Claude subscription (`claude`) or Codex
+  subscription (`codex`). This path is sandboxed (tool use denied); it is for
+  text generation only, kept deliberately separate from the two-way delivery
+  path that is allowed to act.
+- **HTTP providers** call an OpenAI-compatible `chat/completions` endpoint: xAI
+  (Grok), Groq, and any custom OpenAI-compatible base URL (for example OpenAI
+  itself), plus local servers Ollama and LM Studio. Ollama and LM Studio need no
+  key and default to loopback endpoints; the hosted providers read their key from
+  the shared secret vault. Reasoning effort and service tier are sent only for
+  providers/models that advertise them.
 
-The LLM output becomes the spoken and captioned companion response. The raw
-Codex response remains stored for inspection, but is not the voice surface. If
-no provider is configured, the bridge falls back to a bounded deterministic
-brief derived from the full response. The fallback must not collapse speech to
-the first sentence of the card summary and must not read the raw Codex response
-verbatim.
+Provider selection is a presentation concern, separate from voice selection. The
+model's output becomes the spoken and captioned update; the raw agent output
+stays stored for inspection but is never the voice surface. If no provider is
+configured, the service falls back to a bounded plain read-back of the update
+rather than reading raw output verbatim.
 
-Provider API keys are read through the shared secret vault. Signed builds store
-them in the login Keychain. Unsigned development runs can use the 0600
-`~/Library/Application Support/Attache/DevelopmentSecrets.json` fallback because
-Keychain ACLs do not survive ad-hoc rebuilds. The first signed read/write
-migrates any fallback secrets into Keychain and removes the file.
+Durable memory and the persona prompt are editable local app-support files.
+Memory is used only for tone, routing, and preferences; it is never evidence that
+the app inspected a file, tool, or service.
 
-The MVP durable-memory store is an editable local app-support file. Memory is
-used for tone, routing, and user preferences only; it is not evidence that the
-app checked a file, tool, browser, or connected service.
+### 4. Speech and captions
 
-The persona prompt is also editable app state. Presets are only shortcuts for
-the character prompt; the deeper companion identity prompt lives in a local
-app-support file unless an explicit environment or defaults override is set.
+The speech layer owns TTS engine choice, the generated audio asset, deterministic
+audio analysis of that exact asset, playback (pause, replay, seek, configurable
+skip), and caption timing. Two engines ship: **ElevenLabs** (key read from the
+secret vault) and **on-device macOS AVSpeech** (stores the chosen voice
+identifier, falls back to the system voice if it goes missing). The app does not
+silently swap a chosen cloud engine for another; failures surface in voice
+status. Captions render the full line and color only the active word inline, tint
+derived from the current theme; if provider word-alignment is missing, a fallback
+alignment produces the same inline highlight. Seeks update the audio clock first,
+then the caption word and the visualizer frame are recomputed from that
+timestamp. The Echoform visualizer consumes analysis frames from the audio asset
+being played and decays to near-still when idle.
 
-### Renderers
+Secrets (LLM and voice provider keys) are read through a shared vault:
+`CompanionSecretVault` uses the login Keychain for signed builds and a 0600
+`DevelopmentSecrets.json` fallback for unsigned development runs (Keychain ACLs do
+not survive ad-hoc rebuilds); the first signed access migrates the fallback into
+Keychain. Under `ATTACHE_UI_TEST=1` the vault never touches the real Keychain.
 
-Renderer implementations consume app state:
+## Inbox, recap, and needs-you
 
-- playback envelope,
-- mic level,
-- companion status,
-- unread count,
-- card playback state,
-- current caption line.
+Every update becomes a voicemail card in the SQLite `CardStore`. Live mode speaks
+cards from the focused session as they arrive (queued single-file so one recap
+finishes before the next starts); otherwise cards collect silently as unread
+voicemail.
 
-Renderers should not own harness routing or card persistence.
+- **Inbox** (Command-I): the catch-all list of cards, replayable and skippable,
+  filterable to the focused session, watched sessions, Codex, or Claude Code.
+- **History** (Command-Y): prior spoken recaps and replies for review; selecting
+  one replays it through the normal card playback path.
+- **Recap** is one-shot: `InboxDigest` clusters unread cards by session, the
+  presentation model writes a single spoken digest, the summarized originals are
+  archived out of the inbox (they remain in history), and the recap plays as its
+  own card. With no model configured it speaks a deterministic template digest.
 
-The abstract renderer owns a protected middle bar band. Text surfaces own the
-top and bottom bands. Rings, glow, and wave hints may extend behind those text
-bands, but bars should be clipped into the middle band so captions and status
-text stay readable.
+**Needs-you** is the one interrupt. When a watched session enters a
+waiting-on-you state (a `needs_attention` event from a Claude Code Notification
+hook, or the watcher classifying the transcript as awaiting an answer), Attaché
+files a priority notice immediately with no model pass and posts a local
+notification through `CompanionNotifier` at a time-sensitive interruption level.
+Delivery is entirely governed by macOS Focus and Do Not Disturb; the app builds
+no quiet-hours logic of its own and nothing is ever marked critical. The notice
+clears automatically once the session moves again. Everything that is not
+needs-you just waits in the inbox.
 
-Display settings are app state, not renderer globals:
+## Two-way: the "Go live" channel
 
-- visual mode,
-- theme,
-- brightness,
-- intensity,
-- captions enabled,
-- low-latency captions,
-- spoken language,
-- on-device-only recognition,
-- caption sync offset.
+"Go live" (Command-L) is a two-way voice channel. It has two halves:
 
-Quick Actions settings belong to the companion window surface, not only to the
-idle visualizer. Right-click should reveal a compact custom palette instead of
-a long native menu, and it must keep theme, visual mode, voice, caption, skip
-interval, surface opacity, personality, and Codex session choices reachable
-during playback.
-
-Voicemail mode is separate from live mode. The live surface keeps a compact
-unread badge and a left-edge watch rail for watched local-agent sessions.
-Clicking the unread badge opens the global inbox by default. The inbox can be
-filtered to the focused session, watched sessions, Codex, or Claude Code, but
-the global view remains the catch-all so voicemail is not hidden by the wrong
-session focus. Sessions with unheard voicemail show counts in Command K and in
-the watch rail; non-session cards are grouped under General. Escape returns to
-the Echoform-first live surface. Delete archives the selected card and Clear
-Visible archives the visible scoped voicemail cards without confirmation.
-
-The left-edge watch rail is a stable list of watched local-agent sessions, not
-a selected-session stack. Selecting a watched session changes focus without
-removing it from the watch list. The attached session is also shown by a
-smaller top-center lock indicator with a detach affordance. Command K remains
-the broader session picker and shows watched sessions plus sessions with
-unheard voicemail near the top.
-
-Companion History is a live-mode overlay for the attached session. It queries
-recent cards by the attached `external_session_id` and shows prior spoken
-companion recaps from that exact Codex thread. It is not the global voicemail
-inbox and it does not change unread state. Selecting a history item only
-highlights it; double-click or Play Selected reuses the normal card playback
-path so the audio asset, Echoform analysis, transport clock, and karaoke
-caption timing stay in one timeline.
-
-History, captions, and the focus carousel share a fixed bottom HUD tray. The
-tray is an overlay constrained by the existing window bounds, with internal
-scrolling where needed. It must not ask SwiftUI or AppKit to resize the window
-when playback starts, when a history row appears, or when caption text changes.
-
-### Speech
-
-Owns:
-
-- TTS provider choice,
-- generated voice audio assets for companion speech,
-- selected assistant voice,
-- deterministic audio analysis of the exact asset being played,
-- audio playback,
-- pause and replay,
-- seek and configurable skip interval,
-- caption timing,
-- fallback alignment,
-- live mic transcription when explicitly enabled.
-
-The native speech path supports explicit engine selection. On-device macOS
-speech stores the selected voice identifier in preferences, defaults to the
-macOS system voice, and falls back to the system default if the chosen local
-voice is missing. ElevenLabs and xAI provider keys are read through the shared
-secret vault, which uses Keychain for signed builds and the development fallback
-only for unsigned runs. Provider voice lists are fetched only after the user supplies a key; xAI
-discovery merges built-in voices with team custom voices when the account
-exposes them. The app does not silently fall back from a chosen cloud engine to
-another engine; failures surface in voice status. Voice
-settings belong to the speech layer, while visual analysis consumes the
-generated audio asset regardless of provider.
-
-The Echoform renderer must consume analysis frames derived from the active audio
-source. For MVP companion speech, that source is the generated companion voice
-asset. Idle or silent audio should decay to near-still visuals instead of
-synthetic motion.
-
-Caption rendering follows the prior Attaché karaoke component. Speech
-owns the current playback clock and alignment data; the UI renders the full
-caption text and colors only the active word inline. The active-word color is
-derived from the current visual theme so caption emphasis feels integrated with
-Classic, Cyberpunk, Aurora, and Ember. If provider alignment is missing, the
-fallback alignment should still produce the same inline highlight behavior.
-
-Seeking is driven by the playback controller. Slider seeks and skip buttons
-update the audio player clock first, then the caption active word and renderer
-analysis frame are recomputed from that same timestamp.
-
-Mic transcription follows the same caption settings where possible. It requests
-microphone and speech-recognition permission, streams partial speech recognition
-results while enabled, and publishes them for the top user transcript band.
-Translation remains a future speech-stage feature.
-
-### Adapters
-
-Harness adapters convert external events into normalized bridge events.
-
-MVP adapters:
-
-- simulated event adapter,
-- Codex local adapter.
-
-The Codex local adapter starts with explicit session attachment. The app reads
-the local Codex session index, shows active sessions by default, keeps archived
-sessions behind an explicit archived-session disclosure, persists the selected
-session in app preferences, displays active watched sessions as compact
-focus-session chips, and keeps the active attachment visible in the top-center
-lock indicator. The active-session catalog refreshes periodically at a low
-cadence, currently every eight seconds, so new Codex sessions appear without
-manual refresh. Automation definitions are scheduling metadata, not watchable
-targets. When an automation is running, the companion attaches to the concrete
-Codex session id created or resumed by that run.
-
-Routing depends on attachment:
-
-- active attached session updates are live interaction and can be spoken
-  immediately without becoming unread voicemail,
-- if another matching attached-session update arrives while the companion is
-  already speaking or paused, it stays queued and plays only after the current
-  recap finishes,
-- non-attached session updates are background work and become unread voicemail
-  cards,
-- no companion UI path sends data back into Codex.
-
-Follow-up is companion-only. The follow-up editor accepts the user's typed or spoken
-question, runs it through the companion personality and bounded context from the
-selected Codex card, and produces an answer addressed to the user. The answer may
-explain what instruction the user could manually give Codex, but it must not claim
-to send, queue, or execute that instruction.
-
-Live mode also has a direct attached-session question composer. It does not
-require a voicemail card; The user can type a question about the locked session or
-dictate, then copy the captured transcript into the question input. For direct
-attached-session questions, the app builds a synthetic context card from the
-selected card and recent attached-session history so short requests like "what
-chapter is next" can be resolved from observed context. The composer is opened
-from the message button in the top-center lock chip so the live visual surface
-can stay quiet until The user wants to ask the companion something.
-
-The first direct observation path watches the selected active Codex session
-file under `~/.codex/sessions` and extracts final assistant messages. This
-covers the case where Codex Desktop writes the session transcript but no bridge
-hook posts to `/events`. Broader automation and non-attached session capture
-should be implemented as a background adapter or explicit event bridge source,
-so the app does not silently drain old archived transcripts.
-
-The Codex transcript watcher is a background adapter and must behave like one.
-It may do an initial catch-up read when a target is first attached, then it must
-track file offsets and parse only appended complete JSONL records. It should
-not run full-file JSON parsing on a repeating timer, because active Codex
-sessions can be large and the companion may be running with no visible window.
-
-Codex and Claude Code are both supported today by watching their local session
-transcripts. Future adapters (alternative mechanisms):
-
-- Claude Code hooks (the transcript watcher already ships),
-- MCP server surface,
-- generic webhook,
-- terminal transcript watcher.
-
-## One Process Now, Helper Later
-
-Start with one process for speed and simplicity.
-
-Keep these seams clean so an internal helper can be extracted later:
-
-- event intake API,
-- storage API,
-- adapter protocol,
-- renderer protocol,
-- companion question API.
-
-If the UI window crashes, reloads, or gets hidden in a future implementation,
-the bridge layer should be able to keep voicemail capture running. That does not
-need to be solved on day one.
+- **Talk to Attaché.** A live voice conversation with the active personality
+  (`CompanionPresentationService.converse`) that can pull deeper context on demand
+  through session-reading tools (read/search the transcript, list the working
+  directory, read a file, rename the session locally). Your speech is transcribed
+  by `MicTranscriptController`; the reply is spoken with the same captions.
+- **Push direction back to the agents.** A confirmed instruction is delivered
+  into the target Codex or Claude Code session using the vendor's own headless
+  resume (`claude -p --resume`, `codex exec resume`), queued until that session is
+  idle. `TwoWayCoordinator` derives idle state from the transcript file's
+  activity and drives `InstructionReplyEngine` (in `AttacheCore`), which owns the
+  per-session enable gate, the safety filter, confirmation, single-flight FIFO
+  delivery, expiry, and the audit log. `AgentResumeDeliveryAdapter` performs the
+  resume (one adapter per vendor; CLI and desktop share session storage). This
+  path is explicit and confirmed, and it deliberately inherits your own agent
+  permissions. Full design of record: `docs/two-way.md`.
 
 ## Security
 
-The prototype is local-first.
+Local-first, hardened by default.
 
-- Bind any HTTP listener to loopback only.
-- Use a random local token if exposing HTTP endpoints.
-- Do not accept remote network traffic.
-- Do not store API keys in plaintext if avoidable.
-- Send instructions into an agent session only via supported vendor channels
-  (headless resume), with explicit per-instruction confirmation and
-  queue-until-idle delivery, per docs/two-way.md. Never write into agent
-  session files directly.
+- The HTTP listener binds loopback only, requires a per-launch token, rejects
+  cross-origin/rebinding requests, and caps body size and connection count. Do not
+  weaken these to make testing easier.
+- API keys are never stored in the repo and never in plaintext when avoidable;
+  they live in the Keychain for signed builds.
+- Instructions reach an agent session only through the supported vendor channel
+  (headless resume), with explicit per-instruction confirmation, only while the
+  session is idle, never an approval/permission token, and at most one delivery in
+  flight per session. Attaché never writes into agent session files directly.
 
 ## Packaging
 
-The target user experience is one installable app.
-
-- User installs one `.app`.
-- User sees `Attache.app` in `/Applications`.
-- User sees a normal Dock item with a Attaché app icon.
-- User sees one menu bar item.
-- User gets one updater.
-- User does not manage a separate bridge app.
-
-Internal helper processes are allowed later, but must stay invisible to ordinary
-users.
+One installable app. The user drags `Attache.app` to `/Applications`, sees a
+normal Dock item and one menu bar item, and gets one updater. Signed and notarized
+under the Bryanlabs LLC Apple Developer ID, bundle id `com.bryanlabs.attache`. Any
+future internal helper process must stay invisible to ordinary users.
