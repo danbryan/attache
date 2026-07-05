@@ -9,6 +9,9 @@ PRODUCT_NAME="Attache"
 EXECUTABLE_NAME="Attache"
 ICON_NAME="Attache"
 APP_VERSION="${VERSION:-0.1.1}"
+# Monotonic build number for Sparkle's version comparison (CFBundleShortVersionString
+# is the marketing version users see). A timestamp always increases across releases.
+BUILD_NUMBER="${BUILD_NUMBER:-$(date +%s)}"
 DIST_DIR="$ROOT/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -104,7 +107,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key>
   <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BUILD_NUMBER</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>
