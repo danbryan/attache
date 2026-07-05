@@ -1,0 +1,168 @@
+<svg width="1800" height="1280" viewBox="0 0 1800 1280" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1800" y2="1280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#070A12"/>
+      <stop offset="0.55" stop-color="#12051D"/>
+      <stop offset="1" stop-color="#1C1327"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(900 640) rotate(90) scale(500 760)">
+      <stop stop-color="#FF3AAF" stop-opacity="0.23"/>
+      <stop offset="0.5" stop-color="#7A2AFF" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="11"/>
+    </filter>
+    <style>
+      .title { font: 700 28px -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif; fill: #F8EAF5; }
+      .subtitle { font: 500 15px -apple-system, BlinkMacSystemFont, "SF Mono", ui-monospace, monospace; fill: #A897AA; }
+      .panel-title { font: 750 19px -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif; fill: #FF45B4; }
+      .body { font: 600 15px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif; fill: #E9DDEB; }
+      .meta { font: 550 12px -apple-system, BlinkMacSystemFont, "SF Mono", ui-monospace, monospace; fill: #92859A; }
+      .note { font: 600 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif; fill: #BDAEC2; }
+      .tiny { font: 700 10px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif; fill: #7E7384; letter-spacing: 0.5px; }
+      .chip { fill: rgba(255, 58, 175, 0.14); stroke: rgba(255, 58, 175, 0.38); }
+      .glass { fill: rgba(25, 23, 33, 0.78); stroke: rgba(255, 255, 255, 0.12); }
+      .accent-stroke { stroke: #FF3AAF; }
+      .muted-stroke { stroke: rgba(255, 255, 255, 0.13); }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1280" fill="#060710"/>
+  <rect width="1800" height="1280" fill="url(#bg)"/>
+  <rect width="1800" height="1280" fill="url(#glow)"/>
+
+  <text x="70" y="70" class="title">Attaché Focus Indicator Concepts</text>
+  <text x="70" y="100" class="subtitle">Five ways to show the currently focused session without a centered floating pill.</text>
+
+  <!-- Panel frame helper: x positions 70, 635, 1200; y 145, 650 -->
+
+  <!-- 1 Top edge breadcrumb rail -->
+  <g transform="translate(70 145)">
+    <rect width="510" height="440" rx="24" class="glass" filter="url(#shadow)"/>
+    <text x="26" y="42" class="panel-title">1. Top Edge Breadcrumb Rail</text>
+    <text x="26" y="68" class="note">Persistent context, not a notification.</text>
+    <rect x="24" y="100" width="462" height="292" rx="18" fill="#090B14" stroke="#2A2132"/>
+    <circle cx="46" cy="122" r="6" fill="#FF5F57"/><circle cx="66" cy="122" r="6" fill="#FFBD2E"/><circle cx="86" cy="122" r="6" fill="#28C840"/>
+    <rect x="142" y="106" width="230" height="34" rx="10" fill="rgba(255,58,175,0.08)" stroke="rgba(255,58,175,0.30)"/>
+    <text x="159" y="127" class="body">Focused / Cosmos Upgrades</text>
+    <text x="159" y="144" class="meta">updates wait in inbox</text>
+    <circle cx="253" cy="248" r="70" stroke="rgba(255,58,175,0.09)" stroke-width="2"/>
+    <text x="227" y="260" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="84" font-weight="700" fill="#C62D92">A</text>
+    <path d="M80 370 C150 325, 200 140, 245 127" stroke="#FF3AAF" stroke-opacity="0.55" stroke-width="3" stroke-dasharray="8 8" fill="none"/>
+    <polygon points="246,121 258,127 246,134" fill="#FF3AAF" opacity="0.75"/>
+    <rect x="58" y="345" width="150" height="40" rx="9" fill="rgba(255,58,175,0.16)" stroke="rgba(255,58,175,0.35)"/>
+    <text x="74" y="370" class="meta">⌘K selected row</text>
+    <text x="26" y="420" class="tiny">MOTION: row compresses upward into breadcrumb</text>
+  </g>
+
+  <!-- 2 Sidebar-owned focus -->
+  <g transform="translate(635 145)">
+    <rect width="510" height="440" rx="24" class="glass" filter="url(#shadow)"/>
+    <text x="26" y="42" class="panel-title">2. Sidebar-Owned Focus</text>
+    <text x="26" y="68" class="note">Focus is navigation state in Watching.</text>
+    <rect x="24" y="100" width="462" height="292" rx="18" fill="#090B14" stroke="#2A2132"/>
+    <rect x="24" y="100" width="146" height="292" rx="18" fill="#100817"/>
+    <line x1="170" y1="100" x2="170" y2="392" stroke="#FF3AAF" stroke-opacity="0.5"/>
+    <text x="42" y="132" class="meta" fill="#FF3AAF">WATCHING 3</text>
+    <circle cx="45" cy="168" r="4" fill="#FF3AAF"/>
+    <text x="58" y="173" class="body">Cosmos Up...</text>
+    <rect x="128" y="154" width="22" height="18" rx="9" fill="#9A1B6B"/>
+    <text x="136" y="167" font-size="10" font-family="-apple-system" font-weight="800" fill="#FFD7EF">3</text>
+    <text x="58" y="190" class="meta">focused</text>
+    <circle cx="45" cy="222" r="3" fill="#7C7382"/>
+    <text x="58" y="227" class="meta">Adobe Scan</text>
+    <circle cx="45" cy="262" r="3" fill="#7C7382"/>
+    <text x="58" y="267" class="meta">Email Brief</text>
+    <circle cx="315" cy="248" r="72" stroke="rgba(255,58,175,0.09)" stroke-width="2"/>
+    <text x="288" y="260" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="84" font-weight="700" fill="#C62D92">A</text>
+    <path d="M380 370 C320 330, 210 205, 80 170" stroke="#FF3AAF" stroke-opacity="0.55" stroke-width="3" stroke-dasharray="8 8" fill="none"/>
+    <polygon points="74,168 87,164 83,177" fill="#FF3AAF" opacity="0.75"/>
+    <text x="26" y="420" class="tiny">MOTION: ⌘K row flies left into focused watch row</text>
+  </g>
+
+  <!-- 3 Bottom dock context control -->
+  <g transform="translate(1200 145)">
+    <rect width="510" height="440" rx="24" class="glass" filter="url(#shadow)"/>
+    <text x="26" y="42" class="panel-title">3. Bottom Dock Context Control</text>
+    <text x="26" y="68" class="note">The bottom controls own session actions.</text>
+    <rect x="24" y="100" width="462" height="292" rx="18" fill="#090B14" stroke="#2A2132"/>
+    <circle cx="255" cy="230" r="74" stroke="rgba(255,58,175,0.09)" stroke-width="2"/>
+    <text x="228" y="244" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="84" font-weight="700" fill="#C62D92">A</text>
+    <g transform="translate(160 342)">
+      <circle cx="0" cy="0" r="20" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="-6" y="6" font-size="18" fill="#FF3AAF" font-family="-apple-system">☎</text>
+      <circle cx="54" cy="0" r="23" fill="rgba(255,58,175,0.10)" stroke="rgba(255,58,175,0.52)"/>
+      <text x="46" y="7" font-size="20" fill="#FF3AAF" font-family="-apple-system">⌁</text>
+      <circle cx="108" cy="0" r="20" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="100" y="6" font-size="18" fill="#FF3AAF" font-family="-apple-system">▤</text>
+      <circle cx="162" cy="0" r="20" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="154" y="6" font-size="18" fill="#FF3AAF" font-family="-apple-system">⚙</text>
+    </g>
+    <rect x="176" y="288" width="180" height="40" rx="11" fill="rgba(255,58,175,0.10)" stroke="rgba(255,58,175,0.32)"/>
+    <text x="195" y="311" class="body">Cosmos Upgrades</text>
+    <path d="M88 162 C175 196, 200 282, 214 342" stroke="#FF3AAF" stroke-opacity="0.55" stroke-width="3" stroke-dasharray="8 8" fill="none"/>
+    <polygon points="211,347 205,333 220,338" fill="#FF3AAF" opacity="0.75"/>
+    <rect x="54" y="140" width="146" height="38" rx="9" fill="rgba(255,58,175,0.16)" stroke="rgba(255,58,175,0.35)"/>
+    <text x="70" y="164" class="meta">⌘K selected row</text>
+    <text x="26" y="420" class="tiny">MOTION: row collapses into focus target button</text>
+  </g>
+
+  <!-- 4 Ambient center label -->
+  <g transform="translate(70 650)">
+    <rect width="510" height="440" rx="24" class="glass" filter="url(#shadow)"/>
+    <text x="26" y="42" class="panel-title">4. Ambient Center Label</text>
+    <text x="26" y="68" class="note">The companion’s attention, not UI chrome.</text>
+    <rect x="24" y="100" width="462" height="292" rx="18" fill="#090B14" stroke="#2A2132"/>
+    <circle cx="255" cy="232" r="88" stroke="rgba(255,58,175,0.12)" stroke-width="2"/>
+    <circle cx="255" cy="232" r="52" fill="#FF3AAF" opacity="0.06" filter="url(#soft)"/>
+    <text x="228" y="244" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="84" font-weight="700" fill="#C62D92">A</text>
+    <text x="152" y="150" class="body" fill="#FFB3DF">Focused on Cosmos Upgrades</text>
+    <text x="184" y="173" class="meta">updates wait in inbox</text>
+    <path d="M90 352 C150 320, 220 184, 255 170" stroke="#FF3AAF" stroke-opacity="0.45" stroke-width="3" stroke-dasharray="6 10" fill="none"/>
+    <rect x="56" y="333" width="145" height="38" rx="9" fill="rgba(255,58,175,0.14)" stroke="rgba(255,58,175,0.30)"/>
+    <text x="71" y="357" class="meta">focus changed</text>
+    <text x="26" y="420" class="tiny">MOTION: logo pulses, label fades in, then dims</text>
+  </g>
+
+  <!-- 5 Transient lock-in + edge badge -->
+  <g transform="translate(635 650)">
+    <rect width="510" height="440" rx="24" class="glass" filter="url(#shadow)"/>
+    <text x="26" y="42" class="panel-title">5. Lock-In Toast + Tiny Badge</text>
+    <text x="26" y="68" class="note">Show confirmation, then get out of the way.</text>
+    <rect x="24" y="100" width="462" height="292" rx="18" fill="#090B14" stroke="#2A2132"/>
+    <rect x="122" y="128" width="268" height="48" rx="12" fill="rgba(255,58,175,0.12)" stroke="rgba(255,58,175,0.45)"/>
+    <text x="145" y="154" class="body">Focused · Cosmos Upgrades</text>
+    <text x="145" y="171" class="meta">2 seconds, then disappears</text>
+    <rect x="30" y="204" width="4" height="54" rx="2" fill="#FF3AAF"/>
+    <circle cx="43" cy="202" r="10" fill="#120817" stroke="#FF3AAF"/>
+    <text x="39" y="207" font-size="12" font-family="-apple-system" font-weight="800" fill="#FF8ACF">F</text>
+    <circle cx="255" cy="268" r="66" stroke="rgba(255,58,175,0.09)" stroke-width="2"/>
+    <text x="230" y="281" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="78" font-weight="700" fill="#C62D92">A</text>
+    <path d="M260 176 C210 180, 86 195, 43 202" stroke="#FF3AAF" stroke-opacity="0.45" stroke-width="3" stroke-dasharray="5 9" fill="none"/>
+    <polygon points="38,203 52,195 52,210" fill="#FF3AAF" opacity="0.75"/>
+    <text x="26" y="420" class="tiny">MOTION: toast shrinks into a small edge focus badge</text>
+  </g>
+
+  <!-- 6 Hover top tab variant -->
+  <g transform="translate(1200 650)">
+    <rect width="510" height="440" rx="24" class="glass" filter="url(#shadow)"/>
+    <text x="26" y="42" class="panel-title">Bonus. Hover-Revealed Top Tab</text>
+    <text x="26" y="68" class="note">Almost invisible until the pointer hits top edge.</text>
+    <rect x="24" y="100" width="462" height="292" rx="18" fill="#090B14" stroke="#2A2132"/>
+    <rect x="207" y="100" width="96" height="7" rx="3.5" fill="#FF3AAF" opacity="0.70"/>
+    <rect x="142" y="112" width="226" height="64" rx="14" fill="rgba(18,12,24,0.94)" stroke="rgba(255,58,175,0.36)"/>
+    <text x="164" y="139" class="body">Cosmos Upgrades</text>
+    <text x="164" y="158" class="meta">hover top edge for details</text>
+    <circle cx="255" cy="260" r="70" stroke="rgba(255,58,175,0.09)" stroke-width="2"/>
+    <text x="229" y="273" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="82" font-weight="700" fill="#C62D92">A</text>
+    <path d="M90 350 C175 300, 242 190, 254 112" stroke="#FF3AAF" stroke-opacity="0.38" stroke-width="3" stroke-dasharray="8 8" fill="none"/>
+    <polygon points="254,106 261,119 247,119" fill="#FF3AAF" opacity="0.75"/>
+    <text x="26" y="420" class="tiny">MOTION: selected row parks as a hidden top-edge tab</text>
+  </g>
+
+  <text x="70" y="1230" class="subtitle">Implementation note: any option can keep metadata on hover/click and use ⌘K / ⌘Y as the power-user entry points.</text>
+</svg>

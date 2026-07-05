@@ -1,0 +1,32 @@
+{
+  "accentDark": {
+    "blue": 0.25,
+    "green": 0.84,
+    "red": 1.0
+  },
+  "accentLight": {
+    "blue": 0.65,
+    "green": 0.22,
+    "red": 0.05
+  },
+  "id": "seed.high-contrast",
+  "name": "High Contrast",
+  "stops": [
+    {
+      "blue": 0.08,
+      "green": 0.08,
+      "red": 0.08
+    },
+    {
+      "blue": 0.45,
+      "green": 0.45,
+      "red": 0.45
+    },
+    {
+      "blue": 0.92,
+      "green": 0.92,
+      "red": 0.92
+    }
+  ],
+  "wantsSolidPlates": true
+}

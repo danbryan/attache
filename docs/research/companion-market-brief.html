@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attaché: What People Want From an Agent Companion</title>
+<style>
+  :root {
+    --bg: #0d0e12; --panel: #16181f; --panel2: #1c1f28; --text: #e8e9ee;
+    --dim: #9aa0ae; --faint: #6b7180; --accent: #e8b23a; --accent2: #74d0a0;
+    --line: #262a35; --danger: #e06a6a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.55 -apple-system, "SF Pro Text", Helvetica, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 28px 80px; }
+  h1 { font-size: 30px; letter-spacing: -0.3px; margin: 0 0 6px; }
+  h2 { font-size: 20px; margin: 44px 0 12px; letter-spacing: -0.2px; }
+  .sub { color: var(--dim); margin: 0 0 8px; }
+  .meta { color: var(--faint); font-size: 13px; margin-bottom: 34px; }
+  .note { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+          padding: 12px 16px; border-radius: 8px; color: var(--dim); font-size: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 20px 22px; margin: 14px 0; }
+  .card h3 { margin: 0 0 4px; font-size: 17px; display: flex; align-items: baseline; gap: 10px; }
+  .rank { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 700; }
+  .tags { margin: 2px 0 10px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.4px;
+         padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line);
+         color: var(--dim); margin-right: 6px; }
+  .tag.demand-high { color: var(--accent); border-color: rgba(232,178,58,0.4); }
+  .tag.demand-med { color: var(--accent2); border-color: rgba(116,208,160,0.35); }
+  .tag.fit { color: #8ab4f8; border-color: rgba(138,180,248,0.3); }
+  .card p { margin: 8px 0; color: var(--text); }
+  .card .why { color: var(--dim); }
+  .card .impl { background: var(--panel2); border-radius: 8px; padding: 10px 14px;
+                font-size: 14px; color: var(--dim); margin-top: 10px; }
+  .card .impl b { color: var(--text); }
+  .src { font-size: 13px; color: var(--faint); margin-top: 10px; }
+  .src a { color: #8ab4f8; text-decoration: none; }
+  .src a:hover { text-decoration: underline; }
+  .have { color: var(--accent2); font-size: 13px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin-top: 10px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--faint); font-weight: 600; font-size: 12px; letter-spacing: 0.4px; text-transform: uppercase; }
+  td.y { color: var(--accent2); } td.n { color: var(--faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>What people want from an agent companion</h1>
+  <p class="sub">Market scan for Attaché: demand signals from GitHub issues, Hacker News, Product Hunt, Reddit-adjacent guides, and competing tools. Productivity-first framing.</p>
+  <p class="meta">Compiled 2026-07-03 · research only, nothing here is implemented or scheduled · sources linked per idea</p>
+
+  <div class="note">
+    <b>The one-sentence takeaway:</b> the market's loudest, most repeated pain is not "make agents smarter", it is
+    <b>"tell me when my agent needs me, wherever I am, without making me watch a terminal"</b>. Attaché's voice-first
+    design sits directly on top of that pain. Everything below is ranked by how often and how loudly people ask for it.
+  </div>
+
+  <h2>The landscape in one table</h2>
+  <table>
+    <tr><th>Tool</th><th>Shape</th><th>Notify / interrupt</th><th>Voice</th><th>Multi-agent view</th><th>Local-first</th></tr>
+    <tr><td>Claude Code Agent View (official)</td><td>CLI dashboard</td><td class="y">in-terminal</td><td class="n">no</td><td class="y">yes</td><td class="y">yes</td></tr>
+    <tr><td>Omnara</td><td>phone + watch + web</td><td class="y">push, one-tap approve</td><td class="y">voice mode</td><td class="y">yes</td><td class="n">no (cloud relay)</td></tr>
+    <tr><td>Happy Coder</td><td>phone + desktop, OSS</td><td class="y">push, E2E encrypted</td><td class="n">no</td><td class="y">yes</td><td class="y">yes</td></tr>
+    <tr><td>Conductor / Nimbalyst (Crystal)</td><td>Mac app, worktrees</td><td class="n">minimal</td><td class="n">no</td><td class="y">yes</td><td class="y">mostly</td></tr>
+    <tr><td>CodeAgentSwarm, hook scripts, ntfy</td><td>notifiers</td><td class="y">yes</td><td class="n">no</td><td class="n">no</td><td class="y">yes</td></tr>
+    <tr><td><b>Attaché today</b></td><td>Mac companion, voice</td><td class="y">spoken + inbox</td><td class="y">core feature</td><td class="y">watch rail + inbox</td><td class="y">yes</td></tr>
+  </table>
+  <p class="why" style="margin-top:10px">Attaché's open lane: nobody else combines <b>ambient voice</b>, <b>local-first privacy</b>, and <b>two-way talk-back</b>. The gaps are reach (phone), stall detection, and glanceability.</p>
+
+  <h2>Ranked: what to consider building</h2>
+
+  <div class="card">
+    <h3><span class="rank">1</span> "Needs you" interrupts: detect stalled and waiting agents</h3>
+    <div class="tags"><span class="tag demand-high">demand: very high</span><span class="tag fit">fit: perfect</span><span class="tag">effort: medium</span></div>
+    <p class="why">The single most-requested thing in this space. Two open feature requests on the official repo ask for exactly this, and multiple third-party products exist only to solve it. The pattern people describe: kick off a task, switch to email, come back and discover the agent has been sitting on a permission prompt for 10 minutes.</p>
+    <div class="impl"><b>In Attaché:</b> the session watcher learns to recognize "waiting on input / permission / question" states, files a priority card, and (optionally) speaks one line: "Claude is waiting on you in attache." Dock badge turns urgent. Distinct from ordinary recaps: this is the one interrupt worth interrupting for. Pairs with the needs-decision flag that already exists.</div>
+    <p class="src">Sources: <a href="https://github.com/anthropics/claude-code/issues/36885">claude-code #36885</a> · <a href="https://github.com/anthropics/claude-code/issues/13024">claude-code #13024</a> · <a href="https://alexop.dev/posts/claude-code-notification-hooks/">alexop.dev hooks guide</a> · <a href="https://www.codeagentswarm.com/en/guides/codeagentswarm-notifications">CodeAgentSwarm</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">2</span> Phone reach: push notifications and remote reply</h3>
+    <div class="tags"><span class="tag demand-high">demand: very high</span><span class="tag fit">fit: strong</span><span class="tag">effort: large</span></div>
+    <p class="why">Omnara (Product Hunt launch, App Store, Apple Watch) and Happy Coder (open source, E2E encrypted) both exist because people leave the desk while agents run. Anthropic added official Remote Control docs, and there's an open issue asking for a network transport. The demand is "my laptop keeps working, my phone tells me and lets me answer."</p>
+    <div class="impl"><b>In Attaché:</b> phase 1 is a push relay: forward needs-you interrupts and recaps to the phone via APNs or ntfy, deep-linking back. Phase 2 is remote reply through the existing two-way engine. Positioning matters: Happy won trust with E2E encryption, Omnara took criticism for reading message content. Attaché should be the local-first option or nothing.</div>
+    <p class="src">Sources: <a href="https://www.omnara.com/">omnara.com</a> · <a href="https://happy.engineering/">happy.engineering</a> · <a href="https://code.claude.com/docs/en/remote-control">official Remote Control docs</a> · <a href="https://github.com/anthropics/claude-code/issues/24365">claude-code #24365</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">3</span> Fleet board: one glance, every agent's state</h3>
+    <div class="tags"><span class="tag demand-high">demand: high</span><span class="tag fit">strong, partly built</span><span class="tag">effort: medium</span></div>
+    <p class="why">Anthropic validated this by shipping Agent View (May 2026): one screen, color-coded running / waiting / done. Community mission-control dashboards keep appearing. People running 3 to 10 agents want a status board, not a pile of terminals.</p>
+    <div class="impl"><b>In Attaché:</b> the watching rail grows into a fleet board: per-session state chips (running, waiting on you, idle, done), elapsed time, last milestone. The session activity watcher already extracts the signals; this is presentation plus the stall detection from idea 1. The voice layer is the differentiator: "two agents running, one waiting on you."</div>
+    <p class="src">Sources: <a href="https://code.claude.com/docs/en/agent-view">official Agent View docs</a> · <a href="https://github.com/han-cool/claude-mission-control">claude-mission-control</a> · <a href="https://www.brizz.ai/blog/mission-control-for-claude-code">brizz mission control</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">4</span> Morning standup: a spoken "while you were away"</h3>
+    <div class="tags"><span class="tag demand-med">demand: medium-high</span><span class="tag fit">fit: perfect</span><span class="tag">effort: small</span></div>
+    <p class="why">Overnight and scheduled agents are becoming normal; people describe wanting a morning briefing of what their agents did, framed exactly like a standup. Voice briefing tools and meeting-summary tools keep converging on this shape.</p>
+    <div class="impl"><b>In Attaché:</b> the digest engine already summarizes the inbox. Add a schedule ("weekday mornings at 8:30") and a wider window (everything since you last listened), and the companion opens the day with a 40-second spoken standup: what finished, what failed, what waits on you. This is a cheap, extremely demo-able feature that no competitor does by voice.</div>
+    <p class="src">Sources: <a href="https://github.com/silverstein/minutes">minutes (standup templates)</a> · <a href="https://www.freecodecamp.org/news/private-voice-assistant-using-open-source-tools/">morning-briefing voice patterns</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">5</span> Interrupt hygiene: quiet hours, priorities, batching</h3>
+    <div class="tags"><span class="tag demand-med">demand: medium-high</span><span class="tag fit">fit: strong</span><span class="tag">effort: small-medium</span></div>
+    <p class="why">The flip side of notifications: supervising agents measurably burns people out (a BCG/HBR study found 33% more decision fatigue; an HN thread on flow state is full of people describing attention fragmentation). Tools that only add alerts make it worse. The ask, read between the lines: fewer, better interrupts.</p>
+    <div class="impl"><b>In Attaché:</b> a priority model on top of the inbox. Needs-you interrupts speak immediately; ordinary recaps batch and stay quiet during a focus window ("do not narrate for 45 minutes, then digest"). Per-session priority (this repo may interrupt me, that one never). Attaché becomes the tool that protects flow instead of shredding it, which is a stronger pitch than "more notifications."</div>
+    <p class="src">Sources: <a href="https://news.ycombinator.com/item?id=44811457">Ask HN: flow state with AI tools</a> · <a href="https://www.envisioning.com/newsletter/133-babysitting-the-agents">Babysitting the Agents</a> · <a href="https://dev.to/jrswab/how-to-stop-babysitting-your-ai-agents-4376">How to stop babysitting your agents</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">6</span> Cost and usage awareness</h3>
+    <div class="tags"><span class="tag demand-med">demand: medium-high</span><span class="tag fit">fit: good</span><span class="tag">effort: small</span></div>
+    <p class="why">ccusage sits at 4,800+ GitHub stars for reading the same local JSONL files Attaché already parses. Anthropic pegs average spend at about $6 per developer per day and most people have no idea what they spend. Real, proven demand with a low ceiling but very low cost to serve.</p>
+    <div class="impl"><b>In Attaché:</b> a usage strip per session and per day (tokens, estimated cost, model mix), one row in the fleet board, one line in the morning standup ("yesterday's agents: about four dollars"). No new data source needed; the transcripts already contain token counts.</div>
+    <p class="src">Sources: <a href="https://ccusage.com/guide/cost-modes">ccusage</a> · <a href="https://github.com/Maciek-roboblog/Claude-Code-Usage-Monitor">Claude-Code-Usage-Monitor</a> · <a href="https://www.toriihq.com/articles/five-claude-code-usage-dashboards-and-monitoring-tools">dashboard roundup</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">7</span> Menu bar presence</h3>
+    <div class="tags"><span class="tag demand-med">demand: medium</span><span class="tag fit">fit: natural</span><span class="tag">effort: small</span></div>
+    <p class="why">Mac-native users expect glanceable state without a window: agent count, waiting count, a click to the inbox. Every native competitor leans on this; Attaché currently lives in the Dock only.</p>
+    <div class="impl"><b>In Attaché:</b> a menu bar extra with the fleet summary (icon reflects the most urgent state), a compact menu of watched sessions, and quick actions (open inbox, focus session, mute). Cheap to build on the existing model state.</div>
+    <p class="src">Sources: <a href="https://news.ycombinator.com/item?id=44594584">Conductor Show HN</a> (native-Mac expectations in comments) · <a href="https://github.com/stravu/crystal">Crystal/Nimbalyst</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">8</span> Share a recap: Slack and clipboard export</h3>
+    <div class="tags"><span class="tag">demand: medium (teams)</span><span class="tag fit">fit: good</span><span class="tag">effort: small-medium</span></div>
+    <p class="why">Slack is racing to make agent activity visible to teams (thinking steps, agent summaries in channels). Solo users care less, but "send this recap to the channel" turns Attaché's summaries into standup artifacts a team sees, which is how a personal tool spreads inside a company.</p>
+    <div class="impl"><b>In Attaché:</b> per-card actions: copy recap as Markdown, send to a Slack webhook or channel. The morning standup gets the same export. Later, a weekly roll-up. Deliberately one-way (Attaché posts, never reads Slack) to keep the privacy story intact.</div>
+    <p class="src">Sources: <a href="https://slack.dev/slack-thinking-steps-ai-agents/">Slack thinking steps for agents</a> · <a href="https://slack.com/ai-agents">Slack agent platform</a></p>
+  </div>
+
+  <div class="card">
+    <h3><span class="rank">9</span> Trust as a feature: the consent dashboard</h3>
+    <div class="tags"><span class="tag">demand: rising</span><span class="tag fit">fit: differentiator</span><span class="tag">effort: small</span></div>
+    <p class="why">Conductor's Show HN thread turned hostile over broad GitHub permissions ("You are INSANE to authorise this app..."); Happy leads its pitch with E2E encryption; Omnara takes criticism for cloud content access. Privacy posture is becoming the tiebreaker in this category.</p>
+    <div class="impl"><b>In Attaché:</b> mostly positioning plus one screen: a "What Attaché can see" panel showing watched sessions (consent-tiered, per the model just discussed), what never leaves the Mac, and which cloud services are wired (voice or LLM providers) with one-click revoke. Ship the watched-only ingestion default as the headline: the companion only listens where you point it.</div>
+    <p class="src">Sources: <a href="https://news.ycombinator.com/item?id=44594584">Conductor Show HN (permissions backlash)</a> · <a href="https://happy.engineering/docs/comparisons/alternatives/">Happy vs alternatives (E2E framing)</a></p>
+  </div>
+
+  <h2>Explicitly out of scope for now</h2>
+  <p class="why">Relationship-style companionship (persona chat, emotional check-ins) has a large market but a different product, different risks, and different users. The personality system already gives Attaché warmth without pivoting the product. Recommendation: stay productivity-first, revisit only if user feedback pulls that way.</p>
+
+  <h2>Suggested reading order if you green-light anything</h2>
+  <p class="why">1 and 3 together form "the companion that watches so you don't have to" (stall detection feeding the fleet board and the voice line). 4, 5, and 6 are small, high-delight layers on the existing digest and inbox. 2 is the big swing and probably its own milestone. 7, 8, 9 round out a launch story. Nothing here has been started; say which ones deserve tickets.</p>
+</div>
+</body>
+</html>

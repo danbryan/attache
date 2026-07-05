@@ -1,0 +1,32 @@
+{
+  "accentDark": {
+    "blue": 0.94,
+    "green": 0.66,
+    "red": 0.62
+  },
+  "accentLight": {
+    "blue": 0.55,
+    "green": 0.31,
+    "red": 0.28
+  },
+  "id": "seed.paper",
+  "name": "Paper",
+  "stops": [
+    {
+      "blue": 0.84,
+      "green": 0.86,
+      "red": 0.86
+    },
+    {
+      "blue": 0.75,
+      "green": 0.72,
+      "red": 0.7
+    },
+    {
+      "blue": 0.7,
+      "green": 0.58,
+      "red": 0.55
+    }
+  ],
+  "wantsSolidPlates": false
+}

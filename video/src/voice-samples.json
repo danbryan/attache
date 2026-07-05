@@ -1,0 +1,106 @@
+{
+  "vs_bigpicture": {
+    "seconds": 3.892,
+    "voice": "Titan",
+    "provider": "el",
+    "voice_id": "dtSEyYGNJqjrtBArPCVZ",
+    "lang": "en",
+    "text": "That one episode is now a full week of shorts, scheduled and ready to go."
+  },
+  "vs_concise": {
+    "voice": "Hope",
+    "provider": "el",
+    "voice_id": "WAhoMTNdLdMoq1j3wf3I",
+    "lang": "en",
+    "text": "Your episode's cut into five clips. Captioned and queued to post.",
+    "seconds": 4.075
+  },
+  "vs_explainer": {
+    "seconds": 4.911,
+    "voice": "Jessa",
+    "provider": "el",
+    "voice_id": "yj30vwTGJxSHezdAGsv9",
+    "lang": "en",
+    "text": "I cut your episode into five clips, captioned each one, and queued them to post."
+  },
+  "vs_inquisitive": {
+    "seconds": 4.78,
+    "voice": "Hope",
+    "provider": "el",
+    "voice_id": "WAhoMTNdLdMoq1j3wf3I",
+    "lang": "en",
+    "text": "Your clips are cut and captioned. Should I post them daily, or hold for your review?"
+  },
+  "vs_replay": {
+    "seconds": 4.859,
+    "voice": "Jessa",
+    "provider": "el",
+    "voice_id": "yj30vwTGJxSHezdAGsv9",
+    "lang": "en",
+    "text": "Deploy is out. Everything came back green, and I filed the details."
+  },
+  "vs_es": {
+    "seconds": 2.273,
+    "voice": "Ara",
+    "provider": "xai",
+    "voice_id": "ara",
+    "lang": "es",
+    "text": "Dos novedades te esperan en tu bandeja."
+  },
+  "vs_ko": {
+    "seconds": 2.351,
+    "voice": "Eunha",
+    "provider": "el",
+    "voice_id": "cBOtnpVZNlQ5VJygXGB8",
+    "lang": "ko",
+    "text": "\ubc1b\uc740\ud3b8\uc9c0\ud568\uc5d0 \uc0c8 \uc18c\uc2dd 2\uac1c\uac00 \uc788\uc5b4\uc694."
+  },
+  "ann_explainer": {
+    "seconds": 1.121,
+    "voice": "Sekou",
+    "provider": "el",
+    "voice_id": "YPtbPhafrxFTDAeaPP4w",
+    "lang": "en",
+    "text": "The Explainer."
+  },
+  "ann_bigpicture": {
+    "seconds": 1.007,
+    "voice": "Sekou",
+    "provider": "el",
+    "voice_id": "YPtbPhafrxFTDAeaPP4w",
+    "lang": "en",
+    "text": "Big Picture."
+  },
+  "ann_inquisitive": {
+    "seconds": 1.28,
+    "voice": "Sekou",
+    "provider": "el",
+    "voice_id": "YPtbPhafrxFTDAeaPP4w",
+    "lang": "en",
+    "text": "Inquisitive."
+  },
+  "ann_concise": {
+    "voice": "Sekou",
+    "provider": "el",
+    "voice_id": "YPtbPhafrxFTDAeaPP4w",
+    "lang": "en",
+    "text": "Or, Concise.",
+    "seconds": 1.149
+  },
+  "vs_editor": {
+    "voice": "Jessica",
+    "provider": "el",
+    "voice_id": "yj30vwTGJxSHezdAGsv9",
+    "lang": "en",
+    "text": "Five clips, captioned and queued. But clip two's hook is weak. Want me to recut it?",
+    "seconds": 4.78
+  },
+  "vs_hype": {
+    "voice": "Titan",
+    "provider": "el",
+    "voice_id": "dtSEyYGNJqjrtBArPCVZ",
+    "lang": "en",
+    "text": "High five on those clips! That's a week of content before lunch. Let's go!",
+    "seconds": 4.206
+  }
+}

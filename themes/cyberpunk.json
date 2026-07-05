@@ -1,0 +1,32 @@
+{
+  "accentDark": {
+    "blue": 0.66,
+    "green": 0.26,
+    "red": 0.98
+  },
+  "accentLight": {
+    "blue": 0.45,
+    "green": 0.08,
+    "red": 0.78
+  },
+  "id": "seed.cyberpunk",
+  "name": "Cyberpunk",
+  "stops": [
+    {
+      "blue": 0.45,
+      "green": 0.09,
+      "red": 0.2
+    },
+    {
+      "blue": 0.78,
+      "green": 0.16,
+      "red": 0.58
+    },
+    {
+      "blue": 0.66,
+      "green": 0.26,
+      "red": 0.98
+    }
+  ],
+  "wantsSolidPlates": false
+}

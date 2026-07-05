@@ -1,0 +1,860 @@
+import AttacheCore
+import Foundation
+
+final class CompanionPresentationService {
+    private let defaults: UserDefaults
+    private let environment: [String: String]
+    private let memoryStore: CompanionMemoryStore
+    private let personaStore: CompanionPersonaStore
+
+    init(
+        defaults: UserDefaults = .standard,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        self.defaults = defaults
+        self.environment = environment
+        self.memoryStore = CompanionMemoryStore(environment: environment)
+        self.personaStore = CompanionPersonaStore(environment: environment)
+    }
+
+    func prepare(
+        _ event: NormalizedEvent,
+        personality: Personality?,
+        completion: @escaping (NormalizedEvent) -> Void
+    ) {
+        let unresolvedSettings = CompanionPresentationSettings.load(
+            defaults: defaults,
+            environment: environment,
+            resolveSecrets: false
+        )
+
+        guard unresolvedSettings.llmEnabled else {
+            completion(Self.eventWithPlainReadbackPresentation(event))
+            return
+        }
+
+        guard unresolvedSettings.hasProviderConfiguration,
+              SourceKind.liveAgentRawValues.contains(event.source) else {
+            completion(Self.eventWithPlainReadbackPresentation(
+                event,
+                strategy: "plain-readback-personality-unavailable"
+            ))
+            return
+        }
+
+        Task {
+            let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+            guard settings.isConfigured else {
+                await MainActor.run {
+                    completion(Self.eventWithPlainReadbackPresentation(
+                        event,
+                        strategy: "plain-readback-personality-unavailable"
+                    ))
+                }
+                return
+            }
+
+            let presentedEvent: NormalizedEvent
+            do {
+                let memorySnapshot = memoryStore.loadSnapshot()
+                let personaSnapshot = personaStore.loadSnapshot()
+                presentedEvent = try await Self.eventWithLLMPresentation(
+                    event,
+                    settings: settings,
+                    memorySnapshot: memorySnapshot,
+                    personaSnapshot: personaSnapshot,
+                    personality: personality,
+                    spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+                )
+            } catch {
+                var failed = Self.eventWithPlainReadbackPresentation(
+                    event,
+                    strategy: "plain-readback-after-llm-error"
+                )
+                failed.metadata["companion_presentation_error"] = error.localizedDescription
+                presentedEvent = failed
+            }
+
+            await MainActor.run {
+                completion(presentedEvent)
+            }
+        }
+    }
+
+    func answerFollowUpQuestion(
+        card: VoicemailCard,
+        danQuestion: String,
+        completion: @escaping (Result<CompanionFollowUpAnswerResult, Error>) -> Void
+    ) {
+        let fallback = Self.fallbackFollowUpAnswer(
+            card: card,
+            danQuestion: danQuestion
+        )
+        let unresolvedSettings = CompanionPresentationSettings.load(
+            defaults: defaults,
+            environment: environment,
+            resolveSecrets: false
+        )
+
+        guard unresolvedSettings.llmEnabled,
+              unresolvedSettings.hasProviderConfiguration,
+              SourceKind.liveAgentRawValues.contains(card.sourceKind) else {
+            completion(.success(fallback))
+            return
+        }
+
+        Task {
+            let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+            guard settings.isConfigured else {
+                await MainActor.run {
+                    completion(.success(fallback))
+                }
+                return
+            }
+
+            do {
+                let memorySnapshot = memoryStore.loadSnapshot()
+                let personaSnapshot = personaStore.loadSnapshot()
+                let profilePrompt = Self.firstNonEmpty(
+                    settings.profilePrompt,
+                    personaSnapshot.prompt,
+                    CompanionPersonality.defaultProfilePrompt
+                )
+                let prompt = CompanionPersonality.followUpPrompt(
+                    for: card,
+                    danQuestion: danQuestion,
+                    profilePrompt: profilePrompt,
+                    memoryContext: memorySnapshot.context,
+                    spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+                )
+                let content = try await Self.requestChatCompletion(messages: prompt.messages, settings: settings)
+                let answer = Self.sanitizeFollowUpAnswerOutput(content)
+                guard !answer.isEmpty else {
+                    throw CompanionPresentationError.emptyResponse
+                }
+                let result = CompanionFollowUpAnswerResult(
+                    answerText: answer,
+                    strategy: "companion-personality-llm",
+                    model: settings.model,
+                    rawContextCharacterCount: prompt.rawContextCharacterCount,
+                    truncatedContext: prompt.truncatedRawContext,
+                    errorDescription: nil
+                )
+                await MainActor.run {
+                    completion(.success(result))
+                }
+            } catch {
+                var failed = fallback
+                failed.strategy = "deterministic-follow-up-fallback-after-llm-error"
+                failed.errorDescription = error.localizedDescription
+                let failedResult = failed
+                await MainActor.run {
+                    completion(.success(failedResult))
+                }
+            }
+        }
+    }
+
+    /// Multi-turn voice conversation with the personality. Sends the full message
+    /// history plus the session-reading tools, runs the tool-call loop (executing
+    /// each requested tool via `executeTool`), and returns the final spoken reply.
+    func converse(
+        messages: [CompanionChatMessage],
+        executeTool: @escaping (String, String) async -> String,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        let unresolved = CompanionPresentationSettings.load(
+            defaults: defaults,
+            environment: environment,
+            resolveSecrets: false
+        )
+        guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else {
+            completion(.failure(CompanionPresentationError.notConfigured))
+            return
+        }
+
+        Task {
+            let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+            guard settings.isConfigured else {
+                await MainActor.run { completion(.failure(CompanionPresentationError.notConfigured)) }
+                return
+            }
+            do {
+                let reply = try await Self.runConversation(
+                    messages: messages,
+                    settings: settings,
+                    executeTool: executeTool
+                )
+                await MainActor.run { completion(.success(reply)) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
+            }
+        }
+    }
+
+    private static func runConversation(
+        messages: [CompanionChatMessage],
+        settings: CompanionPresentationSettings,
+        executeTool: @escaping (String, String) async -> String
+    ) async throws -> String {
+        var payloadMessages: [[String: Any]] = messages.map { ["role": $0.role, "content": $0.content] }
+        let tools = conversationTools()
+        let maxToolRounds = 8   // room to page/search across a long session (INF-165)
+
+        for _ in 0..<maxToolRounds {
+            let result = try await requestChat(messages: payloadMessages, tools: tools, settings: settings)
+            if result.toolCalls.isEmpty {
+                let text = sanitizeFollowUpAnswerOutput(result.content)
+                guard !text.isEmpty else { throw CompanionPresentationError.emptyResponse }
+                return text
+            }
+            payloadMessages.append([
+                "role": "assistant",
+                "content": result.content,
+                "tool_calls": result.toolCalls.map { call in
+                    ["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.arguments]]
+                }
+            ])
+            for call in result.toolCalls {
+                // Bound each tool call so a stalled tool can't hang the turn; the
+                // model gets a structured timeout result and keeps going.
+                let toolResult = await withTimeout(seconds: 10) {
+                    await executeTool(call.name, call.arguments)
+                } onTimeout: {
+                    "The \(call.name) tool did not respond in time. Answer from what you already have and tell the user you could not check that in time."
+                }
+                payloadMessages.append(["role": "tool", "tool_call_id": call.id, "content": toolResult])
+            }
+        }
+
+        // Tool budget spent: force a final answer with no further tool calls.
+        let final = try await requestChat(messages: payloadMessages, tools: nil, settings: settings)
+        let text = sanitizeFollowUpAnswerOutput(final.content)
+        guard !text.isEmpty else { throw CompanionPresentationError.emptyResponse }
+        return text
+    }
+
+    /// One-shot raw completion for background classification (e.g. topic tags).
+    /// Returns nil if the presentation LLM isn't configured, so callers can bail
+    /// cheaply instead of spinning.
+    func complete(system: String, user: String) async -> String? {
+        let unresolved = CompanionPresentationSettings.load(defaults: defaults, environment: environment, resolveSecrets: false)
+        guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else { return nil }
+        let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+        guard settings.isConfigured else { return nil }
+        return try? await Self.requestChatCompletion(
+            messages: [
+                CompanionChatMessage(role: "system", content: system),
+                CompanionChatMessage(role: "user", content: user)
+            ],
+            settings: settings
+        )
+    }
+
+    /// Whether the presentation LLM is configured enough to make background
+    /// calls. Deliberately keychain-free: presence comes from the defaults
+    /// flag, and the actual calls resolve and re-check before requesting.
+    var isPresentationConfigured: Bool {
+        let unresolved = CompanionPresentationSettings.load(defaults: defaults, environment: environment, resolveSecrets: false)
+        return unresolved.llmEnabled && unresolved.hasProviderConfiguration
+    }
+
+    private static func conversationTools() -> [[String: Any]] {
+        [
+            ["type": "function", "function": [
+                "name": "read_session_transcript",
+                "description": "Read more of the attached session than the latest update. With no arguments, returns the opening turns plus the most recent turns (middle omitted, marked). Pass start_turn to page from a specific turn number (turns are labeled TURN n/total); pair with search_session_transcript to locate an earlier turn. Do not assume anything not shown was never discussed.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "start_turn": ["type": "integer", "description": "1-indexed turn number to start paging from. Omit for the opening+recent overview."],
+                        "max_chars": ["type": "integer", "description": "Max characters of transcript to return (default 12000)."]
+                    ]
+                ] as [String: Any]
+            ]],
+            ["type": "function", "function": [
+                "name": "search_session_transcript",
+                "description": "Search the whole attached session transcript for a term and get back matching turn numbers with snippets. Use this to find where something was discussed, then read_session_transcript with that start_turn.",
+                "parameters": [
+                    "type": "object",
+                    "properties": ["query": ["type": "string", "description": "Text to search for in the session's turns."]],
+                    "required": ["query"]
+                ] as [String: Any]
+            ]],
+            ["type": "function", "function": [
+                "name": "list_working_directory",
+                "description": "List the files in the session's working directory to see what exists before reading.",
+                "parameters": ["type": "object", "properties": [String: Any]()] as [String: Any]
+            ]],
+            ["type": "function", "function": [
+                "name": "read_file",
+                "description": "Read a file inside the session's working directory.",
+                "parameters": [
+                    "type": "object",
+                    "properties": ["path": ["type": "string", "description": "Path relative to the working directory."]],
+                    "required": ["path"]
+                ] as [String: Any]
+            ]],
+            ["type": "function", "function": [
+                "name": "rename_session",
+                "description": "Set the Attaché-local name for the attached work session (does not rename it in Codex). Use when the user asks to name or rename this session, e.g. \"let's call this the tax cleanup session\".",
+                "parameters": [
+                    "type": "object",
+                    "properties": ["name": ["type": "string", "description": "The new short, descriptive name. Empty string resets to the Codex name."]],
+                    "required": ["name"]
+                ] as [String: Any]
+            ]]
+        ]
+    }
+
+    private struct ConversationChatResult {
+        var content: String
+        var toolCalls: [ConversationToolCall]
+    }
+
+    private struct ConversationToolCall {
+        var id: String
+        var name: String
+        var arguments: String
+    }
+
+    private static func requestChat(
+        messages: [[String: Any]],
+        tools: [[String: Any]]?,
+        settings: CompanionPresentationSettings
+    ) async throws -> ConversationChatResult {
+        if settings.provider.isCLI, let tool = settings.provider.cliTool {
+            // The CLI runs a single completion with no OpenAI tool-call protocol, so
+            // we render the messages to a prompt and return its text with no tools.
+            let chatMessages = messages.compactMap { message -> CompanionChatMessage? in
+                guard let role = message["role"] as? String,
+                      let content = message["content"] as? String else { return nil }
+                return CompanionChatMessage(role: role, content: content)
+            }
+            let text = try await CLILanguageModel(
+                tool: tool, model: settings.model,
+                reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier
+            ).complete(messages: chatMessages)
+            return ConversationChatResult(content: text, toolCalls: [])
+        }
+        var url = settings.baseURL
+        if !url.path.hasSuffix("/chat/completions") {
+            url = url.appendingPathComponent("chat/completions")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !settings.apiKey.isEmpty, NetworkSecurity.allowsBearer(url) {
+            request.setValue("Bearer \(settings.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        var payload: [String: Any] = [
+            "model": settings.model,
+            "temperature": 0.6,
+            "messages": messages
+        ]
+        if let tools, !tools.isEmpty {
+            payload["tools"] = tools
+        }
+        if settings.provider.supportsReasoningEffort,
+           let reasoningEffort = settings.reasoningEffort,
+           !reasoningEffort.isEmpty,
+           reasoningEffort.lowercased() != "default" {
+            payload["reasoning_effort"] = reasoningEffort
+        }
+        if settings.provider.supportsServiceTier,
+           let serviceTier = normalizedServiceTier(settings.serviceTier) {
+            payload["service_tier"] = serviceTier
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CompanionPresentationError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw CompanionPresentationError.httpStatus(httpResponse.statusCode, body)
+        }
+
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let message = (object?["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any]
+        let content = message?["content"] as? String ?? ""
+        var calls: [ConversationToolCall] = []
+        if let toolCalls = message?["tool_calls"] as? [[String: Any]] {
+            for toolCall in toolCalls {
+                guard let id = toolCall["id"] as? String,
+                      let function = toolCall["function"] as? [String: Any],
+                      let name = function["name"] as? String else {
+                    continue
+                }
+                let arguments = function["arguments"] as? String ?? "{}"
+                calls.append(ConversationToolCall(id: id, name: name, arguments: arguments))
+            }
+        }
+        return ConversationChatResult(content: content, toolCalls: calls)
+    }
+
+    static func eventWithPlainReadbackPresentation(
+        _ event: NormalizedEvent,
+        strategy: String = "plain-readback"
+    ) -> NormalizedEvent {
+        var presented = event
+        if presented.metadata["companion_summary"] == nil {
+            presented.metadata["companion_summary"] = EventNormalizer.summary(for: event)
+        }
+        presented.metadata["companion_spoken_text"] = event.text
+        presented.metadata["companion_presentation_strategy"] = strategy
+        return presented
+    }
+
+    private static func eventWithLLMPresentation(
+        _ event: NormalizedEvent,
+        settings: CompanionPresentationSettings,
+        memorySnapshot: CompanionMemorySnapshot,
+        personaSnapshot: CompanionPersonaSnapshot,
+        personality: Personality?,
+        spokenLanguageName: String? = nil
+    ) async throws -> NormalizedEvent {
+        let profilePrompt = firstNonEmpty(personality?.prompt, settings.profilePrompt, personaSnapshot.prompt, CompanionPersonality.defaultProfilePrompt)
+        let prompt = CompanionPersonality.presentationPrompt(
+            for: event,
+            profilePrompt: profilePrompt,
+            memoryContext: memorySnapshot.context,
+            spokenLanguageName: spokenLanguageName
+        )
+        let content = try await requestChatCompletion(messages: prompt.messages, settings: settings)
+        let response = splitCardSummary(content)
+
+        guard !response.spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CompanionPresentationError.emptyResponse
+        }
+
+        var presented = event
+        if presented.metadata["companion_summary"] == nil {
+            presented.metadata["companion_summary"] = EventNormalizer.summary(for: event)
+        }
+        if !response.summary.isEmpty {
+            presented.metadata["companion_summary"] = response.summary
+        }
+        presented.metadata["companion_spoken_text"] = response.spokenText
+        if response.needsDecision {
+            presented.metadata["companion_needs_decision"] = "1"
+        }
+        presented.metadata["companion_presentation_strategy"] = "companion-personality-llm"
+        presented.metadata["companion_llm_provider"] = settings.provider.rawValue
+        presented.metadata["companion_llm_model"] = settings.model
+        presented.metadata["companion_llm_base_url"] = settings.baseURL.absoluteString
+        if let personality {
+            presented.metadata["companion_personality_id"] = personality.id
+            presented.metadata["companion_personality_name"] = personality.name
+        }
+        presented.metadata["companion_personality_profile"] = personality?.id ?? "default"
+        presented.metadata["companion_personality_file"] = personaSnapshot.fileURL.path
+        presented.metadata["companion_memory_file"] = memorySnapshot.fileURL.path
+        presented.metadata["companion_memory_context_chars"] = String(memorySnapshot.context?.count ?? 0)
+        presented.metadata["companion_raw_output_chars"] = String(prompt.rawOutputCharacterCount)
+        presented.metadata["companion_raw_output_truncated"] = prompt.truncatedRawOutput ? "true" : "false"
+        if let errorDescription = memorySnapshot.errorDescription {
+            presented.metadata["companion_memory_error"] = errorDescription
+        }
+        if let errorDescription = personaSnapshot.errorDescription {
+            presented.metadata["companion_personality_error"] = errorDescription
+        }
+        if let reasoningEffort = settings.reasoningEffort, !reasoningEffort.isEmpty {
+            presented.metadata["companion_llm_reasoning_effort"] = reasoningEffort
+        }
+        return presented
+    }
+
+    private static func requestChatCompletion(
+        messages: [CompanionChatMessage],
+        settings: CompanionPresentationSettings
+    ) async throws -> String {
+        if settings.provider.isCLI, let tool = settings.provider.cliTool {
+            return try await CLILanguageModel(
+                tool: tool, model: settings.model,
+                reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier
+            ).complete(messages: messages)
+        }
+        var url = settings.baseURL
+        if !url.path.hasSuffix("/chat/completions") {
+            url = url.appendingPathComponent("chat/completions")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !settings.apiKey.isEmpty, NetworkSecurity.allowsBearer(url) {
+            request.setValue("Bearer \(settings.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+
+        var payload: [String: Any] = [
+            "model": settings.model,
+            "temperature": 0.6,
+            "messages": messages.map { message in
+                [
+                    "role": message.role,
+                    "content": message.content
+                ]
+            }
+        ]
+        if settings.provider.supportsReasoningEffort,
+           let reasoningEffort = settings.reasoningEffort,
+           !reasoningEffort.isEmpty,
+           reasoningEffort.lowercased() != "default" {
+            payload["reasoning_effort"] = reasoningEffort
+        }
+        if settings.provider.supportsServiceTier,
+           let serviceTier = normalizedServiceTier(settings.serviceTier) {
+            payload["service_tier"] = serviceTier
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CompanionPresentationError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw CompanionPresentationError.httpStatus(httpResponse.statusCode, body)
+        }
+
+        let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+        return decoded.choices.first?.message.content ?? ""
+    }
+
+    private static func splitCardSummary(_ content: String) -> (summary: String, spokenText: String, needsDecision: Bool) {
+        let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return ("", "", false) }
+
+        var lines = text.components(separatedBy: .newlines)
+        var summary = ""
+        var bodyStart = 0
+        for (index, line) in lines.enumerated() {
+            let stripped = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !stripped.isEmpty else { continue }
+            if stripped.range(of: #"(?i)^card[_ ]?summary\s*:\s*(.+)$"#, options: .regularExpression) != nil,
+               let separator = stripped.firstIndex(of: ":") {
+                summary = String(stripped[stripped.index(after: separator)...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                bodyStart = index + 1
+            }
+            break
+        }
+
+        var needsDecision = false
+        lines = lines.enumerated().filter { index, line in
+            guard index >= bodyStart else { return true }
+            let stripped = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if stripped.range(of: #"(?i)^needs[_ ]?decision\s*:"#, options: .regularExpression) != nil {
+                needsDecision = stripped.range(of: #"(?i)yes|true"#, options: .regularExpression) != nil
+                return false
+            }
+            return true
+        }.map(\.element)
+
+        let spoken = lines.dropFirst(bodyStart)
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let spokenText = spoken.isEmpty ? text : spoken
+        if summary.isEmpty {
+            summary = EventNormalizer.summary(for: NormalizedEvent(
+                source: SourceKind.codex.rawValue,
+                eventType: "assistant.completed",
+                title: "Codex update",
+                text: spokenText
+            ), limit: 120)
+        }
+        return (summary, spokenText, needsDecision)
+    }
+
+    private static func fallbackFollowUpAnswer(
+        card: VoicemailCard,
+        danQuestion: String
+    ) -> CompanionFollowUpAnswerResult {
+        let trimmedQuestion = danQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = card.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headline = summary.isEmpty ? "I can answer from the latest observed update." : summary
+        let spokenContext = card.spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let context = spokenContext.isEmpty ? card.rawText : spokenContext
+        let answer = """
+        \(headline)
+
+        Based on Attaché context I have, \(clipped(context, limit: 900))
+
+        Your question was: \(trimmedQuestion)
+
+        I can answer from the observed update, but I cannot send anything back into Codex from here.
+        """
+        return CompanionFollowUpAnswerResult(
+            answerText: answer.trimmingCharacters(in: .whitespacesAndNewlines),
+            strategy: "deterministic-follow-up-fallback",
+            model: nil,
+            rawContextCharacterCount: card.rawText.count,
+            truncatedContext: false,
+            errorDescription: nil
+        )
+    }
+
+    private static func sanitizeFollowUpAnswerOutput(_ content: String) -> String {
+        let trimmed = content
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "```text", with: "")
+            .replacingOccurrences(of: "```markdown", with: "")
+            .replacingOccurrences(of: "```", with: "")
+
+        let blockedPrefixes = [
+            "CARD_SUMMARY:",
+            "SPOKEN_TEXT:",
+            "DRAFT:",
+            "CODEX-READY DRAFT:"
+        ].map { $0.uppercased() }
+        let blockedFragments = [
+            "sending the follow-up",
+            "sending now",
+            "ready when you are",
+            "want me to send",
+            "should i send",
+            "would you like me to send",
+            "i can send",
+            "i'll send",
+            "i will send"
+        ]
+
+        let lines = trimmed
+            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { line in
+                guard !line.isEmpty else { return true }
+                let uppercased = line.uppercased()
+                let lowercased = line.lowercased()
+                return !blockedPrefixes.contains { uppercased.hasPrefix($0) }
+                    && !blockedFragments.contains { lowercased.contains($0) }
+            }
+
+        let cleaned = lines
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned
+    }
+
+    private static func clipped(_ text: String, limit: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        let end = trimmed.index(trimmed.startIndex, offsetBy: limit)
+        return String(trimmed[..<end]) + "..."
+    }
+
+    /// The user's spoken-language preference as an English language name for
+    /// the prompt, or nil for English (no directive needed).
+    static func spokenLanguageName(defaults: UserDefaults) -> String? {
+        guard let id = defaults.string(forKey: CompanionPreferenceKey.spokenLanguage),
+              id != "en" else { return nil }
+        return CompanionCaptionLanguage.named(id).name
+    }
+
+    private static func firstNonEmpty(_ values: String?...) -> String {
+        for value in values {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return ""
+    }
+
+    private static func normalizedServiceTier(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        switch trimmed.lowercased() {
+        case "default", "standard":
+            return nil
+        default:
+            return trimmed
+        }
+    }
+}
+
+struct CompanionFollowUpAnswerResult: Equatable {
+    var answerText: String
+    var strategy: String
+    var model: String?
+    var rawContextCharacterCount: Int
+    var truncatedContext: Bool
+    var errorDescription: String?
+}
+
+struct CompanionPresentationSettings {
+    var llmEnabled: Bool
+    var provider: CompanionPresentationProvider
+    var baseURL: URL
+    var apiKey: String
+    var apiKeySecretRef: String
+    var model: String
+    var reasoningEffort: String?
+    var serviceTier: String?
+    var profilePrompt: String
+    /// True when the provider's key account is flagged in defaults, so
+    /// unresolved loads can answer "is a key stored" without touching the
+    /// keychain (a keychain read can block on a SecurityAgent prompt).
+    var apiKeyStoredInKeychain: Bool = false
+
+    var isConfigured: Bool {
+        if provider.requiresAPIKey {
+            return !apiKey.isEmpty && !model.isEmpty
+        }
+        return !model.isEmpty
+    }
+
+    var hasProviderConfiguration: Bool {
+        if provider.requiresAPIKey {
+            return (!apiKey.isEmpty || !apiKeySecretRef.isEmpty || apiKeyStoredInKeychain) && !model.isEmpty
+        }
+        return !model.isEmpty
+    }
+
+    static func load(
+        defaults: UserDefaults,
+        environment: [String: String],
+        resolveSecrets: Bool = true
+    ) -> CompanionPresentationSettings {
+        let llmEnabled: Bool
+        if defaults.object(forKey: CompanionPreferenceKey.presentationLLMEnabled) == nil {
+            llmEnabled = true
+        } else {
+            llmEnabled = defaults.bool(forKey: CompanionPreferenceKey.presentationLLMEnabled)
+        }
+
+        let explicitProviderText = firstNonEmpty(
+            environment["ATTACHE_LLM_PROVIDER"],
+            environment["COMPANION_LLM_PROVIDER"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMProvider),
+            ""
+        )
+        let configuredBaseURLText = firstNonEmpty(
+            environment["ATTACHE_LLM_BASE_URL"],
+            environment["COMPANION_LLM_BASE_URL"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMBaseURL),
+            ""
+        )
+        let provider = CompanionPresentationProvider.from(
+            explicitValue: explicitProviderText,
+            baseURLText: configuredBaseURLText
+        )
+        let baseURLText = firstNonEmpty(configuredBaseURLText, provider.defaultBaseURL)
+        let baseURL = URL(string: baseURLText) ?? URL(string: CompanionPresentationProvider.ollama.defaultBaseURL)!
+        let apiKeySecretRef = firstNonEmpty(
+            environment["ATTACHE_LLM_API_KEY_SECRET_REF"],
+            environment["COMPANION_LLM_API_KEY_SECRET_REF"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMAPIKeySecretRef),
+            ""
+        )
+        // The keychain is only touched when secrets are actually being
+        // resolved; unresolved loads run on the launch path and must never
+        // block on a SecurityAgent authorization.
+        let secretAccountFlagged = ((defaults.array(forKey: CompanionPreferenceKey.configuredSecretAccounts) as? [String]) ?? [])
+            .contains(provider.developmentSecretAccount)
+        var apiKey = firstNonEmpty(
+            environment["ATTACHE_LLM_API_KEY"],
+            environment["COMPANION_LLM_API_KEY"],
+            resolveSecrets ? configuredSecret(defaults: defaults, account: provider.developmentSecretAccount) : nil,
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMAPIKey),
+            ""
+        )
+        if resolveSecrets, apiKey.isEmpty, !apiKeySecretRef.isEmpty {
+            apiKey = CompanionSecretStore.readSecret(reference: apiKeySecretRef) ?? ""
+        }
+        let model = firstNonEmpty(
+            environment["ATTACHE_LLM_MODEL"],
+            environment["COMPANION_LLM_MODEL"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMModel),
+            provider.defaultModel
+        )
+        let configuredReasoningEffort = firstNonEmpty(
+            environment["ATTACHE_REASONING_EFFORT"],
+            environment["COMPANION_REASONING_EFFORT"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationReasoningEffort),
+            provider.defaultReasoningEffort
+        )
+        let reasoningEffort = provider.supportsReasoningEffort ? configuredReasoningEffort : "none"
+        let serviceTier = provider.supportsServiceTier
+            ? firstNonEmpty(
+                environment["ATTACHE_SERVICE_TIER"],
+                defaults.string(forKey: CompanionPreferenceKey.presentationServiceTier),
+                provider.defaultServiceTier
+            )
+            : nil
+        let profilePrompt = firstNonEmpty(
+            environment["ATTACHE_PERSONALITY_PROMPT"],
+            environment["ATTACHE_PROFILE_PROMPT"],
+            environment["COMPANION_PERSONALITY_PROMPT"],
+            defaults.string(forKey: CompanionPreferenceKey.personalityPrompt),
+            ""
+        )
+        return CompanionPresentationSettings(
+            llmEnabled: llmEnabled,
+            provider: provider,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            apiKeySecretRef: apiKeySecretRef,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+            profilePrompt: profilePrompt,
+            apiKeyStoredInKeychain: secretAccountFlagged
+        )
+    }
+
+    private static func firstNonEmpty(_ values: String?...) -> String {
+        for value in values {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return ""
+    }
+
+    private static func configuredSecret(defaults: UserDefaults, account: String) -> String? {
+        let accounts = defaults.array(forKey: CompanionPreferenceKey.configuredSecretAccounts) as? [String] ?? []
+        guard accounts.contains(account) else { return nil }
+        return CompanionSecretVault.read(account: account)
+    }
+}
+
+private enum CompanionPresentationError: LocalizedError {
+    case emptyResponse
+    case invalidResponse
+    case httpStatus(Int, String)
+    case notConfigured
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyResponse:
+            return "LLM response was empty."
+        case .invalidResponse:
+            return "LLM response was not HTTP."
+        case .httpStatus(let status, let body):
+            let clipped = String(body.prefix(300))
+            return "LLM request failed with HTTP \(status): \(clipped)"
+        case .notConfigured:
+            return "No personality LLM is configured. Set one up in Settings → Model."
+        }
+    }
+}
+
+private struct ChatCompletionResponse: Decodable {
+    var choices: [Choice]
+
+    struct Choice: Decodable {
+        var message: Message
+    }
+
+    struct Message: Decodable {
+        var content: String?
+    }
+}

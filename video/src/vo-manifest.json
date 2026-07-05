@@ -1,0 +1,62 @@
+{
+  "hook": {
+    "seconds": 9.362,
+    "text": "Your AI agent is about to work for the next hour. You could sit and watch every line, or move on to the next thing and let it come to you."
+  },
+  "intro": {
+    "seconds": 7.608,
+    "text": "This is Attach\u00e9. A native Mac app that watches the agents working for you, and tells you what happened. Out loud."
+  },
+  "install": {
+    "seconds": 3.667,
+    "text": "Install is one download. No account, no sign-up. It just runs."
+  },
+  "onboard": {
+    "seconds": 8.276,
+    "text": "Setup takes two minutes. Pick a voice, a personality, a model, and the sources it watches. Nothing runs until you say so."
+  },
+  "integrations": {
+    "seconds": 9.252,
+    "text": "Bring your own brain and voice. A local model with olahma, or the cloud with xAI, ElevenLabs, and OpenAI. Mix and match."
+  },
+  "privacy": {
+    "seconds": 16.037,
+    "text": "So run it however the work demands. Private: a local model and an on-device voice, with nothing ever leaving your Mac. Or cloud: premium voices and frontier models, for the work that isn't sensitive."
+  },
+  "pin": {
+    "seconds": 7.968,
+    "text": "Press Command K, and pin the session you care about. That is the whole setup. Attach\u00e9 only speaks about sessions you pin."
+  },
+  "update": {
+    "seconds": 7.249,
+    "text": "Attach\u00e9 turns your agents' work into voice memos, in real time. Press Command Y, and pick the one you want to hear."
+  },
+  "personalities": {
+    "seconds": 3.549,
+    "text": "Pick a preset, or write your own, and Attach\u00e9 talks like that."
+  },
+  "needs": {
+    "seconds": 9.96,
+    "text": "This is the part that matters. Go do your next thing. When an agent actually needs you, Attach\u00e9 speaks up once. Everything else just waits."
+  },
+  "inbox": {
+    "seconds": 6.919,
+    "text": "When you are ready, catch up on everything in one pass, like voicemail. Play all, skip, replay."
+  },
+  "multilingual": {
+    "seconds": 1.382,
+    "text": "Attach\u00e9 is multilingual."
+  },
+  "live": {
+    "seconds": 12.165,
+    "text": "Want to do more than listen? Jump into a live session. Attach\u00e9 knows everything that's running, so you can ask anything, push new direction to your agents, and plan their next move together."
+  },
+  "outro": {
+    "seconds": 4.18,
+    "text": "Attach\u00e9. Fluent in agent. <break time=\"0.7s\" /> Speaks human."
+  },
+  "byo": {
+    "seconds": 8.983,
+    "text": "Run Attach\u00e9 fully local. Open models, open voices, nothing leaves your Mac. Or connect the frontier: Claude, Codex, xAI."
+  }
+}

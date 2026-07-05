@@ -1,0 +1,32 @@
+{
+  "accentDark": {
+    "blue": 0.95,
+    "green": 0.85,
+    "red": 0.45
+  },
+  "accentLight": {
+    "blue": 0.48,
+    "green": 0.35,
+    "red": 0.03
+  },
+  "id": "seed.ocean",
+  "name": "Ocean",
+  "stops": [
+    {
+      "blue": 0.35,
+      "green": 0.15,
+      "red": 0.05
+    },
+    {
+      "blue": 0.6,
+      "green": 0.45,
+      "red": 0.05
+    },
+    {
+      "blue": 0.95,
+      "green": 0.8,
+      "red": 0.35
+    }
+  ],
+  "wantsSolidPlates": false
+}
