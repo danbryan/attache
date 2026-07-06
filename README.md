@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/assets/attache-logo.svg" width="130" alt="Attaché logo">
-</p>
-
 <h1 align="center">Attaché</h1>
 
 <p align="center"><b>Your AI agents, out loud.</b></p>
