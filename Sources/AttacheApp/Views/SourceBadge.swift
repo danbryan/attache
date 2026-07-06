@@ -18,13 +18,34 @@ struct SourceBadge: View {
             SourceKind.codex.rawValue: "source-codex"
         ]
         for (kind, resource) in names {
-            guard let url = Bundle.module.url(forResource: resource, withExtension: "svg"),
+            guard let url = sourceMarkURL(resource),
                   let image = NSImage(contentsOf: url), image.isValid else { continue }
             image.isTemplate = true
             loaded[kind] = image
         }
         return loaded
     }()
+
+    /// Locate a bundled source mark WITHOUT touching `Bundle.module`. Its
+    /// generated accessor calls `fatalError` when it cannot resolve the SwiftPM
+    /// resource bundle, and on a clean install (macOS 26, quarantined) that
+    /// lookup failed on the unsigned nested resource bundle and crashed the
+    /// whole app the first time a SourceBadge rendered. We read the file by
+    /// path and return nil (text-chip fallback) if it is absent, never crash.
+    private static func sourceMarkURL(_ resource: String) -> URL? {
+        if let url = Bundle.main.url(forResource: resource, withExtension: "svg") {
+            return url
+        }
+        for base in [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap({ $0 }) {
+            let url = base
+                .appendingPathComponent("Attache_AttacheApp.bundle", isDirectory: true)
+                .appendingPathComponent("\(resource).svg")
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
+    }
 
     var body: some View {
         if let mark = Self.marks[sourceKind] {
