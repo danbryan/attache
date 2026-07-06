@@ -30,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
+    /// Marketing version (CFBundleShortVersionString) shown in the menu and the
+    /// About panel so users can see, at a glance, which build they are on.
+    private static let shortVersionString: String =
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? ""
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         #if DEBUG
@@ -106,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        let aboutItem = NSMenuItem(title: NSLocalizedString("About Attaché", comment: ""), action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(.separator())
         let settingsItem = NSMenuItem(title: NSLocalizedString("Settings…", comment: ""), action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
         appMenu.addItem(settingsItem)
@@ -302,6 +311,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildMenu() {
         let menu = NSMenu()
+        let versionItem = NSMenuItem(title: "\(CompanionAppSupport.appDisplayName) \(Self.shortVersionString)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
+        menu.addItem(.separator())
         let summaryItem = NSMenuItem(title: fleetSummary, action: nil, keyEquivalent: "")
         summaryItem.isEnabled = false
         menu.addItem(summaryItem)
@@ -344,6 +357,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let modeItem = NSMenuItem(title: modeTitle, action: #selector(toggleVoicemailMode), keyEquivalent: "")
         menu.addItem(modeItem)
         menu.addItem(.separator())
+        let checkUpdatesItem = NSMenuItem(title: NSLocalizedString("Check for Updates…", comment: ""), action: #selector(showUpdates), keyEquivalent: "")
+        menu.addItem(checkUpdatesItem)
         menu.addItem(NSMenuItem(title: "Quit \(CompanionAppSupport.appDisplayName)", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
         statusItem?.menu = menu
@@ -351,6 +366,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openCompanion() {
         windowController?.showCompanion()
+    }
+
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: CompanionAppSupport.appDisplayName,
+            .applicationVersion: Self.shortVersionString,
+            .version: ""
+        ])
+    }
+
+    @objc private func showUpdates() {
+        updaterController.checkForUpdates(nil)
     }
 
     @objc private func focusSessionFromMenu(_ sender: NSMenuItem) {
