@@ -29,4 +29,4 @@ macOS theme, volume up so the spoken updates are audible.
 - For scene 9, enable two-way on the demo session first, then speak the
   instruction so the confirm-and-deliver path is genuine.
 - Trim silences; the spoken updates set the pace.
-- Title suggestion: "Your AI agents, out loud. Attaché for macOS."
+- Title suggestion: "Attaché: Fluent in agent. Speaks human."

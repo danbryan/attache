@@ -16,7 +16,6 @@ you in plain language.
 > **Fluent in agent. Speaks human.**
 
 Supporting lines:
-- Your AI agents, out loud.
 - Stop babysitting the terminal.
 - Any voice. Any personality. Even one you describe.
 
@@ -58,7 +57,7 @@ in tests. One accent, blue, everywhere; there is no second brand color.
 
 A blue audio waveform (a row of rounded bars) is the recurring motif. It sits
 under the headline on the site, in the app icon, and in the playback UI. It ties
-every surface back to the core idea: your agents, out loud.
+every surface back to the core idea: fluent in agent, speaks human.
 
 ## Logo
 

@@ -1,6 +1,6 @@
 <h1 align="center">Attaché</h1>
 
-<p align="center"><b>Your AI agents, out loud.</b></p>
+<p align="center"><b>Fluent in agent. Speaks human.</b></p>
 
 <p align="center">
   A native macOS app that watches the AI agents working for you and tells you
