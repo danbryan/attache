@@ -10,13 +10,17 @@
 
 <p align="center">
   <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-0F1424">
-  <img alt="signed & notarized" src="https://img.shields.io/badge/signed%20%26%20notarized-30EAE0">
+  <img alt="signed & notarized" src="https://img.shields.io/badge/signed%20%26%20notarized-0F1424">
   <img alt="license FSL-1.1" src="https://img.shields.io/badge/license-FSL--1.1-0A84FF">
 </p>
 
 <p align="center">
+  <b><a href="https://attache.fm">attache.fm</a></b>
+</p>
+
+<p align="center">
   <a href="https://youtu.be/G0xXOal4e4U">
-    <img src="docs/assets/screenshot-play.png" width="720" alt="Watch the 2-minute tour">
+    <img src="https://img.youtube.com/vi/G0xXOal4e4U/maxresdefault.jpg" width="720" alt="Watch the 2-minute tour">
   </a>
   <br>
   <b><a href="https://youtu.be/G0xXOal4e4U">▶ Watch the 2-minute tour</a></b>
