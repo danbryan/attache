@@ -150,6 +150,17 @@ a user-visible prerequisite. Named targets are checked against the focused
 session, so "tell Codex..." will not silently send to a focused Claude Code
 session.
 
+Personality tools are provider-neutral. HTTP providers that support the
+OpenAI-style `tool_calls` protocol receive the normal structured tool schema.
+CLI-backed personalities such as `claude_cli` and `codex_cli` still run the
+vendor CLI with its native filesystem/tools disabled, but Attaché exposes its own
+bounded app tools through a JSON bridge in the prompt and parses that response
+before executing anything. That means every personality provider can request
+`stage_agent_instruction`, `read_session_transcript`, transcript search,
+working-directory listing, file reads rooted in the attached session, and
+Attaché-local session renames without giving the CLI subprocess direct tool
+access.
+
 The provider canaries are separate: `scripts/provider-canaries.sh` always runs a
 deterministic local OpenAI-compatible provider as a free positive control, then
 tests xAI, OpenAI-compatible, Groq, and Ollama when credentials or local models

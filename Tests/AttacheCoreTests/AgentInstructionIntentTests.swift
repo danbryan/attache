@@ -16,6 +16,20 @@ final class AgentInstructionIntentTests: XCTestCase {
         XCTAssertEqual(intent?.instruction, "what changed in the latest build?")
     }
 
+    func testDetectsHeyCanYouSendCodexTestMessage() {
+        let intent = AgentInstructionIntent.detect(in: "Hey, can you send Codex a test message and tell me its response?")
+
+        XCTAssertEqual(intent?.requestedAgent, .codex)
+        XCTAssertEqual(intent?.instruction, "Reply with a short test response.")
+    }
+
+    func testDetectsHeyCanYouSendCodexMessageToInstruction() {
+        let intent = AgentInstructionIntent.detect(in: "Hey, can you send Codex a message to reply exactly ATTACHE_PONG and do not use tools?")
+
+        XCTAssertEqual(intent?.requestedAgent, .codex)
+        XCTAssertEqual(intent?.instruction, "reply exactly ATTACHE_PONG and do not use tools?")
+    }
+
     func testDetectsClaudeCodeAndAttachedAgentPhrases() {
         let claude = AgentInstructionIntent.detect(in: "Have Claude Code run the focused test target")
         let attached = AgentInstructionIntent.detect(in: "Please tell the agent to run swift test")

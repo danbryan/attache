@@ -110,7 +110,7 @@ ATTACHE_AGENT_INTENT_NONCE="$NONCE" \
 ATTACHE_AGENT_INTENT_SESSION_ID="$SESSION_ID" \
 ATTACHE_AGENT_INTENT_SESSION_FILE="$SESSION_FILE" \
 ATTACHE_AGENT_INTENT_TOKEN="$TOKEN" \
-ATTACHE_AGENT_INTENT_PROMPT="Tell Codex to reply exactly $TOKEN and do not use tools." \
+ATTACHE_AGENT_INTENT_PROMPT="Hey, can you send Codex a message to reply exactly $TOKEN and do not use tools, then tell me its response?" \
   scripts/ui-smoke.sh
 
 echo "==> Agent intent smoke passed for session $SESSION_ID"

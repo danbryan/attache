@@ -154,7 +154,15 @@ public struct AgentInstructionIntent: Equatable {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         text = text.trimmingCharacters(in: CharacterSet(charactersIn: ":,;- "))
         let lower = text.lowercased()
-        for prefix in ["to ", "that ", "with ", "message "] {
+        if lower == "a test message"
+            || lower == "test message"
+            || lower.hasPrefix("a test message and tell me")
+            || lower.hasPrefix("test message and tell me")
+            || lower.hasPrefix("a test message, then tell me")
+            || lower.hasPrefix("test message, then tell me") {
+            return "Reply with a short test response."
+        }
+        for prefix in ["to ", "that ", "with ", "a message to ", "message to ", "message "] {
             if lower.hasPrefix(prefix) {
                 text = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
                 text = text.trimmingCharacters(in: CharacterSet(charactersIn: ":,;- "))
@@ -173,6 +181,8 @@ public struct AgentInstructionIntent: Equatable {
             changed = false
             for prefix in [
                 "please ",
+                "hey, ",
+                "hey ",
                 "hey attaché, ",
                 "hey attache, ",
                 "attaché, ",

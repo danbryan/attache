@@ -2016,7 +2016,7 @@ final class AppModel: ObservableObject {
     }
 
     private var conversationAgentInstructionToolAvailable: Bool {
-        canSendToAgent && !presentationProvider.isCLI
+        canSendToAgent
     }
 
     private func buildConversationMessages() -> [CompanionChatMessage] {
@@ -2025,7 +2025,7 @@ final class AppModel: ObservableObject {
         let profilePrompt = personaSnapshot.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? CompanionPersonality.defaultProfilePrompt
             : personaSnapshot.prompt
-        var system = CompanionPersonality.conversationSystemPrompt(
+        let system = CompanionPersonality.conversationSystemPrompt(
             profilePrompt: profilePrompt,
             memoryContext: memorySnapshot.context,
             sessionTitle: talkContextSession?.displayTitle,
@@ -2033,12 +2033,6 @@ final class AppModel: ObservableObject {
             latestSummary: conversationLatestSummary,
             canStageAgentInstruction: conversationAgentInstructionToolAvailable
         )
-        // CLI providers run in print mode with no tool calls, so the transcript and
-        // file tools silently do nothing. Tell the model so it stops pretending to
-        // check the session or files (INF-165 item 5).
-        if presentationProvider.isCLI {
-            system += "\n\nTool availability: with the current provider the transcript and file tools are unavailable. Answer only from the context already given here; never claim to have read the session transcript or a file."
-        }
         var messages = [CompanionChatMessage(role: "system", content: system)]
         // Cap the in-RAM transcript sent per turn so a long multi-call conversation
         // doesn't grow the request unbounded; durable memory is the persistence

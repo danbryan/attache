@@ -319,7 +319,7 @@ final class CompanionPresentationService {
         if allowAgentInstructionTool {
             tools.append(["type": "function", "function": [
                 "name": "stage_agent_instruction",
-                "description": "Stage an instruction for the attached work agent when the user explicitly asks you to tell, ask, or instruct that agent. This opens Attaché's confirmation UI and does not send by itself.",
+                "description": "Route an instruction for the attached work agent when the user explicitly asks you to tell, ask, or instruct that agent. Attaché applies the user's send-to-agent policy, safety filter, and session targeting before anything is delivered.",
                 "parameters": [
                     "type": "object",
                     "properties": [
@@ -337,6 +337,11 @@ final class CompanionPresentationService {
         var toolCalls: [ConversationToolCall]
     }
 
+    struct CLIToolCallDirective: Equatable {
+        var name: String
+        var arguments: String
+    }
+
     private struct ConversationToolCall {
         var id: String
         var name: String
@@ -349,18 +354,28 @@ final class CompanionPresentationService {
         settings: CompanionPresentationSettings
     ) async throws -> ConversationChatResult {
         if settings.provider.isCLI, let tool = settings.provider.cliTool {
-            // The CLI runs a single completion with no OpenAI tool-call protocol, so
-            // we render the messages to a prompt and return its text with no tools.
-            let chatMessages = messages.compactMap { message -> CompanionChatMessage? in
+            // The CLI has no OpenAI tool-call wire protocol, and we still run its
+            // native tools disabled. Attaché tools are exposed through a narrow JSON
+            // bridge in the prompt and executed by the app after parsing.
+            var chatMessages = messages.compactMap { message -> CompanionChatMessage? in
                 guard let role = message["role"] as? String,
                       let content = message["content"] as? String else { return nil }
                 return CompanionChatMessage(role: role, content: content)
+            }
+            if let tools, !tools.isEmpty {
+                chatMessages.insert(cliToolBridgeMessage(tools: tools), at: 0)
             }
             let text = try await CLILanguageModel(
                 tool: tool, model: settings.model,
                 reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier
             ).complete(messages: chatMessages)
-            return ConversationChatResult(content: text, toolCalls: [])
+            let directives = parseCLIToolDirectives(in: text)
+            return ConversationChatResult(
+                content: directives.isEmpty ? text : "",
+                toolCalls: directives.map {
+                    ConversationToolCall(id: "cli-\(UUID().uuidString)", name: $0.name, arguments: $0.arguments)
+                }
+            )
         }
         var url = settings.baseURL
         if !url.path.hasSuffix("/chat/completions") {
@@ -420,6 +435,129 @@ final class CompanionPresentationService {
             }
         }
         return ConversationChatResult(content: content, toolCalls: calls)
+    }
+
+    static func cliToolBridgeMessage(tools: [[String: Any]]) -> CompanionChatMessage {
+        let descriptions = tools.compactMap { tool -> String? in
+            guard let function = tool["function"] as? [String: Any],
+                  let name = function["name"] as? String else { return nil }
+            let description = (function["description"] as? String) ?? ""
+            return "- \(name): \(description)"
+        }.joined(separator: "\n")
+        return CompanionChatMessage(role: "system", content: """
+        Attaché tool bridge:
+        You have access to these Attaché app tools even though this CLI run has its own native tools disabled:
+        \(descriptions)
+
+        To call a tool, reply with exactly one JSON object and no prose:
+        {"attache_tool_call":{"name":"tool_name","arguments":{}}}
+
+        Use one tool call at a time. After Attaché returns a tool result, either call another tool with the same JSON format or answer the user normally.
+        """)
+    }
+
+    static func parseCLIToolDirectives(in text: String) -> [CLIToolCallDirective] {
+        for candidate in cliJSONCandidates(in: text) {
+            guard let data = candidate.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            let directives = cliToolDirectives(in: object)
+            if !directives.isEmpty { return directives }
+        }
+        return []
+    }
+
+    private static func cliJSONCandidates(in text: String) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates = [trimmed]
+        if let fenced = fencedJSON(in: trimmed) {
+            candidates.append(fenced)
+        }
+        if let object = firstJSONObject(in: trimmed) {
+            candidates.append(object)
+        }
+        return Array(Set(candidates)).filter { !$0.isEmpty }
+    }
+
+    private static func fencedJSON(in text: String) -> String? {
+        guard let start = text.range(of: "```") else { return nil }
+        var body = String(text[start.upperBound...])
+        if body.lowercased().hasPrefix("json") {
+            body = String(body.dropFirst("json".count))
+        }
+        body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let end = body.range(of: "```") else { return nil }
+        return String(body[..<end.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func firstJSONObject(in text: String) -> String? {
+        guard let start = text.firstIndex(of: "{") else { return nil }
+        var depth = 0
+        var inString = false
+        var escaping = false
+        var index = start
+        while index < text.endIndex {
+            let character = text[index]
+            if inString {
+                if escaping {
+                    escaping = false
+                } else if character == "\\" {
+                    escaping = true
+                } else if character == "\"" {
+                    inString = false
+                }
+            } else {
+                if character == "\"" {
+                    inString = true
+                } else if character == "{" {
+                    depth += 1
+                } else if character == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        return String(text[start...index])
+                    }
+                }
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
+
+    private static func cliToolDirectives(in object: [String: Any]) -> [CLIToolCallDirective] {
+        if let call = object["attache_tool_call"] as? [String: Any],
+           let directive = cliToolDirective(in: call) {
+            return [directive]
+        }
+        if let call = object["tool_call"] as? [String: Any],
+           let directive = cliToolDirective(in: call) {
+            return [directive]
+        }
+        if let calls = object["tool_calls"] as? [[String: Any]] {
+            return calls.compactMap(cliToolDirective)
+        }
+        return []
+    }
+
+    private static func cliToolDirective(in object: [String: Any]) -> CLIToolCallDirective? {
+        if let function = object["function"] as? [String: Any] {
+            guard let name = function["name"] as? String else { return nil }
+            return CLIToolCallDirective(name: name, arguments: argumentsString(function["arguments"]))
+        }
+        guard let name = object["name"] as? String else { return nil }
+        return CLIToolCallDirective(name: name, arguments: argumentsString(object["arguments"]))
+    }
+
+    private static func argumentsString(_ value: Any?) -> String {
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? "{}" : trimmed
+        }
+        guard let value,
+              JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              let string = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return string
     }
 
     static func eventWithPlainReadbackPresentation(
