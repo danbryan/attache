@@ -198,7 +198,8 @@ Pre-release coverage adds nine opt-in gates through
 6. `scripts/conversation-feedback-smoke.sh` starts a deterministic local
    personality provider, presses the visible live Ask Attaché send button, proves
    the text field clears, proves a thinking indicator appears while the provider
-   is delayed, and proves the reply is shown.
+   is delayed, proves the reply is shown on the live call surface, and proves
+   the reply starts live playback.
 7. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
    local Ollama default, seeds no cloud credentials, and still files a card.
 8. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event

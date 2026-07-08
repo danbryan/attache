@@ -19,7 +19,7 @@ Usage:
 Starts a deterministic local personality provider, opens the live Ask Attaché
 text input, presses the visible send button, and proves the UI clears the field,
 shows a thinking indicator while the provider is delayed, then displays the
-provider's reply.
+provider's reply on the live call surface and starts reply playback.
 EOF
 }
 

@@ -957,23 +957,16 @@ if enabled("f15") {
         _ = try waitForElement("visible thinking feedback", in: try mainWindow(), containing: "Thinking", timeout: 5)
     }
 
-    run.step("f15-conversation-feedback", "Ask Attaché reply is shown after the provider responds") {
-        do {
-            _ = try waitForElement("conversation feedback reply", in: try mainWindow(),
-                                   containing: replyToken,
-                                   timeout: 20)
-        } catch {
-            app.key(Key.y, command: true)
-            let field = try waitForElement("history search field", in: try mainWindow(),
-                                           role: kAXTextFieldRole as String, containing: "Search history",
-                                           timeout: 15)
-            _ = field.setFocused()
-            if !field.setValue(replyToken) { app.type(replyToken) }
-            _ = try waitForHistoryCardRow(filteredBy: replyToken, timeout: 60)
-            app.key(Key.escape)
-            try? waitForElementGone("history search field", in: try mainWindow(),
-                                    role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
+    run.step("f15-conversation-feedback", "Ask Attaché reply is shown on the live call surface") {
+        _ = try waitForElement("live conversation reply", in: try mainWindow(), timeout: 20) { element in
+            element.identifier == "Conversation reply" && element.matches(replyToken)
         }
+    }
+
+    run.step("f15-conversation-feedback", "Ask Attaché reply starts playback on the live call surface") {
+        _ = try waitForElement("live reply playback", in: try mainWindow(),
+                               containing: "Assistant speaking",
+                               timeout: 60)
         let providerText = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
         guard providerText.contains(prompt) else {
             throw SmokeError(message: "provider log did not record prompt \(prompt). Log:\n\(providerText)")

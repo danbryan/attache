@@ -114,6 +114,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var conversationStatus: String = ""
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
+    @Published private(set) var liveConversationReplyText: String = ""
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -660,11 +661,21 @@ final class AppModel: ObservableObject {
             self?.finishPlayback(cardID: cardID, success: success)
         }
         playback.onPreviewFinished = { [weak self] in
+            if self?.expectingReplyAudio == true {
+                if self?.pendingAssistantReply != nil {
+                    self?.revealPendingReply()
+                }
+                self?.expectingReplyAudio = false
+                self?.maybeResumeContinuousListening()
+            }
             self?.resumeLiveQueueAfterReply()
         }
         playback.onPlaybackError = { [weak self] message in
             self?.intakeStatus = message
             self?.voiceProviderStatus = message
+            if self?.conversationActive == true, self?.expectingReplyAudio == true {
+                self?.conversationStatus = "Voice playback failed. Reply is shown."
+            }
         }
         setupMediaRemote()
         setupConversationObservers()
@@ -1595,6 +1606,7 @@ final class AppModel: ObservableObject {
         conversationActive = true
         if !wasActive {
             conversationDestination = .attache
+            liveConversationReplyText = ""
         }
         if conversationStatus.isEmpty {
             conversationStatus = talkContextSession == nil
@@ -1621,14 +1633,17 @@ final class AppModel: ObservableObject {
     func clearConversation() {
         conversationMessages = []
         conversationStatus = ""
+        liveConversationReplyText = ""
     }
 
     func cycleVoiceInputMode() {
         voiceInputMode = voiceInputMode.next
     }
 
-    /// True while waiting on the model or holding the reply text until its audio.
-    var isAwaitingReply: Bool { isConversing || pendingAssistantReply != nil }
+    /// True while waiting on the model or preparing the reply audio.
+    var isAwaitingReply: Bool {
+        isConversing || pendingAssistantReply != nil || (expectingReplyAudio && playback.isBusy)
+    }
 
     var conversationProgressText: String {
         if isConversing {
@@ -1636,8 +1651,17 @@ final class AppModel: ObservableObject {
                 ? "Thinking \(Self.elapsedConversationTime(conversationElapsedSeconds))"
                 : "Thinking…"
         }
-        if pendingAssistantReply != nil {
+        if playback.isPlaying {
             return "Speaking…"
+        }
+        if playback.isPaused {
+            return "Playback paused"
+        }
+        if expectingReplyAudio, playback.isBusy {
+            return "Preparing audio…"
+        }
+        if pendingAssistantReply != nil {
+            return "Preparing audio…"
         }
         return conversationStatus
     }
@@ -1694,6 +1718,7 @@ final class AppModel: ObservableObject {
         guard !trimmed.isEmpty, !isAwaitingReply else { return }
 
         conversationDraft = ""
+        liveConversationReplyText = ""
         appendConversationTurn(role: .user, text: trimmed)
 
         if conversationDestination == .agent {
@@ -1737,8 +1762,10 @@ final class AppModel: ObservableObject {
                 case .success(let reply):
                     self.surfaceConversationReply(reply)
                 case .failure(let error):
+                    let message = "I hit a problem: \(error.localizedDescription)"
                     self.conversationStatus = error.localizedDescription
-                    self.appendConversationTurn(role: .assistant, text: "I hit a problem: \(error.localizedDescription)")
+                    self.liveConversationReplyText = message
+                    self.appendConversationTurn(role: .assistant, text: message)
                     self.maybeResumeContinuousListening()
                 }
             }
@@ -1748,9 +1775,11 @@ final class AppModel: ObservableObject {
     private func surfaceConversationReply(_ reply: String) {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        // Hold the text until the audio is ready, then reveal them together so the
-        // reply you read matches the reply you hear.
-        conversationStatus = "Speaking…"
+        // The call screen must show the returned text even if audio synthesis is
+        // slow or unavailable. The transcript turn is still appended when audio
+        // starts, or by the fallback timer below.
+        liveConversationReplyText = trimmed
+        conversationStatus = "Preparing audio…"
         pendingAssistantReply = trimmed
         expectingReplyAudio = true
         // The reply preempts any live update mid-flight; requeue it so it resumes
@@ -3724,6 +3753,13 @@ final class AppModel: ObservableObject {
         // preempted the live queue, so resume that queue and go back to
         // listening instead of advancing drains.
         if let card = finishedCard, isDirectConversationReply(card) {
+            if pendingAssistantReply != nil {
+                revealPendingReply()
+            }
+            expectingReplyAudio = false
+            if !success {
+                conversationStatus = "Voice playback failed. Reply is shown."
+            }
             resumeLiveQueueAfterReply()
             maybeResumeContinuousListening()
             return
