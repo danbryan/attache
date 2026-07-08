@@ -18,8 +18,8 @@ Usage:
 
 Starts a deterministic local personality provider, opens the live Ask Attaché
 text input, presses the visible send button, and proves the UI clears the field,
-shows a thinking indicator while the provider is delayed, then displays the
-provider's reply on the live call surface and starts reply playback.
+shows a thinking indicator while the provider is delayed, shows audio-prep
+feedback, then proves the reply arrives through captions and a replayable card.
 EOF
 }
 
@@ -128,6 +128,7 @@ ATTACHE_CONVERSATION_FEEDBACK_NONCE="$NONCE" \
 ATTACHE_CONVERSATION_FEEDBACK_PROVIDER_LOG="$PROVIDER_LOG" \
 ATTACHE_CONVERSATION_FEEDBACK_PROMPT="ATTACHE_CONVERSATION_FEEDBACK $NONCE" \
 ATTACHE_CONVERSATION_FEEDBACK_REPLY="ATTACHE_CONVERSATION_FEEDBACK_REPLY_$NONCE" \
+ATTACHE_UI_TEST_AUDIO_PREP_DELAY_MS=1500 \
   scripts/ui-smoke.sh
 
 echo "==> Conversation feedback smoke passed"

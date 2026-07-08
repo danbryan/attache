@@ -114,7 +114,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var conversationStatus: String = ""
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
-    @Published private(set) var liveConversationReplyText: String = ""
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -674,7 +673,7 @@ final class AppModel: ObservableObject {
             self?.intakeStatus = message
             self?.voiceProviderStatus = message
             if self?.conversationActive == true, self?.expectingReplyAudio == true {
-                self?.conversationStatus = "Voice playback failed. Reply is shown."
+                self?.conversationStatus = "Voice playback failed. Reply was filed."
             }
         }
         setupMediaRemote()
@@ -1606,7 +1605,6 @@ final class AppModel: ObservableObject {
         conversationActive = true
         if !wasActive {
             conversationDestination = .attache
-            liveConversationReplyText = ""
         }
         if conversationStatus.isEmpty {
             conversationStatus = talkContextSession == nil
@@ -1633,7 +1631,6 @@ final class AppModel: ObservableObject {
     func clearConversation() {
         conversationMessages = []
         conversationStatus = ""
-        liveConversationReplyText = ""
     }
 
     func cycleVoiceInputMode() {
@@ -1718,7 +1715,6 @@ final class AppModel: ObservableObject {
         guard !trimmed.isEmpty, !isAwaitingReply else { return }
 
         conversationDraft = ""
-        liveConversationReplyText = ""
         appendConversationTurn(role: .user, text: trimmed)
 
         if conversationDestination == .agent {
@@ -1764,7 +1760,6 @@ final class AppModel: ObservableObject {
                 case .failure(let error):
                     let message = "I hit a problem: \(error.localizedDescription)"
                     self.conversationStatus = error.localizedDescription
-                    self.liveConversationReplyText = message
                     self.appendConversationTurn(role: .assistant, text: message)
                     self.maybeResumeContinuousListening()
                 }
@@ -1775,22 +1770,18 @@ final class AppModel: ObservableObject {
     private func surfaceConversationReply(_ reply: String) {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        // The call screen must show the returned text even if audio synthesis is
-        // slow or unavailable. The transcript turn is still appended when audio
-        // starts, or by the fallback timer below.
-        liveConversationReplyText = trimmed
+        // Keep the HUD in an audio-prep state until the normal delivery path,
+        // captions and a replayable card, is ready.
         conversationStatus = "Preparing audio…"
         pendingAssistantReply = trimmed
         expectingReplyAudio = true
         // The reply preempts any live update mid-flight; requeue it so it resumes
-        // after the reply instead of being lost. The reply itself persists as a
-        // replayable history card when possible.
+        // after the reply instead of being lost. The reply is filed as a
+        // replayable history card, while live delivery uses the same preview
+        // playback/caption path as other immediate voice responses.
         livePlaybackQueue.replyStarted()
-        if let card = persistConversationReply(trimmed) {
-            playback.play(card)
-        } else {
-            playback.preview(trimmed)
-        }
+        _ = persistConversationReply(trimmed)
+        playback.preview(trimmed)
         revealTimer?.invalidate()
         revealTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
             self?.revealPendingReply()
@@ -1860,10 +1851,16 @@ final class AppModel: ObservableObject {
         appendConversationTurn(role: .assistant, text: reply)
         conversationStatus = ""
         // If the reply produced no audio, the playback observer won't fire, so make
-        // sure hands-free listening still resumes.
+        // sure hands-free listening still resumes. If audio is still being
+        // generated, keep the visible prep state alive until playback starts or
+        // fails.
         if !playback.isPlaying {
-            expectingReplyAudio = false
-            maybeResumeContinuousListening()
+            if playback.isBusy {
+                conversationStatus = "Preparing audio…"
+            } else {
+                expectingReplyAudio = false
+                maybeResumeContinuousListening()
+            }
         }
     }
 
@@ -3758,7 +3755,7 @@ final class AppModel: ObservableObject {
             }
             expectingReplyAudio = false
             if !success {
-                conversationStatus = "Voice playback failed. Reply is shown."
+                conversationStatus = "Voice playback failed. Reply was filed."
             }
             resumeLiveQueueAfterReply()
             maybeResumeContinuousListening()

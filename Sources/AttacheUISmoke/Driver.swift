@@ -20,6 +20,9 @@ final class AppUnderTest {
     }
 
     var axApp: AXElement { AXElement.application(pid: pid) }
+    var appWindows: [AXElement] {
+        axApp.windows.filter { $0.role == kAXWindowRole as String }
+    }
 
     func launch() throws {
         let binary = appURL
@@ -38,7 +41,7 @@ final class AppUnderTest {
         pid = process.processIdentifier
 
         try waitUntil("app exposes at least one window", timeout: 20) {
-            !self.axApp.windows.isEmpty
+            !self.appWindows.isEmpty
         }
         activate()
     }
@@ -46,7 +49,7 @@ final class AppUnderTest {
     func activate() {
         NSRunningApplication(processIdentifier: pid)?
             .activate(options: [.activateIgnoringOtherApps])
-        axApp.windows.first?.raiseWindow()
+        appWindows.first?.raiseWindow()
     }
 
     func terminateAndWait(timeout: TimeInterval = 10) {

@@ -160,7 +160,7 @@ struct CompanionRootView: View {
                     // Fades with the chrome like everything else, but never
                     // while typed text or a reply is in flight.
                     onCallHUD
-                        .opacity(chromeAwake || !model.conversationDraft.isEmpty || model.isAwaitingReply || !model.liveConversationReplyText.isEmpty ? 1 : 0)
+                        .opacity(chromeAwake || !model.conversationDraft.isEmpty || model.isAwaitingReply || callProgressVisible ? 1 : 0)
                         .animation(.easeInOut(duration: 0.4), value: chromeAwake)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -538,25 +538,43 @@ struct CompanionRootView: View {
     private var bottomResponseOverlay: some View {
         if model.captionsEnabled,
            playback.isPlaying || playback.isPaused {
-            ResponseCaptionLayer(
-                timeline: playback.clock,
-                text: playback.currentText,
-                alignment: playback.currentAlignment,
-                highlightColor: model.theme.captionHighlightColor,
-                syncOffsetMs: model.captionSyncOffsetMs,
-                fontSize: CGFloat(model.captionFontSize),
-                lineCount: model.captionLineCount,
-                onSeek: seekToCaptionTime,
-                onSeekAndResume: seekToCaptionTimeAndResume
-            )
-            .frame(maxWidth: 760)
-            .readingPlate(theme: model.theme, cornerRadius: 12, minimumOpacity: 0.65)
-            .background(
-                CaptionScrollMonitor(enabled: true) { model.adjustCaptionLines(by: $0) }
-            )
+            ZStack {
+                ResponseCaptionLayer(
+                    timeline: playback.clock,
+                    text: playback.currentText,
+                    alignment: playback.currentAlignment,
+                    highlightColor: model.theme.captionHighlightColor,
+                    syncOffsetMs: model.captionSyncOffsetMs,
+                    fontSize: CGFloat(model.captionFontSize),
+                    lineCount: model.captionLineCount,
+                    onSeek: seekToCaptionTime,
+                    onSeekAndResume: seekToCaptionTimeAndResume
+                )
+                .frame(maxWidth: 760)
+                .readingPlate(theme: model.theme, cornerRadius: 12, minimumOpacity: 0.65)
+                .background(
+                    CaptionScrollMonitor(enabled: true) { model.adjustCaptionLines(by: $0) }
+                )
+                .frame(maxWidth: .infinity, alignment: .bottom)
+                .accessibilityLabel(playback.isPaused ? "Playback paused" : "Assistant speaking")
+
+                // The visual karaoke view is composed from many animated word
+                // fragments; SwiftUI does not reliably expose their full text to
+                // AX. Keep a non-visible transcript node so VoiceOver and smoke
+                // tests can verify the spoken content without adding another
+                // visible answer surface.
+                Text(playback.currentText)
+                    .font(.system(size: 1))
+                    .lineLimit(1)
+                    .frame(width: 1, height: 1)
+                    .clipped()
+                    .opacity(0.001)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(playback.isPaused ? "Playback paused" : "Assistant speaking") transcript \(playback.currentText)")
+                    .accessibilityValue(playback.currentText)
+                    .allowsHitTesting(false)
+            }
             .frame(maxWidth: .infinity, alignment: .bottom)
-            .accessibilityLabel(playback.isPaused ? "Playback paused" : "Assistant speaking")
-            .accessibilityValue(playback.currentText)
         }
     }
 

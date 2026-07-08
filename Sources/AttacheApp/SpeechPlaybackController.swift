@@ -114,6 +114,17 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         return (5...60).contains(stored) ? stored : 20
     }()
 
+    private static let uiTestAudioPrepDelayNanoseconds: UInt64 = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["ATTACHE_UI_TEST"] == "1",
+              let value = environment["ATTACHE_UI_TEST_AUDIO_PREP_DELAY_MS"],
+              let milliseconds = UInt64(value),
+              milliseconds > 0 else {
+            return 0
+        }
+        return milliseconds * 1_000_000
+    }()
+
     override init() {
         super.init()
         speechFileSynthesizer.delegate = self
@@ -345,6 +356,9 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
         let completion = generationCompletion
         generationCompletion = nil
+        if !finishedSpeaking {
+            onPlaybackError?("Voice generation failed: the system speech synthesizer stopped before producing audio.")
+        }
         completion?(finishedSpeaking)
     }
 
@@ -409,6 +423,9 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                 let audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
                 audioPlayer.enableRate = true
                 audioPlayer.prepareToPlay()
+                if Self.uiTestAudioPrepDelayNanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: Self.uiTestAudioPrepDelayNanoseconds)
+                }
                 await MainActor.run { [weak self] in
                     guard let self, self.generationID == generation else { return }
                     audioPlayer.delegate = self
@@ -441,6 +458,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     private func synthesizeCurrentVoice(text: String, audioURL: URL, generationID: UUID) {
         if speechConfiguration.provider == .system {
             if !speechFileSynthesizer.startSpeaking(text, to: audioURL) {
+                onPlaybackError?("Voice generation failed: the system speech synthesizer did not start.")
                 generationCompletion?(false)
             }
             return

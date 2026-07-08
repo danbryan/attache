@@ -118,9 +118,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if "ATTACHE_CONVERSATION_FEEDBACK" in user:
             maybe_delay()
+            reply_token = f"ATTACHE_CONVERSATION_FEEDBACK_REPLY_{NONCE}"
             self.send_bytes(response({
                 "role": "assistant",
-                "content": f"ATTACHE_CONVERSATION_FEEDBACK_REPLY_{NONCE}",
+                "content": (
+                    f"{reply_token}. "
+                    "This deterministic reply is intentionally long enough "
+                    "for the smoke test to observe the karaoke caption surface. "
+                    f"{reply_token}."
+                ),
             }))
             return
 

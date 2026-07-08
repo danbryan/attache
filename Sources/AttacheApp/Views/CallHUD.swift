@@ -73,25 +73,7 @@ extension CompanionRootView {
                     }
                     .padding(.horizontal, 10)
                 }
-
-                if callReplyVisible {
-                    Text(callReplyText)
-                        .typoBody(.regular)
-                        .foregroundStyle(.primary.opacity(0.86))
-                        .lineLimit(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.regularMaterial.opacity(0.76), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.primary.opacity(0.08))
-                        )
-                        .accessibilityIdentifier("Conversation reply")
-                }
             }
-            .frame(width: 374, alignment: .leading)
         }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .padding(.bottom, onCallHUDBottomPadding)
@@ -167,14 +149,6 @@ extension CompanionRootView {
         guard !status.isEmpty else { return false }
         if model.isAwaitingReply { return true }
         return status != idleCallStatusText
-    }
-
-    var callReplyText: String {
-        model.liveConversationReplyText.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var callReplyVisible: Bool {
-        !callReplyText.isEmpty
     }
 
     var idleCallStatusText: String {

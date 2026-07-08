@@ -36,15 +36,15 @@ let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
 let run = SmokeRun()
 
 func mainWindow() throws -> AXElement {
-    guard let window = app.axApp.windows.first(where: { !$0.title.contains("Settings") }) ?? app.axApp.windows.first else {
+    guard let window = app.appWindows.first(where: { !$0.title.contains("Settings") }) ?? app.appWindows.first else {
         throw SmokeError(message: "app has no windows")
     }
     return window
 }
 
 func settingsWindow() throws -> AXElement {
-    guard let window = app.axApp.windows.first(where: { $0.title.contains("Settings") }) else {
-        let titles = app.axApp.windows.map { "\"\($0.title)\"" }.joined(separator: ", ")
+    guard let window = app.appWindows.first(where: { $0.title.contains("Settings") }) else {
+        let titles = app.appWindows.map { "\"\($0.title)\"" }.joined(separator: ", ")
         throw SmokeError(message: "no settings window found; open windows: [\(titles)]")
     }
     return window
@@ -957,20 +957,39 @@ if enabled("f15") {
         _ = try waitForElement("visible thinking feedback", in: try mainWindow(), containing: "Thinking", timeout: 5)
     }
 
-    run.step("f15-conversation-feedback", "Ask Attaché reply is shown on the live call surface") {
-        _ = try waitForElement("live conversation reply", in: try mainWindow(), timeout: 20) { element in
-            element.identifier == "Conversation reply" && element.matches(replyToken)
-        }
+    run.step("f15-conversation-feedback", "Ask Attaché shows audio preparation feedback") {
+        _ = try waitForElement("visible audio preparation feedback", in: try mainWindow(),
+                               containing: "Preparing audio",
+                               timeout: 20)
     }
 
-    run.step("f15-conversation-feedback", "Ask Attaché reply starts playback on the live call surface") {
-        _ = try waitForElement("live reply playback", in: try mainWindow(),
-                               containing: "Assistant speaking",
-                               timeout: 60)
+    run.step("f15-conversation-feedback", "Ask Attaché reply starts through karaoke captions") {
+        _ = try waitForElement("live reply caption surface", in: try mainWindow(),
+                               containing: "Assistant speaking", timeout: 60)
+        try waitUntil("live reply captions to carry the deterministic reply token", timeout: 30) {
+            guard let window = try? mainWindow(),
+                  window.firstDescendant(containing: "Assistant speaking") != nil else {
+                return false
+            }
+            return window.firstDescendant(containing: replyToken) != nil
+        }
         let providerText = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
         guard providerText.contains(prompt) else {
             throw SmokeError(message: "provider log did not record prompt \(prompt). Log:\n\(providerText)")
         }
+    }
+
+    run.step("f15-conversation-feedback", "Ask Attaché reply is filed as a replayable card") {
+        app.key(Key.y, command: true)
+        let field = try waitForElement("history search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search history",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(replyToken) { app.type(replyToken) }
+        _ = try waitForHistoryCardRow(filteredBy: replyToken, timeout: 60)
+        app.key(Key.escape)
+        try? waitForElementGone("history search field", in: try mainWindow(),
+                                role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
     }
 }
 
