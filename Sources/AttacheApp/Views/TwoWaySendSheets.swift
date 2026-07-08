@@ -6,6 +6,7 @@ import AttacheCore
 /// enable. Distinct from "Ask Attaché", which never leaves the app.
 struct TwoWayEnableSheet: View {
     let sessionTitle: String
+    let directSendEnabled: Bool
     let onEnable: () -> Void
     let onCancel: () -> Void
 
@@ -19,7 +20,9 @@ struct TwoWayEnableSheet: View {
             }
             Text("This turns on send-to-agent for this session. Attaché will deliver instructions you confirm back into the agent by resuming it, acting with your own agent permissions. It waits until the session is quiet, sends one at a time, and never approves permissions or tool use on the agent's behalf.")
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
-            Text("Every send still asks you to confirm first. You can turn this off for the session at any time.")
+            Text(directSendEnabled
+                 ? "This first instruction still asks for final confirmation. After that, your Settings choice sends future instructions for this session without the final sheet."
+                 : "Every send still asks you to confirm first. You can turn this off for the session at any time.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
@@ -33,8 +36,8 @@ struct TwoWayEnableSheet: View {
     }
 }
 
-/// Per-instruction confirmation: repeats exactly what will be sent and to which
-/// session, and requires an explicit Send. No path sends without this.
+/// Default per-instruction confirmation: repeats exactly what will be sent and
+/// to which session, and requires an explicit Send.
 struct TwoWayConfirmSheet: View {
     let instruction: Instruction
     let sessionTitle: String

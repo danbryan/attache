@@ -243,10 +243,10 @@ public enum CompanionPersonality {
         let cwdLine = workingDirectory.map { "- Working directory: \($0)\n" } ?? ""
         let summaryLine = latestSummary.map { "- Latest update: \($0)\n" } ?? ""
         let agentInstructionLine = canStageAgentInstruction
-            ? "- If the user explicitly asks you to tell, ask, or instruct the work agent, use stage_agent_instruction with a concise instruction for that agent. This only opens Attaché's confirmation UI; it does not send by itself. After staging, tell the user to review and confirm the send. Never say the agent has been told until the user confirms.\n"
+            ? "- If the user explicitly asks you to tell, ask, or instruct the work agent, use stage_agent_instruction with a concise instruction for that agent. Attaché will route it through the user's send-to-agent policy, which may require confirmation or may send directly after the session is enabled. After the tool returns, report the actual status it gives you. Never say the agent has been told unless Attaché reports that it sent the instruction.\n"
             : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
         let toolsLine = canStageAgentInstruction
-            ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (stage a user-confirmed instruction for the work agent), and rename_session. Only read or stage what you need.\n"
+            ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (route a user-requested instruction to the work agent), and rename_session. Only read or stage what you need.\n"
             : "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and rename_session. Only read what you need.\n"
         return """
         \(companionIdentityPrompt)

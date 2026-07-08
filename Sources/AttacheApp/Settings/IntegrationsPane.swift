@@ -38,6 +38,7 @@ struct IntegrationsPane: View {
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             localSources
+            agentInstructions
 
             VStack(spacing: 5) {
                 ForEach(providers, id: \.id) { provider in
@@ -68,6 +69,28 @@ struct IntegrationsPane: View {
                 get: { model.claudeCodeSourceEnabled },
                 set: { model.setClaudeCodeSourceEnabled($0) }
             ))
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private var agentInstructions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Agent instructions")
+                .typoBody(.semibold)
+            Text("Reverse-send writes into the focused agent session with your own agent permissions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Skip final send confirmation", isOn: Binding(
+                get: { model.directAgentSendEnabled },
+                set: { model.directAgentSendEnabled = $0 }
+            ))
+            .accessibilityLabel("Skip final send confirmation")
+            Text("After you enable send-to-agent for a session, Attaché sends explicit instructions directly. The first-use enable prompt and safety filter still apply.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))

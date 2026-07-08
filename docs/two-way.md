@@ -9,9 +9,11 @@ UX).
 
 "Go live" lets you talk back to your agents by voice and push new direction into
 a session they are working. You enable two-way for a specific session, speak or
-type an instruction, confirm it, and Attaché delivers it into that Codex or Claude
-Code session. The agent's reply is then observed and narrated like any other
-update, and linked back to the instruction in an audit log.
+type an instruction, and Attaché delivers it into that Codex or Claude Code
+session after the configured confirmation policy is satisfied. By default that
+means a per-message confirmation sheet; users can opt into direct send after a
+session is enabled. The agent's reply is then observed and narrated like any
+other update, and linked back to the instruction in an audit log.
 
 The four surfaces it targets are Codex and Claude Code, each in CLI and desktop
 form.
@@ -89,10 +91,12 @@ Two-way turns Attaché from an observer into an actuator, so these are hard
 constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
 
 - **Off by default, per session.** Two-way must be explicitly enabled for a
-  specific session. There is no global "always send" switch.
-- **Confirm before every send.** An instruction is created `pending` and only
-  leaves that state on explicit user confirmation (spoken read-back plus visual
-  confirm). Nothing is ever auto-sent.
+  specific session. No global preference bypasses session-level enablement.
+- **Confirm by default, direct by explicit preference.** The default
+  `AgentInstructionSendPolicy` creates an instruction as `pending` and only
+  leaves that state after explicit visual confirmation. A power-user preference
+  can skip the final sheet after a session is already enabled; that still runs
+  the same target check, safety filter, idle queue, and delivery log.
 - **Never deliver approvals.** The safety filter refuses any payload that is
   really an agent-side permission or tool approval, whether a bare token
   ("yes", "y", "approve", "allow", "1", "2", ...) or a phrase asking the agent to
@@ -140,7 +144,7 @@ Two-way has three intentionally separate verification layers:
 Attaché also owns a provider-independent agent-instruction intent router before
 any personality model call. When the user plainly asks to tell, ask, instruct, or
 send something to the focused agent, the app extracts the instruction itself and
-runs it through the normal enable, safety, and per-message confirmation gates.
+runs it through the normal enable, safety, and configured confirmation gates.
 Structured tool calls remain an enhancement for providers that support them, not
 a user-visible prerequisite. Named targets are checked against the focused
 session, so "tell Codex..." will not silently send to a focused Claude Code

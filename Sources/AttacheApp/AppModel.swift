@@ -553,6 +553,13 @@ final class AppModel: ObservableObject {
     private(set) var twoWay: TwoWayCoordinator!
     /// The instruction the user is currently confirming before it sends, if any.
     @Published var pendingInstruction: Instruction?
+    @Published var agentInstructionSendPolicy: AgentInstructionSendPolicy = .defaultValue {
+        didSet { defaults.set(agentInstructionSendPolicy.rawValue, forKey: CompanionPreferenceKey.agentInstructionSendPolicy) }
+    }
+    var directAgentSendEnabled: Bool {
+        get { agentInstructionSendPolicy.sendsDirectlyAfterSessionEnable }
+        set { agentInstructionSendPolicy = newValue ? .directAfterSessionEnable : .confirmEveryInstruction }
+    }
     /// Drives the first-use two-way enable sheet.
     @Published var showTwoWayEnable = false
     private var twoWayEnablePendingText = ""
@@ -1897,8 +1904,8 @@ final class AppModel: ObservableObject {
     }
 
     /// Entry point from a "Send to agent" control: enable first-use if needed,
-    /// otherwise stage the instruction for confirmation. `text` defaults to the
-    /// live composer's current text.
+    /// otherwise stage the instruction. The user's send policy decides whether an
+    /// enabled-session instruction opens final confirmation or sends directly.
     func requestSendToAgent(_ rawText: String? = nil) {
         let text = (rawText ?? liveFollowUpText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSendToAgent else { intakeStatus = "There's no attached session to send to."; return }
@@ -1918,7 +1925,7 @@ final class AppModel: ObservableObject {
         enableTwoWayForTarget()
         let text = twoWayEnablePendingText
         twoWayEnablePendingText = ""
-        if !text.isEmpty { stageAndSurface(text) }
+        if !text.isEmpty { stageAndSurface(text, allowDirectSend: false) }
     }
 
     func cancelEnableTwoWay() {
@@ -1926,10 +1933,15 @@ final class AppModel: ObservableObject {
         twoWayEnablePendingText = ""
     }
 
-    private func stageAndSurface(_ text: String) {
+    private func stageAndSurface(_ text: String, allowDirectSend: Bool = true) {
         if let reason = stageInstruction(text) {
             intakeStatus = reason   // safety rejection or disabled
             liveFollowUpStatus = reason
+            if conversationActive { conversationStatus = reason }
+            return
+        }
+        if allowDirectSend && agentInstructionSendPolicy.sendsDirectlyAfterSessionEnable {
+            confirmStagedInstruction()
         }
     }
 
@@ -1957,7 +1969,10 @@ final class AppModel: ObservableObject {
     func confirmStagedInstruction() {
         guard let instruction = pendingInstruction else { return }
         pendingInstruction = nil
-        intakeStatus = "Sending to the agent when the session is quiet…"
+        let message = "Sending to the agent when the session is quiet…"
+        intakeStatus = message
+        liveFollowUpStatus = message
+        if conversationActive { conversationStatus = message }
         let coordinator = twoWay
         Task { @MainActor in
             do {
@@ -2120,8 +2135,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Stage a personality-requested agent instruction without sending it. The same
-    /// first-use enable sheet and per-message confirmation sheet still gate delivery.
+    /// Stage or send a personality-requested agent instruction. The first-use
+    /// enable sheet always gates the session; the user's send policy decides
+    /// whether enabled-session instructions need a final confirmation sheet.
     private func applyStageAgentInstructionTool(arguments: String) async -> String {
         let rawInstruction = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["instruction"] as? String ?? ""
         let instruction = rawInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3863,6 +3879,10 @@ final class AppModel: ObservableObject {
         }
         if defaults.object(forKey: CompanionPreferenceKey.claudeCodeSourceEnabled) != nil {
             claudeCodeSourceEnabled = defaults.bool(forKey: CompanionPreferenceKey.claudeCodeSourceEnabled)
+        }
+        if let raw = defaults.string(forKey: CompanionPreferenceKey.agentInstructionSendPolicy),
+           let policy = AgentInstructionSendPolicy(rawValue: raw) {
+            agentInstructionSendPolicy = policy
         }
         loadWatchedSessions()
         if defaults.object(forKey: CompanionPreferenceKey.captionsEnabled) != nil {

@@ -270,6 +270,7 @@ struct CompanionRootView: View {
         .sheet(isPresented: $model.showTwoWayEnable) {
             TwoWayEnableSheet(
                 sessionTitle: model.twoWayTargetTitle ?? "this session",
+                directSendEnabled: model.directAgentSendEnabled,
                 onEnable: { model.confirmEnableTwoWay() },
                 onCancel: { model.cancelEnableTwoWay() }
             )

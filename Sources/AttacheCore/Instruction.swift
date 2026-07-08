@@ -1,8 +1,9 @@
 import Foundation
 
-/// Lifecycle of a two-way instruction, from creation to delivery. Per
-/// docs/two-way.md: nothing is ever auto-sent, so an instruction only leaves
-/// `pending` when the user explicitly confirms it.
+/// Lifecycle of a two-way instruction, from creation to delivery. The default
+/// send policy requires explicit per-message confirmation. A user can opt into
+/// direct send after a session is enabled, which immediately advances a prepared
+/// instruction to `confirmed` through the same engine path.
 public enum InstructionState: String, Codable, Equatable, Sendable {
     case pending      // created, awaiting explicit confirmation
     case confirmed    // user confirmed; eligible to deliver once the session is idle

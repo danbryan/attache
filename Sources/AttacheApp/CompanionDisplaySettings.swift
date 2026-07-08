@@ -383,6 +383,7 @@ enum CompanionPreferenceKey {
     static let attachedCodexSessionID = "attache.attachedCodexSessionID"
     static let codexSourceEnabled = "attache.codexSourceEnabled"
     static let claudeCodeSourceEnabled = "attache.claudeCodeSourceEnabled"
+    static let agentInstructionSendPolicy = "attache.agentInstructionSendPolicy"
     static let personalityPrompt = "attache.personalityPrompt"
     static let speechProvider = "attache.speechProvider"
     static let speechVoiceIdentifier = "attache.speechVoiceIdentifier"

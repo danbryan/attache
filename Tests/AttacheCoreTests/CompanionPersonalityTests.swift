@@ -258,7 +258,7 @@ final class CompanionPersonalityTests: XCTestCase {
         XCTAssertTrue(prompt.messages[1].content.contains("completed chapter 13"))
     }
 
-    func testConversationPromptStagesAgentInstructionOnlyWithConfirmation() {
+    func testConversationPromptRoutesAgentInstructionThroughSendPolicy() {
         let prompt = CompanionPersonality.conversationSystemPrompt(
             memoryContext: nil,
             sessionTitle: "Codex smoke",
@@ -268,8 +268,9 @@ final class CompanionPersonalityTests: XCTestCase {
         )
 
         XCTAssertTrue(prompt.contains("stage_agent_instruction"))
-        XCTAssertTrue(prompt.contains("only opens Attaché's confirmation UI"))
-        XCTAssertTrue(prompt.contains("Never say the agent has been told until the user confirms"))
+        XCTAssertTrue(prompt.contains("route it through the user's send-to-agent policy"))
+        XCTAssertTrue(prompt.contains("report the actual status it gives you"))
+        XCTAssertTrue(prompt.contains("Never say the agent has been told unless Attaché reports that it sent"))
     }
 
     func testConversationPromptForbidsAgentMessagingWhenToolUnavailable() {
