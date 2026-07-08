@@ -10,11 +10,13 @@ set -euo pipefail
 #   SMOKE_ONLY=f1,f4 scripts/ui-smoke.sh     run a subset while iterating
 #   SMOKE_KEEP_STATE=1 scripts/ui-smoke.sh   skip fresh/restore (developer loop)
 #
-# Opt-in paid/network flows are intentionally excluded from the default suite:
+# Opt-in release/network/load flows are intentionally excluded from the default
+# suite:
+#   scripts/release-readiness-smoke.sh       seven pre-release gates
 #   scripts/codex-two-way-smoke.sh           real Codex send/watch round trip
 #   scripts/codex-personality-two-way-smoke.sh
 #                                             fake local personality + real Codex
-#   scripts/xai-tool-calling-canary.sh       live xAI function-calling canary
+#   scripts/provider-canaries.sh             provider tool-calling contracts
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"

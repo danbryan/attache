@@ -137,17 +137,43 @@ Two-way has three intentionally separate verification layers:
    auth/network, but it does not require xAI, Claude, Anthropic, OpenAI, Groq,
    Ollama, or LM Studio credentials.
 
-The live hosted-provider canary is separate:
-`scripts/xai-tool-calling-canary.sh` calls the xAI Chat Completions endpoint with
-the same OpenAI-compatible function-calling shape Attaché uses for
-`stage_agent_instruction`. It proves that the selected xAI model can request the
-tool and produce a final reply after the tool result. It does not send anything
-to Codex and it does not replace the Codex round-trip smoke.
+The provider canaries are separate: `scripts/provider-canaries.sh` always runs a
+deterministic local OpenAI-compatible provider as a free positive control, then
+tests xAI, OpenAI-compatible, Groq, and Ollama when credentials or local models
+are available. Missing hosted-provider credentials are reported as SKIP by
+default so the suite does not require paid subscriptions; set
+`ATTACHE_PROVIDER_CANARIES_REQUIRE_HOSTED=1` to make hosted-provider credentials
+mandatory. The individual wrappers are `scripts/xai-tool-calling-canary.sh`,
+`scripts/openai-tool-calling-canary.sh`, `scripts/groq-tool-calling-canary.sh`,
+`scripts/ollama-tool-calling-canary.sh`, and
+`scripts/local-provider-tool-calling-canary.sh`.
 
-The scripts fail closed on missing CLI/auth/key material, failed session
-creation, missing confirmation UI, transcript timeout, missing watcher card, or
-missing tool calls. They clean up their temp `CODEX_HOME` roots and generated
-test app bundles on exit.
+Pre-release coverage adds seven opt-in gates through
+`scripts/release-readiness-smoke.sh`:
+
+1. `scripts/release-install-smoke.sh` builds a candidate, wraps it in a temporary
+   DMG, installs it into a temp Applications directory, verifies the installed
+   bundle, and launches that installed app with the UI smoke driver.
+2. `scripts/upgrade-from-stable-smoke.sh` builds the stable baseline from
+   `origin/main` (or `ATTACHE_STABLE_REF`), seeds state through the stable app,
+   installs the current candidate over it, and verifies the candidate still sees
+   the pre-upgrade card and settings.
+3. `scripts/provider-canaries.sh` verifies the personality tool-calling contract
+   across local and configured hosted providers.
+4. `scripts/codex-two-way-safety-smoke.sh` proves approval-like send-to-agent
+   payloads are refused before confirmation and never reach a transcript.
+5. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
+   local Ollama default, seeds no cloud credentials, and still files a card.
+6. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event
+   server recovery, and Settings still work.
+7. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
+   cards, and verifies Command-K plus inbox search remain responsive.
+
+The scripts fail closed on failed session creation, missing confirmation UI,
+transcript timeout, missing watcher card, missing required tool calls, failed
+bundle verification, failed state restore, or missing installed app artifacts.
+They clean up their temp `CODEX_HOME` roots and generated test app bundles on
+exit.
 
 ## Concurrency and identity
 

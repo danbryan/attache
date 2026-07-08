@@ -1886,6 +1886,7 @@ final class AppModel: ObservableObject {
     private func stageAndSurface(_ text: String) {
         if let reason = stageInstruction(text) {
             intakeStatus = reason   // safety rejection or disabled
+            liveFollowUpStatus = reason
         }
     }
 

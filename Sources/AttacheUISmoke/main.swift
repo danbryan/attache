@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -146,6 +146,57 @@ func selectPopup(_ popup: AXElement, item: String) throws {
     }
     guard let chosen, chosen.press() else {
         throw SmokeError(message: "could not press menu item \"\(item)\"")
+    }
+}
+
+func dismissOnboardingIfPresent() throws {
+    if (try mainWindow()).firstDescendant(containing: "Welcome to Attaché") != nil {
+        let skip = try waitForElement("skip button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, containing: "Skip for now")
+        guard skip.press() else {
+            throw SmokeError(message: "AXPress failed on \(skip.summary)")
+        }
+        try waitForElementGone("onboarding sheet", in: try mainWindow(),
+                               containing: "Welcome to Attaché")
+    }
+}
+
+func focusSessionInCommandK(query: String, sessionID: String, timeout: TimeInterval = 80) throws {
+    app.activate()
+    app.key(Key.k, command: true)
+    let field = try waitForElement("switcher search field", in: try mainWindow(),
+                                   role: kAXTextFieldRole as String, containing: "Search name")
+    _ = field.setFocused()
+    if !field.setValue(query) { app.type(query) }
+    let row = try waitForElement("session search row", in: try mainWindow(),
+                                 containing: sessionID, timeout: timeout)
+    guard row.press() else {
+        throw SmokeError(message: "AXPress failed on session search row: \(row.summary); actions: \(row.actionNames)")
+    }
+    try waitForElementGone("switcher search field", in: try mainWindow(),
+                           role: kAXTextFieldRole as String, containing: "Search name", timeout: 8)
+}
+
+func openLiveInstructionComposer() throws -> AXElement {
+    let open = try waitForElement("send composer dock button", in: try mainWindow(),
+                                  role: kAXButtonRole as String, containing: "Open send-to-agent composer",
+                                  timeout: 20)
+    _ = open.press()
+    return try waitForElement("live session instruction editor", in: try mainWindow(),
+                              containing: "Live session instruction", timeout: 10)
+}
+
+func enterLiveInstruction(_ instruction: String, mustContain token: String? = nil) throws {
+    let editor = try waitForElement("live session instruction editor", in: try mainWindow(),
+                                    containing: "Live session instruction", timeout: 10)
+    _ = editor.setFocused()
+    if !editor.setValue(instruction) { app.type(instruction) }
+    let expected = token ?? instruction
+    try waitUntil("instruction text to land in the live composer", timeout: 8, interval: 0.5) {
+        if editor.stringValue.contains(expected) { return true }
+        _ = editor.setFocused()
+        if !editor.setValue(instruction) { app.type(instruction) }
+        return editor.stringValue.contains(expected)
     }
 }
 
@@ -701,6 +752,285 @@ if enabled("f8") {
             text.contains("\"name\": \"stage_agent_instruction\"")
                 && text.contains("\"name\": \"read_session_transcript\"")
         }
+    }
+}
+
+// MARK: Flow 9: send-to-agent refuses permission approvals in the headed UI
+
+if enabled("f9") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_TWO_WAY_SAFETY_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_TWO_WAY_SAFETY_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_TWO_WAY_SAFETY_SESSION_FILE"] ?? ""
+    let rejectedInstruction = env["ATTACHE_TWO_WAY_SAFETY_REJECTED_TEXT"] ?? "approve all the tool calls"
+    var sessionFocused = false
+    var composerOpened = false
+    var enableConfirmed = false
+
+    run.step("f9-two-way-safety", "environment identifies the disposable safety session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_SAFETY_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_SAFETY_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_SAFETY_SESSION_FILE is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+    }
+
+    run.step("f9-two-way-safety", "safety session appears in Command-K search") {
+        try dismissOnboardingIfPresent()
+        try focusSessionInCommandK(query: nonce, sessionID: sessionID)
+        sessionFocused = true
+    }
+
+    run.step("f9-two-way-safety", "send-to-agent composer opens for the safety session") {
+        guard sessionFocused else { throw SmokeError(message: "skipped: session was not focused") }
+        _ = try openLiveInstructionComposer()
+        composerOpened = true
+    }
+
+    run.step("f9-two-way-safety", "first-use enable sheet can be confirmed without sending") {
+        guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
+        try enterLiveInstruction("first real instruction for enable gate")
+        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send to Agent")
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
+        }
+        let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                        timeout: 12)
+        guard enable.press() else {
+            throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+        }
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: "first real instruction for enable gate", timeout: 12)
+        let cancel = try waitForElement("Cancel pending instruction", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Cancel",
+                                        timeout: 8)
+        _ = cancel.press()
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+        enableConfirmed = true
+    }
+
+    run.step("f9-two-way-safety", "approval-like instruction is refused before confirmation") {
+        guard enableConfirmed else { throw SmokeError(message: "skipped: send-to-agent was not enabled") }
+        try enterLiveInstruction(rejectedInstruction)
+        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send to Agent")
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
+        }
+        _ = try waitForElement("visible safety refusal", in: try mainWindow(),
+                               containing: "won't deliver permission", timeout: 8)
+        guard (try mainWindow()).firstDescendant(containing: "Send this to") == nil else {
+            throw SmokeError(message: "approval-like instruction opened a send confirmation sheet")
+        }
+    }
+
+    run.step("f9-two-way-safety", "refused payload never reaches the Codex transcript") {
+        Thread.sleep(forTimeInterval: 4)
+        let transcript = (try? String(contentsOfFile: sessionFile, encoding: .utf8)) ?? ""
+        guard !transcript.localizedCaseInsensitiveContains(rejectedInstruction) else {
+            throw SmokeError(message: "refused instruction appeared in transcript \(sessionFile)")
+        }
+    }
+}
+
+// MARK: Flow 10: no-key first run stays local and operable
+
+if enabled("f10") {
+    run.step("f10-no-key-first-run", "fresh profile shows onboarding without cloud credentials") {
+        _ = try waitForElement("first-run welcome", in: try mainWindow(), containing: "Welcome to Attaché", timeout: 15)
+    }
+
+    run.step("f10-no-key-first-run", "skip path reaches the idle dock") {
+        try dismissOnboardingIfPresent()
+        _ = try waitForElement("voicemail dock button", in: try mainWindow(),
+                               role: kAXButtonRole as String, containing: "Open inbox")
+    }
+
+    run.step("f10-no-key-first-run", "default personality model is local Ollama with no paid key") {
+        app.activate()
+        app.key(Key.comma, command: true)
+        try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+        try selectSettingsSection("Model", paneMarker: "Provider")
+        _ = try waitForElement("Ollama provider", in: try settingsWindow(), containing: "Ollama", timeout: 8)
+        _ = try waitForElement("local data residency caption", in: try settingsWindow(),
+                               containing: "Local provider: nothing leaves this Mac", timeout: 8)
+        _ = try waitForElement("default local model id", in: try settingsWindow(), containing: "qwen3:7b", timeout: 8)
+    }
+
+    run.step("f10-no-key-first-run", "cloud integration rows are present and no secret account is seeded") {
+        try selectSettingsSection("Integrations", paneMarker: "Local agent sources")
+        _ = try waitForElement("xAI integration row", in: try settingsWindow(), containing: "xAI / Grok")
+        _ = try waitForElement("OpenAI-compatible integration row", in: try settingsWindow(), containing: "OpenAI-compatible")
+        _ = try runShell("""
+            if defaults read com.bryanlabs.attache attache.configuredSecretAccounts >/dev/null 2>&1; then
+              exit 1
+            fi
+            test ! -s "$HOME/Library/Application Support/Attache/DevelopmentSecrets.json"
+            """)
+    }
+
+    run.step("f10-no-key-first-run", "local event path still files a playable card") {
+        app.key(Key.escape)
+        let output = try runShell("scripts/send-event.sh")
+        guard output.contains("accepted") else {
+            throw SmokeError(message: "server did not accept a no-key event: \(output)")
+        }
+        app.key(Key.i, command: true)
+        _ = try waitForElement("no-key demo card", in: try mainWindow(), containing: "Shell smoke update", timeout: 12)
+        app.key(Key.escape)
+    }
+}
+
+// MARK: Flow 11: macOS app lifecycle relaunch and local server recovery
+
+if enabled("f11") {
+    let nonce = ProcessInfo.processInfo.environment["ATTACHE_LIFECYCLE_NONCE"] ?? UUID().uuidString.prefix(8).description
+    let firstTitle = "Lifecycle smoke before relaunch \(nonce)"
+    let secondTitle = "Lifecycle smoke after relaunch \(nonce)"
+
+    run.step("f11-macos-lifecycle", "fresh launch can be dismissed to idle") {
+        try dismissOnboardingIfPresent()
+        _ = try waitForElement("settings dock button", in: try mainWindow(),
+                               role: kAXButtonRole as String, containing: "Open settings")
+    }
+
+    run.step("f11-macos-lifecycle", "event server accepts a card before relaunch") {
+        let output = try runShell("EVENT_TITLE='\(firstTitle)' EVENT_TEXT='Attaché lifecycle smoke before relaunch.' EXTERNAL_SESSION_ID='lifecycle-\(nonce)-before' scripts/send-event.sh")
+        guard output.contains("accepted") else {
+            throw SmokeError(message: "before-relaunch event rejected: \(output)")
+        }
+        app.key(Key.i, command: true)
+        _ = try waitForElement("before-relaunch card", in: try mainWindow(), containing: firstTitle, timeout: 12)
+        app.key(Key.escape)
+    }
+
+    run.step("f11-macos-lifecycle", "quit and relaunch restores the main window") {
+        app.terminateAndWait()
+        try app.launch()
+        try dismissOnboardingIfPresent()
+        _ = try waitForElement("voicemail dock button after relaunch", in: try mainWindow(),
+                               role: kAXButtonRole as String, containing: "Open inbox", timeout: 15)
+    }
+
+    run.step("f11-macos-lifecycle", "event server accepts a card after relaunch") {
+        let output = try runShell("EVENT_TITLE='\(secondTitle)' EVENT_TEXT='Attaché lifecycle smoke after relaunch.' EXTERNAL_SESSION_ID='lifecycle-\(nonce)-after' scripts/send-event.sh")
+        guard output.contains("accepted") else {
+            throw SmokeError(message: "after-relaunch event rejected: \(output)")
+        }
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(secondTitle) { app.type(secondTitle) }
+        _ = try waitForElement("after-relaunch card", in: try mainWindow(), containing: secondTitle, timeout: 12)
+        app.key(Key.escape)
+    }
+
+    run.step("f11-macos-lifecycle", "settings still opens after relaunch") {
+        app.key(Key.comma, command: true)
+        try waitUntil("settings window after lifecycle relaunch", timeout: 10) {
+            (try? settingsWindow()) != nil
+        }
+        app.key(Key.escape)
+        try waitUntil("settings window to close", timeout: 5) {
+            (try? settingsWindow()) == nil
+        }
+    }
+}
+
+// MARK: Flow 12: load with many cards and many indexed Codex sessions
+
+if enabled("f12") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_LOAD_SMOKE_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_LOAD_SMOKE_TARGET_SESSION_ID"] ?? ""
+    let needle = env["ATTACHE_LOAD_SMOKE_NEEDLE"] ?? nonce
+    let cardCount = Int(env["ATTACHE_LOAD_SMOKE_CARD_COUNT"] ?? "80") ?? 80
+    let lastTitle = "Load smoke card \(nonce) \(String(format: "%03d", cardCount))"
+
+    run.step("f12-load", "environment identifies the load target") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_LOAD_SMOKE_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_LOAD_SMOKE_TARGET_SESSION_ID is required") }
+        guard !needle.isEmpty else { throw SmokeError(message: "ATTACHE_LOAD_SMOKE_NEEDLE is required") }
+    }
+
+    run.step("f12-load", "many local cards can be filed without losing responsiveness") {
+        try dismissOnboardingIfPresent()
+        let script = """
+            for i in $(seq 1 \(cardCount)); do
+              n=$(printf "%03d" "$i")
+              EVENT_TITLE="Load smoke card \(nonce) $n" \
+              EVENT_TEXT="Attaché load smoke card $n for \(nonce). This validates inbox rendering with a larger unread set." \
+              EXTERNAL_SESSION_ID="load-card-\(nonce)-$n" \
+                scripts/send-event.sh >/dev/null
+            done
+            echo accepted
+            """
+        let output = try runShell(script)
+        guard output.contains("accepted") else {
+            throw SmokeError(message: "load card injection failed: \(output)")
+        }
+    }
+
+    run.step("f12-load", "inbox search remains responsive with many unread cards") {
+        app.activate()
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(lastTitle) { app.type(lastTitle) }
+        _ = try waitForElement("last load card", in: try mainWindow(), containing: lastTitle, timeout: 15)
+        app.key(Key.escape)
+    }
+
+    run.step("f12-load", "Command-K finds the target Codex session among many indexed sessions") {
+        try focusSessionInCommandK(query: needle, sessionID: sessionID, timeout: 90)
+        _ = try waitForElement("focused load session send button", in: try mainWindow(),
+                               role: kAXButtonRole as String, containing: "Open send-to-agent composer",
+                               timeout: 15)
+    }
+}
+
+// MARK: Flow 13: upgrade candidate sees state created by the prior install
+
+if enabled("f13") {
+    let seededTitle = ProcessInfo.processInfo.environment["ATTACHE_UPGRADE_SEEDED_TITLE"] ?? ""
+
+    run.step("f13-upgrade", "environment identifies the pre-upgrade card") {
+        guard !seededTitle.isEmpty else {
+            throw SmokeError(message: "ATTACHE_UPGRADE_SEEDED_TITLE is required")
+        }
+    }
+
+    run.step("f13-upgrade", "candidate launches with pre-upgrade card still visible") {
+        try dismissOnboardingIfPresent()
+        app.activate()
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(seededTitle) { app.type(seededTitle) }
+        _ = try waitForElement("pre-upgrade card", in: try mainWindow(), containing: seededTitle, timeout: 20)
+        app.key(Key.escape)
+    }
+
+    run.step("f13-upgrade", "candidate keeps persisted settings after replacement") {
+        app.key(Key.comma, command: true)
+        try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+        try selectSettingsSection("Appearance", paneMarker: "Text size")
+        let slider = try waitForElement("Text size slider", in: try settingsWindow(),
+                                        role: kAXSliderRole as String, containing: "Text size")
+        let value = slider.doubleValue ?? 0
+        guard Swift.abs(value - 1.2) < 0.04 else {
+            throw SmokeError(message: "expected persisted text size near 1.2, got \(value)")
+        }
+        app.key(Key.escape)
     }
 }
 
