@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -103,6 +103,32 @@ func waitForHistoryCardRow(filteredBy token: String, timeout: TimeInterval = 120
     try waitForElement("history card row filtered by \(token)", in: try mainWindow(), timeout: timeout) { element in
         element.role != kAXTextFieldRole as String
             && element.matches("Replay")
+    }
+}
+
+func sendConversationPrompt(_ text: String) throws {
+    app.key(Key.l, command: true)
+    let field = try waitForElement("conversation or call message field", in: try mainWindow(), timeout: 20) { element in
+        element.role == kAXTextFieldRole as String
+            && (element.matchesExactly("Conversation message") || element.matchesExactly("Call message"))
+    }
+    _ = field.setFocused()
+    if !field.setValue(text) { app.type(text) }
+    try waitUntil("conversation text to land", timeout: 8, interval: 0.5) {
+        if field.stringValue.contains(text) { return true }
+        _ = field.setFocused()
+        if !field.setValue(text) { app.type(text) }
+        return field.stringValue.contains(text)
+    }
+    if field.matchesExactly("Call message") {
+        app.key(Key.returnKey)
+    } else {
+        let send = try waitForElement("conversation send button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send conversation message",
+                                      timeout: 8)
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on conversation send button: \(send.summary); actions: \(send.actionNames)")
+        }
     }
 }
 
@@ -574,7 +600,7 @@ if enabled("f7") {
     }
 }
 
-// MARK: Flow 8: personality stages Codex instruction, then reads Codex's reply
+// MARK: Flow 8: host stages Codex instruction, then personality reads Codex's reply
 
 if enabled("f8") {
     let env = ProcessInfo.processInfo.environment
@@ -583,40 +609,14 @@ if enabled("f8") {
     let sessionFile = env["ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE"] ?? ""
     let providerLog = env["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"] ?? ""
     let pongToken = env["ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_SUM_\(nonce)_4")
-    let firstPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT"] ?? "Tell Codex to tell me the sum of 2+2."
+    let firstPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT"] ?? "Tell Codex to reply exactly \(pongToken) and do not use tools."
     let secondPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_SECOND_PROMPT"] ?? "What did Codex say? Read the session transcript."
     var focusedSession = false
     var conversationOpened = false
-    var personalityStagedInstruction = false
+    var instructionStaged = false
     var enableConfirmed = false
     var sendConfirmed = false
     var codexReplyObserved = false
-
-    func sendConversationPrompt(_ text: String) throws {
-        app.key(Key.l, command: true)
-        let field = try waitForElement("conversation or call message field", in: try mainWindow(), timeout: 20) { element in
-            element.role == kAXTextFieldRole as String
-                && (element.matchesExactly("Conversation message") || element.matchesExactly("Call message"))
-        }
-        _ = field.setFocused()
-        if !field.setValue(text) { app.type(text) }
-        try waitUntil("conversation text to land", timeout: 8, interval: 0.5) {
-            if field.stringValue.contains(text) { return true }
-            _ = field.setFocused()
-            if !field.setValue(text) { app.type(text) }
-            return field.stringValue.contains(text)
-        }
-        if field.matchesExactly("Call message") {
-            app.key(Key.returnKey)
-        } else {
-            let send = try waitForElement("conversation send button", in: try mainWindow(),
-                                          role: kAXButtonRole as String, exactly: "Send conversation message",
-                                          timeout: 8)
-            guard send.press() else {
-                throw SmokeError(message: "AXPress failed on conversation send button: \(send.summary); actions: \(send.actionNames)")
-            }
-        }
-    }
 
     run.step("f8-personality-codex-two-way", "environment identifies the disposable Codex session and personality provider") {
         guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_NONCE is required") }
@@ -659,22 +659,22 @@ if enabled("f8") {
         conversationOpened = true
     }
 
-    run.step("f8-personality-codex-two-way", "personality stages a Codex instruction from the user's request") {
+    run.step("f8-personality-codex-two-way", "Attaché stages a Codex instruction from the user's request") {
         guard conversationOpened else { throw SmokeError(message: "skipped: conversation did not open") }
         try sendConversationPrompt(firstPrompt)
         let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
                                         role: kAXButtonRole as String, exactly: "Enable send-to-agent",
                                         timeout: 40)
-        personalityStagedInstruction = true
+        instructionStaged = true
         guard enable.press() else {
             throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
         }
         enableConfirmed = true
     }
 
-    run.step("f8-personality-codex-two-way", "per-instruction confirmation sends the personality-staged request") {
-        guard personalityStagedInstruction, enableConfirmed else {
-            throw SmokeError(message: "skipped: personality did not stage an instruction")
+    run.step("f8-personality-codex-two-way", "per-instruction confirmation sends the staged request") {
+        guard instructionStaged, enableConfirmed else {
+            throw SmokeError(message: "skipped: instruction was not staged")
         }
         _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
                                containing: pongToken, timeout: 20)
@@ -691,7 +691,7 @@ if enabled("f8") {
     run.step("f8-personality-codex-two-way", "Codex transcript records the staged instruction and answer") {
         guard sendConfirmed else { throw SmokeError(message: "skipped: staged instruction was not sent") }
         try waitForFile(sessionFile, toContain: "personality-staged Codex instruction and answer", timeout: 240, interval: 2) { text in
-            text.contains("Reply exactly \(pongToken)")
+            text.localizedCaseInsensitiveContains("reply exactly \(pongToken)")
                 && occurrenceCount(of: pongToken, in: text) >= 2
         }
     }
@@ -747,10 +747,9 @@ if enabled("f8") {
         }
     }
 
-    run.step("f8-personality-codex-two-way", "personality provider used both staging and transcript tools") {
-        try waitForFile(providerLog, toContain: "stage and read tool calls", timeout: 10, interval: 0.5) { text in
-            text.contains("\"name\": \"stage_agent_instruction\"")
-                && text.contains("\"name\": \"read_session_transcript\"")
+    run.step("f8-personality-codex-two-way", "personality provider read the updated transcript") {
+        try waitForFile(providerLog, toContain: "transcript read tool call", timeout: 10, interval: 0.5) { text in
+            text.contains("\"name\": \"read_session_transcript\"")
         }
     }
 }
@@ -832,6 +831,66 @@ if enabled("f9") {
         let transcript = (try? String(contentsOfFile: sessionFile, encoding: .utf8)) ?? ""
         guard !transcript.localizedCaseInsensitiveContains(rejectedInstruction) else {
             throw SmokeError(message: "refused instruction appeared in transcript \(sessionFile)")
+        }
+    }
+}
+
+// MARK: Flow 14: app-owned agent instruction intent works without provider tools
+
+if enabled("f14") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_AGENT_INTENT_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_AGENT_INTENT_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_AGENT_INTENT_SESSION_FILE"] ?? ""
+    let instructionToken = env["ATTACHE_AGENT_INTENT_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_HOST_INTENT_\(nonce)")
+    let prompt = env["ATTACHE_AGENT_INTENT_PROMPT"] ?? "Tell Codex to reply exactly \(instructionToken) and do not use tools."
+    var focusedSession = false
+    var stagedInstruction = false
+
+    run.step("f14-agent-intent", "environment identifies the disposable Codex session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_SESSION_FILE is required") }
+        guard !instructionToken.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_TOKEN is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+    }
+
+    run.step("f14-agent-intent", "Codex session appears in Command-K search") {
+        try dismissOnboardingIfPresent()
+        try focusSessionInCommandK(query: nonce, sessionID: sessionID)
+        focusedSession = true
+    }
+
+    run.step("f14-agent-intent", "text-only personality setup still opens send-to-agent enable") {
+        guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
+        try sendConversationPrompt(prompt)
+        let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                        timeout: 15)
+        guard enable.press() else {
+            throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+        }
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: instructionToken, timeout: 12)
+        stagedInstruction = true
+    }
+
+    run.step("f14-agent-intent", "staged instruction can be canceled before delivery") {
+        guard stagedInstruction else { throw SmokeError(message: "skipped: instruction was not staged") }
+        let cancel = try waitForElement("Cancel pending instruction", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Cancel",
+                                        timeout: 8)
+        _ = cancel.press()
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+    }
+
+    run.step("f14-agent-intent", "host-routed prompt was not delivered without final confirmation") {
+        Thread.sleep(forTimeInterval: 2)
+        let transcript = (try? String(contentsOfFile: sessionFile, encoding: .utf8)) ?? ""
+        guard !transcript.contains(instructionToken) else {
+            throw SmokeError(message: "unconfirmed host-routed instruction appeared in transcript \(sessionFile)")
         }
     }
 }

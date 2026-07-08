@@ -1653,6 +1653,13 @@ final class AppModel: ObservableObject {
 
         conversationDraft = ""
         appendConversationTurn(role: .user, text: trimmed)
+
+        if let intent = AgentInstructionIntent.detect(in: trimmed) {
+            let reply = stageHostAgentInstruction(intent)
+            surfaceConversationReply(reply)
+            return
+        }
+
         isConversing = true
         conversationStatus = "Thinking…"
 
@@ -1685,24 +1692,7 @@ final class AppModel: ObservableObject {
                 self.isConversing = false
                 switch result {
                 case .success(let reply):
-                    // Hold the text until the audio is ready, then reveal them
-                    // together so the reply you read matches the reply you hear.
-                    self.conversationStatus = "Speaking…"
-                    self.pendingAssistantReply = reply
-                    self.expectingReplyAudio = true
-                    // The reply preempts any live update mid-flight; requeue it so
-                    // it resumes after the reply instead of being lost. The reply
-                    // itself persists as a replayable history card when possible.
-                    self.livePlaybackQueue.replyStarted()
-                    if let card = self.persistConversationReply(reply) {
-                        self.playback.play(card)
-                    } else {
-                        self.playback.preview(reply)
-                    }
-                    self.revealTimer?.invalidate()
-                    self.revealTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
-                        self?.revealPendingReply()
-                    }
+                    self.surfaceConversationReply(reply)
                 case .failure(let error):
                     self.conversationStatus = error.localizedDescription
                     self.appendConversationTurn(role: .assistant, text: "I hit a problem: \(error.localizedDescription)")
@@ -1710,6 +1700,29 @@ final class AppModel: ObservableObject {
                 }
             }
         )
+    }
+
+    private func surfaceConversationReply(_ reply: String) {
+        let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // Hold the text until the audio is ready, then reveal them together so the
+        // reply you read matches the reply you hear.
+        conversationStatus = "Speaking…"
+        pendingAssistantReply = trimmed
+        expectingReplyAudio = true
+        // The reply preempts any live update mid-flight; requeue it so it resumes
+        // after the reply instead of being lost. The reply itself persists as a
+        // replayable history card when possible.
+        livePlaybackQueue.replyStarted()
+        if let card = persistConversationReply(trimmed) {
+            playback.play(card)
+        } else {
+            playback.preview(trimmed)
+        }
+        revealTimer?.invalidate()
+        revealTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
+            self?.revealPendingReply()
+        }
     }
 
     private func persistConversationReply(_ reply: String) -> VoicemailCard? {
@@ -1837,6 +1850,36 @@ final class AppModel: ObservableObject {
     }
 
     var canSendToAgent: Bool { twoWayTarget != nil }
+
+    private func stageHostAgentInstruction(_ intent: AgentInstructionIntent) -> String {
+        guard let target = twoWayTarget else {
+            let message = "Attaché needs an active attached agent session before it can send that."
+            intakeStatus = message
+            liveFollowUpStatus = message
+            return message
+        }
+
+        let sourceKind = SourceKind(rawValue: target.sourceKind) ?? .codex
+        guard intent.requestedAgent.matches(sourceKind: sourceKind) else {
+            let message = "Attaché is focused on \(sourceKind.displayName), not \(intent.requestedAgent.displayName). Focus an active \(intent.requestedAgent.displayName) session first, then ask again."
+            intakeStatus = message
+            liveFollowUpStatus = message
+            return message
+        }
+
+        requestSendToAgent(intent.instruction)
+        let title = twoWayTargetTitle ?? sourceKind.displayName
+        if showTwoWayEnable {
+            return "Attaché found the instruction for \(title). Review the first-use send-to-agent prompt; nothing sends until you enable it and confirm the message."
+        }
+        if pendingInstruction != nil {
+            return "Attaché staged that for \(title). Review and confirm before it sends."
+        }
+        let status = liveFollowUpStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !status.isEmpty { return status }
+        let fallback = intakeStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback.isEmpty ? "Attaché could not stage that instruction." : fallback
+    }
 
     func isTwoWayEnabledForTarget() -> Bool {
         guard let target = twoWayTarget else { return false }

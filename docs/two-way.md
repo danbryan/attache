@@ -128,14 +128,23 @@ Two-way has three intentionally separate verification layers:
    auth/network and real Codex model calls, but no presentation provider.
 3. **Personality-to-Codex round trip:**
    `scripts/codex-personality-two-way-smoke.sh` adds the personality layer. It
-   starts a deterministic local OpenAI-compatible provider that calls
-   `stage_agent_instruction`, drives the first-use enable sheet and per-message
-   confirmation, waits for real Codex to answer, then asks the personality to use
-   `read_session_transcript` and report the result. The smoke forces plain
-   watched-card readback and skips topic tagging so success depends on Codex's
-   watched answer, not a presentation-model paraphrase. It still uses real Codex
-   auth/network, but it does not require xAI, Claude, Anthropic, OpenAI, Groq,
-   Ollama, or LM Studio credentials.
+   starts a deterministic local OpenAI-compatible provider, uses Attaché's
+   provider-independent intent router to stage the Codex instruction, drives the
+   first-use enable sheet and per-message confirmation, waits for real Codex to
+   answer, then asks the personality to use `read_session_transcript` and report
+   the result. The smoke forces plain watched-card readback and skips topic
+   tagging so success depends on Codex's watched answer, not a presentation-model
+   paraphrase. It still uses real Codex auth/network, but it does not require
+   xAI, Claude, Anthropic, OpenAI, Groq, Ollama, or LM Studio credentials.
+
+Attaché also owns a provider-independent agent-instruction intent router before
+any personality model call. When the user plainly asks to tell, ask, instruct, or
+send something to the focused agent, the app extracts the instruction itself and
+runs it through the normal enable, safety, and per-message confirmation gates.
+Structured tool calls remain an enhancement for providers that support them, not
+a user-visible prerequisite. Named targets are checked against the focused
+session, so "tell Codex..." will not silently send to a focused Claude Code
+session.
 
 The provider canaries are separate: `scripts/provider-canaries.sh` always runs a
 deterministic local OpenAI-compatible provider as a free positive control, then
@@ -148,7 +157,7 @@ mandatory. The individual wrappers are `scripts/xai-tool-calling-canary.sh`,
 `scripts/ollama-tool-calling-canary.sh`, and
 `scripts/local-provider-tool-calling-canary.sh`.
 
-Pre-release coverage adds seven opt-in gates through
+Pre-release coverage adds eight opt-in gates through
 `scripts/release-readiness-smoke.sh`:
 
 1. `scripts/release-install-smoke.sh` builds a candidate, wraps it in a temporary
@@ -162,11 +171,15 @@ Pre-release coverage adds seven opt-in gates through
    across local and configured hosted providers.
 4. `scripts/codex-two-way-safety-smoke.sh` proves approval-like send-to-agent
    payloads are refused before confirmation and never reach a transcript.
-5. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
+5. `scripts/agent-intent-smoke.sh` configures a text-only CLI personality,
+   focuses a disposable Codex session, asks the personality to tell Codex
+   something, and proves Attaché itself opens the send-to-agent confirmation path
+   without requiring provider-side tool calls.
+6. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
    local Ollama default, seeds no cloud credentials, and still files a card.
-6. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event
+7. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event
    server recovery, and Settings still work.
-7. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
+8. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
    cards, and verifies Command-K plus inbox search remain responsive.
 
 The scripts fail closed on failed session creation, missing confirmation UI,

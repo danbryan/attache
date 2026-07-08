@@ -18,8 +18,9 @@ Usage:
   scripts/codex-personality-two-way-smoke.sh
 
 Creates a disposable Codex session, starts a deterministic local personality
-provider, asks the personality to stage an instruction for Codex, confirms the
-send, then asks the personality to read Codex's reply from the watched session.
+provider, asks Attaché to stage an instruction for Codex from natural language,
+confirms the send, then asks the personality to read Codex's reply from the
+watched session.
 EOF
 }
 
@@ -177,6 +178,7 @@ ATTACHE_PERSONALITY_TWO_WAY_SESSION_ID="$SESSION_ID" \
 ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE="$SESSION_FILE" \
 ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$PROVIDER_LOG" \
 ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="$PONG_TOKEN" \
+ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT="Tell Codex to reply exactly $PONG_TOKEN and do not use tools." \
   scripts/ui-smoke.sh
 
 echo "==> Personality-to-Codex two-way smoke passed for session $SESSION_ID"
