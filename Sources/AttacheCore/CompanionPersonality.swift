@@ -235,22 +235,29 @@ public enum CompanionPersonality {
         memoryContext: String?,
         sessionTitle: String?,
         workingDirectory: String?,
-        latestSummary: String?
+        latestSummary: String?,
+        canStageAgentInstruction: Bool = false
     ) -> String {
         let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
         let titleLine = sessionTitle.map { "- Session: \($0)\n" } ?? ""
         let cwdLine = workingDirectory.map { "- Working directory: \($0)\n" } ?? ""
         let summaryLine = latestSummary.map { "- Latest update: \($0)\n" } ?? ""
+        let agentInstructionLine = canStageAgentInstruction
+            ? "- If the user explicitly asks you to tell, ask, or instruct the work agent, use stage_agent_instruction with a concise instruction for that agent. This only opens Attaché's confirmation UI; it does not send by itself. After staging, tell the user to review and confirm the send. Never say the agent has been told until the user confirms.\n"
+            : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
+        let toolsLine = canStageAgentInstruction
+            ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (stage a user-confirmed instruction for the work agent), and rename_session. Only read or stage what you need.\n"
+            : "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and rename_session. Only read what you need.\n"
         return """
         \(companionIdentityPrompt)
 
         \(profilePrompt.trimmingCharacters(in: .whitespacesAndNewlines))\(memoryBlock)
 
         Live conversation task:
-        - You are in a back-and-forth voice conversation with the user about their work. This is your own chat with the user, not the work agent. Do not address or write to the agent.
+        - You are in a back-and-forth voice conversation with the user about their work. This is your own chat with the user, not the work agent.
         - Speak directly to the user. Replies are read aloud, so keep them short and listenable: headline first, then the key point. No long lists, no code blocks, no reciting paths, hashes, or URLs.
         - You start with the session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing.
-        - Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents). Only read what you need.
+        \(agentInstructionLine)\(toolsLine)
         - You can also rename this session for Attaché with rename_session when the user asks to name or relabel it (for example "let's call this the tax cleanup session"). This only changes Attaché's label. Confirm the new name briefly after renaming.
         - Preserve uncertainty. Do not invent file contents, results, approvals, or repository state. If a tool returns nothing useful, say what is missing.
         - Output only your spoken reply. No labels, no markdown fences, no stage directions.

@@ -72,11 +72,11 @@ enum CompanionPresentationModelService {
         }
     }
 
-    /// Read Codex's own model cache (~/.codex/models_cache.json) so the list matches
+    /// Read Codex's own model cache so the list matches
     /// what `codex` shows. Falls back to just "default" if the cache is missing.
     private static func codexModelsFromCache() -> [CompanionPresentationModelOption] {
         var options = [CompanionPresentationModelOption(id: "default", detail: "use Codex's configured model", reasoningEfforts: [])]
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/models_cache.json")
+        let url = CodexPaths.home().appendingPathComponent("models_cache.json")
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = json["models"] as? [[String: Any]] else {

@@ -405,6 +405,11 @@ struct SessionCommandPalette: View {
             }
             attach(hit)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Session \(model.displaySessionTitle(record)) \(record.id)")
+        .accessibilityValue(hit.snippet ?? "")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { attach(hit) }
         .contextMenu {
             Button("Rename for Attaché") {
                 renameText = model.displaySessionTitle(record)

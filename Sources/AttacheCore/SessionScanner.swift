@@ -45,7 +45,7 @@ public final class CodexSessionScanner: SessionScanner {
     }()
 
     public init(codexHome: URL? = nil) {
-        self.codexHome = codexHome ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        self.codexHome = codexHome ?? CodexPaths.home()
     }
 
     public func beginScan() {

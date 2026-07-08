@@ -90,19 +90,20 @@ final class CodexSessionCatalog {
 
     init(
         fileURL: URL? = nil,
+        codexHome: URL? = nil,
         sessionsDirectory: URL? = nil,
         archivedSessionsDirectory: URL? = nil,
         automationsDirectory: URL? = nil
     ) {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        self.fileURL = fileURL ?? home
-            .appendingPathComponent(".codex/session_index.jsonl")
-        self.sessionsDirectory = sessionsDirectory ?? home
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
-        self.archivedSessionsDirectory = archivedSessionsDirectory ?? home
-            .appendingPathComponent(".codex/archived_sessions", isDirectory: true)
-        self.automationsDirectory = automationsDirectory ?? home
-            .appendingPathComponent(".codex/automations", isDirectory: true)
+        let resolvedCodexHome = codexHome ?? CodexPaths.home()
+        self.fileURL = fileURL ?? resolvedCodexHome
+            .appendingPathComponent("session_index.jsonl")
+        self.sessionsDirectory = sessionsDirectory ?? resolvedCodexHome
+            .appendingPathComponent("sessions", isDirectory: true)
+        self.archivedSessionsDirectory = archivedSessionsDirectory ?? resolvedCodexHome
+            .appendingPathComponent("archived_sessions", isDirectory: true)
+        self.automationsDirectory = automationsDirectory ?? resolvedCodexHome
+            .appendingPathComponent("automations", isDirectory: true)
         fractionalParser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         wholeSecondParser.formatOptions = [.withInternetDateTime]
     }

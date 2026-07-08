@@ -114,6 +114,41 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
   the watcher like any other update and narrated, and the resulting card is linked
   back to the instruction.
 
+## Smoke and canary coverage
+
+Two-way has three intentionally separate verification layers:
+
+1. **Default UI smoke:** `scripts/ui-smoke.sh` is free/local and excludes paid
+   or network-dependent flows. It should stay green before every release.
+2. **Direct Codex round trip:** `scripts/codex-two-way-smoke.sh` creates a
+   disposable `CODEX_HOME`, copies only the Codex auth file, spawns a fresh Codex
+   session, sends a confirmed instruction through real `codex exec resume`, waits
+   for the transcript to append the resumed user turn and Codex reply, and checks
+   that Attaché files the reply as a watched-session card. It uses real Codex
+   auth/network and real Codex model calls, but no presentation provider.
+3. **Personality-to-Codex round trip:**
+   `scripts/codex-personality-two-way-smoke.sh` adds the personality layer. It
+   starts a deterministic local OpenAI-compatible provider that calls
+   `stage_agent_instruction`, drives the first-use enable sheet and per-message
+   confirmation, waits for real Codex to answer, then asks the personality to use
+   `read_session_transcript` and report the result. The smoke forces plain
+   watched-card readback and skips topic tagging so success depends on Codex's
+   watched answer, not a presentation-model paraphrase. It still uses real Codex
+   auth/network, but it does not require xAI, Claude, Anthropic, OpenAI, Groq,
+   Ollama, or LM Studio credentials.
+
+The live hosted-provider canary is separate:
+`scripts/xai-tool-calling-canary.sh` calls the xAI Chat Completions endpoint with
+the same OpenAI-compatible function-calling shape Attaché uses for
+`stage_agent_instruction`. It proves that the selected xAI model can request the
+tool and produce a final reply after the tool result. It does not send anything
+to Codex and it does not replace the Codex round-trip smoke.
+
+The scripts fail closed on missing CLI/auth/key material, failed session
+creation, missing confirmation UI, transcript timeout, missing watcher card, or
+missing tool calls. They clean up their temp `CODEX_HOME` roots and generated
+test app bundles on exit.
+
 ## Concurrency and identity
 
 - **Session identity** is the external session id the watcher already tracks. It

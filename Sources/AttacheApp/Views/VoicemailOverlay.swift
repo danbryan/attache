@@ -248,6 +248,7 @@ extension CompanionRootView {
                 .typoBody()
                 .scrollContentBackground(.hidden)
                 .frame(minHeight: 46, maxHeight: 68)
+                .accessibilityLabel("Live session instruction")
                 .padding(8)
                 .background(Color(nsColor: .textBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(
@@ -290,6 +291,7 @@ extension CompanionRootView {
                     }
                     .tint(.orange)
                     .disabled(directFollowUpQuestionDisabled)
+                    .accessibilityLabel("Send to Agent")
                 }
             }
             .buttonStyle(.bordered)

@@ -26,6 +26,7 @@ struct TwoWayEnableSheet: View {
                 Button("Cancel", role: .cancel, action: onCancel).keyboardShortcut(.cancelAction)
                 Button("Enable send-to-agent", action: onEnable)
                     .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                    .accessibilityLabel("Enable send-to-agent")
             }
         }
         .padding(20).frame(width: 440)
@@ -60,6 +61,7 @@ struct TwoWayConfirmSheet: View {
                 Button("Cancel", role: .cancel, action: onCancel).keyboardShortcut(.cancelAction)
                 Button("Send to agent", action: onSend)
                     .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).tint(.orange)
+                    .accessibilityLabel("Send to agent")
             }
         }
         .padding(20).frame(width: 440)

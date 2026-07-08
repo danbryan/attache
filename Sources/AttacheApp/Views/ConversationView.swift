@@ -145,6 +145,7 @@ struct ConversationView: View {
                         .lineLimit(1...4)
                         .focused($inputFocused)
                         .onSubmit(send)
+                        .accessibilityLabel("Conversation message")
                 }
             }
             .padding(.horizontal, 11).padding(.vertical, 8)
@@ -159,6 +160,7 @@ struct ConversationView: View {
             .buttonStyle(.plain)
             .disabled(!canSend)
             .help("Send")
+            .accessibilityLabel("Send conversation message")
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
     }

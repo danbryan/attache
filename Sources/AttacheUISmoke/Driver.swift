@@ -95,6 +95,8 @@ final class AppUnderTest {
 }
 
 enum Key {
+    static let l: CGKeyCode = 37
+    static let returnKey: CGKeyCode = 36
     static let k: CGKeyCode = 40
     static let i: CGKeyCode = 34
     static let y: CGKeyCode = 16
@@ -135,6 +137,44 @@ func waitForElement(_ what: String,
     throw SmokeError(message: """
         could not find \(what): no element\(role.map { " with role \($0)" } ?? "") \
         matching "\(query)" appeared within \(Int(timeout))s. AX tree at failure:
+        \(dump)
+        """)
+}
+
+func waitForElement(_ what: String,
+                    in root: @autoclosure () throws -> AXElement,
+                    role: String? = nil,
+                    exactly query: String,
+                    timeout: TimeInterval = 10) throws -> AXElement {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if let found = (try? root())?.firstDescendant(role: role, exactly: query) {
+            return found
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    let dump = (try? root())?.treeDump() ?? "(no root element available)"
+    throw SmokeError(message: """
+        could not find \(what): no element\(role.map { " with role \($0)" } ?? "") \
+        exactly matching "\(query)" appeared within \(Int(timeout))s. AX tree at failure:
+        \(dump)
+        """)
+}
+
+func waitForElement(_ what: String,
+                    in root: @autoclosure () throws -> AXElement,
+                    timeout: TimeInterval = 10,
+                    matching predicate: (AXElement) -> Bool) throws -> AXElement {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if let found = (try? root())?.descendants(where: predicate, collectLimit: 1).first {
+            return found
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    let dump = (try? root())?.treeDump() ?? "(no root element available)"
+    throw SmokeError(message: """
+        could not find \(what): no matching element appeared within \(Int(timeout))s. AX tree at failure:
         \(dump)
         """)
 }

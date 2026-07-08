@@ -1,4 +1,5 @@
 import AppKit
+import AttacheCore
 import SwiftUI
 
 // First-run onboarding (INF-153): launch to first spoken card in under two
@@ -27,8 +28,7 @@ enum OnboardingStep: Int, CaseIterable {
 /// point is "found something" plus a rough magnitude, not an exact census.
 enum OnboardingSourceProbe {
     static func codexSessionCount(limit: Int = 200) -> Int {
-        count(root: FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/sessions"), suffix: ".jsonl", limit: limit)
+        count(root: CodexPaths.sessionsDirectory(), suffix: ".jsonl", limit: limit)
     }
 
     static func claudeCodeSessionCount(limit: Int = 200) -> Int {

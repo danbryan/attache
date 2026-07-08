@@ -2,6 +2,28 @@ import AttacheCore
 import XCTest
 
 final class SessionIndexerTests: XCTestCase {
+    func testCodexHomeFallsBackToUserCodexDirectory() {
+        let home = CodexPaths.home(environment: [:])
+        XCTAssertEqual(home.lastPathComponent, ".codex")
+        XCTAssertTrue(home.path.hasSuffix("/.codex"))
+    }
+
+    func testCodexHomeUsesNonEmptyEnvironmentOverride() {
+        let override = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-codex-home-\(UUID().uuidString)", isDirectory: true)
+        let resolved = CodexPaths.home(environment: ["CODEX_HOME": override.path])
+        XCTAssertEqual(resolved.path, override.standardizedFileURL.path)
+        XCTAssertEqual(CodexPaths.sessionsDirectory(environment: ["CODEX_HOME": override.path]).path,
+                       override.appendingPathComponent("sessions", isDirectory: true).standardizedFileURL.path)
+        XCTAssertEqual(CodexPaths.sessionIndexURL(environment: ["CODEX_HOME": override.path]).lastPathComponent,
+                       "session_index.jsonl")
+    }
+
+    func testBlankCodexHomeEnvironmentFallsBack() {
+        let home = CodexPaths.home(environment: ["CODEX_HOME": "  "])
+        XCTAssertEqual(home.lastPathComponent, ".codex")
+    }
+
     func testSessionIDExtractedFromRolloutFileName() {
         let name = "rollout-2026-06-03T15-35-20-019e8efb-b0e2-7061-b0e1-f7df4b9735e0.jsonl"
         XCTAssertEqual(CodexSessionScanner.sessionID(fromFileName: name), "019e8efb-b0e2-7061-b0e1-f7df4b9735e0")

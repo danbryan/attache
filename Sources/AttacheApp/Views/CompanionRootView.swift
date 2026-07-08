@@ -32,7 +32,7 @@ extension View {
     }
 }
 
-enum DockItem { case unread, focus, mode, talk, personality, settings }
+enum DockItem { case unread, focus, mode, talk, send, personality, settings }
 
 struct CompanionRootView: View {
     @ObservedObject var model: AppModel
@@ -306,8 +306,11 @@ struct CompanionRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenTalk)) { _ in
             withAnimation(.easeInOut(duration: 0.18)) {
                 surfaceMode = .live
+                chromeAwake = true
+                nearBottom = true
                 model.startConversation()
             }
+            scheduleIdleFade()
         }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenInbox)) { _ in
             withAnimation(.easeInOut(duration: 0.16)) {

@@ -14,6 +14,7 @@ extension CompanionRootView {
             HStack(spacing: 8) {
                 callButton
                 if model.onCall { callMicButton }
+                if model.canSendToAgent { sendToAgentComposerButton }
                 focusButton
                 unreadBadge
                 if model.showPersonalitySwitcher {
@@ -49,6 +50,29 @@ extension CompanionRootView {
         .help(focusDockHelpText)
         .accessibilityLabel("Focus status")
         .onHover { setDockHover(.focus, $0) }
+    }
+
+    var sendToAgentComposerButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                surfaceMode = .live
+                liveComposerVisible = true
+            }
+        } label: {
+            Image(systemName: "paperplane.fill")
+                .typoIcon(size: 13, .semibold)
+                .foregroundStyle(liveComposerVisible || hoveredDockItem == .send ? .orange : Color.primary.opacity(0.62))
+                .frame(width: 38, height: 38)
+                .background(.ultraThinMaterial.opacity(hoveredDockItem == .send ? 0.72 : 0.58), in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(liveComposerVisible || hoveredDockItem == .send ? Color.orange.opacity(0.5) : Color.primary.opacity(0.12))
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Send an instruction to the focused agent")
+        .accessibilityLabel("Open send-to-agent composer")
+        .onHover { setDockHover(.send, $0) }
     }
 
     private var focusDockIconName: String {
@@ -249,6 +273,7 @@ extension CompanionRootView {
         }
         .buttonStyle(.plain)
         .help("Converse with Attaché — type or hold to talk (⌘L)")
+        .accessibilityLabel(model.conversationActive ? "Close conversation" : "Open conversation")
         .onHover { setDockHover(.talk, $0) }
     }
 

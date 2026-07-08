@@ -1659,13 +1659,19 @@ final class AppModel: ObservableObject {
         let messages = buildConversationMessages()
         let sessionID = talkContextSession?.id
         let workingDirectory = conversationWorkingDirectory
+        let allowAgentInstructionTool = conversationAgentInstructionToolAvailable
 
         presentationService.converse(
             messages: messages,
+            allowAgentInstructionTool: allowAgentInstructionTool,
             executeTool: { [weak self] name, arguments in
                 if name == "rename_session" {
                     return await self?.applyRenameTool(arguments: arguments, sessionID: sessionID)
                         ?? "There's no attached session to rename."
+                }
+                if name == "stage_agent_instruction" {
+                    return await self?.applyStageAgentInstructionTool(arguments: arguments)
+                        ?? "There's no attached session to send to."
                 }
                 return Self.executeConversationTool(
                     name: name,
@@ -1921,6 +1927,10 @@ final class AppModel: ObservableObject {
         try? twoWay.cancel(id: id)
     }
 
+    private var conversationAgentInstructionToolAvailable: Bool {
+        canSendToAgent && !presentationProvider.isCLI
+    }
+
     private func buildConversationMessages() -> [CompanionChatMessage] {
         let memorySnapshot = companionMemoryStore.loadSnapshot()
         let personaSnapshot = companionPersonaStore.loadSnapshot()
@@ -1932,7 +1942,8 @@ final class AppModel: ObservableObject {
             memoryContext: memorySnapshot.context,
             sessionTitle: talkContextSession?.displayTitle,
             workingDirectory: conversationWorkingDirectory,
-            latestSummary: conversationLatestSummary
+            latestSummary: conversationLatestSummary,
+            canStageAgentInstruction: conversationAgentInstructionToolAvailable
         )
         // CLI providers run in print mode with no tool calls, so the transcript and
         // file tools silently do nothing. Tell the model so it stops pretending to
@@ -2033,6 +2044,30 @@ final class AppModel: ObservableObject {
             return trimmed.isEmpty
                 ? "Reset this session's Attaché name back to the Codex default."
                 : "Renamed this session to \"\(trimmed)\" in Attaché."
+        }
+    }
+
+    /// Stage a personality-requested agent instruction without sending it. The same
+    /// first-use enable sheet and per-message confirmation sheet still gate delivery.
+    private func applyStageAgentInstructionTool(arguments: String) async -> String {
+        let rawInstruction = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["instruction"] as? String ?? ""
+        let instruction = rawInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else {
+            return "No instruction was provided to stage for the agent."
+        }
+        return await MainActor.run {
+            guard canSendToAgent else {
+                return "There's no attached session to send to."
+            }
+            requestSendToAgent(instruction)
+            if showTwoWayEnable {
+                return "Attaché opened the first-use send-to-agent enable confirmation. Tell the user to review and confirm before anything is sent."
+            }
+            if pendingInstruction != nil {
+                return "Attaché staged the instruction and opened the final send confirmation. Tell the user to review and confirm before anything is sent."
+            }
+            let status = intakeStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+            return status.isEmpty ? "Attaché could not stage that instruction." : status
         }
     }
 
@@ -2965,6 +3000,7 @@ final class AppModel: ObservableObject {
     /// Tags persist in the index cache, so this only does real work for new or
     /// changed sessions after the first pass. Bounded per run to keep cost in check.
     func tagUntaggedSessions(maxPerRun: Int = 480, batchSize: Int = 12) {
+        guard ProcessInfo.processInfo.environment["ATTACHE_DISABLE_TOPIC_TAGGING"] != "1" else { return }
         guard !isTaggingSessions, presentationService.isPresentationConfigured else { return }
         let pending = Array(sessionIndexer.untaggedRecords()
             .filter { enabledAgentSources.contains($0.sourceKind) }
@@ -3125,8 +3161,8 @@ final class AppModel: ObservableObject {
     }
 
     private static func loadCuratedProjectPaths() -> [String] {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/.codex-global-state.json")
+        let url = CodexPaths.home()
+            .appendingPathComponent(".codex-global-state.json")
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let order = json["project-order"] as? [String] else {

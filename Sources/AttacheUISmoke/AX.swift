@@ -84,6 +84,11 @@ struct AXElement {
         matchText.localizedCaseInsensitiveContains(query)
     }
 
+    func matchesExactly(_ query: String) -> Bool {
+        [title, axDescription, help, placeholder, stringValue, identifier]
+            .contains(query)
+    }
+
     /// One-line description used in failure messages and tree dumps.
     var summary: String {
         var parts = [role]
@@ -149,6 +154,13 @@ struct AXElement {
         descendants(where: { element in
             if let role, element.role != role { return false }
             return element.matches(query)
+        }, collectLimit: 1).first
+    }
+
+    func firstDescendant(role: String? = nil, exactly query: String) -> AXElement? {
+        descendants(where: { element in
+            if let role, element.role != role { return false }
+            return element.matchesExactly(query)
         }, collectLimit: 1).first
     }
 

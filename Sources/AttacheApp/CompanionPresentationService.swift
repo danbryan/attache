@@ -22,6 +22,14 @@ final class CompanionPresentationService {
         personality: Personality?,
         completion: @escaping (NormalizedEvent) -> Void
     ) {
+        if environment["ATTACHE_FORCE_PLAIN_READBACK"] == "1" {
+            completion(Self.eventWithPlainReadbackPresentation(
+                event,
+                strategy: "plain-readback-forced"
+            ))
+            return
+        }
+
         let unresolvedSettings = CompanionPresentationSettings.load(
             defaults: defaults,
             environment: environment,
@@ -160,6 +168,7 @@ final class CompanionPresentationService {
     /// each requested tool via `executeTool`), and returns the final spoken reply.
     func converse(
         messages: [CompanionChatMessage],
+        allowAgentInstructionTool: Bool = false,
         executeTool: @escaping (String, String) async -> String,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
@@ -182,6 +191,7 @@ final class CompanionPresentationService {
             do {
                 let reply = try await Self.runConversation(
                     messages: messages,
+                    allowAgentInstructionTool: allowAgentInstructionTool,
                     settings: settings,
                     executeTool: executeTool
                 )
@@ -194,11 +204,12 @@ final class CompanionPresentationService {
 
     private static func runConversation(
         messages: [CompanionChatMessage],
+        allowAgentInstructionTool: Bool,
         settings: CompanionPresentationSettings,
         executeTool: @escaping (String, String) async -> String
     ) async throws -> String {
         var payloadMessages: [[String: Any]] = messages.map { ["role": $0.role, "content": $0.content] }
-        let tools = conversationTools()
+        let tools = conversationTools(allowAgentInstructionTool: allowAgentInstructionTool)
         let maxToolRounds = 8   // room to page/search across a long session (INF-165)
 
         for _ in 0..<maxToolRounds {
@@ -259,8 +270,8 @@ final class CompanionPresentationService {
         return unresolved.llmEnabled && unresolved.hasProviderConfiguration
     }
 
-    private static func conversationTools() -> [[String: Any]] {
-        [
+    private static func conversationTools(allowAgentInstructionTool: Bool) -> [[String: Any]] {
+        var tools: [[String: Any]] = [
             ["type": "function", "function": [
                 "name": "read_session_transcript",
                 "description": "Read more of the attached session than the latest update. With no arguments, returns the opening turns plus the most recent turns (middle omitted, marked). Pass start_turn to page from a specific turn number (turns are labeled TURN n/total); pair with search_session_transcript to locate an earlier turn. Do not assume anything not shown was never discussed.",
@@ -305,6 +316,20 @@ final class CompanionPresentationService {
                 ] as [String: Any]
             ]]
         ]
+        if allowAgentInstructionTool {
+            tools.append(["type": "function", "function": [
+                "name": "stage_agent_instruction",
+                "description": "Stage an instruction for the attached work agent when the user explicitly asks you to tell, ask, or instruct that agent. This opens Attaché's confirmation UI and does not send by itself.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "instruction": ["type": "string", "description": "The concise instruction to send to the work agent after the user confirms."]
+                    ],
+                    "required": ["instruction"]
+                ] as [String: Any]
+            ]])
+        }
+        return tools
     }
 
     private struct ConversationChatResult {

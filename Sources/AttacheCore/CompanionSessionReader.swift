@@ -390,9 +390,10 @@ public enum CompanionSessionReader {
 
     private static func locateSessionFile(id: String, fileManager: FileManager) -> URL? {
         let home = fileManager.homeDirectoryForCurrentUser
+        let codexHome = CodexPaths.home(fileManager: fileManager)
         let directories = [
-            home.appendingPathComponent(".codex/sessions", isDirectory: true),
-            home.appendingPathComponent(".codex/archived_sessions", isDirectory: true),
+            codexHome.appendingPathComponent("sessions", isDirectory: true),
+            codexHome.appendingPathComponent("archived_sessions", isDirectory: true),
             home.appendingPathComponent(".claude/projects", isDirectory: true)
         ]
         var best: (url: URL, modified: Date)?

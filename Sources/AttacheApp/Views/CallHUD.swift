@@ -35,6 +35,7 @@ extension CompanionRootView {
     var onCallHUD: some View {
         TextField("Type instead…", text: $model.conversationDraft)
             .textFieldStyle(.plain)
+            .accessibilityLabel("Call message")
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .background(.regularMaterial.opacity(0.82), in: Capsule())

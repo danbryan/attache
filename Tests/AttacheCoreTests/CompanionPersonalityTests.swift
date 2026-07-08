@@ -257,4 +257,31 @@ final class CompanionPersonalityTests: XCTestCase {
         XCTAssertTrue(prompt.messages[1].content.contains("summarizing chapters in sequence"))
         XCTAssertTrue(prompt.messages[1].content.contains("completed chapter 13"))
     }
+
+    func testConversationPromptStagesAgentInstructionOnlyWithConfirmation() {
+        let prompt = CompanionPersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: "Codex smoke",
+            workingDirectory: "/tmp/smoke",
+            latestSummary: "Ready",
+            canStageAgentInstruction: true
+        )
+
+        XCTAssertTrue(prompt.contains("stage_agent_instruction"))
+        XCTAssertTrue(prompt.contains("only opens Attaché's confirmation UI"))
+        XCTAssertTrue(prompt.contains("Never say the agent has been told until the user confirms"))
+    }
+
+    func testConversationPromptForbidsAgentMessagingWhenToolUnavailable() {
+        let prompt = CompanionPersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: nil,
+            workingDirectory: nil,
+            latestSummary: nil,
+            canStageAgentInstruction: false
+        )
+
+        XCTAssertFalse(prompt.contains("stage_agent_instruction"))
+        XCTAssertTrue(prompt.contains("Do not address, write to, or imply you can message the work agent"))
+    }
 }

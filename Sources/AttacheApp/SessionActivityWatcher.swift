@@ -52,10 +52,11 @@ final class SessionActivityWatcher {
         claudeProjectsDirectory: URL? = nil
     ) {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        self.sessionsDirectory = sessionsDirectory ?? home
-            .appendingPathComponent(".codex/sessions", isDirectory: true)
-        self.archivedSessionsDirectory = archivedSessionsDirectory ?? home
-            .appendingPathComponent(".codex/archived_sessions", isDirectory: true)
+        let codexHome = CodexPaths.home()
+        self.sessionsDirectory = sessionsDirectory ?? codexHome
+            .appendingPathComponent("sessions", isDirectory: true)
+        self.archivedSessionsDirectory = archivedSessionsDirectory ?? codexHome
+            .appendingPathComponent("archived_sessions", isDirectory: true)
         self.claudeProjectsDirectory = claudeProjectsDirectory ?? home
             .appendingPathComponent(".claude/projects", isDirectory: true)
     }

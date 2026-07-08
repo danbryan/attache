@@ -27,7 +27,9 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
     .map { Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }) }
 
 func enabled(_ flow: String) -> Bool {
-    onlyFlows?.contains(flow.lowercased()) ?? true
+    let key = flow.lowercased()
+    if let onlyFlows { return onlyFlows.contains(key) }
+    return !["f7", "f8"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -63,6 +65,45 @@ func runShell(_ script: String) throws -> String {
         throw SmokeError(message: "shell command failed (\(process.terminationStatus)): \(script)\n\(output)")
     }
     return output
+}
+
+func waitForFile(_ path: String,
+                 toContain description: String,
+                 timeout: TimeInterval = 120,
+                 interval: TimeInterval = 1,
+                 condition: (String) -> Bool) throws {
+    try waitUntil(description, timeout: timeout, interval: interval) {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        return condition(text)
+    }
+}
+
+func occurrenceCount(of needle: String, in haystack: String) -> Int {
+    guard !needle.isEmpty else { return 0 }
+    var count = 0
+    var searchStart = haystack.startIndex
+    while let range = haystack.range(of: needle, range: searchStart..<haystack.endIndex) {
+        count += 1
+        searchStart = range.upperBound
+    }
+    return count
+}
+
+@discardableResult
+func waitForInboxCardRow(containing token: String, timeout: TimeInterval = 120) throws -> AXElement {
+    try waitForElement("inbox card row containing \(token)", in: try mainWindow(), timeout: timeout) { element in
+        element.role != kAXTextFieldRole as String
+            && element.matches("Play")
+            && element.matches(token)
+    }
+}
+
+@discardableResult
+func waitForHistoryCardRow(filteredBy token: String, timeout: TimeInterval = 120) throws -> AXElement {
+    try waitForElement("history card row filtered by \(token)", in: try mainWindow(), timeout: timeout) { element in
+        element.role != kAXTextFieldRole as String
+            && element.matches("Replay")
+    }
 }
 
 /// Selects a settings sidebar section by title. SwiftUI outline rows expose
@@ -353,6 +394,313 @@ if enabled("f4") {
         app.key(Key.escape)
         try waitForElementGone("switcher search field", in: try mainWindow(),
                                role: kAXTextFieldRole as String, containing: "Search name")
+    }
+}
+
+// MARK: Flow 7: real Codex watch plus send-to-agent round trip
+
+if enabled("f7") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_CODEX_TWO_WAY_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_CODEX_TWO_WAY_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_CODEX_TWO_WAY_SESSION_FILE"] ?? ""
+    let pongToken = env["ATTACHE_CODEX_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_PONG_\(nonce)")
+    let instruction = env["ATTACHE_CODEX_TWO_WAY_INSTRUCTION"] ?? "reply exactly \(pongToken) and do not use tools."
+    var focusedSession = false
+    var composerOpened = false
+    var instructionStaged = false
+    var enableConfirmed = false
+    var sendConfirmed = false
+
+    run.step("f7-codex-two-way", "environment identifies the disposable Codex session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_CODEX_TWO_WAY_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_CODEX_TWO_WAY_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_CODEX_TWO_WAY_SESSION_FILE is required") }
+        guard !pongToken.isEmpty else { throw SmokeError(message: "ATTACHE_CODEX_TWO_WAY_PONG_TOKEN is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+    }
+
+    run.step("f7-codex-two-way", "spawned Codex session appears in Command-K search") {
+        app.activate()
+        app.key(Key.k, command: true)
+        let field = try waitForElement("switcher search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search name")
+        _ = field.setFocused()
+        if !field.setValue(nonce) { app.type(nonce) }
+        let row = try waitForElement("spawned Codex session row", in: try mainWindow(),
+                                     containing: sessionID, timeout: 80)
+        guard row.press() else {
+            throw SmokeError(message: "AXPress failed on spawned Codex session row: \(row.summary); actions: \(row.actionNames)")
+        }
+        try waitForElementGone("switcher search field", in: try mainWindow(),
+                               role: kAXTextFieldRole as String, containing: "Search name", timeout: 8)
+        focusedSession = true
+    }
+
+    run.step("f7-codex-two-way", "live send composer opens for the focused session") {
+        guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
+        let open = try waitForElement("send composer dock button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, containing: "Open send-to-agent composer",
+                                      timeout: 20)
+        _ = open.press()
+        _ = try waitForElement("live session instruction editor", in: try mainWindow(),
+                               containing: "Live session instruction", timeout: 10)
+        composerOpened = true
+    }
+
+    run.step("f7-codex-two-way", "instruction is entered and staged for send-to-agent") {
+        guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
+        let editor = try waitForElement("live session instruction editor", in: try mainWindow(),
+                                        containing: "Live session instruction", timeout: 10)
+        _ = editor.setFocused()
+        if !editor.setValue(instruction) { app.type(instruction) }
+        try waitUntil("instruction text to land in the live composer", timeout: 8, interval: 0.5) {
+            if editor.stringValue.contains(pongToken) { return true }
+            _ = editor.setFocused()
+            if !editor.setValue(instruction) { app.type(instruction) }
+            return editor.stringValue.contains(pongToken)
+        }
+        try waitUntil("Send to Agent button to enable", timeout: 8, interval: 0.5) {
+            (try? mainWindow())?
+                .firstDescendant(role: kAXButtonRole as String, exactly: "Send to Agent")?
+                .isEnabled == true
+        }
+        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send to Agent")
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
+        }
+        instructionStaged = true
+    }
+
+    run.step("f7-codex-two-way", "first-use send-to-agent enable sheet confirms") {
+        guard instructionStaged else { throw SmokeError(message: "skipped: instruction was not staged") }
+        let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                        timeout: 12)
+        guard enable.press() else {
+            throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+        }
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: pongToken, timeout: 12)
+        enableConfirmed = true
+    }
+
+    run.step("f7-codex-two-way", "per-instruction confirmation sends to Codex") {
+        guard enableConfirmed else { throw SmokeError(message: "skipped: send-to-agent was not enabled") }
+        let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                         role: kAXButtonRole as String, exactly: "Send to agent",
+                                         timeout: 12)
+        guard confirm.press() else {
+            throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+        }
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+        sendConfirmed = true
+    }
+
+    run.step("f7-codex-two-way", "Codex transcript records the resumed instruction and pong reply") {
+        guard sendConfirmed else { throw SmokeError(message: "skipped: instruction was not sent to Codex") }
+        try waitForFile(sessionFile, toContain: "resumed Codex instruction and pong reply", timeout: 240, interval: 2) { text in
+            text.contains("reply exactly \(pongToken)")
+                && occurrenceCount(of: pongToken, in: text) >= 2
+        }
+    }
+
+    run.step("f7-codex-two-way", "Attaché files the Codex pong as a watched-session card") {
+        app.activate()
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(pongToken) { app.type(pongToken) }
+        _ = try waitForInboxCardRow(containing: pongToken, timeout: 120)
+        app.key(Key.escape)
+        try? waitForElementGone("inbox search field", in: try mainWindow(),
+                                role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+    }
+}
+
+// MARK: Flow 8: personality stages Codex instruction, then reads Codex's reply
+
+if enabled("f8") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_PERSONALITY_TWO_WAY_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_PERSONALITY_TWO_WAY_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE"] ?? ""
+    let providerLog = env["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"] ?? ""
+    let pongToken = env["ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_SUM_\(nonce)_4")
+    let firstPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT"] ?? "Tell Codex to tell me the sum of 2+2."
+    let secondPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_SECOND_PROMPT"] ?? "What did Codex say? Read the session transcript."
+    var focusedSession = false
+    var conversationOpened = false
+    var personalityStagedInstruction = false
+    var enableConfirmed = false
+    var sendConfirmed = false
+    var codexReplyObserved = false
+
+    func sendConversationPrompt(_ text: String) throws {
+        app.key(Key.l, command: true)
+        let field = try waitForElement("conversation or call message field", in: try mainWindow(), timeout: 20) { element in
+            element.role == kAXTextFieldRole as String
+                && (element.matchesExactly("Conversation message") || element.matchesExactly("Call message"))
+        }
+        _ = field.setFocused()
+        if !field.setValue(text) { app.type(text) }
+        try waitUntil("conversation text to land", timeout: 8, interval: 0.5) {
+            if field.stringValue.contains(text) { return true }
+            _ = field.setFocused()
+            if !field.setValue(text) { app.type(text) }
+            return field.stringValue.contains(text)
+        }
+        if field.matchesExactly("Call message") {
+            app.key(Key.returnKey)
+        } else {
+            let send = try waitForElement("conversation send button", in: try mainWindow(),
+                                          role: kAXButtonRole as String, exactly: "Send conversation message",
+                                          timeout: 8)
+            guard send.press() else {
+                throw SmokeError(message: "AXPress failed on conversation send button: \(send.summary); actions: \(send.actionNames)")
+            }
+        }
+    }
+
+    run.step("f8-personality-codex-two-way", "environment identifies the disposable Codex session and personality provider") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE is required") }
+        guard !providerLog.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG is required") }
+        guard !pongToken.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+        guard FileManager.default.fileExists(atPath: providerLog) else {
+            throw SmokeError(message: "provider log does not exist: \(providerLog)")
+        }
+    }
+
+    run.step("f8-personality-codex-two-way", "spawned Codex session appears in Command-K search") {
+        app.activate()
+        app.key(Key.k, command: true)
+        let field = try waitForElement("switcher search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search name")
+        _ = field.setFocused()
+        if !field.setValue(nonce) { app.type(nonce) }
+        let row = try waitForElement("spawned Codex session row", in: try mainWindow(),
+                                     containing: sessionID, timeout: 80)
+        guard row.press() else {
+            throw SmokeError(message: "AXPress failed on spawned Codex session row: \(row.summary); actions: \(row.actionNames)")
+        }
+        try waitForElementGone("switcher search field", in: try mainWindow(),
+                               role: kAXTextFieldRole as String, containing: "Search name", timeout: 8)
+        focusedSession = true
+    }
+
+    run.step("f8-personality-codex-two-way", "Talk conversation opens for the focused session") {
+        guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
+        app.key(Key.l, command: true)
+        _ = try waitForElement("conversation or call message field", in: try mainWindow(), timeout: 20) { element in
+            element.role == kAXTextFieldRole as String
+                && (element.matchesExactly("Conversation message") || element.matchesExactly("Call message"))
+        }
+        conversationOpened = true
+    }
+
+    run.step("f8-personality-codex-two-way", "personality stages a Codex instruction from the user's request") {
+        guard conversationOpened else { throw SmokeError(message: "skipped: conversation did not open") }
+        try sendConversationPrompt(firstPrompt)
+        let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                        timeout: 40)
+        personalityStagedInstruction = true
+        guard enable.press() else {
+            throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+        }
+        enableConfirmed = true
+    }
+
+    run.step("f8-personality-codex-two-way", "per-instruction confirmation sends the personality-staged request") {
+        guard personalityStagedInstruction, enableConfirmed else {
+            throw SmokeError(message: "skipped: personality did not stage an instruction")
+        }
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: pongToken, timeout: 20)
+        let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                         role: kAXButtonRole as String, exactly: "Send to agent",
+                                         timeout: 12)
+        guard confirm.press() else {
+            throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+        }
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+        sendConfirmed = true
+    }
+
+    run.step("f8-personality-codex-two-way", "Codex transcript records the staged instruction and answer") {
+        guard sendConfirmed else { throw SmokeError(message: "skipped: staged instruction was not sent") }
+        try waitForFile(sessionFile, toContain: "personality-staged Codex instruction and answer", timeout: 240, interval: 2) { text in
+            text.contains("Reply exactly \(pongToken)")
+                && occurrenceCount(of: pongToken, in: text) >= 2
+        }
+    }
+
+    run.step("f8-personality-codex-two-way", "Attaché files the Codex answer as a watched-session card") {
+        app.activate()
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(pongToken) { app.type(pongToken) }
+        do {
+            _ = try waitForInboxCardRow(containing: pongToken, timeout: 60)
+            app.key(Key.escape)
+            try? waitForElementGone("inbox search field", in: try mainWindow(),
+                                    role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+        } catch {
+            app.key(Key.escape)
+            try? waitForElementGone("inbox search field", in: try mainWindow(),
+                                    role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+            app.key(Key.y, command: true)
+            let historyField = try waitForElement("history search field", in: try mainWindow(),
+                                                  role: kAXTextFieldRole as String, containing: "Search history",
+                                                  timeout: 15)
+            _ = historyField.setFocused()
+            if !historyField.setValue(pongToken) { app.type(pongToken) }
+            _ = try waitForHistoryCardRow(filteredBy: pongToken, timeout: 60)
+            app.key(Key.escape)
+            try? waitForElementGone("history search field", in: try mainWindow(),
+                                    role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
+        }
+        codexReplyObserved = true
+    }
+
+    run.step("f8-personality-codex-two-way", "personality reads the updated session and tells the user Codex said 4") {
+        guard codexReplyObserved else { throw SmokeError(message: "skipped: Codex answer was not observed") }
+        try sendConversationPrompt(secondPrompt)
+        do {
+            _ = try waitForElement("personality final answer", in: try mainWindow(),
+                                   containing: "Codex said 4.", timeout: 15)
+        } catch {
+            app.key(Key.y, command: true)
+            let field = try waitForElement("history search field", in: try mainWindow(),
+                                           role: kAXTextFieldRole as String, containing: "Search history",
+                                           timeout: 15)
+            _ = field.setFocused()
+            if !field.setValue("Codex said 4") { app.type("Codex said 4") }
+            _ = try waitForHistoryCardRow(filteredBy: "Codex said 4", timeout: 60)
+            app.key(Key.escape)
+            try? waitForElementGone("history search field", in: try mainWindow(),
+                                    role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
+        }
+    }
+
+    run.step("f8-personality-codex-two-way", "personality provider used both staging and transcript tools") {
+        try waitForFile(providerLog, toContain: "stage and read tool calls", timeout: 10, interval: 0.5) { text in
+            text.contains("\"name\": \"stage_agent_instruction\"")
+                && text.contains("\"name\": \"read_session_transcript\"")
+        }
     }
 }
 
