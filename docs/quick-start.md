@@ -57,9 +57,10 @@ subset.
 
 ## 6. Go live
 
-Press **Command-L** to talk back. Speak a correction or a new direction and
-Attaché pushes it to your agents, so you can steer without switching to the
-terminal.
+Press **Command-L** to talk back. Use **Ask Attaché** when you want the
+personality to answer or decide what to do. Switch to **Tell Agent** when the
+next spoken or typed turn should go directly to the focused Codex or Claude Code
+session through the send-to-agent confirmation flow.
 
 ## Keys worth learning
 

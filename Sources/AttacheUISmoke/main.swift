@@ -132,6 +132,16 @@ func sendConversationPrompt(_ text: String) throws {
     }
 }
 
+func selectConversationDestination(_ title: String) throws {
+    let option = try waitForElement("conversation destination \(title)", in: try mainWindow(), timeout: 8) { element in
+        element.matchesExactly(title)
+            && (element.actionNames.contains(kAXPressAction) || element.role == kAXRadioButtonRole as String)
+    }
+    if !option.press(), !option.setSelected(true) {
+        throw SmokeError(message: "could not select conversation destination \(title): \(option.summary); actions: \(option.actionNames)")
+    }
+}
+
 /// Selects a settings sidebar section by title. SwiftUI outline rows expose
 /// their label text in a nested cell, so the row is found by searching each
 /// row's subtree, then selected; the pane switch is asserted via a marker
@@ -835,36 +845,38 @@ if enabled("f9") {
     }
 }
 
-// MARK: Flow 14: app-owned agent instruction intent works without provider tools
+// MARK: Flow 14: explicit agent destination stages without provider tools
 
 if enabled("f14") {
     let env = ProcessInfo.processInfo.environment
-    let nonce = env["ATTACHE_AGENT_INTENT_NONCE"] ?? ""
-    let sessionID = env["ATTACHE_AGENT_INTENT_SESSION_ID"] ?? ""
-    let sessionFile = env["ATTACHE_AGENT_INTENT_SESSION_FILE"] ?? ""
-    let instructionToken = env["ATTACHE_AGENT_INTENT_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_HOST_INTENT_\(nonce)")
-    let prompt = env["ATTACHE_AGENT_INTENT_PROMPT"] ?? "Tell Codex to reply exactly \(instructionToken) and do not use tools."
+    let nonce = env["ATTACHE_AGENT_MODE_NONCE"] ?? env["ATTACHE_AGENT_INTENT_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_AGENT_MODE_SESSION_ID"] ?? env["ATTACHE_AGENT_INTENT_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_AGENT_MODE_SESSION_FILE"] ?? env["ATTACHE_AGENT_INTENT_SESSION_FILE"] ?? ""
+    let instructionToken = env["ATTACHE_AGENT_MODE_TOKEN"] ?? env["ATTACHE_AGENT_INTENT_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_AGENT_MODE_\(nonce)")
+    let prompt = env["ATTACHE_AGENT_MODE_PROMPT"] ?? env["ATTACHE_AGENT_INTENT_PROMPT"] ?? "reply exactly \(instructionToken) and do not use tools."
     var focusedSession = false
     var stagedInstruction = false
 
-    run.step("f14-agent-intent", "environment identifies the disposable Codex session") {
-        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_NONCE is required") }
-        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_SESSION_ID is required") }
-        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_SESSION_FILE is required") }
-        guard !instructionToken.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_INTENT_TOKEN is required") }
+    run.step("f14-agent-destination", "environment identifies the disposable Codex session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_SESSION_FILE is required") }
+        guard !instructionToken.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_TOKEN is required") }
         guard FileManager.default.fileExists(atPath: sessionFile) else {
             throw SmokeError(message: "session file does not exist: \(sessionFile)")
         }
     }
 
-    run.step("f14-agent-intent", "Codex session appears in Command-K search") {
+    run.step("f14-agent-destination", "Codex session appears in Command-K search") {
         try dismissOnboardingIfPresent()
         try focusSessionInCommandK(query: nonce, sessionID: sessionID)
         focusedSession = true
     }
 
-    run.step("f14-agent-intent", "text-only personality setup still opens send-to-agent enable") {
+    run.step("f14-agent-destination", "Tell Agent mode opens send-to-agent enable without personality routing") {
         guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
+        app.key(Key.l, command: true)
+        try selectConversationDestination("Tell Agent")
         try sendConversationPrompt(prompt)
         let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
                                         role: kAXButtonRole as String, exactly: "Enable send-to-agent",
@@ -877,7 +889,7 @@ if enabled("f14") {
         stagedInstruction = true
     }
 
-    run.step("f14-agent-intent", "staged instruction can be canceled before delivery") {
+    run.step("f14-agent-destination", "staged instruction can be canceled before delivery") {
         guard stagedInstruction else { throw SmokeError(message: "skipped: instruction was not staged") }
         let cancel = try waitForElement("Cancel pending instruction", in: try mainWindow(),
                                         role: kAXButtonRole as String, exactly: "Cancel",
@@ -886,11 +898,11 @@ if enabled("f14") {
         try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
     }
 
-    run.step("f14-agent-intent", "host-routed prompt was not delivered without final confirmation") {
+    run.step("f14-agent-destination", "explicit agent-mode prompt was not delivered without final confirmation") {
         Thread.sleep(forTimeInterval: 2)
         let transcript = (try? String(contentsOfFile: sessionFile, encoding: .utf8)) ?? ""
         guard !transcript.contains(instructionToken) else {
-            throw SmokeError(message: "unconfirmed host-routed instruction appeared in transcript \(sessionFile)")
+            throw SmokeError(message: "unconfirmed explicit agent instruction appeared in transcript \(sessionFile)")
         }
     }
 }

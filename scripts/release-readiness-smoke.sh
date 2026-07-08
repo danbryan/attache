@@ -16,7 +16,7 @@ suite:
   2. upgrade-from-stable smoke
   3. provider canaries
   4. negative two-way safety smoke
-  5. provider-independent agent intent smoke
+  5. explicit agent destination smoke
   6. no-key first-run smoke
   7. macOS lifecycle smoke
   8. long-session/load smoke
@@ -52,8 +52,8 @@ scripts/provider-canaries.sh
 echo "==> Gate 4/8: two-way safety"
 scripts/codex-two-way-safety-smoke.sh
 
-echo "==> Gate 5/8: provider-independent agent intent"
-scripts/agent-intent-smoke.sh
+echo "==> Gate 5/8: explicit agent destination"
+scripts/agent-destination-smoke.sh
 
 echo "==> Gate 6/8: no-key first run"
 scripts/no-key-first-run-smoke.sh

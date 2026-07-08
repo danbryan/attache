@@ -177,8 +177,10 @@ needs-you just waits in the inbox.
 - **Talk to Attaché.** A live voice conversation with the active personality
   (`CompanionPresentationService.converse`) that can pull deeper context on demand
   through session-reading tools (read/search the transcript, list the working
-  directory, read a file, rename the session locally). Your speech is transcribed
-  by `MicTranscriptController`; the reply is spoken with the same captions.
+  directory, read a file, rename the session locally) and can request
+  `stage_agent_instruction` when it decides the user wants the work agent
+  instructed. Your speech is transcribed by `MicTranscriptController`; the reply
+  is spoken with the same captions.
 - **Push direction back to the agents.** A confirmed instruction is delivered
   into the target Codex or Claude Code session using the vendor's own headless
   resume (`claude -p --resume`, `codex exec resume`), queued until that session is
@@ -189,6 +191,13 @@ needs-you just waits in the inbox.
   resume (one adapter per vendor; CLI and desktop share session storage). This
   path is explicit and confirmed, and it deliberately inherits your own agent
   permissions. Full design of record: `docs/two-way.md`.
+
+The live UI makes the destination explicit with Ask Attaché and Tell Agent.
+Attaché does not use host-side phrase matching to infer destination from a
+message such as "tell Codex..." because that fails across languages and creates
+unsafe false positives. Tell Agent sends the raw turn through the two-way safety
+pipeline; Ask Attaché lets the configured personality reason and use app-owned
+tools.
 
 ## Security
 

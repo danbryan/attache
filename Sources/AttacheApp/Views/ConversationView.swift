@@ -36,13 +36,14 @@ struct ConversationView: View {
                 Text("Conversation")
                     .typoBody(.bold)
                 Text(model.conversationStatus.isEmpty
-                     ? (model.talkContextSession?.displayTitle ?? "No session attached")
+                     ? conversationTargetText
                      : model.conversationStatus)
                     .typoCaption(.medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer()
+            destinationPicker(width: 214)
             if !model.conversationMessages.isEmpty {
                 Button { model.clearConversation() } label: {
                     Image(systemName: "trash").typoIcon(size: 11, .semibold)
@@ -139,7 +140,7 @@ struct ConversationView: View {
                         Spacer(minLength: 0)
                     }
                 } else {
-                    TextField("Ask about this session…", text: $model.conversationDraft, axis: .vertical)
+                    TextField(inputPlaceholder, text: $model.conversationDraft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .typoBody()
                         .lineLimit(1...4)
@@ -163,6 +164,19 @@ struct ConversationView: View {
             .accessibilityLabel("Send conversation message")
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
+    }
+
+    private func destinationPicker(width: CGFloat) -> some View {
+        Picker("", selection: $model.conversationDestination) {
+            ForEach(ConversationDestination.allCases) { destination in
+                Text(destination.title).tag(destination)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .frame(width: width)
+        .accessibilityLabel("Conversation destination")
     }
 
     // Active = recording right now. Push-to-talk tracks the local hold; toggle and
@@ -229,10 +243,33 @@ struct ConversationView: View {
     }
 
     private var emptyStateHint: String {
+        if model.conversationDestination == .agent {
+            return model.canSendToAgent
+                ? "Messages go to \(model.twoWayTargetTitle ?? "the focused agent")."
+                : "Focus a Codex or Claude Code session first."
+        }
         switch model.voiceInputMode {
         case .pushToTalk: return "Type below, or hold the mic to talk. I can read more of the session if I need to."
         case .toggle: return "Type below, or click the mic to start and click again to send."
         case .alwaysOn: return "Just start talking — I'm listening and send when you pause. You can also type."
+        }
+    }
+
+    private var conversationTargetText: String {
+        switch model.conversationDestination {
+        case .attache:
+            return model.talkContextSession?.displayTitle ?? "No session attached"
+        case .agent:
+            return model.canSendToAgent
+                ? "To \(model.twoWayTargetTitle ?? "focused agent")"
+                : "No agent focused"
+        }
+    }
+
+    private var inputPlaceholder: String {
+        switch model.conversationDestination {
+        case .attache: return "Ask about this session…"
+        case .agent: return "Tell the focused agent…"
         }
     }
 

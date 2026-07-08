@@ -18,6 +18,20 @@ struct ConversationTurn: Identifiable, Equatable {
     let createdAt: Date
 }
 
+enum ConversationDestination: String, CaseIterable, Identifiable {
+    case attache
+    case agent
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .attache: return "Ask Attaché"
+        case .agent: return "Tell Agent"
+        }
+    }
+}
+
 struct CardPersonalityMarker: Equatable {
     let id: String
     let name: String
@@ -96,6 +110,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var conversationMessages: [ConversationTurn] = []
     @Published private(set) var isConversing: Bool = false
     @Published var conversationDraft: String = ""
+    @Published var conversationDestination: ConversationDestination = .attache
     @Published private(set) var conversationStatus: String = ""
     @Published private(set) var pendingAssistantReply: String?
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
@@ -1573,7 +1588,11 @@ final class AppModel: ObservableObject {
     // MARK: - Live voice conversation
 
     func startConversation() {
+        let wasActive = conversationActive
         conversationActive = true
+        if !wasActive {
+            conversationDestination = .attache
+        }
         if conversationStatus.isEmpty {
             conversationStatus = talkContextSession == nil
                 ? "No session attached — I can still chat."
@@ -1661,8 +1680,8 @@ final class AppModel: ObservableObject {
         conversationDraft = ""
         appendConversationTurn(role: .user, text: trimmed)
 
-        if let intent = AgentInstructionIntent.detect(in: trimmed) {
-            let reply = stageHostAgentInstruction(intent)
+        if conversationDestination == .agent {
+            let reply = stageConversationAgentInstruction(trimmed)
             surfaceConversationReply(reply)
             return
         }
@@ -1858,7 +1877,7 @@ final class AppModel: ObservableObject {
 
     var canSendToAgent: Bool { twoWayTarget != nil }
 
-    private func stageHostAgentInstruction(_ intent: AgentInstructionIntent) -> String {
+    private func stageConversationAgentInstruction(_ instruction: String) -> String {
         guard let target = twoWayTarget else {
             let message = "Attaché needs an active attached agent session before it can send that."
             intakeStatus = message
@@ -1867,17 +1886,10 @@ final class AppModel: ObservableObject {
         }
 
         let sourceKind = SourceKind(rawValue: target.sourceKind) ?? .codex
-        guard intent.requestedAgent.matches(sourceKind: sourceKind) else {
-            let message = "Attaché is focused on \(sourceKind.displayName), not \(intent.requestedAgent.displayName). Focus an active \(intent.requestedAgent.displayName) session first, then ask again."
-            intakeStatus = message
-            liveFollowUpStatus = message
-            return message
-        }
-
-        requestSendToAgent(intent.instruction)
+        requestSendToAgent(instruction)
         let title = twoWayTargetTitle ?? sourceKind.displayName
         if showTwoWayEnable {
-            return "Attaché found the instruction for \(title). Review the first-use send-to-agent prompt; nothing sends until you enable it and confirm the message."
+            return "Attaché staged that for \(title). Review the first-use send-to-agent prompt; nothing sends until you enable it and confirm the message."
         }
         if pendingInstruction != nil {
             return "Attaché staged that for \(title). Review and confirm before it sends."

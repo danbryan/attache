@@ -7,13 +7,18 @@ UX).
 
 ## What it is
 
-"Go live" lets you talk back to your agents by voice and push new direction into
-a session they are working. You enable two-way for a specific session, speak or
-type an instruction, and Attaché delivers it into that Codex or Claude Code
-session after the configured confirmation policy is satisfied. By default that
-means a per-message confirmation sheet; users can opt into direct send after a
-session is enabled. The agent's reply is then observed and narrated like any
-other update, and linked back to the instruction in an audit log.
+"Go live" lets you talk back by voice or text in two explicit modes. **Ask
+Attaché** sends the turn to the active personality, which may read the watched
+session and may request `stage_agent_instruction` when it decides the user wants
+the agent instructed. **Tell Agent** sends the exact turn to the focused Codex or
+Claude Code session through Attaché's two-way pipeline.
+
+Two-way must still be enabled for that specific session before anything reaches
+the agent. After enablement, Attaché delivers the instruction only after the
+configured confirmation policy is satisfied. By default that means a per-message
+confirmation sheet; users can opt into direct send after a session is enabled.
+The agent's reply is then observed and narrated like any other update, and
+linked back to the instruction in an audit log.
 
 The four surfaces it targets are Codex and Claude Code, each in CLI and desktop
 form.
@@ -132,8 +137,8 @@ Two-way has three intentionally separate verification layers:
    auth/network and real Codex model calls, but no presentation provider.
 3. **Personality-to-Codex round trip:**
    `scripts/codex-personality-two-way-smoke.sh` adds the personality layer. It
-   starts a deterministic local OpenAI-compatible provider, uses Attaché's
-   provider-independent intent router to stage the Codex instruction, drives the
+   starts a deterministic local OpenAI-compatible provider, asks the personality
+   to stage a Codex instruction through `stage_agent_instruction`, drives the
    first-use enable sheet and per-message confirmation, waits for real Codex to
    answer, then asks the personality to use `read_session_transcript` and report
    the result. The smoke forces plain watched-card readback and skips topic
@@ -141,14 +146,14 @@ Two-way has three intentionally separate verification layers:
    paraphrase. It still uses real Codex auth/network, but it does not require
    xAI, Claude, Anthropic, OpenAI, Groq, Ollama, or LM Studio credentials.
 
-Attaché also owns a provider-independent agent-instruction intent router before
-any personality model call. When the user plainly asks to tell, ask, instruct, or
-send something to the focused agent, the app extracts the instruction itself and
-runs it through the normal enable, safety, and configured confirmation gates.
-Structured tool calls remain an enhancement for providers that support them, not
-a user-visible prerequisite. Named targets are checked against the focused
-session, so "tell Codex..." will not silently send to a focused Claude Code
-session.
+Attaché intentionally does **not** use a host-side natural-language intent
+router to decide whether a live message should go to the personality or the
+agent. That approach is brittle for multilingual speech and free-form phrasing,
+and false positives are unsafe because they can send a message to an agent when
+the user meant to ask Attaché a question. Destination is a visible UI state:
+Ask Attaché or Tell Agent. LLM inference remains available inside Ask Attaché
+through the provider-neutral `stage_agent_instruction` tool, but hidden
+phrase-matching is not a routing contract.
 
 Personality tools are provider-neutral. HTTP providers that support the
 OpenAI-style `tool_calls` protocol receive the normal structured tool schema.
@@ -186,10 +191,10 @@ Pre-release coverage adds eight opt-in gates through
    across local and configured hosted providers.
 4. `scripts/codex-two-way-safety-smoke.sh` proves approval-like send-to-agent
    payloads are refused before confirmation and never reach a transcript.
-5. `scripts/agent-intent-smoke.sh` configures a text-only CLI personality,
-   focuses a disposable Codex session, asks the personality to tell Codex
-   something, and proves Attaché itself opens the send-to-agent confirmation path
-   without requiring provider-side tool calls.
+5. `scripts/agent-destination-smoke.sh` configures a text-only CLI personality,
+   focuses a disposable Codex session, switches the live conversation to Tell
+   Agent, and proves Attaché opens the send-to-agent confirmation path without
+   relying on provider-side tool calls or host-side phrase matching.
 6. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
    local Ollama default, seeds no cloud credentials, and still files a card.
 7. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event

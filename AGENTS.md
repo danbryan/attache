@@ -248,6 +248,12 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
   avoid them AND `CompanionPersonality.stripDashes` removes them deterministically
   on the spoken path, because the model ignores the instruction often enough to
   matter.
+- **No hidden phrase routing for agent sends.** Live conversation has explicit
+  destinations: Ask Attaché goes to the personality, Tell Agent sends the raw turn
+  through the two-way send-to-agent pipeline. Do not infer destination with
+  English phrase matching before the personality sees the turn. That approach is
+  brittle across languages and unsafe on false positives; personality-driven
+  delegation remains available through `stage_agent_instruction`.
 
 ## Gotchas
 

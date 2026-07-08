@@ -33,21 +33,38 @@ extension CompanionRootView {
     // fallback capsule. The dock mic owns voice input, the mic status lives
     // in the tooltip, and there is no box.
     var onCallHUD: some View {
-        TextField("Type instead…", text: $model.conversationDraft)
-            .textFieldStyle(.plain)
-            .accessibilityLabel("Call message")
-            .padding(.horizontal, 13)
-            .padding(.vertical, 9)
-            .background(.regularMaterial.opacity(0.82), in: Capsule())
-            .overlay(Capsule().stroke(Color.primary.opacity(0.08)))
-            .frame(width: 320)
-            .onSubmit {
-                let text = model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty { model.sendConversationMessage(text) }
-            }
-            .help(callMicStatusText)
+        HStack(spacing: 8) {
+            callDestinationPicker
+            TextField(callMessagePlaceholder, text: $model.conversationDraft)
+                .textFieldStyle(.plain)
+                .accessibilityLabel("Call message")
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .background(.regularMaterial.opacity(0.82), in: Capsule())
+                .overlay(Capsule().stroke(Color.primary.opacity(0.08)))
+                .frame(width: 320)
+                .onSubmit {
+                    let text = model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty { model.sendConversationMessage(text) }
+                }
+                .help(callMicStatusText)
+        }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .padding(.bottom, onCallHUDBottomPadding)
+    }
+
+    var callDestinationPicker: some View {
+        Picker("", selection: $model.conversationDestination) {
+            ForEach(ConversationDestination.allCases) { destination in
+                Text(destination.title).tag(destination)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .frame(width: 206)
+        .accessibilityLabel("Conversation destination")
+        .help("Choose where this live turn goes")
     }
 
     var callMicActive: Bool {
@@ -66,11 +83,11 @@ extension CompanionRootView {
         if micTranscript.isListening {
             switch model.voiceInputMode {
             case .pushToTalk:
-                return "Release the mic to send this turn to \(model.presentationProviderSummary)."
+                return "Release the mic to send this turn to \(callDestinationSummary)."
             case .toggle:
-                return "Click the mic again to send this turn to \(model.presentationProviderSummary)."
+                return "Click the mic again to send this turn to \(callDestinationSummary)."
             case .alwaysOn:
-                return "Pause briefly to send this turn to \(model.presentationProviderSummary)."
+                return "Pause briefly to send this turn to \(callDestinationSummary)."
             }
         }
         let micStatus = micTranscript.status.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,6 +95,22 @@ extension CompanionRootView {
             return "\(micStatus) Right-click the mic for options."
         }
         return "Right-click the mic for options."
+    }
+
+    var callMessagePlaceholder: String {
+        switch model.conversationDestination {
+        case .attache: return "Type instead…"
+        case .agent: return model.canSendToAgent ? "Tell the agent…" : "Focus an agent first…"
+        }
+    }
+
+    var callDestinationSummary: String {
+        switch model.conversationDestination {
+        case .attache:
+            return model.presentationProviderSummary
+        case .agent:
+            return model.twoWayTargetTitle ?? "the focused agent"
+        }
     }
 
     @ViewBuilder var callMicButton: some View {
