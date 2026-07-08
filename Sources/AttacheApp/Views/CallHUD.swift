@@ -35,19 +35,45 @@ extension CompanionRootView {
     var onCallHUD: some View {
         HStack(spacing: 8) {
             callDestinationPicker
-            TextField(callMessagePlaceholder, text: $model.conversationDraft)
-                .textFieldStyle(.plain)
-                .accessibilityLabel("Call message")
-                .padding(.horizontal, 13)
-                .padding(.vertical, 9)
-                .background(.regularMaterial.opacity(0.82), in: Capsule())
-                .overlay(Capsule().stroke(Color.primary.opacity(0.08)))
-                .frame(width: 320)
-                .onSubmit {
-                    let text = model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !text.isEmpty { model.sendConversationMessage(text) }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    TextField(callMessagePlaceholder, text: $model.conversationDraft)
+                        .textFieldStyle(.plain)
+                        .accessibilityLabel("Call message")
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 9)
+                        .background(.regularMaterial.opacity(0.82), in: Capsule())
+                        .overlay(Capsule().stroke(Color.primary.opacity(0.08)))
+                        .frame(width: 320)
+                        .onSubmit(sendCallMessage)
+                        .help(callMicStatusText)
+
+                    Button(action: sendCallMessage) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .typoIcon(size: 26)
+                            .foregroundStyle(canSendCallMessage ? accent : Color.primary.opacity(0.28))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSendCallMessage)
+                    .help("Send")
+                    .accessibilityLabel("Send call message")
                 }
-                .help(callMicStatusText)
+
+                if callProgressVisible {
+                    HStack(spacing: 7) {
+                        if model.isConversing {
+                            ProgressView().controlSize(.small)
+                                .accessibilityHidden(true)
+                        }
+                        Text(model.conversationProgressText)
+                            .typoCaption(.medium, design: .monospaced)
+                            .foregroundStyle(.primary.opacity(0.68))
+                            .lineLimit(1)
+                            .help("Conversation status")
+                    }
+                    .padding(.horizontal, 10)
+                }
+            }
         }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .padding(.bottom, onCallHUDBottomPadding)
@@ -75,7 +101,7 @@ extension CompanionRootView {
 
     var callMicStatusText: String {
         if model.isConversing {
-            return "Sent to \(model.presentationProviderSummary). Waiting for reply."
+            return "Sent to \(callDestinationSummary). Waiting for reply."
         }
         if micTranscript.isPreparing {
             return "Starting microphone..."
@@ -111,6 +137,30 @@ extension CompanionRootView {
         case .agent:
             return model.twoWayTargetTitle ?? "the focused agent"
         }
+    }
+
+    var canSendCallMessage: Bool {
+        !model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.isAwaitingReply
+    }
+
+    var callProgressVisible: Bool {
+        let status = model.conversationProgressText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !status.isEmpty else { return false }
+        if model.isAwaitingReply { return true }
+        return status != idleCallStatusText
+    }
+
+    var idleCallStatusText: String {
+        model.talkContextSession == nil
+            ? "No session attached — I can still chat."
+            : "Talking about \(model.talkContextSession?.displayTitle ?? "this session")."
+    }
+
+    func sendCallMessage() {
+        let text = model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        model.sendConversationMessage(text)
     }
 
     @ViewBuilder var callMicButton: some View {

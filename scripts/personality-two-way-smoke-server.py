@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -8,6 +9,7 @@ NONCE = os.environ["ATTACHE_PERSONALITY_TWO_WAY_NONCE"]
 PONG_TOKEN = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN"]
 LOG_PATH = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"]
 MODEL = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_MODEL", "attache-smoke-personality")
+RESPONSE_DELAY_MS = int(os.environ.get("ATTACHE_SMOKE_PROVIDER_DELAY_MS", "0") or "0")
 
 
 def log(event):
@@ -51,6 +53,11 @@ def tool_contents(messages):
     return [str(message.get("content", "")) for message in messages if message.get("role") == "tool"]
 
 
+def maybe_delay():
+    if RESPONSE_DELAY_MS > 0:
+        time.sleep(RESPONSE_DELAY_MS / 1000)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AttacheSmokePersonality/1.0"
 
@@ -86,10 +93,12 @@ class Handler(BaseHTTPRequestHandler):
         if "Tell Codex" in user and not tools:
             instruction = f"Reply exactly {PONG_TOKEN}. Do not use tools."
             log({"event": "tool_call", "name": "stage_agent_instruction", "instruction": instruction})
+            maybe_delay()
             self.send_bytes(response(tool_call("stage_agent_instruction", {"instruction": instruction})))
             return
 
         if any("opened" in content or "staged" in content for content in tools):
+            maybe_delay()
             self.send_bytes(response({
                 "role": "assistant",
                 "content": "I staged that for Codex. Review the confirmation and press Send to agent.",
@@ -98,13 +107,24 @@ class Handler(BaseHTTPRequestHandler):
 
         if "What did Codex say" in user and not tools:
             log({"event": "tool_call", "name": "read_session_transcript"})
+            maybe_delay()
             self.send_bytes(response(tool_call("read_session_transcript", {})))
             return
 
         if any(PONG_TOKEN in content for content in tools):
+            maybe_delay()
             self.send_bytes(response({"role": "assistant", "content": "Codex said 4."}))
             return
 
+        if "ATTACHE_CONVERSATION_FEEDBACK" in user:
+            maybe_delay()
+            self.send_bytes(response({
+                "role": "assistant",
+                "content": f"ATTACHE_CONVERSATION_FEEDBACK_REPLY_{NONCE}",
+            }))
+            return
+
+        maybe_delay()
         self.send_bytes(response({
             "role": "assistant",
             "content": "I need the attached session context before I can answer.",

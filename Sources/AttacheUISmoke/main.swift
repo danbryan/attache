@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -121,7 +121,12 @@ func sendConversationPrompt(_ text: String) throws {
         return field.stringValue.contains(text)
     }
     if field.matchesExactly("Call message") {
-        app.key(Key.returnKey)
+        let send = try waitForElement("call send button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send call message",
+                                      timeout: 8)
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on call send button: \(send.summary); actions: \(send.actionNames)")
+        }
     } else {
         let send = try waitForElement("conversation send button", in: try mainWindow(),
                                       role: kAXButtonRole as String, exactly: "Send conversation message",
@@ -903,6 +908,75 @@ if enabled("f14") {
         let transcript = (try? String(contentsOfFile: sessionFile, encoding: .utf8)) ?? ""
         guard !transcript.contains(instructionToken) else {
             throw SmokeError(message: "unconfirmed explicit agent instruction appeared in transcript \(sessionFile)")
+        }
+    }
+}
+
+// MARK: Flow 15: live Ask Attaché text send shows acceptance and thinking feedback
+
+if enabled("f15") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_CONVERSATION_FEEDBACK_NONCE"] ?? ""
+    let providerLog = env["ATTACHE_CONVERSATION_FEEDBACK_PROVIDER_LOG"] ?? ""
+    let prompt = env["ATTACHE_CONVERSATION_FEEDBACK_PROMPT"] ?? "ATTACHE_CONVERSATION_FEEDBACK \(nonce)"
+    let replyToken = env["ATTACHE_CONVERSATION_FEEDBACK_REPLY"] ?? (nonce.isEmpty ? "" : "ATTACHE_CONVERSATION_FEEDBACK_REPLY_\(nonce)")
+
+    run.step("f15-conversation-feedback", "environment identifies the deterministic personality provider") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_FEEDBACK_NONCE is required") }
+        guard !providerLog.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_FEEDBACK_PROVIDER_LOG is required") }
+        guard !replyToken.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_FEEDBACK_REPLY is required") }
+        guard FileManager.default.fileExists(atPath: providerLog) else {
+            throw SmokeError(message: "provider log does not exist: \(providerLog)")
+        }
+    }
+
+    run.step("f15-conversation-feedback", "Ask Attaché call message clears and shows thinking feedback") {
+        try dismissOnboardingIfPresent()
+        app.key(Key.l, command: true)
+        try selectConversationDestination("Ask Attaché")
+        let field = try waitForElement("call message field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, exactly: "Call message",
+                                       timeout: 20)
+        _ = field.setFocused()
+        if !field.setValue(prompt) { app.type(prompt) }
+        try waitUntil("call text to land", timeout: 8, interval: 0.5) {
+            if field.stringValue.contains(prompt) { return true }
+            _ = field.setFocused()
+            if !field.setValue(prompt) { app.type(prompt) }
+            return field.stringValue.contains(prompt)
+        }
+        let send = try waitForElement("call send button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send call message",
+                                      timeout: 8)
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on call send button: \(send.summary); actions: \(send.actionNames)")
+        }
+        try waitUntil("call field clears after accepting the message", timeout: 5, interval: 0.25) {
+            field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        _ = try waitForElement("visible thinking feedback", in: try mainWindow(), containing: "Thinking", timeout: 5)
+    }
+
+    run.step("f15-conversation-feedback", "Ask Attaché reply is shown after the provider responds") {
+        do {
+            _ = try waitForElement("conversation feedback reply", in: try mainWindow(),
+                                   containing: replyToken,
+                                   timeout: 20)
+        } catch {
+            app.key(Key.y, command: true)
+            let field = try waitForElement("history search field", in: try mainWindow(),
+                                           role: kAXTextFieldRole as String, containing: "Search history",
+                                           timeout: 15)
+            _ = field.setFocused()
+            if !field.setValue(replyToken) { app.type(replyToken) }
+            _ = try waitForHistoryCardRow(filteredBy: replyToken, timeout: 60)
+            app.key(Key.escape)
+            try? waitForElementGone("history search field", in: try mainWindow(),
+                                    role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
+        }
+        let providerText = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
+        guard providerText.contains(prompt) else {
+            throw SmokeError(message: "provider log did not record prompt \(prompt). Log:\n\(providerText)")
         }
     }
 }

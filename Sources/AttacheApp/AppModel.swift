@@ -112,6 +112,7 @@ final class AppModel: ObservableObject {
     @Published var conversationDraft: String = ""
     @Published var conversationDestination: ConversationDestination = .attache
     @Published private(set) var conversationStatus: String = ""
+    @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
         didSet {
@@ -545,6 +546,8 @@ final class AppModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var silenceTimer: Timer?
     private var revealTimer: Timer?
+    private var conversationWaitTimer: Timer?
+    private var conversationWaitStartedAt: Date?
     private var expectingReplyAudio = false
     private static let sessionIndexURL = CompanionAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
     private var sessionIndexer = SessionIndexer(cacheURL: AppModel.sessionIndexURL, scanners: [])
@@ -1606,6 +1609,7 @@ final class AppModel: ObservableObject {
     func endConversation() {
         conversationActive = false
         silenceTimer?.invalidate(); silenceTimer = nil
+        endConversationWait()
         micTranscript.stop(status: "")
         // Hanging up silences live narration immediately: stop what's speaking and
         // drop the queued backlog so it doesn't keep talking. The rest stays in the
@@ -1625,6 +1629,18 @@ final class AppModel: ObservableObject {
 
     /// True while waiting on the model or holding the reply text until its audio.
     var isAwaitingReply: Bool { isConversing || pendingAssistantReply != nil }
+
+    var conversationProgressText: String {
+        if isConversing {
+            return conversationElapsedSeconds > 0
+                ? "Thinking \(Self.elapsedConversationTime(conversationElapsedSeconds))"
+                : "Thinking…"
+        }
+        if pendingAssistantReply != nil {
+            return "Speaking…"
+        }
+        return conversationStatus
+    }
 
     /// Re-apply the input mode to a live conversation when the setting changes:
     /// start hands-free listening, or stop it.
@@ -1675,7 +1691,7 @@ final class AppModel: ObservableObject {
 
     func sendConversationMessage(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isConversing else { return }
+        guard !trimmed.isEmpty, !isAwaitingReply else { return }
 
         conversationDraft = ""
         appendConversationTurn(role: .user, text: trimmed)
@@ -1687,7 +1703,7 @@ final class AppModel: ObservableObject {
         }
 
         isConversing = true
-        conversationStatus = "Thinking…"
+        beginConversationWait()
 
         let messages = buildConversationMessages()
         let sessionID = talkContextSession?.id
@@ -1716,6 +1732,7 @@ final class AppModel: ObservableObject {
             completion: { [weak self] result in
                 guard let self else { return }
                 self.isConversing = false
+                self.endConversationWait()
                 switch result {
                 case .success(let reply):
                     self.surfaceConversationReply(reply)
@@ -1819,6 +1836,30 @@ final class AppModel: ObservableObject {
             expectingReplyAudio = false
             maybeResumeContinuousListening()
         }
+    }
+
+    private func beginConversationWait() {
+        conversationWaitTimer?.invalidate()
+        conversationWaitStartedAt = Date()
+        conversationElapsedSeconds = 0
+        conversationStatus = "Thinking…"
+        conversationWaitTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, let startedAt = self.conversationWaitStartedAt else { return }
+            self.conversationElapsedSeconds = max(0, Int(Date().timeIntervalSince(startedAt)))
+        }
+    }
+
+    private func endConversationWait() {
+        conversationWaitTimer?.invalidate()
+        conversationWaitTimer = nil
+        conversationWaitStartedAt = nil
+        conversationElapsedSeconds = 0
+    }
+
+    private static func elapsedConversationTime(_ seconds: Int) -> String {
+        let minutes = seconds / 60
+        let remainder = seconds % 60
+        return String(format: "%d:%02d", minutes, remainder)
     }
 
     // Hands-free: when no new words arrive for a beat, treat the utterance as done.

@@ -14,7 +14,7 @@ extension CompanionRootView {
             HStack(spacing: 8) {
                 callButton
                 if model.onCall { callMicButton }
-                if model.canSendToAgent { sendToAgentComposerButton }
+                if model.canSendToAgent, !model.onCall { sendToAgentComposerButton }
                 focusButton
                 unreadBadge
                 if model.showPersonalitySwitcher {

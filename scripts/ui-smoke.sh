@@ -12,8 +12,9 @@ set -euo pipefail
 #
 # Opt-in release/network/load flows are intentionally excluded from the default
 # suite:
-#   scripts/release-readiness-smoke.sh       eight pre-release gates
+#   scripts/release-readiness-smoke.sh       nine pre-release gates
 #   scripts/agent-destination-smoke.sh       explicit Tell Agent staging
+#   scripts/conversation-feedback-smoke.sh   live Ask Attaché send feedback
 #   scripts/codex-two-way-smoke.sh           real Codex send/watch round trip
 #   scripts/codex-personality-two-way-smoke.sh
 #                                             fake local personality + real Codex

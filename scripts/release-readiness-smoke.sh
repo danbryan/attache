@@ -9,7 +9,7 @@ usage() {
 Usage:
   scripts/release-readiness-smoke.sh
 
-Runs the eight release-readiness gates that sit on top of the default unit/UI
+Runs the nine release-readiness gates that sit on top of the default unit/UI
 suite:
 
   1. release install smoke
@@ -17,13 +17,14 @@ suite:
   3. provider canaries
   4. negative two-way safety smoke
   5. explicit agent destination smoke
-  6. no-key first-run smoke
-  7. macOS lifecycle smoke
-  8. long-session/load smoke
+  6. live conversation feedback smoke
+  7. no-key first-run smoke
+  8. macOS lifecycle smoke
+  9. long-session/load smoke
 
 Environment:
   ATTACHE_RELEASE_READINESS_WITH_CODEX=1 also runs the real Codex f7/f8
-  round-trip smokes after the eight gates.
+  round-trip smokes after the nine gates.
 EOF
 }
 
@@ -40,28 +41,31 @@ case "${1:-}" in
     ;;
 esac
 
-echo "==> Gate 1/8: release install"
+echo "==> Gate 1/9: release install"
 scripts/release-install-smoke.sh
 
-echo "==> Gate 2/8: upgrade from stable"
+echo "==> Gate 2/9: upgrade from stable"
 scripts/upgrade-from-stable-smoke.sh
 
-echo "==> Gate 3/8: provider canaries"
+echo "==> Gate 3/9: provider canaries"
 scripts/provider-canaries.sh
 
-echo "==> Gate 4/8: two-way safety"
+echo "==> Gate 4/9: two-way safety"
 scripts/codex-two-way-safety-smoke.sh
 
-echo "==> Gate 5/8: explicit agent destination"
+echo "==> Gate 5/9: explicit agent destination"
 scripts/agent-destination-smoke.sh
 
-echo "==> Gate 6/8: no-key first run"
+echo "==> Gate 6/9: live conversation feedback"
+scripts/conversation-feedback-smoke.sh
+
+echo "==> Gate 7/9: no-key first run"
 scripts/no-key-first-run-smoke.sh
 
-echo "==> Gate 7/8: macOS lifecycle"
+echo "==> Gate 8/9: macOS lifecycle"
 scripts/macos-lifecycle-smoke.sh
 
-echo "==> Gate 8/8: load"
+echo "==> Gate 9/9: load"
 scripts/load-smoke.sh
 
 if [[ "${ATTACHE_RELEASE_READINESS_WITH_CODEX:-0}" == "1" ]]; then

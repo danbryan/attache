@@ -177,7 +177,7 @@ mandatory. The individual wrappers are `scripts/xai-tool-calling-canary.sh`,
 `scripts/ollama-tool-calling-canary.sh`, and
 `scripts/local-provider-tool-calling-canary.sh`.
 
-Pre-release coverage adds eight opt-in gates through
+Pre-release coverage adds nine opt-in gates through
 `scripts/release-readiness-smoke.sh`:
 
 1. `scripts/release-install-smoke.sh` builds a candidate, wraps it in a temporary
@@ -195,11 +195,15 @@ Pre-release coverage adds eight opt-in gates through
    focuses a disposable Codex session, switches the live conversation to Tell
    Agent, and proves Attaché opens the send-to-agent confirmation path without
    relying on provider-side tool calls or host-side phrase matching.
-6. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
+6. `scripts/conversation-feedback-smoke.sh` starts a deterministic local
+   personality provider, presses the visible live Ask Attaché send button, proves
+   the text field clears, proves a thinking indicator appears while the provider
+   is delayed, and proves the reply is shown.
+7. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
    local Ollama default, seeds no cloud credentials, and still files a card.
-7. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event
+8. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event
    server recovery, and Settings still work.
-8. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
+9. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
    cards, and verifies Command-K plus inbox search remain responsive.
 
 The scripts fail closed on failed session creation, missing confirmation UI,

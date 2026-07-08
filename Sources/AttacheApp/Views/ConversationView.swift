@@ -274,7 +274,7 @@ struct ConversationView: View {
     }
 
     private var canSend: Bool {
-        !model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isConversing
+        !model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isAwaitingReply
     }
 
     private func send() {

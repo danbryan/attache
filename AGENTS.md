@@ -276,7 +276,7 @@ Before claiming a change works, verify:
 - `swift build && swift test` pass,
 - `scripts/ui-smoke.sh` passes.
 - Before a release candidate, run `scripts/release-readiness-smoke.sh` as the
-  eight-gate pre-release suite. Set `ATTACHE_RELEASE_READINESS_WITH_CODEX=1`
+  nine-gate pre-release suite. Set `ATTACHE_RELEASE_READINESS_WITH_CODEX=1`
   when the candidate also needs the real Codex f7/f8 round trips in the same run.
 
 The UI smoke harness (INF-156) is the standard UI verification step. It builds

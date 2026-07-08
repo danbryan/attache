@@ -158,9 +158,9 @@ struct CompanionRootView: View {
 
                 if model.onCall {
                     // Fades with the chrome like everything else, but never
-                    // while a draft is mid-thought.
+                    // while typed text or a reply is in flight.
                     onCallHUD
-                        .opacity(chromeAwake || !model.conversationDraft.isEmpty ? 1 : 0)
+                        .opacity(chromeAwake || !model.conversationDraft.isEmpty || model.isAwaitingReply ? 1 : 0)
                         .animation(.easeInOut(duration: 0.4), value: chromeAwake)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
