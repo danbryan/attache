@@ -17,7 +17,9 @@ private final class MockAdapter: InstructionDeliveryAdapter, @unchecked Sendable
     }
 
     func capability(forSessionID sessionID: String) -> DeliveryCapability {
-        DeliveryCapability(canDeliver: canDeliver, requiresIdle: requiresIdle)
+        canDeliver
+            ? DeliveryCapability(canDeliver: true, requiresIdle: requiresIdle)
+            : .unavailable("unavailable")
     }
 
     func deliver(_ instruction: Instruction) async -> Result<DeliveryReceipt, InstructionDeliveryError> {
@@ -129,6 +131,20 @@ final class InstructionReplyEngineTests: XCTestCase {
         let out = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
         XCTAssertEqual(out.first?.state, .failed)
         XCTAssertNotNil(out.first?.error)
+    }
+
+    func testUnavailableCapabilityFailsInsteadOfWaitingSilently() async throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        engine.register(MockAdapter(canDeliver: false))
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let created = try engine.submit(text: "run it", sessionID: "s1", sourceKind: "codex", now: now)
+        _ = try engine.confirm(id: created.id, now: now)
+
+        let out = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+
+        XCTAssertEqual(out.first?.state, .failed)
+        XCTAssertEqual(out.first?.error, "unavailable")
     }
 
     func testExpiryFailsStaleInstructions() throws {

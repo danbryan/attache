@@ -50,10 +50,11 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
 
     /// Confirm an instruction and immediately try to deliver it (delivery still
     /// waits for the session to be idle).
-    func confirmAndDeliver(id: String, now: Date = Date()) async throws {
+    @discardableResult
+    func confirmAndDeliver(id: String, now: Date = Date()) async throws -> [Instruction] {
         _ = try engine.confirm(id: id, now: now)
         refreshLog()
-        await pump(now: now)
+        return await pump(now: now)
     }
 
     func cancel(id: String) throws {
@@ -65,13 +66,15 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
 
     /// Deliver any confirmed instruction whose session is quiet, and expire stale
     /// ones. Call on watcher activity / the refresh timer.
-    func pump(now: Date = Date()) async {
+    @discardableResult
+    func pump(now: Date = Date()) async -> [Instruction] {
         _ = engine.expireStale(now: now)
-        _ = await engine.deliverReadyInstructions(
+        let changed = await engine.deliverReadyInstructions(
             sessionIsIdle: { [weak self] sessionID in self?.sessionIsIdle(sessionID, now: now) ?? false },
             now: now
         )
         refreshLog()
+        return changed
     }
 
     /// Link a freshly-narrated card to the most recent delivered instruction for

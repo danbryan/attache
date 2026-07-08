@@ -19,6 +19,16 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         XCTAssertEqual(args, ["exec", "resume", "sid-2", "commit it"])
     }
 
+    func testMergedPathIncludesHomebrewNodeForFinderLaunchedApp() {
+        let path = CLILanguageModel.mergedPATH(existing: "/usr/bin:/bin", home: "/Users/tester")
+        let parts = path.split(separator: ":").map(String.init)
+
+        XCTAssertEqual(parts.first, "/Users/tester/.local/bin")
+        XCTAssertTrue(parts.contains("/opt/homebrew/bin"))
+        XCTAssertTrue(parts.contains("/usr/local/bin"))
+        XCTAssertEqual(parts.filter { $0 == "/usr/bin" }.count, 1)
+    }
+
     func testCapabilityUnavailableWhenCLIMissing() {
         let adapter = AgentResumeDeliveryAdapter(
             vendor: .claude,

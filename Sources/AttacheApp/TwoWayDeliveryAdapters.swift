@@ -94,6 +94,7 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
             var env = ProcessInfo.processInfo.environment
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             env["HOME"] = home
+            env["PATH"] = CLILanguageModel.mergedPATH(existing: env["PATH"], home: home)
             process.environment = env
             let errPipe = Pipe()
             process.standardError = errPipe

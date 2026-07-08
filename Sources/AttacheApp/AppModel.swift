@@ -1959,7 +1959,36 @@ final class AppModel: ObservableObject {
         pendingInstruction = nil
         intakeStatus = "Sending to the agent when the session is quiet…"
         let coordinator = twoWay
-        Task { @MainActor in try? await coordinator?.confirmAndDeliver(id: instruction.id) }
+        Task { @MainActor in
+            do {
+                let changed = try await coordinator?.confirmAndDeliver(id: instruction.id) ?? []
+                handleTwoWayDeliveryChanges(changed)
+            } catch {
+                let message = "Send failed: \(error.localizedDescription)"
+                intakeStatus = message
+                liveFollowUpStatus = message
+                conversationStatus = message
+            }
+        }
+    }
+
+    private func handleTwoWayDeliveryChanges(_ changed: [Instruction]) {
+        guard let latest = changed.sorted(by: { $0.createdAt < $1.createdAt }).last else { return }
+        switch latest.state {
+        case .delivered:
+            let message = "Sent to agent. Watching for the reply…"
+            intakeStatus = message
+            liveFollowUpStatus = message
+            if conversationActive { conversationStatus = message }
+        case .failed:
+            let reason = latest.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let message = reason.isEmpty ? "Send failed." : "Send failed: \(reason)"
+            intakeStatus = message
+            liveFollowUpStatus = message
+            if conversationActive { conversationStatus = message }
+        default:
+            break
+        }
     }
 
     func discardStagedInstruction() {
@@ -2981,7 +3010,10 @@ final class AppModel: ObservableObject {
             // Deliver any confirmed instruction whose session has gone quiet. Run on
             // the main actor so the shared store is never touched off-main.
             if let twoWay = self?.twoWay {
-                Task { @MainActor in await twoWay.pump() }
+                Task { @MainActor in
+                    let changed = await twoWay.pump()
+                    self?.handleTwoWayDeliveryChanges(changed)
+                }
             }
         }
         codexSessionRefreshTimer = timer

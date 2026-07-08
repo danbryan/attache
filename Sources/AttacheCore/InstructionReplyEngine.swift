@@ -118,7 +118,10 @@ public final class InstructionReplyEngine: @unchecked Sendable {
                 continue
             }
             let capability = adapter.capability(forSessionID: session)
-            guard capability.canDeliver else { continue }              // can't reach yet; retry next pump
+            guard capability.canDeliver else {
+                changed.append(markFailed(instruction, error: capability.reason ?? "Delivery unavailable."))
+                continue
+            }
             if capability.requiresIdle && !sessionIsIdle(session) { continue }  // hold until quiet
 
             // Persist single-flight before the async gap so a concurrent pump sees it.

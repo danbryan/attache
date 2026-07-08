@@ -335,7 +335,7 @@ struct CLILanguageModel {
         return String(joined[..<index]) + "..."
     }
 
-    private static func mergedPATH(existing: String?, home: String) -> String {
+    static func mergedPATH(existing: String?, home: String = FileManager.default.homeDirectoryForCurrentUser.path) -> String {
         let defaults = [
             "\(home)/.local/bin",
             "\(home)/.claude/local",
