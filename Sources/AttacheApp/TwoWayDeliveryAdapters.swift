@@ -82,8 +82,10 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
             return ["-p", "--resume", sessionID, instruction]
         case .codex:
             // `codex exec resume <id> "<instruction>"`: non-interactive resume using
-            // the user's own Codex config/sandbox settings.
-            return ["exec", "resume", sessionID, instruction]
+            // the user's own Codex config/sandbox settings. A session may have
+            // started in a non-Git directory, and Finder gives the helper no
+            // useful working directory, so allow resume-by-id in that case.
+            return ["exec", "resume", "--skip-git-repo-check", sessionID, instruction]
         }
     }
 

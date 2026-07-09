@@ -16,7 +16,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
 
     func testCodexResumeArguments() {
         let args = AgentResumeDeliveryAdapter.resumeArguments(vendor: .codex, sessionID: "sid-2", instruction: "commit it")
-        XCTAssertEqual(args, ["exec", "resume", "sid-2", "commit it"])
+        XCTAssertEqual(args, ["exec", "resume", "--skip-git-repo-check", "sid-2", "commit it"])
     }
 
     func testMergedPathIncludesHomebrewNodeForFinderLaunchedApp() {
