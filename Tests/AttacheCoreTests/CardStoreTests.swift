@@ -190,8 +190,12 @@ final class CardStoreTests: XCTestCase {
         let dbURL = root.appendingPathComponent("cards.sqlite")
         let store = try CardStore(databaseURL: dbURL)
 
-        let first = try store.insertEvent(EventNormalizer.simulatedEvent(projectPath: "/tmp/one"))
-        _ = try store.insertEvent(EventNormalizer.simulatedEvent(projectPath: "/tmp/two"))
+        var firstEvent = EventNormalizer.simulatedEvent(projectPath: "/tmp/one")
+        firstEvent.metadata["source_time"] = "2026-07-09T19:00:00.000Z"
+        var secondEvent = EventNormalizer.simulatedEvent(projectPath: "/tmp/two")
+        secondEvent.metadata["source_time"] = "2026-07-09T19:00:01.000Z"
+        let first = try store.insertEvent(firstEvent)
+        _ = try store.insertEvent(secondEvent)
         try store.markHeard(cardID: first.id)
 
         XCTAssertEqual(try store.fetchCards().count, 2)

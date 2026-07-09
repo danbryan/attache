@@ -118,6 +118,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     private var audioCacheRetentionSeconds: TimeInterval = 24 * 3600
     private var lastAudioCacheCleanup = Date.distantPast
     private let logger = Logger(subsystem: "com.bryanlabs.attache", category: "playback")
+    private let muteAudioOutput = SpeechPlaybackController.shouldMuteAudioOutput()
     private var playbackStartedAt: TimeInterval = 0
     private var playbackStartOffset: TimeInterval = 0
     private var playbackSeekCount = 0
@@ -161,6 +162,12 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         }
         return milliseconds * 1_000_000
     }()
+
+    static func shouldMuteAudioOutput(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment["ATTACHE_UI_TEST_MUTE_AUDIO"] == "1"
+    }
 
     override init() {
         super.init()
@@ -619,10 +626,11 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                 self.playbackStartedAt = ProcessInfo.processInfo.systemUptime
                 self.playbackStartOffset = audioPlayer.currentTime
                 self.playbackSeekCount = 0
+                audioPlayer.volume = self.muteAudioOutput ? 0 : 1
                 audioPlayer.rate = self.playbackRate
                 audioPlayer.play()
                 self.logger.info(
-                    "Playback started duration=\(audioPlayer.duration) start=\(audioPlayer.currentTime)"
+                    "Playback started duration=\(audioPlayer.duration) start=\(audioPlayer.currentTime) muted=\(self.muteAudioOutput)"
                 )
                 self.reanchorClock()
                 self.updateClock()

@@ -35,6 +35,9 @@ final class AppUnderTest {
         process.executableURL = binary
         var environment = ProcessInfo.processInfo.environment
         environment["ATTACHE_UI_TEST"] = "1"
+        // Keep headed smokes silent without changing the Mac's system volume.
+        // Audio still decodes, plays, advances captions, and drives the bars.
+        environment["ATTACHE_UI_TEST_MUTE_AUDIO"] = "1"
         process.environment = environment
         try process.run()
         self.process = process

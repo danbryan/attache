@@ -339,18 +339,42 @@ struct CLILanguageModel {
             }
             let type = (object["type"] as? String)?.lowercased() ?? ""
             guard type.contains("error") || object["error"] != nil else { continue }
-            let candidates: [Any?] = [
-                object["message"],
-                object["error"],
-                (object["error"] as? [String: Any])?["message"],
-                (object["item"] as? [String: Any])?["message"]
-            ]
-            for case let message as String in candidates.compactMap({ $0 }) {
-                let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
-            }
+            if let message = humanReadableError(from: object) { return message }
         }
         return nil
+    }
+
+    /// Codex sometimes wraps an API error object as JSON text inside the event's
+    /// `message` field. Unwrap those layers so the HUD shows the actionable API
+    /// message instead of escaped braces and transport metadata.
+    private static func humanReadableError(from value: Any, depth: Int = 0) -> String? {
+        guard depth < 6 else { return nil }
+
+        if let object = value as? [String: Any] {
+            if let error = object["error"],
+               let message = humanReadableError(from: error, depth: depth + 1) {
+                return message
+            }
+            if let message = object["message"],
+               let readable = humanReadableError(from: message, depth: depth + 1) {
+                return readable
+            }
+            if let item = object["item"],
+               let message = humanReadableError(from: item, depth: depth + 1) {
+                return message
+            }
+            return nil
+        }
+
+        guard let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let data = trimmed.data(using: .utf8),
+           let nested = try? JSONSerialization.jsonObject(with: data),
+           let message = humanReadableError(from: nested, depth: depth + 1) {
+            return message
+        }
+        return trimmed
     }
 
     private static func trimmedProcessOutput(_ text: String) -> String {

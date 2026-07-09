@@ -29,7 +29,25 @@ struct EchoformRendererView: View {
             } else {
                 ambientGlow
             }
+
+            if playback.isPlaying || playback.isPaused {
+                Text("Visualizer state")
+                    .font(.system(size: 1))
+                    .frame(width: 1, height: 1)
+                    .clipped()
+                    .opacity(0.001)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Audio visualizer")
+                    .accessibilityValue(visualizerAccessibilityValue)
+                    .allowsHitTesting(false)
+            }
         }
+    }
+
+    private var visualizerAccessibilityValue: String {
+        let peak = state.bars.max() ?? 0
+        let status = playback.isPaused ? "paused" : "active"
+        return "\(status), level \(Int((state.level * 1_000).rounded())), peak \(Int((peak * 1_000).rounded()))"
     }
 
     private var state: VisualizerRenderState {

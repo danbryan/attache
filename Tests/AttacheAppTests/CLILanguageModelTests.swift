@@ -75,6 +75,28 @@ final class CLILanguageModelTests: XCTestCase {
         XCTAssertTrue(message.contains("Authentication required."))
     }
 
+    func testCodexFailureUnwrapsNestedJSONMessage() {
+        let nested = #"{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.6-luna' model requires a newer version of Codex. Please upgrade and try again."}}"#
+        let event = try! JSONSerialization.data(withJSONObject: [
+            "type": "error",
+            "message": nested
+        ])
+        let stdout = String(decoding: event, as: UTF8.self)
+
+        let message = CLILanguageModel.processFailureMessage(
+            executable: "/opt/homebrew/bin/codex",
+            code: 1,
+            stdout: stdout,
+            stderr: "WARN codex_core_skills::loader: ignored plugin icon"
+        )
+
+        XCTAssertEqual(
+            message,
+            "codex exited with code 1: The 'gpt-5.6-luna' model requires a newer version of Codex. Please upgrade and try again."
+        )
+        XCTAssertFalse(message.contains(#"{"type""#))
+    }
+
     private func assertFlag(_ args: [String], _ flag: String, value: String, file: StaticString = #filePath, line: UInt = #line) {
         guard let index = args.firstIndex(of: flag) else {
             XCTFail("missing \(flag)", file: file, line: line)

@@ -438,6 +438,15 @@ if enabled("f3") {
             layer.stringValue.count > 10
         }
     }
+    run.step("f3-transport", "muted smoke playback still drives the audio visualizer") {
+        let visualizer = try waitForElement("audio visualizer", in: try mainWindow(),
+                                            containing: "Audio visualizer", timeout: 15)
+        try waitUntil("audio visualizer to report analyzed energy", timeout: 12, interval: 0.5) {
+            let value = visualizer.stringValue
+            let numbers = value.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+            return numbers.contains(where: { $0 > 0 })
+        }
+    }
 }
 
 // MARK: Flow 4: Command-K search opens, filters, and closes

@@ -2,6 +2,16 @@ import XCTest
 @testable import AttacheApp
 
 final class PlaybackReliabilityTests: XCTestCase {
+    func testSmokeMuteIsScopedToExplicitEnvironmentFlag() {
+        XCTAssertTrue(SpeechPlaybackController.shouldMuteAudioOutput(environment: [
+            "ATTACHE_UI_TEST_MUTE_AUDIO": "1"
+        ]))
+        XCTAssertFalse(SpeechPlaybackController.shouldMuteAudioOutput(environment: [
+            "ATTACHE_UI_TEST": "1"
+        ]))
+        XCTAssertFalse(SpeechPlaybackController.shouldMuteAudioOutput(environment: [:]))
+    }
+
     func testRejectsImplausiblyEarlyLongClipFinish() {
         XCTAssertFalse(PlaybackCompletionValidator.isCredibleFinish(
             flag: true,
