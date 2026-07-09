@@ -27,83 +27,98 @@ extension CompanionRootView {
         .help(model.onCall ? "Hang up (updates go to your inbox)" : "Call the focused session (talk live)")
     }
 
-    // On a call: stay on the talking screen (the agent's voice plays on the visualizer
-    // behind this). A compact HUD to talk back; Hang up lives in the dock.
-    // The June design, restored: on a call the surface is just a typed
-    // fallback capsule. The dock mic owns voice input, the mic status lives
-    // in the tooltip, and there is no box.
+    // A standard chat composer for the live call: destination toggle, one input
+    // bar, and a bounded status region. The dock still owns the microphone and
+    // call controls.
     var onCallHUD: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 5) {
-                callDestinationPicker
-                if model.conversationDestination == .agent || !model.canSendToAgent {
-                    HStack(spacing: 4) {
-                        Image(systemName: model.canSendToAgent ? "paperplane.fill" : "exclamationmark.triangle.fill")
-                            .typoIcon(size: 9, .semibold)
-                        Text(agentDestinationLabel)
-                            .typoCaption(.semibold)
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(model.canSendToAgent ? Color.orange : Color.red)
-                    .accessibilityLabel(agentDestinationLabel)
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            callDestinationPicker
+
+            if model.conversationDestination == .agent || !model.canSendToAgent {
+                Label(
+                    agentDestinationLabel,
+                    systemImage: model.canSendToAgent ? "terminal.fill" : "exclamationmark.triangle.fill"
+                )
+                .typoCaption(.semibold)
+                .foregroundStyle(model.canSendToAgent ? accent : Color.red)
+                .lineLimit(1)
+                .accessibilityLabel(agentDestinationLabel)
             }
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    TextField(callMessagePlaceholder, text: $model.conversationDraft)
-                        .textFieldStyle(.plain)
-                        .accessibilityLabel("Call message")
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 9)
-                        .background(.regularMaterial.opacity(0.82), in: Capsule())
-                        .overlay(Capsule().stroke(Color.primary.opacity(0.08)))
-                        .frame(width: 320)
-                        .onSubmit(sendCallMessage)
-                        .help(callMicStatusText)
 
-                    Button(action: sendCallMessage) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .typoIcon(size: 26)
-                            .foregroundStyle(canSendCallMessage ? accent : Color.primary.opacity(0.28))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSendCallMessage)
-                    .help("Send")
-                    .accessibilityLabel("Send call message")
-                }
+            HStack(spacing: 8) {
+                TextField(callMessagePlaceholder, text: $model.conversationDraft)
+                    .textFieldStyle(.plain)
+                    .typoBody()
+                    .accessibilityLabel("Call message")
+                    .onSubmit(sendCallMessage)
+                    .help(callMicStatusText)
 
-                if callProgressVisible {
-                    HStack(spacing: 7) {
-                        if model.isConversing {
-                            ProgressView().controlSize(.small)
-                                .accessibilityHidden(true)
-                        }
-                        Text(model.conversationProgressText)
-                            .typoCaption(.medium, design: .monospaced)
-                            .foregroundStyle(.primary.opacity(0.68))
-                            .lineLimit(1)
-                            .help("Conversation status")
-                    }
-                    .padding(.horizontal, 10)
+                Button(action: sendCallMessage) {
+                    Image(systemName: "arrow.up")
+                        .typoIcon(size: 13, .bold)
+                        .foregroundStyle(canSendCallMessage ? model.theme.signatureForegroundColor : Color.primary.opacity(0.32))
+                        .frame(width: 30, height: 30)
+                        .background(canSendCallMessage ? accent : Color.primary.opacity(0.08), in: Circle())
                 }
+                .buttonStyle(.plain)
+                .disabled(!canSendCallMessage)
+                .help("Send")
+                .accessibilityLabel("Send call message")
+            }
+            .padding(.leading, 13)
+            .padding(.trailing, 5)
+            .padding(.vertical, 5)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.12)))
+
+            if callProgressVisible {
+                HStack(alignment: .top, spacing: 7) {
+                    if model.isConversing {
+                        ProgressView().controlSize(.small)
+                            .accessibilityHidden(true)
+                    } else {
+                        Image(systemName: callStatusIsError ? "exclamationmark.triangle.fill" : "info.circle")
+                            .typoIcon(size: 10, .semibold)
+                            .foregroundStyle(callStatusIsError ? Color.red : accent)
+                    }
+                    Text(callStatusDisplayText)
+                        .typoCaption(.medium, design: .monospaced)
+                        .foregroundStyle(callStatusIsError ? Color.red.opacity(0.88) : Color.primary.opacity(0.68))
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(model.conversationProgressText)
+                .accessibilityLabel("Conversation status: \(callStatusDisplayText)")
             }
         }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .padding(.bottom, onCallHUDBottomPadding)
+        .padding(10)
+        .frame(width: 480)
+        .background(.ultraThinMaterial.opacity(0.82), in: RoundedRectangle(cornerRadius: 18))
+        .readingPlate(theme: model.theme, cornerRadius: 18, minimumOpacity: 0.66)
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(accent.opacity(0.22)))
+        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, onCallHUDBottomPadding)
     }
 
     var callDestinationPicker: some View {
         Picker("", selection: $model.conversationDestination) {
             ForEach(ConversationDestination.allCases) { destination in
-                Text(destination.title).tag(destination)
+                Label(
+                    destination.title,
+                    systemImage: destination == .attache ? "sparkles" : "terminal"
+                )
+                    .tag(destination)
                     .disabled(destination == .agent && !model.canSendToAgent)
             }
         }
         .labelsHidden()
         .pickerStyle(.segmented)
         .controlSize(.small)
-        .frame(width: 206)
-        .tint(model.conversationDestination == .agent ? .orange : accent)
+        .frame(maxWidth: .infinity)
+        .tint(accent)
         .accessibilityLabel("Conversation destination, \(callDestinationSummary)")
         .help(model.canSendToAgent
               ? "Choose where this live turn goes"
@@ -174,6 +189,30 @@ extension CompanionRootView {
         guard !status.isEmpty else { return false }
         if model.isAwaitingReply { return true }
         return status != idleCallStatusText
+    }
+
+    var callStatusIsError: Bool {
+        let status = model.conversationProgressText.lowercased()
+        return status.contains("exited with code")
+            || status.contains("failed")
+            || status.contains("error")
+            || status.contains("problem")
+    }
+
+    var callStatusDisplayText: String {
+        let status = model.conversationProgressText
+        let lower = status.lowercased()
+        guard callStatusIsError,
+              let colon = status.firstIndex(of: ":") else { return status }
+        let detail = status[status.index(after: colon)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.hasPrefix("codex exited") {
+            return detail.isEmpty ? "Codex couldn't respond." : "Codex couldn't respond: \(detail)"
+        }
+        if lower.hasPrefix("claude exited") {
+            return detail.isEmpty ? "Claude Code couldn't respond." : "Claude Code couldn't respond: \(detail)"
+        }
+        return status
     }
 
     var idleCallStatusText: String {

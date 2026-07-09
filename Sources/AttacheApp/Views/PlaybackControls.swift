@@ -78,7 +78,18 @@ struct PlaybackScrubberSlider: View {
     }
 
     private var progressBinding: Binding<Double> {
-        Binding(get: { progress }, set: { onSeek($0) })
+        Binding(
+            get: { progress },
+            set: { requested in
+                let clamped = min(1, max(0, requested))
+                // SwiftUI can write the slider's displayed value back while the
+                // 20 Hz playback clock refreshes it. Treat near-identical writes
+                // as display synchronization, not a seek, so AVAudioPlayer is not
+                // stopped and restarted every frame.
+                guard abs(clamped - progress) > 0.01 else { return }
+                onSeek(clamped)
+            }
+        )
     }
 
     private var progress: Double {

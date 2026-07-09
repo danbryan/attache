@@ -313,14 +313,44 @@ struct CLILanguageModel {
         }
     }
 
-    private static func processFailureMessage(executable: String, code: Int32, stdout: String, stderr: String) -> String {
-        let detail = [stderr, stdout]
+    static func processFailureMessage(executable: String, code: Int32, stdout: String, stderr: String) -> String {
+        let executableName = URL(fileURLWithPath: executable).lastPathComponent
+        let structuredError = executableName == "codex" ? codexErrorMessage(in: stdout) : nil
+        // Codex writes plugin and skill-loader warnings to stderr even when the
+        // useful structured failure is on stdout. Prefer the real JSON error so
+        // the HUD does not blame an unrelated warning.
+        let candidates = executableName == "codex"
+            ? [structuredError ?? "", stdout, stderr]
+            : [stderr, stdout]
+        let detail = candidates
             .map { trimmedProcessOutput($0) }
             .first(where: { !$0.isEmpty })
         if let detail {
-            return "\(executable) exited with code \(code): \(detail)"
+            return "\(executableName) exited with code \(code): \(detail)"
         }
-        return "\(executable) exited with code \(code)."
+        return "\(executableName) exited with code \(code)."
+    }
+
+    private static func codexErrorMessage(in output: String) -> String? {
+        for line in output.split(whereSeparator: \.isNewline).reversed() {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            let type = (object["type"] as? String)?.lowercased() ?? ""
+            guard type.contains("error") || object["error"] != nil else { continue }
+            let candidates: [Any?] = [
+                object["message"],
+                object["error"],
+                (object["error"] as? [String: Any])?["message"],
+                (object["item"] as? [String: Any])?["message"]
+            ]
+            for case let message as String in candidates.compactMap({ $0 }) {
+                let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
     }
 
     private static func trimmedProcessOutput(_ text: String) -> String {

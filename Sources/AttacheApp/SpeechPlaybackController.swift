@@ -3,6 +3,35 @@ import AVFoundation
 import Combine
 import AttacheCore
 import Foundation
+import OSLog
+
+enum PlaybackCompletionValidator {
+    /// AVAudioPlayer can report a successful finish after a seek storm or an
+    /// implausibly short run. Only mark a card heard when the playhead reached
+    /// the end and the elapsed time is credible, unless the user explicitly
+    /// sought during this playback.
+    static func isCredibleFinish(
+        flag: Bool,
+        currentTime: TimeInterval,
+        duration: TimeInterval,
+        elapsed: TimeInterval,
+        startOffset: TimeInterval,
+        seekCount: Int
+    ) -> Bool {
+        guard flag else { return false }
+        guard seekCount <= 8 else { return false }
+
+        let tolerance = min(2.0, max(0.35, duration * 0.01))
+        guard duration <= 0 || currentTime >= duration - tolerance else { return false }
+        if seekCount > 0 { return true }
+
+        // Playback rate is clamped to 2x. Anything faster than this lower
+        // bound cannot be a natural finish from the requested start offset.
+        let remaining = max(0, duration - startOffset)
+        let minimumElapsed = max(0, remaining / 2.05 - 0.75)
+        return elapsed >= minimumElapsed
+    }
+}
 
 final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     @Published private(set) var isPlaying = false
@@ -88,6 +117,14 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     private var finishingNormally = false
     private var audioCacheRetentionSeconds: TimeInterval = 24 * 3600
     private var lastAudioCacheCleanup = Date.distantPast
+    private let logger = Logger(subsystem: "com.bryanlabs.attache", category: "playback")
+    private var playbackStartedAt: TimeInterval = 0
+    private var playbackStartOffset: TimeInterval = 0
+    private var playbackSeekCount = 0
+    private var preparedAudioPaths: Set<String> = []
+    private var failedAudioPreparationAttempts: [String: Date] = [:]
+    private var audioPreparationWaiters: [String: [(Bool) -> Void]] = [:]
+    private var systemAudioPreparationJobs: [UUID: SpeechFileExportJob] = [:]
 
     // When true, the current audio file lives in the persistent cache and must
     // survive playback so the next replay can reuse it instead of re-synthesizing.
@@ -206,6 +243,10 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         let cacheURL = cachedAudioURL(for: card)
         let audioURL = cacheURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("attache-\(card.id)-\(generationID.uuidString).\(audioFileExtension)")
+        let cacheHit = cacheURL.map { self.isUsableAudioFile($0) } ?? false
+        logger.info(
+            "Playback requested card=\(card.id, privacy: .private(mask: .hash)) cacheHit=\(cacheHit)"
+        )
 
         self.generationID = generationID
         generatedAudioURL = audioURL
@@ -236,7 +277,110 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             self.beginPlayback(card: card, audioURL: audioURL, startTimeMs: requestedStartTimeMs)
         }
 
+        if let cacheURL {
+            let cachePath = cacheURL.standardizedFileURL.path
+            if preparedAudioPaths.contains(cachePath) {
+                logger.info("Playback waiting for background voice preparation")
+                audioPreparationWaiters[cachePath, default: []].append { [weak self] prepared in
+                    guard let self, self.generationID == generationID else { return }
+                    if prepared, self.isUsableAudioFile(cacheURL) {
+                        self.beginPlayback(card: card, audioURL: cacheURL, startTimeMs: requestedStartTimeMs)
+                    } else {
+                        self.synthesizeCurrentVoice(text: card.spokenText, audioURL: audioURL, generationID: generationID)
+                    }
+                }
+                return
+            }
+        }
+
         synthesizeCurrentVoice(text: card.spokenText, audioURL: audioURL, generationID: generationID)
+    }
+
+    /// Prepares the selected voice in the persistent cache while a voicemail is
+    /// waiting, so Play normally becomes a local cache hit instead of an
+    /// interactive cloud request. Multiple reloads coalesce onto one path.
+    func prepareAudioCache(for card: VoicemailCard) {
+        cleanExpiredAudioCache(force: false)
+        guard let cacheURL = cachedAudioURL(for: card) else { return }
+        let cachePath = cacheURL.standardizedFileURL.path
+        guard !preparedAudioPaths.contains(cachePath) else { return }
+        if let lastFailure = failedAudioPreparationAttempts[cachePath],
+           Date().timeIntervalSince(lastFailure) < 60 {
+            return
+        }
+        guard !isUsableAudioFile(cacheURL) else {
+            touchAudioFile(cacheURL)
+            failedAudioPreparationAttempts[cachePath] = nil
+            return
+        }
+
+        let configuration = speechConfiguration
+        let systemVoiceIdentifier = voiceIdentifier
+        let temporaryURL = cacheURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".preparing-\(UUID().uuidString).\(audioFileExtension(for: configuration))")
+        preparedAudioPaths.insert(cachePath)
+        logger.info("Background voice preparation started provider=\(configuration.provider.rawValue, privacy: .public)")
+
+        switch configuration.provider {
+        case .system:
+            let jobID = UUID()
+            let job = SpeechFileExportJob(
+                configuration: configuration,
+                preferredVoiceIdentifier: systemVoiceIdentifier,
+                outputURL: temporaryURL
+            ) { [weak self] success in
+                DispatchQueue.main.async {
+                    self?.systemAudioPreparationJobs[jobID] = nil
+                    self?.finishAudioCachePreparation(
+                        success: success,
+                        cacheURL: cacheURL,
+                        temporaryURL: temporaryURL,
+                        cachePath: cachePath
+                    )
+                }
+            }
+            systemAudioPreparationJobs[jobID] = job
+            if !job.start(text: card.spokenText) {
+                systemAudioPreparationJobs[jobID] = nil
+                finishAudioCachePreparation(
+                    success: false,
+                    cacheURL: cacheURL,
+                    temporaryURL: temporaryURL,
+                    cachePath: cachePath
+                )
+            }
+        default:
+            Task(priority: .utility) { [configuration, temporaryURL, cacheURL, cachePath, text = card.spokenText] in
+                do {
+                    try await CompanionRemoteVoiceService.synthesize(
+                        text: text,
+                        configuration: configuration,
+                        outputURL: temporaryURL
+                    )
+                    await MainActor.run { [weak self] in
+                        self?.finishAudioCachePreparation(
+                            success: true,
+                            cacheURL: cacheURL,
+                            temporaryURL: temporaryURL,
+                            cachePath: cachePath
+                        )
+                    }
+                } catch {
+                    await MainActor.run { [weak self] in
+                        self?.logger.error(
+                            "Background voice preparation failed: \(error.localizedDescription, privacy: .public)"
+                        )
+                        self?.finishAudioCachePreparation(
+                            success: false,
+                            cacheURL: cacheURL,
+                            temporaryURL: temporaryURL,
+                            cachePath: cachePath
+                        )
+                    }
+                }
+            }
+        }
     }
 
     func replay(_ card: VoicemailCard) {
@@ -288,6 +432,10 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     func seek(to milliseconds: Int) {
         guard durationMs > 0 else { return }
         let clamped = min(durationMs, max(0, milliseconds))
+        if isPlaying {
+            playbackSeekCount += 1
+            logger.debug("Playback seek targetMs=\(clamped) count=\(self.playbackSeekCount)")
+        }
         player?.currentTime = Double(clamped) / 1000.0
         currentTimeMs = clamped
         reanchorClock()
@@ -351,6 +499,9 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         durationMs = 0
         timeline = .empty
         renderState.reset()
+        playbackStartedAt = 0
+        playbackStartOffset = 0
+        playbackSeekCount = 0
     }
 
     func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
@@ -365,9 +516,23 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         let cardID = currentCardID
         let wasPreview = activeIsPreview
+        let elapsed = playbackStartedAt > 0
+            ? ProcessInfo.processInfo.systemUptime - playbackStartedAt
+            : 0
+        let credibleCardFinish = finishingNormally && PlaybackCompletionValidator.isCredibleFinish(
+            flag: flag,
+            currentTime: player.currentTime,
+            duration: player.duration,
+            elapsed: elapsed,
+            startOffset: playbackStartOffset,
+            seekCount: playbackSeekCount
+        )
+        logger.info(
+            "Playback finished flag=\(flag) position=\(player.currentTime) duration=\(player.duration) elapsed=\(elapsed) seeks=\(self.playbackSeekCount) credible=\(credibleCardFinish)"
+        )
         timer?.invalidate()
         timer = nil
-        updateClock(forceEnd: true)
+        updateClock(forceEnd: wasPreview ? flag : credibleCardFinish)
         isPlaying = false
         isPaused = false
         isBusy = false
@@ -380,8 +545,11 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
 
         if wasPreview {
             onPreviewFinished?()
-        } else if flag, finishingNormally, let cardID {
+        } else if credibleCardFinish, let cardID {
             onFinished?(cardID, true)
+        } else if let cardID {
+            onPlaybackError?("Playback stopped before the voice message finished. The card remains unread.")
+            onFinished?(cardID, false)
         }
     }
 
@@ -412,38 +580,19 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         )
     }
 
-    /// Decode and analyze the audio off the main thread, then start playback on
-    /// the main thread. The generation guard drops a stale analysis if a newer
-    /// playback or preview began while this one was still decoding.
+    /// Decode enough to start immediately, then analyze the visualizer timeline
+    /// in the background. Long cloud clips used to block on a full-file decode
+    /// and FFT before captions or audio appeared.
     private func analyzeAndStart(audioURL: URL, alignmentText: String, startTimeMs: Int, finishingNormally: Bool, failureMessage: @escaping (Error) -> String) {
         let generation = generationID
         Task(priority: .userInitiated) { [weak self] in
+            let audioPlayer: AVAudioPlayer
             do {
-                let analyzed = try AudioFileAnalysis.analyze(url: audioURL)
-                let audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
+                audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
                 audioPlayer.enableRate = true
                 audioPlayer.prepareToPlay()
                 if Self.uiTestAudioPrepDelayNanoseconds > 0 {
                     try? await Task.sleep(nanoseconds: Self.uiTestAudioPrepDelayNanoseconds)
-                }
-                await MainActor.run { [weak self] in
-                    guard let self, self.generationID == generation else { return }
-                    audioPlayer.delegate = self
-                    self.timeline = analyzed
-                    self.player = audioPlayer
-                    self.durationMs = max(1, Int((audioPlayer.duration * 1000).rounded()))
-                    self.currentAlignment = CaptionAlignmentBuilder.fallback(text: alignmentText, durationMs: self.durationMs)
-                    self.currentTimeMs = min(self.durationMs, max(0, startTimeMs))
-                    audioPlayer.currentTime = Double(self.currentTimeMs) / 1000.0
-                    self.activeWordIndex = nil
-                    self.finishingNormally = finishingNormally
-                    self.isPlaying = true
-                    self.isPaused = false
-                    audioPlayer.rate = self.playbackRate
-                    audioPlayer.play()
-                    self.reanchorClock()
-                    self.updateClock()
-                    self.startTimer()
                 }
             } catch {
                 await MainActor.run { [weak self] in
@@ -451,6 +600,50 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                     self.onPlaybackError?(failureMessage(error))
                     self.finishWithoutPlayback()
                 }
+                return
+            }
+
+            let started = await MainActor.run { [weak self] () -> Bool in
+                guard let self, self.generationID == generation else { return false }
+                audioPlayer.delegate = self
+                self.timeline = .empty
+                self.player = audioPlayer
+                self.durationMs = max(1, Int((audioPlayer.duration * 1000).rounded()))
+                self.currentAlignment = CaptionAlignmentBuilder.fallback(text: alignmentText, durationMs: self.durationMs)
+                self.currentTimeMs = min(self.durationMs, max(0, startTimeMs))
+                audioPlayer.currentTime = Double(self.currentTimeMs) / 1000.0
+                self.activeWordIndex = nil
+                self.finishingNormally = finishingNormally
+                self.isPlaying = true
+                self.isPaused = false
+                self.playbackStartedAt = ProcessInfo.processInfo.systemUptime
+                self.playbackStartOffset = audioPlayer.currentTime
+                self.playbackSeekCount = 0
+                audioPlayer.rate = self.playbackRate
+                audioPlayer.play()
+                self.logger.info(
+                    "Playback started duration=\(audioPlayer.duration) start=\(audioPlayer.currentTime)"
+                )
+                self.reanchorClock()
+                self.updateClock()
+                self.startTimer()
+                return true
+            }
+            guard started else { return }
+
+            do {
+                let analyzed = try await Task.detached(priority: .utility) {
+                    try AudioFileAnalysis.analyze(url: audioURL)
+                }.value
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.generationID == generation,
+                          self.isBusy else { return }
+                    self.timeline = analyzed
+                    self.logger.debug("Playback analysis ready durationMs=\(analyzed.durationMs)")
+                }
+            } catch {
+                self?.logger.error("Playback analysis failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -491,7 +684,11 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     }
 
     private var audioFileExtension: String {
-        speechConfiguration.provider == .system ? "aiff" : "mp3"
+        audioFileExtension(for: speechConfiguration)
+    }
+
+    private func audioFileExtension(for configuration: CompanionSpeechConfiguration) -> String {
+        configuration.provider == .system ? "aiff" : "mp3"
     }
 
     private func finishWithoutPlayback() {
@@ -567,6 +764,40 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         generatedAudioIsCached = false
     }
 
+    private func finishAudioCachePreparation(success: Bool, cacheURL: URL, temporaryURL: URL, cachePath: String) {
+        preparedAudioPaths.remove(cachePath)
+        let completed: Bool
+        if !success || !isUsableAudioFile(temporaryURL) {
+            failedAudioPreparationAttempts[cachePath] = Date()
+            try? FileManager.default.removeItem(at: temporaryURL)
+            completed = false
+        } else if isUsableAudioFile(cacheURL) {
+            touchAudioFile(cacheURL)
+            try? FileManager.default.removeItem(at: temporaryURL)
+            failedAudioPreparationAttempts[cachePath] = nil
+            completed = true
+        } else {
+            do {
+                try FileManager.default.createDirectory(
+                    at: cacheURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.moveItem(at: temporaryURL, to: cacheURL)
+                touchAudioFile(cacheURL)
+                failedAudioPreparationAttempts[cachePath] = nil
+                completed = true
+            } catch {
+                failedAudioPreparationAttempts[cachePath] = Date()
+                try? FileManager.default.removeItem(at: temporaryURL)
+                completed = false
+            }
+        }
+
+        logger.info("Background voice preparation finished success=\(completed)")
+        let waiters = audioPreparationWaiters.removeValue(forKey: cachePath) ?? []
+        waiters.forEach { $0(completed) }
+    }
+
     private func cachedAudioURL(for card: VoicemailCard) -> URL? {
         guard audioCacheRetentionSeconds > 0 else { return nil }
         guard let audioCacheDirectory else { return nil }
@@ -623,5 +854,55 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             hash = hash &* 0x0000_0100_0000_01b3
         }
         return String(hash, radix: 16)
+    }
+}
+
+private final class SpeechFileExportJob: NSObject, NSSpeechSynthesizerDelegate {
+    private let synthesizer = NSSpeechSynthesizer()
+    private let configuration: CompanionSpeechConfiguration
+    private let preferredVoiceIdentifier: String?
+    private let outputURL: URL
+    private let completion: (Bool) -> Void
+
+    init(
+        configuration: CompanionSpeechConfiguration,
+        preferredVoiceIdentifier: String?,
+        outputURL: URL,
+        completion: @escaping (Bool) -> Void
+    ) {
+        self.configuration = configuration
+        self.preferredVoiceIdentifier = preferredVoiceIdentifier
+        self.outputURL = outputURL
+        self.completion = completion
+        super.init()
+        synthesizer.delegate = self
+        synthesizer.rate = 185
+    }
+
+    func start(text: String) -> Bool {
+        configureVoice()
+        return synthesizer.startSpeaking(text, to: outputURL)
+    }
+
+    func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
+        completion(finishedSpeaking)
+    }
+
+    private func configureVoice() {
+        let preferred = preferredVoiceIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let preferred, !preferred.isEmpty,
+           synthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: preferred)) {
+            return
+        }
+
+        let explicit = configuration.systemVoiceIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let explicit, !explicit.isEmpty,
+           synthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: explicit)) {
+            return
+        }
+
+        if let fallback = CompanionVoiceCatalog.fileExportFallbackVoiceID() {
+            _ = synthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: fallback))
+        }
     }
 }

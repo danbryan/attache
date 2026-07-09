@@ -883,6 +883,7 @@ struct CompanionRootView: View {
     private var topOverlayVisible: Bool {
         playback.isPlaying
             || playback.isPaused
+            || playback.isBusy
             || micTranscript.isPreparing
             || micTranscript.isListening
             || !micTranscript.transcript.isEmpty
@@ -891,6 +892,7 @@ struct CompanionRootView: View {
     private var topStatusText: String {
         if playback.isPlaying && !playback.isPaused { return "Assistant speaking" }
         if playback.isPaused { return "Playback paused" }
+        if playback.isBusy { return "Preparing voice…" }
         if model.unreadCount > 0 { return "\(model.unreadCount) unread update\(model.unreadCount == 1 ? "" : "s")" }
         return "Listening for agent updates"
     }

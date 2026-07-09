@@ -46,6 +46,35 @@ final class CLILanguageModelTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: first.path), [])
     }
 
+    func testCodexFailurePrefersStructuredStdoutErrorOverStderrWarning() {
+        let stdout = """
+        {"type":"thread.started","thread_id":"test"}
+        {"type":"error","message":"The selected model is unavailable."}
+        """
+        let stderr = "WARN codex_core_skills::loader: ignoring interface.icon_large"
+
+        let message = CLILanguageModel.processFailureMessage(
+            executable: "/opt/homebrew/bin/codex",
+            code: 1,
+            stdout: stdout,
+            stderr: stderr
+        )
+
+        XCTAssertTrue(message.contains("The selected model is unavailable."))
+        XCTAssertFalse(message.contains("interface.icon_large"))
+    }
+
+    func testCodexFailureFallsBackToStderrWhenStdoutIsEmpty() {
+        let message = CLILanguageModel.processFailureMessage(
+            executable: "/opt/homebrew/bin/codex",
+            code: 1,
+            stdout: "",
+            stderr: "Authentication required."
+        )
+
+        XCTAssertTrue(message.contains("Authentication required."))
+    }
+
     private func assertFlag(_ args: [String], _ flag: String, value: String, file: StaticString = #filePath, line: UInt = #line) {
         guard let index = args.firstIndex(of: flag) else {
             XCTFail("missing \(flag)", file: file, line: line)

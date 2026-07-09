@@ -1032,6 +1032,7 @@ final class AppModel: ObservableObject {
                 selectedCardID = cards.first?.id
             }
             loadAttachedSessionHistory()
+            prepareUnreadVoicemailAudio()
         } catch {
             intakeStatus = "Storage read failed: \(error.localizedDescription)"
         }
@@ -1429,6 +1430,13 @@ final class AppModel: ObservableObject {
         selectedStartProgress = 0
         playback.replay(card)
         intakeStatus = "Playing voicemail for \(card.sessionTitle ?? card.externalSessionID ?? "General")."
+    }
+
+    private func prepareUnreadVoicemailAudio() {
+        guard audioCacheRetentionMinutes > 0 else { return }
+        for card in unreadCards.prefix(20) {
+            playback.prepareAudioCache(for: card)
+        }
     }
 
     /// One line summarizing the waiting inbox, composed deterministically from
@@ -4401,6 +4409,9 @@ final class AppModel: ObservableObject {
                 systemVoiceIdentifier: speechVoiceIdentifier
             )
         )
+        if !cards.isEmpty {
+            prepareUnreadVoicemailAudio()
+        }
     }
 
     private func seekRelative(milliseconds: Int) {
