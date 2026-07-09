@@ -75,7 +75,11 @@ enum CompanionPresentationModelService {
     /// Read Codex's own model cache so the list matches
     /// what `codex` shows. Falls back to just "default" if the cache is missing.
     private static func codexModelsFromCache() -> [CompanionPresentationModelOption] {
-        var options = [CompanionPresentationModelOption(id: "default", detail: "use Codex's configured model", reasoningEfforts: [])]
+        var options = [CompanionPresentationModelOption(
+            id: "default",
+            detail: "use Codex's configured model",
+            reasoningEfforts: fallbackReasoningEfforts(provider: .codexCLI, modelID: "default")
+        )]
         let url = CodexPaths.home().appendingPathComponent("models_cache.json")
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -87,7 +91,9 @@ enum CompanionPresentationModelService {
             if let visibility = model["visibility"] as? String, visibility != "list" { continue }
             let name = (model["display_name"] as? String) ?? slug
             let levels = (model["supported_reasoning_levels"] as? [[String: Any]])?.compactMap { $0["effort"] as? String } ?? []
-            let efforts = levels.isEmpty ? [] : (["default"] + levels)
+            let efforts = levels.isEmpty
+                ? fallbackReasoningEfforts(provider: .codexCLI, modelID: slug)
+                : (["default"] + levels)
             let serviceTiers = serviceTiers(in: model, provider: .codexCLI, modelID: slug)
             options.append(CompanionPresentationModelOption(
                 id: slug,
@@ -273,7 +279,12 @@ enum CompanionPresentationModelService {
             return []
         case .claudeCLI:
             return ["default", "low", "medium", "high", "xhigh", "max"]
-        case .codexCLI, .ollama, .lmStudio:
+        case .codexCLI:
+            // Codex accepts this setting even when a newly released or custom
+            // model has not appeared in its local capability cache yet. Keep a
+            // saved choice instead of silently replacing it with `none`.
+            return ["default", "low", "medium", "high", "xhigh"]
+        case .ollama, .lmStudio:
             return []
         }
     }
