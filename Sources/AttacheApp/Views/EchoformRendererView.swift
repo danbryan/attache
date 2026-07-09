@@ -37,7 +37,7 @@ struct EchoformRendererView: View {
                     .clipped()
                     .opacity(0.001)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Audio visualizer")
+                    .accessibilityLabel("Audio visualizer \(visualizerAccessibilityValue)")
                     .accessibilityValue(visualizerAccessibilityValue)
                     .allowsHitTesting(false)
             }

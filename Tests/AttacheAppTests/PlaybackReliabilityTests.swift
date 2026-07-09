@@ -12,6 +12,24 @@ final class PlaybackReliabilityTests: XCTestCase {
         XCTAssertFalse(SpeechPlaybackController.shouldMuteAudioOutput(environment: [:]))
     }
 
+    func testMeteredFallbackDrivesBarsBeforeFullAnalysisIsReady() {
+        let audible = SpeechPlaybackController.meteredFrame(
+            averagePowerDB: -24,
+            peakPowerDB: -12
+        )
+        XCTAssertGreaterThan(audible.rms, 0)
+        XCTAssertGreaterThan(audible.peak, audible.rms)
+        XCTAssertEqual(audible.bands.count, 56)
+        XCTAssertGreaterThan(audible.bands.max() ?? 0, 0)
+
+        let silent = SpeechPlaybackController.meteredFrame(
+            averagePowerDB: -160,
+            peakPowerDB: -160
+        )
+        XCTAssertEqual(silent.rms, 0)
+        XCTAssertEqual(silent.bands.max(), 0)
+    }
+
     func testRejectsImplausiblyEarlyLongClipFinish() {
         XCTAssertFalse(PlaybackCompletionValidator.isCredibleFinish(
             flag: true,

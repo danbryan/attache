@@ -117,10 +117,21 @@ public enum SessionSearchRanker {
 
         for record in pool {
             let titleLower = record.title.lowercased()
+            let idLower = record.id.lowercased()
             let tagLower = record.topicTag?.lowercased() ?? ""
             var score = 0.0
             var matchedContent = false
             var matchedTerms = 0
+
+            // Session IDs are visible in Command-K and are the only stable
+            // identifier available to automation and support workflows. Match
+            // them directly even when the transcript prefix is too large to
+            // include the user's first prompt in the capped content digest.
+            if idLower == queryLower {
+                score += 500
+            } else if idLower.contains(queryLower) {
+                score += 250
+            }
 
             // Whole-query fuzzy match on the title (handles typo-y short queries).
             if let fuzzy = fuzzyScore(queryLower, titleLower) {
@@ -131,6 +142,10 @@ public enum SessionSearchRanker {
                 var matched = false
                 if titleLower.contains(term) {
                     score += 14
+                    matched = true
+                }
+                if idLower.contains(term) {
+                    score += 20
                     matched = true
                 }
                 if !tagLower.isEmpty, tagLower.contains(term) {

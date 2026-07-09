@@ -219,8 +219,11 @@ func focusSessionInCommandK(query: String, sessionID: String, timeout: TimeInter
                                    role: kAXTextFieldRole as String, containing: "Search name")
     _ = field.setFocused()
     if !field.setValue(query) { app.type(query) }
-    let row = try waitForElement("session search row", in: try mainWindow(),
-                                 containing: sessionID, timeout: timeout)
+    let row = try waitForElement("session search row", in: try mainWindow(), timeout: timeout) { element in
+        element.role != kAXTextFieldRole as String
+            && element.matches(sessionID)
+            && element.actionNames.contains(kAXPressAction as String)
+    }
     guard row.press() else {
         throw SmokeError(message: "AXPress failed on session search row: \(row.summary); actions: \(row.actionNames)")
     }
@@ -442,7 +445,7 @@ if enabled("f3") {
         let visualizer = try waitForElement("audio visualizer", in: try mainWindow(),
                                             containing: "Audio visualizer", timeout: 15)
         try waitUntil("audio visualizer to report analyzed energy", timeout: 12, interval: 0.5) {
-            let value = visualizer.stringValue
+            let value = visualizer.matchText
             let numbers = value.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
             return numbers.contains(where: { $0 > 0 })
         }
@@ -534,19 +537,7 @@ if enabled("f7") {
     }
 
     run.step("f7-codex-two-way", "spawned Codex session appears in Command-K search") {
-        app.activate()
-        app.key(Key.k, command: true)
-        let field = try waitForElement("switcher search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search name")
-        _ = field.setFocused()
-        if !field.setValue(nonce) { app.type(nonce) }
-        let row = try waitForElement("spawned Codex session row", in: try mainWindow(),
-                                     containing: sessionID, timeout: 80)
-        guard row.press() else {
-            throw SmokeError(message: "AXPress failed on spawned Codex session row: \(row.summary); actions: \(row.actionNames)")
-        }
-        try waitForElementGone("switcher search field", in: try mainWindow(),
-                               role: kAXTextFieldRole as String, containing: "Search name", timeout: 8)
+        try focusSessionInCommandK(query: nonce, sessionID: sessionID)
         focusedSession = true
     }
 
@@ -620,14 +611,24 @@ if enabled("f7") {
     }
 
     run.step("f7-codex-two-way", "Attaché files the Codex pong as a watched-session card") {
+        var resultingSummary = ""
+        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
+            let command = """
+            sqlite3 "$HOME/Library/Application Support/Attache/attache.sqlite" \
+              "SELECT c.summary FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
+            """
+            guard let output = try? runShell(command) else { return false }
+            resultingSummary = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !resultingSummary.isEmpty
+        }
         app.activate()
         app.key(Key.i, command: true)
         let field = try waitForElement("inbox search field", in: try mainWindow(),
                                        role: kAXTextFieldRole as String, containing: "Search inbox",
                                        timeout: 15)
         _ = field.setFocused()
-        if !field.setValue(pongToken) { app.type(pongToken) }
-        _ = try waitForInboxCardRow(containing: pongToken, timeout: 120)
+        if !field.setValue(resultingSummary) { app.type(resultingSummary) }
+        _ = try waitForInboxCardRow(containing: resultingSummary, timeout: 30)
         app.key(Key.escape)
         try? waitForElementGone("inbox search field", in: try mainWindow(),
                                 role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
@@ -670,19 +671,7 @@ if enabled("f8") {
     }
 
     run.step("f8-personality-codex-two-way", "spawned Codex session appears in Command-K search") {
-        app.activate()
-        app.key(Key.k, command: true)
-        let field = try waitForElement("switcher search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search name")
-        _ = field.setFocused()
-        if !field.setValue(nonce) { app.type(nonce) }
-        let row = try waitForElement("spawned Codex session row", in: try mainWindow(),
-                                     containing: sessionID, timeout: 80)
-        guard row.press() else {
-            throw SmokeError(message: "AXPress failed on spawned Codex session row: \(row.summary); actions: \(row.actionNames)")
-        }
-        try waitForElementGone("switcher search field", in: try mainWindow(),
-                               role: kAXTextFieldRole as String, containing: "Search name", timeout: 8)
+        try focusSessionInCommandK(query: nonce, sessionID: sessionID)
         focusedSession = true
     }
 

@@ -54,4 +54,15 @@ final class SessionSearchRankerTests: XCTestCase {
         let hits = SessionSearchRanker.search("one", in: records, includeArchived: false)
         XCTAssertEqual(hits.map(\.record.id), ["live"])
     }
+
+    func testExactSessionIDAndPrefixAreSearchable() {
+        let id = "019f4938-0285-7cc0-bec2-41c3ad1b03f7"
+        let records = [
+            record(id, "A title without the smoke token"),
+            record("019f1111-1111-1111-1111-111111111111", "Another session")
+        ]
+
+        XCTAssertEqual(SessionSearchRanker.search(id, in: records).map(\.record.id), [id])
+        XCTAssertEqual(SessionSearchRanker.search("019f4938", in: records).map(\.record.id), [id])
+    }
 }

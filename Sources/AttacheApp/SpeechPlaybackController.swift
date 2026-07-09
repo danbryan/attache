@@ -169,6 +169,30 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         environment["ATTACHE_UI_TEST_MUTE_AUDIO"] == "1"
     }
 
+    static func meteredFrame(averagePowerDB: Float, peakPowerDB: Float, barCount: Int = 56) -> AnalysisFrame {
+        func amplitude(from decibels: Float) -> Float {
+            guard decibels > -80 else { return 0 }
+            return min(1, max(0, pow(10, decibels / 20)))
+        }
+
+        let level = amplitude(from: averagePowerDB)
+        let peak = amplitude(from: peakPowerDB)
+        var frame = AnalysisFrame()
+        frame.rms = level
+        frame.peak = max(level, peak)
+        frame.bass = level * 0.85
+        frame.mid = level
+        frame.treble = level * 0.7
+        frame.centroid = level > 0 ? 0.5 : 0
+        frame.silence = level > 0.001 ? 0 : 1
+        frame.bands = (0..<max(1, barCount)).map { index in
+            let position = Float(index) / Float(max(1, barCount - 1))
+            let centerWeight = 0.55 + 0.45 * sin(position * .pi)
+            return level * centerWeight
+        }
+        return frame
+    }
+
     override init() {
         super.init()
         speechFileSynthesizer.delegate = self
@@ -597,6 +621,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             do {
                 audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
                 audioPlayer.enableRate = true
+                audioPlayer.isMeteringEnabled = true
                 audioPlayer.prepareToPlay()
                 if Self.uiTestAudioPrepDelayNanoseconds > 0 {
                     try? await Task.sleep(nanoseconds: Self.uiTestAudioPrepDelayNanoseconds)
@@ -755,10 +780,14 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         activeWordIndex = currentAlignment?.activeWordIndex(at: currentTimeMs)
 
         var nextState = renderState
-        if isPaused {
+        if !timeline.frames.isEmpty {
             nextState.apply(timeline.frame(at: currentTimeMs))
-        } else {
-            nextState.apply(timeline.frame(at: currentTimeMs))
+        } else if !isPaused, let player {
+            player.updateMeters()
+            nextState.apply(Self.meteredFrame(
+                averagePowerDB: player.averagePower(forChannel: 0),
+                peakPowerDB: player.peakPower(forChannel: 0)
+            ))
         }
         renderState = nextState
         envelope = Double(renderState.level)
