@@ -170,6 +170,7 @@ struct ConversationView: View {
         Picker("", selection: $model.conversationDestination) {
             ForEach(ConversationDestination.allCases) { destination in
                 Text(destination.title).tag(destination)
+                    .disabled(destination == .agent && !model.canSendToAgent)
             }
         }
         .labelsHidden()
@@ -177,6 +178,10 @@ struct ConversationView: View {
         .controlSize(.small)
         .frame(width: width)
         .accessibilityLabel("Conversation destination")
+        .tint(model.conversationDestination == .agent ? .orange : accent)
+        .help(model.canSendToAgent
+              ? "Choose where this live turn goes"
+              : "Focus a Codex or Claude Code session to enable Tell Agent")
     }
 
     // Active = recording right now. Push-to-talk tracks the local hold; toggle and
@@ -258,7 +263,7 @@ struct ConversationView: View {
     private var conversationTargetText: String {
         switch model.conversationDestination {
         case .attache:
-            return model.talkContextSession?.displayTitle ?? "No session attached"
+            return model.conversationContextSession?.displayTitle ?? "No session attached"
         case .agent:
             return model.canSendToAgent
                 ? "To \(model.twoWayTargetTitle ?? "focused agent")"
@@ -269,12 +274,16 @@ struct ConversationView: View {
     private var inputPlaceholder: String {
         switch model.conversationDestination {
         case .attache: return "Ask about this session…"
-        case .agent: return "Tell the focused agent…"
+        case .agent: return model.canSendToAgent
+            ? "Tell \(model.twoWayTargetSourceName ?? "agent") · \(model.twoWayTargetTitle ?? "focused session")…"
+            : "Focus an agent first…"
         }
     }
 
     private var canSend: Bool {
-        !model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isAwaitingReply
+        !model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.isAwaitingReply
+            && (model.conversationDestination != .agent || model.canSendToAgent)
     }
 
     private func send() {

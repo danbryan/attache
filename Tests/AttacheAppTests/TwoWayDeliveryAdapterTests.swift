@@ -61,16 +61,20 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
     }
 
     func testDeliverSuccessOnExitZero() async {
+        let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("delivery-checkpoint-\(UUID().uuidString).jsonl")
+        try? Data("checkpoint".utf8).write(to: sessionFile)
         let adapter = AgentResumeDeliveryAdapter(
             vendor: .claude,
-            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateSessionFile: { _ in sessionFile },
             locateExecutable: { _ in "/usr/local/bin/claude" },
             spawn: { _, _ in (0, "") }
         )
         let instruction = Instruction(id: "i1", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
         switch result {
-        case .success(let receipt): XCTAssertEqual(receipt.mechanism, "headless-resume")
+        case .success(let receipt):
+            XCTAssertEqual(receipt.mechanism, "headless-resume")
+            XCTAssertEqual(receipt.transcriptCheckpoint, 10)
         case .failure(let error): XCTFail("expected success, got \(error)")
         }
     }
@@ -91,11 +95,42 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         }
     }
 
-    func testIdleClassification() {
-        let base = now
-        XCTAssertFalse(SessionActivityClassifier.isIdle(lastModified: base, now: base.addingTimeInterval(2)))
-        XCTAssertTrue(SessionActivityClassifier.isIdle(lastModified: base, now: base.addingTimeInterval(10)))
-        XCTAssertFalse(SessionActivityClassifier.isIdle(lastModified: nil, now: base))
+    func testDeliveryReadinessRequiresStableCompletedCodexTurn() {
+        let final = codexAssistant("Ready.", phase: "final_answer")
+        let previous = observation(size: 100, seconds: 0, lines: [final])
+        let stable = observation(size: 100, seconds: 8, lines: [final])
+        let growing = observation(size: 120, seconds: 8, lines: [final])
+
+        XCTAssertTrue(SessionDeliveryReadinessClassifier.isReady(
+            previous: previous, current: stable, format: .codex,
+            now: now.addingTimeInterval(10), quietWindow: 6
+        ))
+        XCTAssertFalse(SessionDeliveryReadinessClassifier.isReady(
+            previous: previous, current: growing, format: .codex,
+            now: now.addingTimeInterval(10), quietWindow: 6
+        ))
+    }
+
+    func testDeliveryReadinessRejectsPendingToolTrailingUserAndPartialAssistant() {
+        let pendingTool = #"{"type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"c1"}}"#
+        let trailingUser = codexUser("keep going")
+        let partial = codexAssistant("Still working.", phase: "commentary")
+
+        XCTAssertFalse(SessionDeliveryReadinessClassifier.turnIsComplete(tailLines: [pendingTool], format: .codex))
+        XCTAssertFalse(SessionDeliveryReadinessClassifier.turnIsComplete(
+            tailLines: [codexAssistant("Done.", phase: "final_answer"), trailingUser], format: .codex
+        ))
+        XCTAssertFalse(SessionDeliveryReadinessClassifier.turnIsComplete(tailLines: [partial], format: .codex))
+    }
+
+    func testDeliveryReadinessHandlesClaudeCompletedAndPendingTurns() {
+        let completed = #"{"type":"assistant","message":{"content":[{"type":"text","text":"Finished."}]}}"#
+        let pending = #"{"type":"assistant","message":{"content":[{"type":"text","text":"Checking."},{"type":"tool_use","name":"Bash","id":"t1"}]}}"#
+        let result = #"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#
+
+        XCTAssertTrue(SessionDeliveryReadinessClassifier.turnIsComplete(tailLines: [completed], format: .claude))
+        XCTAssertFalse(SessionDeliveryReadinessClassifier.turnIsComplete(tailLines: [pending], format: .claude))
+        XCTAssertFalse(SessionDeliveryReadinessClassifier.turnIsComplete(tailLines: [pending, result], format: .claude))
     }
 
     func testEngineNeverDeliversWhileSessionBusy() async throws {
@@ -122,5 +157,22 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         // Session goes quiet: delivered exactly once.
         _ = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
         XCTAssertEqual(spawnCount, 1)
+    }
+
+    private func observation(size: Int64, seconds: TimeInterval, lines: [String]) -> SessionFileObservation {
+        SessionFileObservation(
+            size: size,
+            modifiedAt: now,
+            observedAt: now.addingTimeInterval(seconds),
+            tailLines: lines
+        )
+    }
+
+    private func codexUser(_ text: String) -> String {
+        #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"\#(text)"}]}}"#
+    }
+
+    private func codexAssistant(_ text: String, phase: String) -> String {
+        #"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"\#(phase)","content":[{"text":"\#(text)"}]}}"#
     }
 }

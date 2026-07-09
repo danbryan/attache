@@ -107,7 +107,13 @@ func waitForHistoryCardRow(filteredBy token: String, timeout: TimeInterval = 120
 }
 
 func sendConversationPrompt(_ text: String) throws {
-    app.key(Key.l, command: true)
+    let existingField = (try? mainWindow())?.descendants(where: { element in
+        element.role == kAXTextFieldRole as String
+            && (element.matchesExactly("Conversation message") || element.matchesExactly("Call message"))
+    }, collectLimit: 1).first
+    if existingField == nil {
+        app.key(Key.l, command: true)
+    }
     let field = try waitForElement("conversation or call message field", in: try mainWindow(), timeout: 20) { element in
         element.role == kAXTextFieldRole as String
             && (element.matchesExactly("Conversation message") || element.matchesExactly("Call message"))
@@ -121,16 +127,20 @@ func sendConversationPrompt(_ text: String) throws {
         return field.stringValue.contains(text)
     }
     if field.matchesExactly("Call message") {
-        let send = try waitForElement("call send button", in: try mainWindow(),
-                                      role: kAXButtonRole as String, exactly: "Send call message",
-                                      timeout: 8)
+        let send = try waitForElement("enabled call send button", in: try mainWindow(), timeout: 20) { element in
+            element.role == kAXButtonRole as String
+                && element.matchesExactly("Send call message")
+                && element.isEnabled
+        }
         guard send.press() else {
             throw SmokeError(message: "AXPress failed on call send button: \(send.summary); actions: \(send.actionNames)")
         }
     } else {
-        let send = try waitForElement("conversation send button", in: try mainWindow(),
-                                      role: kAXButtonRole as String, exactly: "Send conversation message",
-                                      timeout: 8)
+        let send = try waitForElement("enabled conversation send button", in: try mainWindow(), timeout: 20) { element in
+            element.role == kAXButtonRole as String
+                && element.matchesExactly("Send conversation message")
+                && element.isEnabled
+        }
         guard send.press() else {
             throw SmokeError(message: "AXPress failed on conversation send button: \(send.summary); actions: \(send.actionNames)")
         }
@@ -624,8 +634,10 @@ if enabled("f8") {
     let sessionFile = env["ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE"] ?? ""
     let providerLog = env["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"] ?? ""
     let pongToken = env["ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_SUM_\(nonce)_4")
+    let directToken = env["ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_DIRECT_\(nonce)_9")
     let firstPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT"] ?? "Tell Codex to reply exactly \(pongToken) and do not use tools."
     let secondPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_SECOND_PROMPT"] ?? "What did Codex say? Read the session transcript."
+    let directPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_DIRECT_PROMPT"] ?? "Send Codex directly and tell it to reply exactly \(directToken) and do not use tools."
     var focusedSession = false
     var conversationOpened = false
     var instructionStaged = false
@@ -639,6 +651,7 @@ if enabled("f8") {
         guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE is required") }
         guard !providerLog.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG is required") }
         guard !pongToken.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN is required") }
+        guard !directToken.isEmpty else { throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN is required") }
         guard FileManager.default.fileExists(atPath: sessionFile) else {
             throw SmokeError(message: "session file does not exist: \(sessionFile)")
         }
@@ -767,6 +780,41 @@ if enabled("f8") {
             text.contains("\"name\": \"read_session_transcript\"")
         }
     }
+
+    run.step("f8-personality-codex-two-way", "question about Codex stays with Attaché instead of staging another send") {
+        let query = "SELECT COUNT(*) FROM instructions WHERE session_id='\(sessionID)' AND origin='personality_tool';"
+        let output = try runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"")
+        guard (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) == 1 else {
+            throw SmokeError(message: "agent-status question unexpectedly staged another personality instruction")
+        }
+    }
+
+    run.step("f8-personality-codex-two-way", "enabled Ask Attaché handoff sends directly without a final sheet") {
+        try sendConversationPrompt(directPrompt)
+        Thread.sleep(forTimeInterval: 2)
+        let confirmation = (try mainWindow()).firstDescendant(containing: "Send this to")
+        guard confirmation == nil else {
+            throw SmokeError(message: "direct personality handoff unexpectedly opened a final confirmation sheet")
+        }
+        try waitUntil("direct personality handoff to persist the exact structured payload", timeout: 20, interval: 0.5) {
+            let query = "SELECT COUNT(*) FROM instructions WHERE session_id='\(sessionID)' AND origin='personality_tool' AND source_utterance LIKE '%\(directToken)%' AND text='Reply exactly \(directToken). Do not use tools.';"
+            guard let output = try? runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"") else {
+                return false
+            }
+            return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) == 1
+        }
+        try waitForFile(sessionFile, toContain: "direct personality handoff and answer", timeout: 240, interval: 2) { text in
+            text.localizedCaseInsensitiveContains("reply exactly \(directToken)")
+                && occurrenceCount(of: directToken, in: text) >= 2
+        }
+        try waitUntil("both personality handoffs to persist their delivery checkpoints", timeout: 20, interval: 0.5) {
+            let query = "SELECT COUNT(*) FROM instructions WHERE session_id='\(sessionID)' AND origin='personality_tool' AND state='delivered' AND delivery_checkpoint IS NOT NULL;"
+            guard let output = try? runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"") else {
+                return false
+            }
+            return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) >= 2
+        }
+    }
 }
 
 // MARK: Flow 9: send-to-agent refuses permission approvals in the headed UI
@@ -882,6 +930,9 @@ if enabled("f14") {
         guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
         app.key(Key.l, command: true)
         try selectConversationDestination("Tell Agent")
+        _ = try waitForElement("visible frozen Tell Agent target", in: try mainWindow(), timeout: 8) { element in
+            element.matches("Tell Codex") && element.matches(nonce)
+        }
         try sendConversationPrompt(prompt)
         let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
                                         role: kAXButtonRole as String, exactly: "Enable send-to-agent",
@@ -901,6 +952,14 @@ if enabled("f14") {
                                         timeout: 8)
         _ = cancel.press()
         try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+    }
+
+    run.step("f14-agent-destination", "Tell Agent resets to Ask Attaché after one turn") {
+        let ask = try waitForElement("Ask Attaché destination", in: try mainWindow(),
+                                     role: kAXRadioButtonRole as String, containing: "Ask Attaché", timeout: 8)
+        try waitUntil("Ask Attaché to be selected after the Tell Agent turn", timeout: 8) {
+            ask.stringValue == "1"
+        }
     }
 
     run.step("f14-agent-destination", "explicit agent-mode prompt was not delivered without final confirmation") {

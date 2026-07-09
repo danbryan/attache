@@ -184,20 +184,26 @@ needs-you just waits in the inbox.
 - **Push direction back to the agents.** A confirmed instruction is delivered
   into the target Codex or Claude Code session using the vendor's own headless
   resume (`claude -p --resume`, `codex exec resume`), queued until that session is
-  idle. `TwoWayCoordinator` derives idle state from the transcript file's
-  activity and drives `InstructionReplyEngine` (in `AttacheCore`), which owns the
+  safe to resume. `TwoWayCoordinator` requires stable file state and a completed
+  top-level assistant turn with no unresolved tools, then drives
+  `InstructionReplyEngine` (in `AttacheCore`), which owns the
   per-session enable gate, the safety filter, confirmation, single-flight FIFO
   delivery, expiry, and the audit log. `AgentResumeDeliveryAdapter` performs the
   resume (one adapter per vendor; CLI and desktop share session storage). This
-  path is explicit and confirmed, and it deliberately inherits your own agent
-  permissions. Full design of record: `docs/two-way.md`.
+  path uses the user's configured confirmation policy and deliberately inherits
+  their own agent permissions. Persisted in-flight work fails closed after a
+  restart. Full design of record: `docs/two-way.md`.
 
 The live UI makes the destination explicit with Ask Attaché and Tell Agent.
 Attaché does not use host-side phrase matching to infer destination from a
 message such as "tell Codex..." because that fails across languages and creates
 unsafe false positives. Tell Agent sends the raw turn through the two-way safety
-pipeline; Ask Attaché lets the configured personality reason and use app-owned
-tools.
+pipeline as a one-shot destination; Ask Attaché lets the configured personality
+reason and use app-owned tools. Agent sends require a focused session, and each
+call freezes its target identity, title, source, and working directory so focus
+changes cannot retarget a staged instruction. The structured instruction payload
+is frozen separately and compared with persisted state immediately before
+delivery; any mismatch fails closed.
 
 ## Security
 
@@ -208,10 +214,11 @@ Local-first, hardened by default.
   weaken these to make testing easier.
 - API keys are never stored in the repo and never in plaintext when avoidable;
   they live in the Keychain for signed builds.
-- Instructions reach an agent session only through the supported vendor channel
-  (headless resume), with explicit per-instruction confirmation, only while the
-  session is idle, never an approval/permission token, and at most one delivery in
-  flight per session. Attaché never writes into agent session files directly.
+- Instructions reach an explicitly focused, frozen agent session only through
+  the supported vendor channel (headless resume), under the configured
+  confirmation policy, only when the transcript is safe to resume, never as an
+  approval/permission token, and at most one delivery in flight per session.
+  Attaché never writes into agent session files directly.
 
 ## Packaging
 

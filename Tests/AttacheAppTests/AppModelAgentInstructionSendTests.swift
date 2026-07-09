@@ -27,6 +27,8 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
 
         XCTAssertNotNil(model.pendingInstruction)
         XCTAssertEqual(model.twoWay.log.first?.state, .pending)
+        XCTAssertEqual(model.pendingInstruction?.origin, .offCallComposer)
+        XCTAssertEqual(model.pendingInstruction?.targetDisplayName, "Agent Send Test")
     }
 
     func testDirectPolicySendsImmediatelyAfterSessionIsEnabled() async throws {
@@ -42,8 +44,9 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         try await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertNil(model.pendingInstruction)
-        XCTAssertEqual(model.intakeStatus, "Sending to the agent when the session is quiet…")
-        XCTAssertEqual(model.twoWay.log.first?.state, .confirmed)
+        XCTAssertEqual(model.intakeStatus, "Sending to Agent Send Test when the session is quiet…")
+        XCTAssertNotNil(model.twoWay.log.first?.confirmedAt)
+        XCTAssertNotEqual(model.twoWay.log.first?.state, .pending)
     }
 
     func testDirectPolicyDoesNotSkipFirstUseEnable() throws {
@@ -89,15 +92,82 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         defer { snapshot.restore() }
         let sessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
         let model = try AppModel(store: CardStore.inMemory())
+        model.startConversation()
         model.conversationDestination = .agent
 
         model.sendConversationMessage("reply exactly RAW_AGENT_MODE")
 
+        XCTAssertEqual(model.conversationDestination, .attache)
         XCTAssertTrue(model.showTwoWayEnable)
+        XCTAssertEqual(model.twoWayEnableTargetTitle, "Agent Send Test")
         model.confirmEnableTwoWay()
         XCTAssertEqual(model.pendingInstruction?.sessionID, sessionID)
         XCTAssertEqual(model.pendingInstruction?.text, "reply exactly RAW_AGENT_MODE")
+        XCTAssertEqual(model.pendingInstruction?.origin, .tellAgent)
+        XCTAssertEqual(model.pendingInstruction?.sourceUtterance, "reply exactly RAW_AGENT_MODE")
+        XCTAssertEqual(model.pendingInstruction?.targetDisplayName, "Agent Send Test")
         XCTAssertEqual(model.twoWay.log.first?.state, .pending)
+    }
+
+    func testTellAgentFreezesFocusedTargetAcrossFocusChanges() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        let firstSessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.startConversation()
+
+        let second = CodexSessionTarget(
+            id: "second-\(UUID().uuidString)",
+            title: "Second Session",
+            updatedAt: Date(),
+            category: .activeSession,
+            status: nil,
+            sourceKind: .claudeCode
+        )
+        model.attachCodexSession(second)
+        model.conversationDestination = .agent
+        model.sendConversationMessage("stay on the original target")
+
+        XCTAssertEqual(model.twoWayEnableTargetTitle, "Agent Send Test")
+        model.confirmEnableTwoWay()
+        XCTAssertEqual(model.pendingInstruction?.sessionID, firstSessionID)
+        XCTAssertEqual(model.pendingInstruction?.sourceKind, SourceKind.codex.rawValue)
+        XCTAssertEqual(model.pendingInstruction?.targetDisplayName, "Agent Send Test")
+    }
+
+    func testTellAgentRequiresExplicitFocusEvenWhenARecentSessionExists() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        _ = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
+        defaults.removeObject(forKey: CompanionPreferenceKey.attachedCodexSessionID)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.attachCodexSession(nil)
+        model.startConversation()
+
+        XCTAssertFalse(model.canSendToAgent)
+        model.conversationDestination = .agent
+        model.sendConversationMessage("do not guess the target")
+
+        XCTAssertEqual(model.conversationDestination, .attache)
+        XCTAssertFalse(model.showTwoWayEnable)
+        XCTAssertNil(model.pendingInstruction)
+        XCTAssertTrue(model.twoWay.log.isEmpty)
+        XCTAssertTrue(model.intakeStatus.contains("focused") || model.intakeStatus.contains("Focus"))
+    }
+
+    func testPersonalityToolArgumentsFreezeOnlyTheStructuredInstruction() {
+        let arguments = #"{"instruction":"  Reply exactly TOOL_PAYLOAD. Do not use tools.  ","working_directory":"/tmp/wrong"}"#
+
+        XCTAssertEqual(
+            AppModel.agentInstruction(fromToolArguments: arguments),
+            "Reply exactly TOOL_PAYLOAD. Do not use tools."
+        )
+        XCTAssertNil(AppModel.agentInstruction(fromToolArguments: #"{"instruction":"   "}"#))
+        XCTAssertNil(AppModel.agentInstruction(fromToolArguments: #"{"working_directory":"/tmp/wrong"}"#))
     }
 
     private func seedWatchedSession(policy: AgentInstructionSendPolicy, defaults: UserDefaults) throws -> String {

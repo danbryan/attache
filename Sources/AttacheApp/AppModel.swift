@@ -32,6 +32,44 @@ enum ConversationDestination: String, CaseIterable, Identifiable {
     }
 }
 
+struct AgentSendTarget: Equatable {
+    let sessionID: String
+    let sourceKind: String
+    let displayTitle: String
+    let workingDirectory: String?
+
+    var sourceDisplayName: String {
+        (SourceKind(rawValue: sourceKind) ?? .generic).displayName
+    }
+}
+
+struct ConversationTargetSnapshot: Equatable {
+    let target: CodexSessionTarget
+    let workingDirectory: String?
+    let isExplicitlyFocused: Bool
+
+    var agentSendTarget: AgentSendTarget? {
+        guard isExplicitlyFocused else { return nil }
+        return AgentSendTarget(
+            sessionID: target.id,
+            sourceKind: target.sourceKind.rawValue,
+            displayTitle: target.displayTitle,
+            workingDirectory: workingDirectory
+        )
+    }
+}
+
+private struct PendingAgentSend {
+    let text: String
+    let target: AgentSendTarget
+    let origin: InstructionOrigin
+    let sourceUtterance: String?
+}
+
+private struct AgentInstructionToolArguments: Decodable {
+    let instruction: String
+}
+
 struct CardPersonalityMarker: Equatable {
     let id: String
     let name: String
@@ -111,6 +149,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isConversing: Bool = false
     @Published var conversationDraft: String = ""
     @Published var conversationDestination: ConversationDestination = .attache
+    @Published private(set) var conversationTargetSnapshot: ConversationTargetSnapshot?
     @Published private(set) var conversationStatus: String = ""
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
@@ -580,7 +619,7 @@ final class AppModel: ObservableObject {
     }
     /// Drives the first-use two-way enable sheet.
     @Published var showTwoWayEnable = false
-    private var twoWayEnablePendingText = ""
+    private var twoWayEnablePendingSend: PendingAgentSend?
     private let codexSessionWatcher = CodexSessionWatcher()
     private let sessionActivityWatcher = SessionActivityWatcher()
     private let presentationEnvironment: [String: String]
@@ -655,6 +694,9 @@ final class AppModel: ObservableObject {
             store: self.store,
             locateSessionFile: { CompanionSessionReader.sessionFileURL(forSessionID: $0) }
         )
+        if let recoveryMessage = twoWay.startupRecoveryMessage {
+            intakeStatus = recoveryMessage
+        }
 
         playback.onFinished = { [weak self] cardID, success in
             self?.finishPlayback(cardID: cardID, success: success)
@@ -849,6 +891,32 @@ final class AppModel: ObservableObject {
             return target(for: record)
         }
         return nil
+    }
+
+    /// The call's immutable context while live. It may be a read-only recent
+    /// session when nothing was focused, but only an explicitly focused snapshot
+    /// can produce an agent-send target.
+    var conversationContextSession: CodexSessionTarget? {
+        if conversationActive || isConversing || pendingAssistantReply != nil {
+            return conversationTargetSnapshot?.target
+        }
+        return talkContextSession
+    }
+
+    private func captureConversationTargetSnapshot() -> ConversationTargetSnapshot? {
+        if let focused = attachedCodexSession {
+            return ConversationTargetSnapshot(
+                target: focused,
+                workingDirectory: workingDirectory(for: focused.id),
+                isExplicitlyFocused: true
+            )
+        }
+        guard let fallback = talkContextSession else { return nil }
+        return ConversationTargetSnapshot(
+            target: fallback,
+            workingDirectory: workingDirectory(for: fallback.id),
+            isExplicitlyFocused: false
+        )
     }
 
     var attachedCodexSessionLabel: String {
@@ -1212,7 +1280,12 @@ final class AppModel: ObservableObject {
             // If this narration is the agent's reply to an instruction we sent,
             // link it so the delivery log can jump to it (INF-173).
             if let sessionID = event.externalSessionID {
-                twoWay?.linkResponseCard(cardID: card.id, sessionID: sessionID)
+                twoWay?.linkResponseCard(
+                    cardID: card.id,
+                    sessionID: sessionID,
+                    eventText: event.text,
+                    transcriptEndOffset: event.metadata["transcript_end_offset"].flatMap(Int64.init)
+                )
             }
             // A late-arriving event whose source time predates the newest already
             // spoken update for this session is filed read, not narrated as new.
@@ -1602,14 +1675,15 @@ final class AppModel: ObservableObject {
 
     func startConversation() {
         let wasActive = conversationActive
-        conversationActive = true
         if !wasActive {
             conversationDestination = .attache
+            conversationTargetSnapshot = captureConversationTargetSnapshot()
         }
+        conversationActive = true
         if conversationStatus.isEmpty {
-            conversationStatus = talkContextSession == nil
+            conversationStatus = conversationTargetSnapshot == nil
                 ? "No session attached — I can still chat."
-                : "Talking about \(talkContextSession?.displayTitle ?? "this session")."
+                : "Talking about \(conversationTargetSnapshot?.target.displayTitle ?? "this session")."
         }
         if voiceInputMode == .alwaysOn {
             beginConversationDictation()
@@ -1718,7 +1792,16 @@ final class AppModel: ObservableObject {
         appendConversationTurn(role: .user, text: trimmed)
 
         if conversationDestination == .agent {
-            let reply = stageConversationAgentInstruction(trimmed)
+            let target = conversationTargetSnapshot?.agentSendTarget
+            // Tell Agent is deliberately one-shot. Continuous listening and the
+            // next typed turn return to the personality unless the user selects it again.
+            conversationDestination = .attache
+            let reply = stageConversationAgentInstruction(
+                trimmed,
+                target: target,
+                origin: .tellAgent,
+                sourceUtterance: trimmed
+            )
             surfaceConversationReply(reply)
             return
         }
@@ -1726,10 +1809,12 @@ final class AppModel: ObservableObject {
         isConversing = true
         beginConversationWait()
 
-        let messages = buildConversationMessages()
-        let sessionID = talkContextSession?.id
-        let workingDirectory = conversationWorkingDirectory
-        let allowAgentInstructionTool = conversationAgentInstructionToolAvailable
+        let context = conversationTargetSnapshot
+        let messages = buildConversationMessages(context: context)
+        let sessionID = context?.target.id
+        let workingDirectory = context?.workingDirectory
+        let agentTarget = context?.agentSendTarget
+        let allowAgentInstructionTool = agentTarget != nil
 
         presentationService.converse(
             messages: messages,
@@ -1740,7 +1825,11 @@ final class AppModel: ObservableObject {
                         ?? "There's no attached session to rename."
                 }
                 if name == "stage_agent_instruction" {
-                    return await self?.applyStageAgentInstructionTool(arguments: arguments)
+                    return await self?.applyStageAgentInstructionTool(
+                        arguments: arguments,
+                        target: agentTarget,
+                        sourceUtterance: trimmed
+                    )
                         ?? "There's no attached session to send to."
                 }
                 return Self.executeConversationTool(
@@ -1792,7 +1881,7 @@ final class AppModel: ObservableObject {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        let session = talkContextSession
+        let session = conversationTargetSnapshot?.target
         let personality = activePersonality
         var metadata: [String: String] = [
             "companion_history_kind": "direct_reply",
@@ -1934,27 +2023,44 @@ final class AppModel: ObservableObject {
 
     // MARK: - Two-way send-to-agent (INF-173)
 
-    /// The session an instruction would target (the one being talked about), and
-    /// its vendor source kind, if any.
-    private var twoWayTarget: (sessionID: String, sourceKind: String)? {
-        guard let session = talkContextSession ?? attachedCodexSession else { return nil }
-        let sourceKind = (sessionRecords.first(where: { $0.id == session.id })?.sourceKind ?? .codex).rawValue
-        return (session.id, sourceKind)
+    /// Agent sends require a user-focused session. The conversational fallback to
+    /// the most recent session remains read-only and never becomes an implicit target.
+    private var twoWayTarget: AgentSendTarget? {
+        if conversationActive {
+            return conversationTargetSnapshot?.agentSendTarget
+        }
+        guard let session = attachedCodexSession else { return nil }
+        return AgentSendTarget(
+            sessionID: session.id,
+            sourceKind: session.sourceKind.rawValue,
+            displayTitle: session.displayTitle,
+            workingDirectory: workingDirectory(for: session.id)
+        )
     }
 
     var canSendToAgent: Bool { twoWayTarget != nil }
 
-    private func stageConversationAgentInstruction(_ instruction: String) -> String {
-        guard let target = twoWayTarget else {
-            let message = "Attaché needs an active attached agent session before it can send that."
+    private func stageConversationAgentInstruction(
+        _ instruction: String,
+        target: AgentSendTarget?,
+        origin: InstructionOrigin,
+        sourceUtterance: String?
+    ) -> String {
+        guard let target else {
+            let message = "Focus an active Codex or Claude Code session before sending to an agent."
             intakeStatus = message
             liveFollowUpStatus = message
             return message
         }
 
         let sourceKind = SourceKind(rawValue: target.sourceKind) ?? .codex
-        requestSendToAgent(instruction)
-        let title = twoWayTargetTitle ?? sourceKind.displayName
+        requestSendToAgent(
+            instruction,
+            target: target,
+            origin: origin,
+            sourceUtterance: sourceUtterance
+        )
+        let title = target.displayTitle.isEmpty ? sourceKind.displayName : target.displayTitle
         if showTwoWayEnable {
             return "Attaché staged that for \(title). Review the first-use send-to-agent prompt; nothing sends until you enable it and confirm the message."
         }
@@ -1979,7 +2085,15 @@ final class AppModel: ObservableObject {
 
     /// The name of the session an instruction would target, for the UI copy.
     var twoWayTargetTitle: String? {
-        (talkContextSession ?? attachedCodexSession)?.displayTitle
+        twoWayTarget?.displayTitle
+    }
+
+    var twoWayTargetSourceName: String? {
+        twoWayTarget?.sourceDisplayName
+    }
+
+    var twoWayEnableTargetTitle: String? {
+        twoWayEnablePendingSend?.target.displayTitle
     }
 
     /// Entry point from a "Send to agent" control: enable first-use if needed,
@@ -1987,12 +2101,32 @@ final class AppModel: ObservableObject {
     /// enabled-session instruction opens final confirmation or sends directly.
     func requestSendToAgent(_ rawText: String? = nil) {
         let text = (rawText ?? liveFollowUpText).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSendToAgent else { intakeStatus = "There's no attached session to send to."; return }
+        requestSendToAgent(
+            text,
+            target: twoWayTarget,
+            origin: .offCallComposer,
+            sourceUtterance: text
+        )
+    }
+
+    private func requestSendToAgent(
+        _ text: String,
+        target: AgentSendTarget?,
+        origin: InstructionOrigin,
+        sourceUtterance: String?
+    ) {
+        guard let target else { intakeStatus = "Focus a Codex or Claude Code session before sending."; return }
         guard !text.isEmpty else { intakeStatus = "Type or dictate an instruction first."; return }
-        if isTwoWayEnabledForTarget() {
-            stageAndSurface(text)
+        let pending = PendingAgentSend(
+            text: text,
+            target: target,
+            origin: origin,
+            sourceUtterance: sourceUtterance
+        )
+        if twoWay.isEnabled(sessionID: target.sessionID) {
+            stageAndSurface(pending)
         } else {
-            twoWayEnablePendingText = text
+            twoWayEnablePendingSend = pending
             showTwoWayEnable = true
         }
     }
@@ -2001,19 +2135,19 @@ final class AppModel: ObservableObject {
     /// the held instruction.
     func confirmEnableTwoWay() {
         showTwoWayEnable = false
-        enableTwoWayForTarget()
-        let text = twoWayEnablePendingText
-        twoWayEnablePendingText = ""
-        if !text.isEmpty { stageAndSurface(text, allowDirectSend: false) }
+        guard let pending = twoWayEnablePendingSend else { return }
+        twoWayEnablePendingSend = nil
+        twoWay.setEnabled(true, sessionID: pending.target.sessionID)
+        stageAndSurface(pending, allowDirectSend: false)
     }
 
     func cancelEnableTwoWay() {
         showTwoWayEnable = false
-        twoWayEnablePendingText = ""
+        twoWayEnablePendingSend = nil
     }
 
-    private func stageAndSurface(_ text: String, allowDirectSend: Bool = true) {
-        if let reason = stageInstruction(text) {
+    private func stageAndSurface(_ pending: PendingAgentSend, allowDirectSend: Bool = true) {
+        if let reason = stageInstruction(pending) {
             intakeStatus = reason   // safety rejection or disabled
             liveFollowUpStatus = reason
             if conversationActive { conversationStatus = reason }
@@ -2028,10 +2162,16 @@ final class AppModel: ObservableObject {
     /// reason for the UI, or nil on success (the instruction is held in
     /// `pendingInstruction`). Two-way must be enabled for the session first.
     @discardableResult
-    func stageInstruction(_ text: String) -> String? {
-        guard let target = twoWayTarget else { return "There's no attached session to send to." }
+    private func stageInstruction(_ pending: PendingAgentSend) -> String? {
         do {
-            let instruction = try twoWay.prepare(text: text, sessionID: target.sessionID, sourceKind: target.sourceKind)
+            let instruction = try twoWay.prepare(
+                text: pending.text,
+                sessionID: pending.target.sessionID,
+                sourceKind: pending.target.sourceKind,
+                origin: pending.origin,
+                sourceUtterance: pending.sourceUtterance,
+                targetDisplayName: pending.target.displayTitle
+            )
             pendingInstruction = instruction
             return nil
         } catch InstructionError.twoWayDisabled {
@@ -2048,7 +2188,8 @@ final class AppModel: ObservableObject {
     func confirmStagedInstruction() {
         guard let instruction = pendingInstruction else { return }
         pendingInstruction = nil
-        let message = "Sending to the agent when the session is quiet…"
+        let target = instruction.targetDisplayName ?? "the focused agent"
+        let message = "Sending to \(target) when the session is quiet…"
         intakeStatus = message
         liveFollowUpStatus = message
         if conversationActive { conversationStatus = message }
@@ -2070,7 +2211,8 @@ final class AppModel: ObservableObject {
         guard let latest = changed.sorted(by: { $0.createdAt < $1.createdAt }).last else { return }
         switch latest.state {
         case .delivered:
-            let message = "Sent to agent. Watching for the reply…"
+            let target = latest.targetDisplayName ?? "agent"
+            let message = "Sent to \(target). Watching for the reply…"
             intakeStatus = message
             liveFollowUpStatus = message
             if conversationActive { conversationStatus = message }
@@ -2094,11 +2236,7 @@ final class AppModel: ObservableObject {
         try? twoWay.cancel(id: id)
     }
 
-    private var conversationAgentInstructionToolAvailable: Bool {
-        canSendToAgent
-    }
-
-    private func buildConversationMessages() -> [CompanionChatMessage] {
+    private func buildConversationMessages(context: ConversationTargetSnapshot?) -> [CompanionChatMessage] {
         let memorySnapshot = companionMemoryStore.loadSnapshot()
         let personaSnapshot = companionPersonaStore.loadSnapshot()
         let profilePrompt = personaSnapshot.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2107,10 +2245,11 @@ final class AppModel: ObservableObject {
         let system = CompanionPersonality.conversationSystemPrompt(
             profilePrompt: profilePrompt,
             memoryContext: memorySnapshot.context,
-            sessionTitle: talkContextSession?.displayTitle,
-            workingDirectory: conversationWorkingDirectory,
+            sessionTitle: context?.target.displayTitle,
+            sessionSourceName: context?.target.sourceKind.displayName,
+            workingDirectory: context?.workingDirectory,
             latestSummary: conversationLatestSummary,
-            canStageAgentInstruction: conversationAgentInstructionToolAvailable
+            canStageAgentInstruction: context?.agentSendTarget != nil
         )
         var messages = [CompanionChatMessage(role: "system", content: system)]
         // Cap the in-RAM transcript sent per turn so a long multi-call conversation
@@ -2126,7 +2265,12 @@ final class AppModel: ObservableObject {
     private static let maxLoadedCards = 1_000
 
     private var conversationWorkingDirectory: String? {
+        if let snapshot = conversationTargetSnapshot { return snapshot.workingDirectory }
         guard let id = talkContextSession?.id else { return nil }
+        return workingDirectory(for: id)
+    }
+
+    private func workingDirectory(for id: String) -> String? {
         // Use the attached session's own working directory (from its transcript's
         // cwd, held on SessionRecord.project), so a quiet freshly-attached session
         // still resolves and read_file can't wander into another project via some
@@ -2140,7 +2284,7 @@ final class AppModel: ObservableObject {
     }
 
     private var conversationLatestSummary: String? {
-        let id = talkContextSession?.id
+        let id = conversationTargetSnapshot?.target.id ?? talkContextSession?.id
         if let id, let summary = cards.first(where: { $0.externalSessionID == id })?.summary {
             return summary
         }
@@ -2211,17 +2355,27 @@ final class AppModel: ObservableObject {
     /// Stage or send a personality-requested agent instruction. The first-use
     /// enable sheet always gates the session; the user's send policy decides
     /// whether enabled-session instructions need a final confirmation sheet.
-    private func applyStageAgentInstructionTool(arguments: String) async -> String {
-        let rawInstruction = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["instruction"] as? String ?? ""
-        let instruction = rawInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !instruction.isEmpty else {
+    private func applyStageAgentInstructionTool(
+        arguments: String,
+        target: AgentSendTarget?,
+        sourceUtterance: String
+    ) async -> String {
+        guard let instruction = Self.agentInstruction(fromToolArguments: arguments) else {
             return "No instruction was provided to stage for the agent."
         }
-        return await MainActor.run {
-            guard canSendToAgent else {
-                return "There's no attached session to send to."
-            }
-            requestSendToAgent(instruction)
+        guard let target else {
+            return "No agent session was explicitly focused when this conversation turn began."
+        }
+        // Freeze the complete send before crossing back to the UI actor. The
+        // structured tool payload must never be recomputed from mutable call UI.
+        let pending = PendingAgentSend(
+            text: instruction,
+            target: target,
+            origin: .personalityTool,
+            sourceUtterance: sourceUtterance
+        )
+        return await MainActor.run { [pending] in
+            requestSendToAgent(pending.text, target: pending.target, origin: pending.origin, sourceUtterance: pending.sourceUtterance)
             if showTwoWayEnable {
                 return "Attaché opened the first-use send-to-agent enable confirmation. Tell the user to review and confirm before anything is sent."
             }
@@ -2231,6 +2385,15 @@ final class AppModel: ObservableObject {
             let status = intakeStatus.trimmingCharacters(in: .whitespacesAndNewlines)
             return status.isEmpty ? "Attaché could not stage that instruction." : status
         }
+    }
+
+    static func agentInstruction(fromToolArguments arguments: String) -> String? {
+        guard let decoded = try? JSONDecoder().decode(
+            AgentInstructionToolArguments.self,
+            from: Data(arguments.utf8)
+        ) else { return nil }
+        let instruction = decoded.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        return instruction.isEmpty ? nil : instruction
     }
 
     // MARK: - System media controls
@@ -4235,9 +4398,9 @@ final class AppModel: ObservableObject {
         // speak live; off a call, everything (including focused) collects as voicemail.
         guard onCall,
               SourceKind.liveAgentRawValues.contains(event.source),
-              let attachedCodexSession,
-              attachedCodexSession.category == .activeSession,
-              event.externalSessionID == attachedCodexSession.id else {
+              let callTarget = conversationTargetSnapshot?.target,
+              callTarget.category == .activeSession,
+              event.externalSessionID == callTarget.id else {
             return false
         }
         return true
@@ -4251,7 +4414,7 @@ final class AppModel: ObservableObject {
     /// plus two-way conversation.
     func startCall() {
         startConversation()
-        if let session = attachedCodexSession ?? talkContextSession {
+        if let session = conversationTargetSnapshot?.target {
             intakeStatus = "On a call with \(session.displayTitle)."
         }
     }

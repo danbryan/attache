@@ -3,7 +3,7 @@ import AttacheCore
 
 /// First-use enablement for send-to-agent on a specific session. States plainly
 /// what it does and the safety rules (docs/two-way.md), and requires an explicit
-/// enable. Distinct from "Ask Attaché", which never leaves the app.
+/// enable. Ask Attaché may also hand off an explicit request through this gate.
 struct TwoWayEnableSheet: View {
     let sessionTitle: String
     let directSendEnabled: Bool
@@ -21,7 +21,7 @@ struct TwoWayEnableSheet: View {
             Text("This turns on send-to-agent for this session. Attaché will deliver instructions you confirm back into the agent by resuming it, acting with your own agent permissions. It waits until the session is quiet, sends one at a time, and never approves permissions or tool use on the agent's behalf.")
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
             Text(directSendEnabled
-                 ? "This first instruction still asks for final confirmation. After that, your Settings choice sends future instructions for this session without the final sheet."
+                 ? "This first instruction still asks for final confirmation. After that, your Settings choice sends future Tell Agent turns and explicit personality handoffs for this session without the final sheet."
                  : "Every send still asks you to confirm first. You can turn this off for the session at any time.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -40,7 +40,6 @@ struct TwoWayEnableSheet: View {
 /// to which session, and requires an explicit Send.
 struct TwoWayConfirmSheet: View {
     let instruction: Instruction
-    let sessionTitle: String
     let onSend: () -> Void
     let onCancel: () -> Void
 
@@ -49,7 +48,7 @@ struct TwoWayConfirmSheet: View {
             HStack(spacing: 10) {
                 Image(systemName: "paperplane.fill")
                     .typoIcon(size: 20).foregroundStyle(.orange)
-                Text("Send this to \(sessionTitle)?")
+                Text("Send this to \(instruction.targetDisplayName ?? "this session")?")
                     .typoSection()
             }
             Text("“\(instruction.text)”")
@@ -57,6 +56,14 @@ struct TwoWayConfirmSheet: View {
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            if instruction.origin == .personalityTool,
+               let source = instruction.sourceUtterance,
+               source.trimmingCharacters(in: .whitespacesAndNewlines) != instruction.text {
+                Text("Requested in Ask Attaché: “\(source)”")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Delivered by resuming the agent when the session is quiet. This goes INTO the agent, not to Attaché.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {

@@ -4,9 +4,13 @@ import AttacheCore
 
 private final class StubAdapter: InstructionDeliveryAdapter, @unchecked Sendable {
     let sourceKind = "codex"
-    var result: Result<DeliveryReceipt, InstructionDeliveryError> = .success(DeliveryReceipt(mechanism: "headless-resume"))
+    var result: Result<DeliveryReceipt, InstructionDeliveryError> = .success(
+        DeliveryReceipt(mechanism: "headless-resume", transcriptCheckpoint: 0)
+    )
 
-    init(result: Result<DeliveryReceipt, InstructionDeliveryError> = .success(DeliveryReceipt(mechanism: "headless-resume"))) {
+    init(result: Result<DeliveryReceipt, InstructionDeliveryError> = .success(
+        DeliveryReceipt(mechanism: "headless-resume", transcriptCheckpoint: 0)
+    )) {
         self.result = result
     }
 
@@ -28,7 +32,7 @@ final class TwoWayCoordinatorTests: XCTestCase {
     func testPrepareShowsInLogAndDeliversWhenIdle() async throws {
         let store = try makeStore()
         let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
-        try Data("{}".utf8).write(to: sessionFile)
+        try writeReadyCodexSession(to: sessionFile)
         let coordinator = TwoWayCoordinator(
             store: store,
             locateSessionFile: { _ in sessionFile },
@@ -48,7 +52,7 @@ final class TwoWayCoordinatorTests: XCTestCase {
     func testConfirmAndDeliverReturnsFailureForVisibleStatus() async throws {
         let store = try makeStore()
         let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
-        try Data("{}".utf8).write(to: sessionFile)
+        try writeReadyCodexSession(to: sessionFile)
         let coordinator = TwoWayCoordinator(
             store: store,
             locateSessionFile: { _ in sessionFile },
@@ -69,7 +73,7 @@ final class TwoWayCoordinatorTests: XCTestCase {
     func testLinkResponseCardTiesReplyToInstruction() async throws {
         let store = try makeStore()
         let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
-        try Data("{}".utf8).write(to: sessionFile)
+        try writeReadyCodexSession(to: sessionFile)
         let coordinator = TwoWayCoordinator(
             store: store,
             locateSessionFile: { _ in sessionFile },
@@ -80,7 +84,33 @@ final class TwoWayCoordinatorTests: XCTestCase {
         let instruction = try coordinator.prepare(text: "make a change", sessionID: "s1", sourceKind: "codex")
         try await coordinator.confirmAndDeliver(id: instruction.id)
 
-        coordinator.linkResponseCard(cardID: "card-1", sessionID: "s1")
+        let reply = "Finished the requested change."
+        try append(
+            """
+            {"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"make a change"}]}}
+            {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":"\(reply)"}]}}
+
+            """,
+            to: sessionFile
+        )
+        let endOffset = Int64(try XCTUnwrap(
+            try FileManager.default.attributesOfItem(atPath: sessionFile.path)[.size] as? NSNumber
+        ).int64Value)
+
+        coordinator.linkResponseCard(
+            cardID: "unrelated",
+            sessionID: "s1",
+            eventText: "An unrelated update.",
+            transcriptEndOffset: endOffset
+        )
+        XCTAssertNil(coordinator.log.first(where: { $0.id == instruction.id })?.resultingCardID)
+
+        coordinator.linkResponseCard(
+            cardID: "card-1",
+            sessionID: "s1",
+            eventText: reply,
+            transcriptEndOffset: endOffset
+        )
         XCTAssertEqual(coordinator.log.first(where: { $0.id == instruction.id })?.resultingCardID, "card-1")
     }
 
@@ -92,5 +122,42 @@ final class TwoWayCoordinatorTests: XCTestCase {
             adapters: [StubAdapter()]
         )
         XCTAssertThrowsError(try coordinator.prepare(text: "go", sessionID: "s1", sourceKind: "codex"))
+    }
+
+    func testStartupFailsInterruptedInstructionsClosed() throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let confirmed = try engine.submit(text: "queued", sessionID: "s1", sourceKind: "codex", now: Date())
+        _ = try engine.confirm(id: confirmed.id, now: Date())
+        try store.upsertInstruction(Instruction(
+            id: "delivering",
+            sessionID: "s2",
+            sourceKind: "codex",
+            text: "possibly sent",
+            state: .delivering,
+            createdAt: Date()
+        ))
+
+        let coordinator = TwoWayCoordinator(store: store, locateSessionFile: { _ in nil }, adapters: [StubAdapter()])
+
+        XCTAssertEqual(coordinator.log.first(where: { $0.id == confirmed.id })?.state, .failed)
+        XCTAssertEqual(coordinator.log.first(where: { $0.id == "delivering" })?.state, .failed)
+        XCTAssertTrue(coordinator.log.allSatisfy { $0.error?.contains("restarted") == true })
+        XCTAssertTrue(coordinator.startupRecoveryMessage?.contains("Review the frozen target and resend") == true)
+    }
+
+    private func writeReadyCodexSession(to url: URL) throws {
+        try Data("""
+        {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":"Ready."}]}}
+
+        """.utf8).write(to: url)
+    }
+
+    private func append(_ text: String, to url: URL) throws {
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(text.utf8))
     }
 }

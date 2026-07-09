@@ -254,6 +254,12 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
   English phrase matching before the personality sees the turn. That approach is
   brittle across languages and unsafe on false positives; personality-driven
   delegation remains available through `stage_agent_instruction`.
+- **Agent destinations are frozen and explicit.** Agent sends require a focused
+  session. A live call freezes that session's ID, source, title, and working
+  directory for tool calls, confirmation, and delivery until hang-up. Tell Agent
+  applies to one turn and then resets to Ask Attaché before listening resumes.
+  Freeze the structured instruction payload separately and fail closed if it or
+  the stored target differs before delivery.
 
 ## Gotchas
 

@@ -13,6 +13,15 @@ public enum InstructionState: String, Codable, Equatable, Sendable {
     case canceled     // the user or the system canceled it before delivery
 }
 
+/// How an instruction entered the two-way pipeline. This stays in the audit log
+/// so a direct user turn is distinguishable from a personality-generated handoff.
+public enum InstructionOrigin: String, Codable, Equatable, Sendable {
+    case tellAgent = "tell_agent"
+    case personalityTool = "personality_tool"
+    case offCallComposer = "off_call_composer"
+    case legacy
+}
+
 /// One instruction the user has directed at an agent session, plus its delivery
 /// state and audit fields. The engine and the store both work in these terms; the
 /// adapters (INF-172) turn a `confirmed`/`delivering` instruction into a real
@@ -29,6 +38,10 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
     public var deliveryMechanism: String?   // e.g. "headless-resume"
     public var error: String?
     public var resultingCardID: String?     // the narration card the agent's reply produced
+    public var origin: InstructionOrigin
+    public var sourceUtterance: String?      // original user wording before personality rewriting
+    public var targetDisplayName: String?    // frozen label shown at confirmation time
+    public var deliveryCheckpoint: Int64?    // transcript byte offset before headless resume
 
     public init(
         id: String,
@@ -41,7 +54,11 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         deliveredAt: Date? = nil,
         deliveryMechanism: String? = nil,
         error: String? = nil,
-        resultingCardID: String? = nil
+        resultingCardID: String? = nil,
+        origin: InstructionOrigin = .legacy,
+        sourceUtterance: String? = nil,
+        targetDisplayName: String? = nil,
+        deliveryCheckpoint: Int64? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -54,6 +71,10 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         self.deliveryMechanism = deliveryMechanism
         self.error = error
         self.resultingCardID = resultingCardID
+        self.origin = origin
+        self.sourceUtterance = sourceUtterance
+        self.targetDisplayName = targetDisplayName
+        self.deliveryCheckpoint = deliveryCheckpoint
     }
 
     public var isTerminal: Bool {

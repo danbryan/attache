@@ -19,8 +19,10 @@ Usage:
 
 Creates a disposable Codex session, starts a deterministic local personality
 provider, asks Attaché to stage an instruction for Codex from natural language,
-confirms the send, then asks the personality to read Codex's reply from the
-watched session.
+confirms the first send, verifies a second explicit personality handoff follows
+the direct-send policy, then asks the personality to read Codex's reply from the
+watched session. It also audits frozen target, origin, source utterance, and
+delivery checkpoint persistence.
 EOF
 }
 
@@ -65,6 +67,7 @@ esac
 
 command -v codex >/dev/null 2>&1 || fail "codex CLI was not found on PATH"
 command -v python3 >/dev/null 2>&1 || fail "python3 was not found on PATH"
+command -v sqlite3 >/dev/null 2>&1 || fail "sqlite3 was not found on PATH"
 [[ -f "$REAL_CODEX_HOME/auth.json" ]] || fail "Codex auth file not found at $REAL_CODEX_HOME/auth.json"
 
 TEMP_ROOT="$(mktemp -d /tmp/attache-codex-personality-two-way.XXXXXX)"
@@ -88,6 +91,7 @@ chmod 600 "$CODEX_TEST_HOME/config.toml"
 NONCE="$(date +%Y%m%d%H%M%S)_$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-' | cut -c1-8)"
 READY_TOKEN="ATTACHE_READY_${NONCE}"
 PONG_TOKEN="ATTACHE_SUM_${NONCE}_4"
+DIRECT_TOKEN="ATTACHE_DIRECT_${NONCE}_9"
 READY_LOG="$TEMP_ROOT/codex-ready.log"
 READY_OUT="$TEMP_ROOT/codex-ready.txt"
 MODEL="attache-smoke-personality"
@@ -103,6 +107,7 @@ PY
 echo "==> Starting deterministic personality provider on 127.0.0.1:$PORT"
 ATTACHE_PERSONALITY_TWO_WAY_NONCE="$NONCE" \
 ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="$PONG_TOKEN" \
+ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN="$DIRECT_TOKEN" \
 ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$PROVIDER_LOG" \
 ATTACHE_PERSONALITY_TWO_WAY_MODEL="$MODEL" \
 ATTACHE_PERSONALITY_TWO_WAY_PORT="$PORT" \
@@ -163,6 +168,7 @@ defaults write "$BUNDLE_ID" attache.presentationLLMEnabled -bool true
 defaults write "$BUNDLE_ID" attache.voicemailMode -bool true
 defaults write "$BUNDLE_ID" attache.showActivityInsights -bool false
 defaults write "$BUNDLE_ID" attache.showTips -bool false
+defaults write "$BUNDLE_ID" attache.agentInstructionSendPolicy -string directAfterSessionEnable
 
 echo "==> Running Attaché personality-to-Codex UI smoke"
 SMOKE_ONLY=f8 \
@@ -178,7 +184,21 @@ ATTACHE_PERSONALITY_TWO_WAY_SESSION_ID="$SESSION_ID" \
 ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE="$SESSION_FILE" \
 ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$PROVIDER_LOG" \
 ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="$PONG_TOKEN" \
+ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN="$DIRECT_TOKEN" \
 ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT="Tell Codex to reply exactly $PONG_TOKEN and do not use tools." \
+ATTACHE_PERSONALITY_TWO_WAY_DIRECT_PROMPT="Send Codex directly and tell it to reply exactly $DIRECT_TOKEN and do not use tools." \
   scripts/ui-smoke.sh
+
+DATABASE="$HOME/Library/Application Support/Attache/Attache.sqlite"
+[[ -f "$DATABASE" ]] || fail "Attaché instruction database was not created"
+PERSONALITY_ROWS="$(sqlite3 "$DATABASE" "SELECT COUNT(*) FROM instructions WHERE session_id='$SESSION_ID' AND origin='personality_tool' AND source_utterance IS NOT NULL AND target_display_name IS NOT NULL AND target_display_name != '';" )"
+[[ "$PERSONALITY_ROWS" -ge 2 ]] || fail "expected two personality-origin instructions with source wording and frozen targets, found $PERSONALITY_ROWS"
+CHECKPOINT_ROWS=0
+for _ in {1..30}; do
+  CHECKPOINT_ROWS="$(sqlite3 "$DATABASE" "SELECT COUNT(*) FROM instructions WHERE session_id='$SESSION_ID' AND origin='personality_tool' AND state='delivered' AND delivery_checkpoint IS NOT NULL;")"
+  [[ "$CHECKPOINT_ROWS" -ge 2 ]] && break
+  sleep 0.5
+done
+[[ "$CHECKPOINT_ROWS" -ge 2 ]] || fail "expected transcript checkpoints for both personality-origin deliveries, found $CHECKPOINT_ROWS"
 
 echo "==> Personality-to-Codex two-way smoke passed for session $SESSION_ID"

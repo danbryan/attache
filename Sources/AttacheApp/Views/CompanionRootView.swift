@@ -269,7 +269,7 @@ struct CompanionRootView: View {
         }
         .sheet(isPresented: $model.showTwoWayEnable) {
             TwoWayEnableSheet(
-                sessionTitle: model.twoWayTargetTitle ?? "this session",
+                sessionTitle: model.twoWayEnableTargetTitle ?? "this session",
                 directSendEnabled: model.directAgentSendEnabled,
                 onEnable: { model.confirmEnableTwoWay() },
                 onCancel: { model.cancelEnableTwoWay() }
@@ -278,7 +278,6 @@ struct CompanionRootView: View {
         .sheet(item: $model.pendingInstruction) { instruction in
             TwoWayConfirmSheet(
                 instruction: instruction,
-                sessionTitle: model.twoWayTargetTitle ?? "this session",
                 onSend: { model.confirmStagedInstruction() },
                 onCancel: { model.discardStagedInstruction() }
             )

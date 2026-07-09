@@ -201,6 +201,9 @@ final class CodexSessionWatcher {
         // Source time = when the agent wrote the turn, not when we processed it, so
         // ordering and dedup use the real timeline (INF-163).
         event.metadata["source_time"] = PipelineOrdering.isoString(from: turn.timestamp)
+        if let endOffset = fileSize(fileURL) {
+            event.metadata["transcript_end_offset"] = String(endOffset)
+        }
         event.metadata["companion_summary"] = EventNormalizer.summary(for: event)
         if !turn.interstitials.isEmpty {
             event.metadata["interstitial_count"] = String(turn.interstitials.count)

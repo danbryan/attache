@@ -34,7 +34,20 @@ extension CompanionRootView {
     // in the tooltip, and there is no box.
     var onCallHUD: some View {
         HStack(spacing: 8) {
-            callDestinationPicker
+            VStack(alignment: .leading, spacing: 5) {
+                callDestinationPicker
+                if model.conversationDestination == .agent || !model.canSendToAgent {
+                    HStack(spacing: 4) {
+                        Image(systemName: model.canSendToAgent ? "paperplane.fill" : "exclamationmark.triangle.fill")
+                            .typoIcon(size: 9, .semibold)
+                        Text(agentDestinationLabel)
+                            .typoCaption(.semibold)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(model.canSendToAgent ? Color.orange : Color.red)
+                    .accessibilityLabel(agentDestinationLabel)
+                }
+            }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     TextField(callMessagePlaceholder, text: $model.conversationDraft)
@@ -83,14 +96,18 @@ extension CompanionRootView {
         Picker("", selection: $model.conversationDestination) {
             ForEach(ConversationDestination.allCases) { destination in
                 Text(destination.title).tag(destination)
+                    .disabled(destination == .agent && !model.canSendToAgent)
             }
         }
         .labelsHidden()
         .pickerStyle(.segmented)
         .controlSize(.small)
         .frame(width: 206)
-        .accessibilityLabel("Conversation destination")
-        .help("Choose where this live turn goes")
+        .tint(model.conversationDestination == .agent ? .orange : accent)
+        .accessibilityLabel("Conversation destination, \(callDestinationSummary)")
+        .help(model.canSendToAgent
+              ? "Choose where this live turn goes"
+              : "Focus a Codex or Claude Code session to enable Tell Agent")
     }
 
     var callMicActive: Bool {
@@ -126,7 +143,7 @@ extension CompanionRootView {
     var callMessagePlaceholder: String {
         switch model.conversationDestination {
         case .attache: return "Type instead…"
-        case .agent: return model.canSendToAgent ? "Tell the agent…" : "Focus an agent first…"
+        case .agent: return model.canSendToAgent ? "Tell \(model.twoWayTargetTitle ?? "the agent")…" : "Focus an agent first…"
         }
     }
 
@@ -135,13 +152,21 @@ extension CompanionRootView {
         case .attache:
             return model.presentationProviderSummary
         case .agent:
-            return model.twoWayTargetTitle ?? "the focused agent"
+            return model.canSendToAgent
+                ? "\(model.twoWayTargetSourceName ?? "Agent") / \(model.twoWayTargetTitle ?? "focused session")"
+                : "no focused agent"
         }
+    }
+
+    var agentDestinationLabel: String {
+        guard model.canSendToAgent else { return "Focus a session to enable Tell Agent" }
+        return "Tell \(model.twoWayTargetSourceName ?? "Agent") · \(model.twoWayTargetTitle ?? "Focused session")"
     }
 
     var canSendCallMessage: Bool {
         !model.conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !model.isAwaitingReply
+            && (model.conversationDestination != .agent || model.canSendToAgent)
     }
 
     var callProgressVisible: Bool {
@@ -152,9 +177,9 @@ extension CompanionRootView {
     }
 
     var idleCallStatusText: String {
-        model.talkContextSession == nil
+        model.conversationContextSession == nil
             ? "No session attached — I can still chat."
-            : "Talking about \(model.talkContextSession?.displayTitle ?? "this session")."
+            : "Talking about \(model.conversationContextSession?.displayTitle ?? "this session")."
     }
 
     func sendCallMessage() {

@@ -34,8 +34,11 @@ public enum InstructionDeliveryError: Error, Equatable, Sendable {
 /// the audit log.
 public struct DeliveryReceipt: Equatable, Sendable {
     public var mechanism: String   // e.g. "headless-resume"
-    public init(mechanism: String) {
+    public var transcriptCheckpoint: Int64?
+
+    public init(mechanism: String, transcriptCheckpoint: Int64? = nil) {
         self.mechanism = mechanism
+        self.transcriptCheckpoint = transcriptCheckpoint
     }
 }
 

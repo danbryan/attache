@@ -262,15 +262,18 @@ final class CompanionPersonalityTests: XCTestCase {
         let prompt = CompanionPersonality.conversationSystemPrompt(
             memoryContext: nil,
             sessionTitle: "Codex smoke",
+            sessionSourceName: "Codex",
             workingDirectory: "/tmp/smoke",
             latestSummary: "Ready",
             canStageAgentInstruction: true
         )
 
         XCTAssertTrue(prompt.contains("stage_agent_instruction"))
-        XCTAssertTrue(prompt.contains("route it through the user's send-to-agent policy"))
-        XCTAssertTrue(prompt.contains("report the actual status it gives you"))
-        XCTAssertTrue(prompt.contains("Never say the agent has been told unless Attaché reports that it sent"))
+        XCTAssertTrue(prompt.contains("Questions about what the agent said, did, can do, or should do stay in this conversation"))
+        XCTAssertTrue(prompt.contains("If the user names a different agent than the focused one"))
+        XCTAssertTrue(prompt.contains("may confirm or may send directly"))
+        XCTAssertTrue(prompt.contains("Never claim a send unless Attaché reports it"))
+        XCTAssertTrue(prompt.contains("Focused agent: Codex / Codex smoke"))
     }
 
     func testConversationPromptForbidsAgentMessagingWhenToolUnavailable() {

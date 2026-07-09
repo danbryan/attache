@@ -319,7 +319,7 @@ final class CompanionPresentationService {
         if allowAgentInstructionTool {
             tools.append(["type": "function", "function": [
                 "name": "stage_agent_instruction",
-                "description": "Route an instruction for the attached work agent when the user explicitly asks you to tell, ask, or instruct that agent. Attaché applies the user's send-to-agent policy, safety filter, and session targeting before anything is delivered.",
+                "description": "Route an action to the focused work agent only when the user explicitly asks that agent to act. Do not use this for questions about the agent, and do not redirect a request naming a different agent. Attaché applies the user's send policy, safety filter, and frozen session target.",
                 "parameters": [
                     "type": "object",
                     "properties": [

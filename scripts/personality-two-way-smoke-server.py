@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 NONCE = os.environ["ATTACHE_PERSONALITY_TWO_WAY_NONCE"]
 PONG_TOKEN = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN"]
+DIRECT_TOKEN = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN", "")
 LOG_PATH = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"]
 MODEL = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_MODEL", "attache-smoke-personality")
 RESPONSE_DELAY_MS = int(os.environ.get("ATTACHE_SMOKE_PROVIDER_DELAY_MS", "0") or "0")
@@ -90,11 +91,26 @@ class Handler(BaseHTTPRequestHandler):
             ],
         })
 
+        if "Send Codex directly" in user and not tools:
+            instruction = f"Reply exactly {DIRECT_TOKEN}. Do not use tools."
+            log({"event": "tool_call", "name": "stage_agent_instruction", "instruction": instruction})
+            maybe_delay()
+            self.send_bytes(response(tool_call("stage_agent_instruction", {"instruction": instruction})))
+            return
+
         if "Tell Codex" in user and not tools:
             instruction = f"Reply exactly {PONG_TOKEN}. Do not use tools."
             log({"event": "tool_call", "name": "stage_agent_instruction", "instruction": instruction})
             maybe_delay()
             self.send_bytes(response(tool_call("stage_agent_instruction", {"instruction": instruction})))
+            return
+
+        if any("Sending to" in content for content in tools):
+            maybe_delay()
+            self.send_bytes(response({
+                "role": "assistant",
+                "content": "Attaché is sending that directly to the frozen Codex target.",
+            }))
             return
 
         if any("opened" in content or "staged" in content for content in tools):

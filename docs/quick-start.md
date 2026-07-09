@@ -58,9 +58,11 @@ subset.
 ## 6. Go live
 
 Press **Command-L** to talk back. Use **Ask Attaché** when you want the
-personality to answer or decide what to do. Switch to **Tell Agent** when the
-next spoken or typed turn should go directly to the focused Codex or Claude Code
-session through the send-to-agent confirmation flow.
+personality to answer or decide what to do. An explicit request may be handed to
+the focused agent under your send confirmation setting. Switch to **Tell Agent**
+when the next spoken or typed turn should go directly to that named Codex or
+Claude Code session. Tell Agent applies to one turn and then returns to Ask
+Attaché.
 
 ## Keys worth learning
 

@@ -168,13 +168,13 @@ public final class CardStore {
     // MARK: - Instructions (two-way)
 
     private static let instructionColumns =
-        "id, session_id, source_kind, text, state, created_at, confirmed_at, delivered_at, delivery_mechanism, error, resulting_card_id"
+        "id, session_id, source_kind, text, state, created_at, confirmed_at, delivered_at, delivery_mechanism, error, resulting_card_id, origin, source_utterance, target_display_name, delivery_checkpoint"
 
     public func upsertInstruction(_ instruction: Instruction) throws {
         try execute(
             """
             INSERT INTO instructions (\(Self.instructionColumns))
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 source_kind = excluded.source_kind,
@@ -185,7 +185,11 @@ public final class CardStore {
                 delivered_at = excluded.delivered_at,
                 delivery_mechanism = excluded.delivery_mechanism,
                 error = excluded.error,
-                resulting_card_id = excluded.resulting_card_id
+                resulting_card_id = excluded.resulting_card_id,
+                origin = excluded.origin,
+                source_utterance = excluded.source_utterance,
+                target_display_name = excluded.target_display_name,
+                delivery_checkpoint = excluded.delivery_checkpoint
             """,
             [
                 .text(instruction.id),
@@ -198,7 +202,11 @@ public final class CardStore {
                 .optionalText(instruction.deliveredAt.map(formatDate)),
                 .optionalText(instruction.deliveryMechanism),
                 .optionalText(instruction.error),
-                .optionalText(instruction.resultingCardID)
+                .optionalText(instruction.resultingCardID),
+                .text(instruction.origin.rawValue),
+                .optionalText(instruction.sourceUtterance),
+                .optionalText(instruction.targetDisplayName),
+                instruction.deliveryCheckpoint.map(SQLiteBinding.int64) ?? .null
             ]
         )
     }
@@ -250,7 +258,11 @@ public final class CardStore {
             deliveredAt: parseDate(columnText(stmt, 7)),
             deliveryMechanism: columnText(stmt, 8),
             error: columnText(stmt, 9),
-            resultingCardID: columnText(stmt, 10)
+            resultingCardID: columnText(stmt, 10),
+            origin: InstructionOrigin(rawValue: columnText(stmt, 11) ?? "") ?? .legacy,
+            sourceUtterance: columnText(stmt, 12),
+            targetDisplayName: columnText(stmt, 13),
+            deliveryCheckpoint: columnInt64(stmt, 14)
         )
     }
 
@@ -447,7 +459,11 @@ public final class CardStore {
                 delivered_at TEXT,
                 delivery_mechanism TEXT,
                 error TEXT,
-                resulting_card_id TEXT
+                resulting_card_id TEXT,
+                origin TEXT NOT NULL DEFAULT 'legacy',
+                source_utterance TEXT,
+                target_display_name TEXT,
+                delivery_checkpoint INTEGER
             );
 
             CREATE INDEX IF NOT EXISTS idx_instructions_session
@@ -455,6 +471,18 @@ public final class CardStore {
             CREATE INDEX IF NOT EXISTS idx_instructions_state ON instructions(state);
             """
         )
+        try addColumnIfMissing(table: "instructions", column: "origin", definition: "TEXT NOT NULL DEFAULT 'legacy'")
+        try addColumnIfMissing(table: "instructions", column: "source_utterance", definition: "TEXT")
+        try addColumnIfMissing(table: "instructions", column: "target_display_name", definition: "TEXT")
+        try addColumnIfMissing(table: "instructions", column: "delivery_checkpoint", definition: "INTEGER")
+    }
+
+    private func addColumnIfMissing(table: String, column: String, definition: String) throws {
+        let columns = try query(sql: "PRAGMA table_info(\(table))", bindings: []) {
+            columnText($0, 1) ?? ""
+        }
+        guard !columns.contains(column) else { return }
+        try exec("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
     }
 
     private func upsertSource(kind: String, displayName: String) throws -> StoredSource {
@@ -675,6 +703,8 @@ public final class CardStore {
                 }
             case .int(let value):
                 result = sqlite3_bind_int(statement, position, Int32(value))
+            case .int64(let value):
+                result = sqlite3_bind_int64(statement, position, value)
             case .null:
                 result = sqlite3_bind_null(statement, position)
             }
@@ -698,6 +728,7 @@ private enum SQLiteBinding {
     case text(String)
     case optionalText(String?)
     case int(Int)
+    case int64(Int64)
     case null
 }
 
@@ -708,6 +739,11 @@ private func columnText(_ statement: OpaquePointer?, _ index: Int32) -> String? 
           let pointer = sqlite3_column_text(statement, index)
     else { return nil }
     return String(cString: pointer)
+}
+
+private func columnInt64(_ statement: OpaquePointer?, _ index: Int32) -> Int64? {
+    guard sqlite3_column_type(statement, index) != SQLITE_NULL else { return nil }
+    return sqlite3_column_int64(statement, index)
 }
 
 private let iso8601WithFractionalSeconds: ISO8601DateFormatter = {

@@ -23,6 +23,7 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     private let idGenerator: () -> String
     private var adapters: [String: InstructionDeliveryAdapter] = [:]
     private var enabledSessions: Set<String> = []
+    private var submittedSnapshots: [String: Instruction] = [:]
 
     /// How long a confirmed/pending instruction may wait before it is failed as
     /// expired rather than firing much later.
@@ -59,7 +60,15 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     /// Create a pending instruction. Fails closed if two-way is off for the session
     /// or the text is an agent-side approval. Nothing is delivered here.
     @discardableResult
-    public func submit(text: String, sessionID: String, sourceKind: String, now: Date) throws -> Instruction {
+    public func submit(
+        text: String,
+        sessionID: String,
+        sourceKind: String,
+        now: Date,
+        origin: InstructionOrigin = .legacy,
+        sourceUtterance: String? = nil,
+        targetDisplayName: String? = nil
+    ) throws -> Instruction {
         guard isTwoWayEnabled(forSessionID: sessionID) else { throw InstructionError.twoWayDisabled }
         if let reason = InstructionSafetyFilter.rejectionReason(for: text) {
             throw InstructionError.rejected(reason)
@@ -70,9 +79,13 @@ public final class InstructionReplyEngine: @unchecked Sendable {
             sourceKind: sourceKind,
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
             state: .pending,
-            createdAt: now
+            createdAt: now,
+            origin: origin,
+            sourceUtterance: sourceUtterance,
+            targetDisplayName: targetDisplayName
         )
         try store.upsertInstruction(instruction)
+        submittedSnapshots[instruction.id] = instruction
         return instruction
     }
 
@@ -93,16 +106,20 @@ public final class InstructionReplyEngine: @unchecked Sendable {
         guard !instruction.isTerminal, instruction.state != .delivering else { throw InstructionError.notCancelable }
         instruction.state = .canceled
         try store.upsertInstruction(instruction)
+        submittedSnapshots.removeValue(forKey: id)
     }
 
     // MARK: Delivery
 
     /// Deliver whatever is ready: for each session with a confirmed instruction,
-    /// if the session is idle and no delivery is already in flight, deliver the
-    /// oldest one (FIFO, single-flight per session). Call on the watcher's idle
-    /// signal. Returns the instructions whose state changed.
+    /// if the transcript is safe to resume and no delivery is already in flight,
+    /// deliver the oldest one (FIFO, single-flight per session). Returns the
+    /// instructions whose state changed.
     @discardableResult
-    public func deliverReadyInstructions(sessionIsIdle: (String) -> Bool, now: Date) async -> [Instruction] {
+    public func deliverReadyInstructions(
+        instructionIsReady: (Instruction) -> Bool,
+        now: Date
+    ) async -> [Instruction] {
         let confirmed = (try? store.fetchInstructions(inStates: [.confirmed])) ?? []
         let alreadyDelivering = Set(((try? store.fetchInstructions(inStates: [.delivering])) ?? []).map(\.sessionID))
         var handledSessions = alreadyDelivering
@@ -113,6 +130,15 @@ public final class InstructionReplyEngine: @unchecked Sendable {
             guard !handledSessions.contains(session) else { continue }  // one per session per pump
             handledSessions.insert(session)
 
+            guard let snapshot = submittedSnapshots[instruction.id],
+                  Self.hasSameFrozenDeliveryContent(instruction, snapshot) else {
+                changed.append(markFailed(
+                    instruction,
+                    error: "The stored instruction or target changed before delivery. Review and resend."
+                ))
+                continue
+            }
+
             guard let adapter = adapters[instruction.sourceKind] else {
                 changed.append(markFailed(instruction, error: "No delivery adapter for \(instruction.sourceKind)."))
                 continue
@@ -122,7 +148,7 @@ public final class InstructionReplyEngine: @unchecked Sendable {
                 changed.append(markFailed(instruction, error: capability.reason ?? "Delivery unavailable."))
                 continue
             }
-            if capability.requiresIdle && !sessionIsIdle(session) { continue }  // hold until quiet
+            if capability.requiresIdle && !instructionIsReady(instruction) { continue }
 
             // Persist single-flight before the async gap so a concurrent pump sees it.
             var inFlight = instruction
@@ -134,15 +160,33 @@ public final class InstructionReplyEngine: @unchecked Sendable {
                 inFlight.state = .delivered
                 inFlight.deliveredAt = now
                 inFlight.deliveryMechanism = receipt.mechanism
+                inFlight.deliveryCheckpoint = receipt.transcriptCheckpoint
                 inFlight.error = nil
             case .failure(let error):
                 inFlight.state = .failed
                 inFlight.error = Self.describe(error)
             }
             try? store.upsertInstruction(inFlight)
+            submittedSnapshots.removeValue(forKey: inFlight.id)
             changed.append(inFlight)
         }
         return changed
+    }
+
+    /// Compatibility seam for callers that only have a session-level idle signal.
+    @discardableResult
+    public func deliverReadyInstructions(sessionIsIdle: (String) -> Bool, now: Date) async -> [Instruction] {
+        await deliverReadyInstructions(instructionIsReady: { sessionIsIdle($0.sessionID) }, now: now)
+    }
+
+    /// A previous process cannot prove whether a persisted nonterminal instruction
+    /// was delivered. Fail it closed so relaunch never duplicates or surprises.
+    @discardableResult
+    public func recoverInterruptedInstructions() -> [Instruction] {
+        let interrupted = (try? store.fetchInstructions(inStates: [.pending, .confirmed, .delivering])) ?? []
+        return interrupted.map {
+            markFailed($0, error: "Attaché restarted before delivery completed. Review the target and resend.")
+        }
     }
 
     /// Fail any pending/confirmed instruction older than the expiry window, so an
@@ -182,7 +226,18 @@ public final class InstructionReplyEngine: @unchecked Sendable {
         failed.state = .failed
         failed.error = error
         try? store.upsertInstruction(failed)
+        submittedSnapshots.removeValue(forKey: instruction.id)
         return failed
+    }
+
+    private static func hasSameFrozenDeliveryContent(_ persisted: Instruction, _ snapshot: Instruction) -> Bool {
+        persisted.id == snapshot.id
+            && persisted.sessionID == snapshot.sessionID
+            && persisted.sourceKind == snapshot.sourceKind
+            && persisted.text == snapshot.text
+            && persisted.origin == snapshot.origin
+            && persisted.sourceUtterance == snapshot.sourceUtterance
+            && persisted.targetDisplayName == snapshot.targetDisplayName
     }
 
     private static func describe(_ error: InstructionDeliveryError) -> String {

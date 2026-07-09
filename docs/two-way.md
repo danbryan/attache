@@ -9,9 +9,18 @@ UX).
 
 "Go live" lets you talk back by voice or text in two explicit modes. **Ask
 Attaché** sends the turn to the active personality, which may read the watched
-session and may request `stage_agent_instruction` when it decides the user wants
-the agent instructed. **Tell Agent** sends the exact turn to the focused Codex or
-Claude Code session through Attaché's two-way pipeline.
+session and may request `stage_agent_instruction` only for an explicit request to
+act through the agent. Questions about what an agent said, did, can do, or should
+do stay with Attaché. **Tell Agent** sends the exact next turn to the focused
+Codex or Claude Code session through Attaché's two-way pipeline, then immediately
+returns to Ask Attaché before hands-free listening resumes.
+
+Agent sends require an explicitly focused session. Attaché freezes the session
+ID, source kind, display title, and working directory when the call begins, and
+uses that snapshot for personality tools, confirmation, and delivery until
+hang-up. Ask Attaché remains available without a focused session, but Tell Agent
+is disabled and explains how to focus one. The HUD names the frozen target while
+Tell Agent is selected.
 
 Two-way must still be enabled for that specific session before anything reaches
 the agent. After enablement, Attaché delivers the instruction only after the
@@ -70,18 +79,18 @@ on-disk session storage per vendor
 
 Delivery only fires when the target session is **idle**, so a headless resume (a
 second writer) never interleaves with the agent writing the same file.
-`TwoWayCoordinator` resolves the session's transcript file and treats it as idle
-when it has not been appended to for a quiet window (`SessionActivityClassifier`,
-default 6s), which lines up with the watcher's own ~6s completed-turn debounce
-(three 2s polls). A session is safely idle when all hold:
+`TwoWayCoordinator` resolves the session transcript and uses
+`SessionDeliveryReadinessClassifier` across a quiet window (default 6s), which
+lines up with the watcher's own ~6s completed-turn debounce (three 2s polls). A
+session is safe to resume when all hold:
 
 1. **No growth:** the session file's length is unchanged across the quiet window
    (no newly appended bytes).
 2. **Turn complete:** the last surfaced record is a completed assistant turn (for
    Codex, a `final_answer`; for Claude Code, a top-level non-sidechain
    `assistant` message), never mid-tool-call and never a dangling user turn.
-3. **Not being written this instant:** the file's modification time is older than
-   the current poll tick.
+3. **Stable modification time:** both size and modification time match the prior
+   observation, and the modification time is older than the quiet window.
 4. **Nothing in flight:** no delivery is already in progress for this session.
 
 The debounce is deliberately conservative so a model pausing briefly between tool
@@ -102,6 +111,15 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
   leaves that state after explicit visual confirmation. A power-user preference
   can skip the final sheet after a session is already enabled; that still runs
   the same target check, safety filter, idle queue, and delivery log.
+- **Frozen explicit target and payload.** Agent sends require a focused session.
+  The target identity and display title are captured at call start, while the
+  exact structured instruction is captured when the turn is staged. Both are
+  stored on every instruction and retained in an in-memory delivery snapshot. A
+  focus change cannot retarget the tool call, and a persisted payload or target
+  mismatch fails closed before the adapter runs.
+- **Tell Agent is one-shot.** The raw turn is captured, staged or sent, and the
+  destination resets to Ask Attaché before voice listening can accept another
+  utterance.
 - **Never deliver approvals.** The safety filter refuses any payload that is
   really an agent-side permission or tool approval, whether a bare token
   ("yes", "y", "approve", "allow", "1", "2", ...) or a phrase asking the agent to
@@ -113,15 +131,24 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
   confirmation order and marks an instruction `delivering` before the async call,
   so a concurrent pump sees the single-flight and additional confirmed
   instructions queue behind it.
+- **Restart fails closed.** On startup, persisted pending, confirmed, or
+  delivering instructions are marked failed with a review-and-resend message.
+  Attaché cannot prove how far a pre-crash resume got, so it never retries one
+  automatically. The same message is surfaced in the app's status area on
+  launch, rather than living only in the audit row.
 - **Persisted instruction log.** Every instruction is logged with its text,
-  target session, timestamps, state transitions, delivery mechanism, outcome, and
-  the narration card the agent's reply produced. The log is the audit trail.
+  original user wording, origin, frozen target title, target session, timestamps,
+  state transitions, pre-resume transcript checkpoint, delivery mechanism,
+  outcome, and the narration card the agent's reply produced. The log is the
+  audit trail.
 - **Deleted/archived target.** If the session is gone when delivery is attempted,
   the instruction fails with a clear reason; it is never redirected to a different
   session.
-- **Reply is narrated normally.** After delivery, the agent's reply is observed by
-  the watcher like any other update and narrated, and the resulting card is linked
-  back to the instruction.
+- **Reply is narrated and correlated.** After delivery, the agent's reply is
+  observed by the watcher like any other update. A card links to an instruction
+  only when the transcript after the stored checkpoint contains that resumed user
+  turn followed by the matching completed assistant turn. Unrelated session
+  cards are not linked by proximity alone.
 
 ## Smoke and canary coverage
 
@@ -139,9 +166,13 @@ Two-way has three intentionally separate verification layers:
    `scripts/codex-personality-two-way-smoke.sh` adds the personality layer. It
    starts a deterministic local OpenAI-compatible provider, asks the personality
    to stage a Codex instruction through `stage_agent_instruction`, drives the
-   first-use enable sheet and per-message confirmation, waits for real Codex to
-   answer, then asks the personality to use `read_session_transcript` and report
-   the result. The smoke forces plain watched-card readback and skips topic
+   first-use enable sheet and confirmation, verifies a second explicit handoff
+   obeys the direct-send policy, waits for real Codex to answer, and audits the
+   stored origin, source wording, exact structured payload, frozen target, and
+   delivery checkpoints. It also asks what Codex said, verifies that question uses
+   `read_session_transcript` without staging another instruction, and reports the
+   result.
+   The smoke forces plain watched-card readback and skips topic
    tagging so success depends on Codex's watched answer, not a presentation-model
    paraphrase. It still uses real Codex auth/network, but it does not require
    xAI, Claude, Anthropic, OpenAI, Groq, Ollama, or LM Studio credentials.
@@ -153,7 +184,9 @@ and false positives are unsafe because they can send a message to an agent when
 the user meant to ask Attaché a question. Destination is a visible UI state:
 Ask Attaché or Tell Agent. LLM inference remains available inside Ask Attaché
 through the provider-neutral `stage_agent_instruction` tool, but hidden
-phrase-matching is not a routing contract.
+phrase-matching is not a routing contract. The tool prompt is deliberately
+conservative: uncertainty stays with Attaché, while explicit action requests may
+be handed off under the user's configured confirmation policy.
 
 Personality tools are provider-neutral. HTTP providers that support the
 OpenAI-style `tool_calls` protocol receive the normal structured tool schema.
@@ -193,8 +226,10 @@ Pre-release coverage adds nine opt-in gates through
    payloads are refused before confirmation and never reach a transcript.
 5. `scripts/agent-destination-smoke.sh` configures a text-only CLI personality,
    focuses a disposable Codex session, switches the live conversation to Tell
-   Agent, and proves Attaché opens the send-to-agent confirmation path without
-   relying on provider-side tool calls or host-side phrase matching.
+   Agent, proves the frozen target is visible, proves Attaché opens the
+   send-to-agent confirmation path without provider-side tool calls or host-side
+   phrase matching, and proves the destination resets to Ask Attaché after one
+   turn.
 6. `scripts/conversation-feedback-smoke.sh` starts a deterministic local
    personality provider, presses the visible live Ask Attaché send button, proves
    the text field clears, proves a thinking indicator appears while the provider
@@ -235,11 +270,15 @@ Instruction {
   sessionID: String              // external agent session id (shared CLI/Desktop)
   sourceKind: String             // "codex" | "claude_code"
   text: String                   // instruction as confirmed by the user
+  origin: enum { tell_agent, personality_tool, off_call_composer, legacy }
+  sourceUtterance: String?       // original Ask Attaché wording before a rewrite
+  targetDisplayName: String?     // frozen title shown in confirmation and audit
   state: enum { pending, confirmed, delivering, delivered, failed, canceled }
   createdAt: Date
   confirmedAt: Date?
   deliveredAt: Date?
   deliveryMechanism: String?     // e.g. "headless-resume"
+  deliveryCheckpoint: Int64?     // transcript byte offset immediately before resume
   error: String?                 // failure reason / stderr on failure
   resultingCardID: String?       // the narration card the agent's reply produced
 }

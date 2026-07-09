@@ -173,4 +173,76 @@ final class InstructionReplyEngineTests: XCTestCase {
         XCTAssertEqual(log.first?.resultingCardID, "card-123")
         XCTAssertEqual(log.first?.state, .delivered)
     }
+
+    func testInstructionProvenancePersistsInAuditLog() throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+
+        let created = try engine.submit(
+            text: "run the focused tests",
+            sessionID: "s1",
+            sourceKind: "codex",
+            now: now,
+            origin: .personalityTool,
+            sourceUtterance: "Can you ask Codex to run those tests?",
+            targetDisplayName: "Parser repair"
+        )
+
+        let logged = try XCTUnwrap(engine.log().first(where: { $0.id == created.id }))
+        XCTAssertEqual(logged.origin, .personalityTool)
+        XCTAssertEqual(logged.sourceUtterance, "Can you ask Codex to run those tests?")
+        XCTAssertEqual(logged.targetDisplayName, "Parser repair")
+    }
+
+    func testChangedPayloadOrTargetFailsClosedBeforeAdapterRuns() async throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        let adapter = MockAdapter()
+        engine.register(adapter)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let created = try engine.submit(
+            text: "run the exact test",
+            sessionID: "s1",
+            sourceKind: "codex",
+            now: now,
+            origin: .personalityTool,
+            sourceUtterance: "Ask Codex to run it",
+            targetDisplayName: "Frozen target"
+        )
+        _ = try engine.confirm(id: created.id, now: now)
+        var changed = try XCTUnwrap(store.fetchInstruction(id: created.id))
+        changed.text = "/tmp/wrong"
+        changed.targetDisplayName = "Different target"
+        try store.upsertInstruction(changed)
+
+        let result = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+
+        XCTAssertEqual(result.first?.state, .failed)
+        XCTAssertTrue(result.first?.error?.contains("changed before delivery") == true)
+        XCTAssertTrue(adapter.delivered.isEmpty)
+    }
+
+    func testRecoveryFailsEveryNonterminalInstructionClosed() throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let pending = try engine.submit(text: "prepare the pending report", sessionID: "s1", sourceKind: "codex", now: now)
+        let confirmed = try engine.submit(text: "prepare the confirmed report", sessionID: "s1", sourceKind: "codex", now: now)
+        _ = try engine.confirm(id: confirmed.id, now: now)
+        try store.upsertInstruction(Instruction(
+            id: "delivering",
+            sessionID: "s2",
+            sourceKind: "codex",
+            text: "unknown",
+            state: .delivering,
+            createdAt: now
+        ))
+
+        let recovered = engine.recoverInterruptedInstructions()
+
+        XCTAssertEqual(Set(recovered.map(\.id)), Set([pending.id, confirmed.id, "delivering"]))
+        XCTAssertTrue(recovered.allSatisfy { $0.state == .failed })
+        XCTAssertTrue(recovered.allSatisfy { $0.error?.contains("restarted") == true })
+    }
 }
