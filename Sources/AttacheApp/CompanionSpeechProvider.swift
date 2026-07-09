@@ -75,6 +75,46 @@ struct CompanionSpeechConfiguration: Equatable {
         openaiModel: "gpt-4o-mini-tts",
         openaiInstructions: ""
     )
+
+    /// Explains why the selected cloud provider cannot synthesize audio yet.
+    /// Keeping this decision in the configuration makes playback fallback
+    /// deterministic and independently testable instead of relying on UI state.
+    var playbackUnavailableReason: String? {
+        switch provider {
+        case .system:
+            return nil
+        case .elevenLabs:
+            if elevenLabsAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                return "ElevenLabs API key is not configured."
+            }
+            if elevenLabsVoiceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "ElevenLabs voice is not selected."
+            }
+        case .xai:
+            if xaiAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                return "xAI API key is not configured."
+            }
+            if xaiVoiceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "xAI voice is not selected."
+            }
+        case .openai:
+            if openaiAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                return "OpenAI API key is not configured."
+            }
+            if openaiVoiceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "OpenAI voice is not selected."
+            }
+        }
+        return nil
+    }
+
+    func resolvedForPlayback(systemVoiceIdentifier: String?) -> CompanionSpeechConfiguration {
+        guard playbackUnavailableReason != nil else { return self }
+        var fallback = self
+        fallback.provider = .system
+        fallback.systemVoiceIdentifier = systemVoiceIdentifier
+        return fallback
+    }
 }
 
 enum CompanionDevelopmentSecretStore {

@@ -714,6 +714,7 @@ final class AppModel: ObservableObject {
         playback.onPlaybackError = { [weak self] message in
             self?.intakeStatus = message
             self?.voiceProviderStatus = message
+            self?.postHomeNotice(message, kind: .info, duration: 6)
             if self?.conversationActive == true, self?.expectingReplyAudio == true {
                 self?.conversationStatus = "Voice playback failed. Reply was filed."
             }
@@ -929,6 +930,9 @@ final class AppModel: ObservableObject {
     var databasePath: String { store.databasePath }
 
     var currentVoiceSummary: String {
+        if voicePlaybackFallbackDescription != nil {
+            return "On-device fallback"
+        }
         switch speechProvider {
         case .system:
             if let speechVoiceIdentifier,
@@ -948,6 +952,11 @@ final class AppModel: ObservableObject {
         case .openai:
             return openaiVoiceName.isEmpty ? "OpenAI \(openaiVoiceID)" : "OpenAI \(openaiVoiceName)"
         }
+    }
+
+    var voicePlaybackFallbackDescription: String? {
+        guard let reason = selectedSpeechConfiguration.playbackUnavailableReason else { return nil }
+        return "\(reason) Playback will use an on-device voice."
     }
 
     var presentationProviderSummary: String {
@@ -2547,7 +2556,13 @@ final class AppModel: ObservableObject {
     }
 
     var presentationSendsToCloud: Bool { presentationProviderSendsToCloud(presentationProvider) }
-    var voiceSendsToCloud: Bool { speechProvider.sendsToCloud }
+    var voiceSendsToCloud: Bool { effectiveSpeechProvider.sendsToCloud }
+
+    private var effectiveSpeechProvider: CompanionSpeechProvider {
+        selectedSpeechConfiguration.resolvedForPlayback(
+            systemVoiceIdentifier: speechVoiceIdentifier
+        ).provider
+    }
 
     /// One-time acknowledgment that cloud presentation/voice providers send data
     /// off the Mac. Keyed by category so a user acknowledges once per category.
@@ -4361,8 +4376,8 @@ final class AppModel: ObservableObject {
         micTranscript.stopMicTest()
     }
 
-    private func applySpeechConfiguration() {
-        playback.configureVoice(configuration: CompanionSpeechConfiguration(
+    private var selectedSpeechConfiguration: CompanionSpeechConfiguration {
+        CompanionSpeechConfiguration(
             provider: speechProvider,
             systemVoiceIdentifier: speechVoiceIdentifier,
             elevenLabsAPIKey: elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : elevenLabsAPIKey,
@@ -4377,7 +4392,15 @@ final class AppModel: ObservableObject {
             openaiVoiceID: openaiVoiceID,
             openaiModel: "gpt-4o-mini-tts",
             openaiInstructions: ""
-        ))
+        )
+    }
+
+    private func applySpeechConfiguration() {
+        playback.configureVoice(
+            configuration: selectedSpeechConfiguration.resolvedForPlayback(
+                systemVoiceIdentifier: speechVoiceIdentifier
+            )
+        )
     }
 
     private func seekRelative(milliseconds: Int) {

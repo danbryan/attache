@@ -43,6 +43,12 @@ struct VoicePane: View {
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
             }
+            if let fallback = model.voicePlaybackFallbackDescription {
+                Label(fallback, systemImage: "speaker.wave.2")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             engineControls
 
@@ -224,29 +230,12 @@ struct VoicePane: View {
     private var activeHeader: some View {
         HStack(spacing: 8) {
             Image(systemName: "speaker.wave.2.fill").foregroundStyle(.green)
-            Text("Active voice: \(activeVoiceName) · \(model.speechProvider.title)")
+            Text("Active voice: \(model.currentVoiceSummary)")
                 .typoLabel(.medium)
             Spacer(minLength: 0)
         }
         .padding(.vertical, 9).padding(.horizontal, 12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var activeVoiceName: String {
-        switch model.speechProvider {
-        case .system:
-            if let id = model.speechVoiceIdentifier,
-               let voice = model.speechVoiceOptions.first(where: { $0.id == id }) {
-                return voice.name
-            }
-            return "System default"
-        case .elevenLabs:
-            return model.elevenLabsVoiceName.isEmpty ? "not selected" : model.elevenLabsVoiceName
-        case .xai:
-            return model.xaiVoiceName.isEmpty ? "not selected" : model.xaiVoiceName
-        case .openai:
-            return model.openaiVoiceName.isEmpty ? "not selected" : model.openaiVoiceName
-        }
     }
 
     private var replayRetentionBinding: Binding<Int> {

@@ -82,13 +82,16 @@ enum CompanionSecretStore {
         service: String = presentationAPIKeyService,
         account: String = presentationAPIKeyAccount
     ) -> String? {
+        // Provider secrets load off the main thread after the app window is
+        // visible. Use Security's default interactive behavior so an updated
+        // signed bundle can be reauthorized instead of silently treating an
+        // existing Keychain item as missing.
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
         var result: CFTypeRef?
