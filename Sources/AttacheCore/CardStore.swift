@@ -204,13 +204,13 @@ public final class CardStore: @unchecked Sendable {
     // MARK: - Instructions (two-way)
 
     private static let instructionColumns =
-        "id, session_id, source_kind, text, state, created_at, confirmed_at, delivered_at, delivery_mechanism, error, resulting_card_id, origin, source_utterance, target_display_name, delivery_checkpoint, delivery_reply_text, delivery_reply_turn_id"
+        "id, session_id, source_kind, text, state, created_at, confirmed_at, delivered_at, delivery_mechanism, error, resulting_card_id, origin, source_utterance, target_display_name, delivery_checkpoint, delivery_reply_text, delivery_reply_turn_id, delivering_at"
 
     public func upsertInstruction(_ instruction: Instruction) throws {
         try execute(
             """
             INSERT INTO instructions (\(Self.instructionColumns))
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 source_kind = excluded.source_kind,
@@ -227,7 +227,8 @@ public final class CardStore: @unchecked Sendable {
                 target_display_name = excluded.target_display_name,
                 delivery_checkpoint = excluded.delivery_checkpoint,
                 delivery_reply_text = excluded.delivery_reply_text,
-                delivery_reply_turn_id = excluded.delivery_reply_turn_id
+                delivery_reply_turn_id = excluded.delivery_reply_turn_id,
+                delivering_at = excluded.delivering_at
             """,
             [
                 .text(instruction.id),
@@ -246,7 +247,8 @@ public final class CardStore: @unchecked Sendable {
                 .optionalText(instruction.targetDisplayName),
                 instruction.deliveryCheckpoint.map(SQLiteBinding.int64) ?? .null,
                 .optionalText(instruction.deliveryReplyText),
-                .optionalText(instruction.deliveryReplyTurnID)
+                .optionalText(instruction.deliveryReplyTurnID),
+                .optionalText(instruction.deliveringAt.map(formatDate))
             ]
         )
     }
@@ -296,6 +298,7 @@ public final class CardStore: @unchecked Sendable {
             createdAt: parseDate(columnText(stmt, 5)) ?? Date(timeIntervalSince1970: 0),
             confirmedAt: parseDate(columnText(stmt, 6)),
             deliveredAt: parseDate(columnText(stmt, 7)),
+            deliveringAt: parseDate(columnText(stmt, 17)),
             deliveryMechanism: columnText(stmt, 8),
             error: columnText(stmt, 9),
             resultingCardID: columnText(stmt, 10),
@@ -507,7 +510,8 @@ public final class CardStore: @unchecked Sendable {
                 target_display_name TEXT,
                 delivery_checkpoint INTEGER,
                 delivery_reply_text TEXT,
-                delivery_reply_turn_id TEXT
+                delivery_reply_turn_id TEXT,
+                delivering_at TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_instructions_session
@@ -526,6 +530,7 @@ public final class CardStore: @unchecked Sendable {
         try addColumnIfMissing(table: "instructions", column: "delivery_checkpoint", definition: "INTEGER")
         try addColumnIfMissing(table: "instructions", column: "delivery_reply_text", definition: "TEXT")
         try addColumnIfMissing(table: "instructions", column: "delivery_reply_turn_id", definition: "TEXT")
+        try addColumnIfMissing(table: "instructions", column: "delivering_at", definition: "TEXT")
     }
 
     private func addColumnIfMissing(table: String, column: String, definition: String) throws {

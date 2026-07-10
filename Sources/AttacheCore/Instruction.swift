@@ -35,6 +35,15 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
     public var createdAt: Date
     public var confirmedAt: Date?
     public var deliveredAt: Date?
+    /// When this instruction most recently entered `.delivering`. Distinct from
+    /// `confirmedAt`, which marks confirmation, not the start of the delivery
+    /// attempt: a confirmed instruction can sit waiting for the session to go
+    /// idle for a while before it ever reaches `.delivering`, so `confirmedAt`
+    /// would overcount how long a stuck delivery has actually been in flight.
+    /// Used by the runtime strand-recovery check (INF-249/B6) to find a
+    /// `.delivering` instruction that has been stuck longer than
+    /// `InstructionReplyEngine.deliveringStrandTimeout`.
+    public var deliveringAt: Date?
     public var deliveryMechanism: String?   // e.g. "headless-resume"
     public var error: String?
     public var resultingCardID: String?     // the narration card the agent's reply produced
@@ -54,6 +63,7 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         createdAt: Date,
         confirmedAt: Date? = nil,
         deliveredAt: Date? = nil,
+        deliveringAt: Date? = nil,
         deliveryMechanism: String? = nil,
         error: String? = nil,
         resultingCardID: String? = nil,
@@ -72,6 +82,7 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.confirmedAt = confirmedAt
         self.deliveredAt = deliveredAt
+        self.deliveringAt = deliveringAt
         self.deliveryMechanism = deliveryMechanism
         self.error = error
         self.resultingCardID = resultingCardID
