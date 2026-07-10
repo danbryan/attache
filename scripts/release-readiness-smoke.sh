@@ -26,6 +26,9 @@ suite:
 Environment:
   ATTACHE_RELEASE_READINESS_WITH_CODEX=1 also runs the real Codex f7/f8
   round-trip smokes after the ten gates.
+  ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1 also runs the real Claude Code f21
+  round-trip smoke (the claude -p --resume delivery branch, opt-in and
+  separate from the Codex extras above).
 EOF
 }
 
@@ -79,6 +82,11 @@ if [[ "${ATTACHE_RELEASE_READINESS_WITH_CODEX:-0}" == "1" ]]; then
   scripts/codex-two-way-smoke.sh
   echo "==> Extra: real Codex personality two-way"
   scripts/codex-personality-two-way-smoke.sh
+fi
+
+if [[ "${ATTACHE_RELEASE_READINESS_WITH_CLAUDE:-0}" == "1" ]]; then
+  echo "==> Extra: real Claude Code direct two-way"
+  scripts/claude-two-way-smoke.sh
 fi
 
 echo "==> Release-readiness smoke gates passed"

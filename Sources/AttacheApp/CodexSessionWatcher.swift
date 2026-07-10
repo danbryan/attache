@@ -34,14 +34,12 @@ final class CodexSessionWatcher {
         archivedSessionsDirectory: URL? = nil,
         defaults: UserDefaults = .standard
     ) {
-        let home = FileManager.default.homeDirectoryForCurrentUser
         let codexHome = CodexPaths.home()
         self.sessionsDirectory = sessionsDirectory ?? codexHome
             .appendingPathComponent("sessions", isDirectory: true)
         self.archivedSessionsDirectory = archivedSessionsDirectory ?? codexHome
             .appendingPathComponent("archived_sessions", isDirectory: true)
-        self.claudeProjectsDirectory = home
-            .appendingPathComponent(".claude/projects", isDirectory: true)
+        self.claudeProjectsDirectory = ClaudePaths.projectsDirectory()
         self.defaults = defaults
     }
 

@@ -178,7 +178,7 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
     private let projectsDirectory: URL
 
     public init(claudeHome: URL? = nil) {
-        let home = claudeHome ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude", isDirectory: true)
+        let home = claudeHome ?? ClaudePaths.home()
         self.projectsDirectory = home.appendingPathComponent("projects", isDirectory: true)
     }
 
