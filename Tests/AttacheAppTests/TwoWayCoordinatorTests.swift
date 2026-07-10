@@ -174,6 +174,77 @@ final class TwoWayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.log.first?.state, .failed)
     }
 
+    /// INF-255 (B4): the watcher's `onEvent` callback now schedules a pump
+    /// (`scheduleEventDrivenPump`) instead of relying solely on the periodic
+    /// refresh timer, which lives entirely in `AppModel` and is never started
+    /// in this test - so any delivery below happens through the event-driven
+    /// path alone. A small quiet window that hasn't elapsed yet at confirm
+    /// time leaves the instruction `.confirmed`; only the later
+    /// `scheduleEventDrivenPump()` call (standing in for a real watcher event)
+    /// delivers it once the (test-shortened) debounce settles.
+    func testEventDrivenPumpDeliversWithoutWaitingForTimer() async throws {
+        let store = try makeStore()
+        let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
+        try writeReadyCodexSession(to: sessionFile)
+        let coordinator = TwoWayCoordinator(
+            store: store,
+            locateSessionFile: { _ in sessionFile },
+            quietWindow: 0.05,
+            eventPumpDebounceInterval: 0.05,
+            adapters: [StubAdapter()]
+        )
+        coordinator.setEnabled(true, sessionID: "s1")
+        let instruction = try coordinator.prepare(text: "run the suite", sessionID: "s1", sourceKind: "codex")
+
+        let changedAtConfirm = try await coordinator.confirmAndDeliver(id: instruction.id)
+        XCTAssertTrue(changedAtConfirm.isEmpty, "quiet window hasn't elapsed yet: still waiting")
+        XCTAssertEqual(coordinator.log.first?.state, .confirmed)
+
+        var eventPumpChanges: [Instruction] = []
+        coordinator.onEventDrivenPump = { eventPumpChanges = $0 }
+        coordinator.scheduleEventDrivenPump()
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(eventPumpChanges.first?.id, instruction.id)
+        XCTAssertEqual(eventPumpChanges.first?.state, .delivered)
+        XCTAssertEqual(coordinator.log.first?.state, .delivered)
+    }
+
+    /// INF-255 (B4): a burst of watcher events must collapse to exactly one
+    /// pump, not one per event, or a session writing many small transcript
+    /// updates in quick succession would hammer the store once per update.
+    /// Fires 8 events well within the (test-shortened) debounce window and
+    /// counts pump invocations via `onEventDrivenPump`, the same counter-
+    /// closure testability seam `AgentResumeDeliveryAdapter.processTimeout`
+    /// and `expiryWindow` use elsewhere in this file for timing-sensitive
+    /// behavior.
+    func testEventDrivenPumpDebouncesRapidBurstToOnePump() async throws {
+        let store = try makeStore()
+        let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
+        try writeReadyCodexSession(to: sessionFile)
+        let coordinator = TwoWayCoordinator(
+            store: store,
+            locateSessionFile: { _ in sessionFile },
+            quietWindow: 0,
+            eventPumpDebounceInterval: 0.05,
+            adapters: [StubAdapter()]
+        )
+        coordinator.setEnabled(true, sessionID: "s1")
+        _ = try coordinator.prepare(text: "run the suite", sessionID: "s1", sourceKind: "codex")
+
+        var pumpCount = 0
+        coordinator.onEventDrivenPump = { _ in pumpCount += 1 }
+
+        // A burst of 8 rapid watcher events, all well inside the debounce
+        // window; each call cancels the previous one's scheduled work item.
+        for _ in 0..<8 {
+            coordinator.scheduleEventDrivenPump()
+        }
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(pumpCount, 1, "a burst of events must collapse to exactly one pump")
+    }
+
     func testDisabledSessionRefusesPrepare() throws {
         let store = try makeStore()
         let coordinator = TwoWayCoordinator(
