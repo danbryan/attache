@@ -194,8 +194,26 @@ extension CallPhase {
             switch send.state {
             case .delivered:
                 return .sendDelivered(target: target)
-            case .pending, .confirmed, .delivering:
-                return .sendQueued(target: target, since: send.confirmedAt ?? send.createdAt, reason: nil)
+            case .pending:
+                // Not confirmed yet: the wait is on the user, not the session.
+                return .sendQueued(
+                    target: target,
+                    since: send.createdAt,
+                    reason: "Waiting for you to confirm the send to \(target)"
+                )
+            case .confirmed, .delivering:
+                // Confirmed: the only thing left to wait on is the target
+                // session going idle (docs/two-way.md Idle detection), so name
+                // that explicitly instead of leaving the UI to guess (INF-248/B3).
+                // Wording matches AppModel.confirmStagedInstruction's off-call
+                // status verbatim (before the elapsed-time suffix
+                // `CallStatusPresentation` appends) so on-call and off-call
+                // never drift apart for the same underlying wait.
+                return .sendQueued(
+                    target: target,
+                    since: send.confirmedAt ?? send.createdAt,
+                    reason: "Sending to \(target) when the session is quiet"
+                )
             case .failed, .canceled:
                 break
             }

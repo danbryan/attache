@@ -2371,21 +2371,43 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func handleTwoWayDeliveryChanges(_ changed: [Instruction]) {
-        guard let latest = changed.sorted(by: { $0.createdAt < $1.createdAt }).last else { return }
-        switch latest.state {
+    /// Reacts to every instruction a pump changed (INF-248/B3), not just the
+    /// newest: a pump batch can contain both a delivered instruction and an
+    /// expired/failed one (e.g. from `TwoWayCoordinator.pump`'s now-surfaced
+    /// `expireStale` results), and a failure must never be silently dropped
+    /// just because a different instruction happens to sort after it. Applying
+    /// every change in ascending `createdAt` order still leaves the newest
+    /// instruction's message visible last, preserving today's precedence for
+    /// the primary status string, while every failure is at minimum logged so
+    /// it is never invisible even when a later success overwrites the display.
+    func handleTwoWayDeliveryChanges(_ changed: [Instruction]) {
+        for instruction in changed.sorted(by: { $0.createdAt < $1.createdAt }) {
+            applyTwoWayDeliveryChange(instruction)
+        }
+    }
+
+    private func applyTwoWayDeliveryChange(_ instruction: Instruction) {
+        switch instruction.state {
         case .delivered:
-            let target = latest.targetDisplayName ?? "agent"
+            let target = instruction.targetDisplayName ?? "agent"
             let message = "Sent to \(target). Watching for the reply…"
             intakeStatus = message
             liveFollowUpStatus = message
             if conversationActive { conversationStatus = message }
         case .failed:
-            let reason = latest.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let message = reason.isEmpty ? "Send failed." : "Send failed: \(reason)"
+            // Mirrors CallPhase.derive's failed-send formatting (the message is
+            // shown verbatim, no generic prefix) so on-call and off-call read
+            // the same way, including the expiry message
+            // (`InstructionReplyEngine.expireStale`) naming the window and target.
+            let reason = instruction.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let message = reason.isEmpty ? "Send failed." : reason
             intakeStatus = message
             liveFollowUpStatus = message
             if conversationActive { conversationStatus = message }
+            AttacheLog.twoWay.warning("""
+                Send-to-agent instruction \(instruction.id, privacy: .public) for session \
+                \(instruction.sessionID, privacy: .public) failed: \(message, privacy: .public)
+                """)
         default:
             break
         }

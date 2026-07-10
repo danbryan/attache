@@ -125,6 +125,55 @@ final class TwoWayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.log.first(where: { $0.id == instruction.id })?.resultingCardID, "card-1")
     }
 
+    /// INF-248 (B3): `pump` used to discard `expireStale`'s result
+    /// (`_ = engine.expireStale(now: now)` in the pre-fix code), so an
+    /// instruction that expired while waiting for its session to go quiet
+    /// never reached `AppModel.handleTwoWayDeliveryChanges` and the user saw
+    /// nothing after the initial "Sending…" status, forever. This proves the
+    /// expiry list now comes back out of `pump` alongside delivered/failed
+    /// instructions, using `expiryWindow` as the fast-expiry override for
+    /// tests (mirrors `AgentResumeDeliveryAdapter.processTimeout`'s override
+    /// style) instead of waiting 30 real minutes. A later ticket (E4) can
+    /// reuse this same `TwoWayCoordinator(expiryWindow:)` seam.
+    func testPumpSurfacesExpiredInstructionsInsteadOfDiscardingThem() async throws {
+        let store = try makeStore()
+        // No session file ever resolves, so the confirmed instruction can
+        // never be observed as ready/idle - it stays queued (like a fake
+        // Codex session that never goes quiet) until it expires.
+        let coordinator = TwoWayCoordinator(
+            store: store,
+            locateSessionFile: { _ in nil },
+            expiryWindow: 1,
+            adapters: [StubAdapter()]
+        )
+        coordinator.setEnabled(true, sessionID: "s1")
+        let start = Date()
+        let instruction = try coordinator.prepare(
+            text: "run the suite",
+            sessionID: "s1",
+            sourceKind: "codex",
+            targetDisplayName: "Weekly Codex Improvement Review",
+            now: start
+        )
+
+        let changedAtConfirm = try await coordinator.confirmAndDeliver(id: instruction.id, now: start)
+        XCTAssertTrue(changedAtConfirm.isEmpty, "not ready yet and not expired yet: still waiting")
+        XCTAssertEqual(coordinator.log.first?.state, .confirmed)
+
+        // Advance past the 1s fast-expiry window without the session ever
+        // becoming observable/idle.
+        let changed = await coordinator.pump(now: start.addingTimeInterval(5))
+
+        XCTAssertEqual(changed.count, 1)
+        XCTAssertEqual(changed.first?.id, instruction.id)
+        XCTAssertEqual(changed.first?.state, .failed)
+        XCTAssertEqual(
+            changed.first?.error,
+            "Send expired after 1 min waiting for Weekly Codex Improvement Review to go quiet."
+        )
+        XCTAssertEqual(coordinator.log.first?.state, .failed)
+    }
+
     func testDisabledSessionRefusesPrepare() throws {
         let store = try makeStore()
         let coordinator = TwoWayCoordinator(

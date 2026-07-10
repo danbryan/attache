@@ -170,6 +170,45 @@ final class InstructionReplyEngineTests: XCTestCase {
         XCTAssertEqual(try store.fetchInstruction(id: created.id)?.state, .failed)
     }
 
+    /// INF-248 (B3): the expiry message must name the window and the frozen
+    /// target so a caller that shows `error` verbatim (`CallPhase.derive`,
+    /// `AppModel.handleTwoWayDeliveryChanges`) gives the user something
+    /// concrete instead of a bare "expired before it could be delivered."
+    func testExpiryMessageNamesWindowAndTarget() throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store, expiryWindow: 60)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let created = try engine.submit(
+            text: "do the thing",
+            sessionID: "s1",
+            sourceKind: "codex",
+            now: now,
+            targetDisplayName: "Weekly Codex Improvement Review"
+        )
+        _ = try engine.confirm(id: created.id, now: now)
+
+        let expired = engine.expireStale(now: now.addingTimeInterval(120))
+
+        XCTAssertEqual(
+            expired.first?.error,
+            "Send expired after 1 min waiting for Weekly Codex Improvement Review to go quiet."
+        )
+    }
+
+    /// A pending (never confirmed) instruction also expires, using the same
+    /// message shape with a generic target when none was frozen.
+    func testExpiryMessageFallsBackToGenericTargetWhenNoneIsSet() throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store, expiryWindow: 60)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let created = try engine.submit(text: "do the thing", sessionID: "s1", sourceKind: "codex", now: now)
+
+        let expired = engine.expireStale(now: now.addingTimeInterval(120))
+
+        XCTAssertEqual(expired.first?.id, created.id)
+        XCTAssertEqual(expired.first?.error, "Send expired after 1 min waiting for the agent to go quiet.")
+    }
+
     func testLogAndResponseLinking() async throws {
         let store = try makeStore()
         let engine = InstructionReplyEngine(store: store)

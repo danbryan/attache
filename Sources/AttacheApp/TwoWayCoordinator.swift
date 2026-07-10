@@ -21,9 +21,10 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
         store: CardStore,
         locateSessionFile: @escaping @Sendable (String) -> URL?,
         quietWindow: TimeInterval = 6,
+        expiryWindow: TimeInterval = InstructionReplyEngine.defaultExpiryWindow,
         adapters: [InstructionDeliveryAdapter]? = nil
     ) {
-        self.engine = InstructionReplyEngine(store: store)
+        self.engine = InstructionReplyEngine(store: store, expiryWindow: expiryWindow)
         self.locateSessionFile = locateSessionFile
         self.quietWindow = quietWindow
         let resolved = adapters ?? [
@@ -89,18 +90,22 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
     // MARK: Pump / expiry / linking (driven by AppModel on watcher signals)
 
     /// Deliver any confirmed instruction whose session is quiet, and expire stale
-    /// ones. Call on watcher activity / the refresh timer.
+    /// ones. Call on watcher activity / the refresh timer. Returns BOTH the
+    /// instructions this pump expired and the ones it delivered/failed
+    /// delivering, so a caller (`AppModel.handleTwoWayDeliveryChanges`) can
+    /// surface an expiry the same way it surfaces any other outcome, instead of
+    /// the expiry result being silently discarded (INF-248/B3).
     @discardableResult
     func pump(now: Date = Date()) async -> [Instruction] {
-        _ = engine.expireStale(now: now)
-        let changed = await engine.deliverReadyInstructions(
+        let expired = engine.expireStale(now: now)
+        let delivered = await engine.deliverReadyInstructions(
             instructionIsReady: { [weak self] instruction in
                 self?.instructionIsReady(instruction, now: now) ?? false
             },
             now: now
         )
         refreshLog()
-        return changed
+        return expired + delivered
     }
 
     /// Link a freshly-narrated card to the delivered instruction whose reply it
