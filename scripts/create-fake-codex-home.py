@@ -36,6 +36,21 @@ on-disk session file. Unknown/stale session id: plain-text stderr message,
 exit 1, empty stdout. Do not hand-edit; regenerate via
 create-fake-codex-home.py.
 
+Failure-mode simulation (tests only; unset all of these for real-contract
+behavior), mirroring create-fake-claude-home.py's ATTACHE_FAKE_CLAUDE_MODE
+(INF-256/E4):
+  ATTACHE_FAKE_CODEX_MODE=exit_code  exit nonzero with a custom stderr
+                                     (ATTACHE_FAKE_CODEX_EXIT_CODE, default 1;
+                                     ATTACHE_FAKE_CODEX_STDERR, default
+                                     message) so a delivery failure is
+                                     observable end to end (stderr tail in the
+                                     error, `.failed` state in the log).
+  ATTACHE_FAKE_CODEX_MODE=hang       sleep past any reasonable test timeout
+                                     (ATTACHE_FAKE_CODEX_HANG_SECONDS, default
+                                     5), then behave normally. Used to prove a
+                                     restart interrupts a `.delivering`
+                                     instruction and fails it closed.
+
 $CODEX_HOME (AgentResumeDeliveryAdapter's default spawn does not override it,
 unlike $HOME) points at the disposable home created by
 create-fake-codex-home.py; the fixture manifest lives at
@@ -48,6 +63,7 @@ resumeArguments in TwoWayDeliveryAdapters.swift).
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -92,6 +108,16 @@ def main():
     argv = sys.argv[1:]
     session_id = argv[-2] if len(argv) >= 2 else None
     text = argv[-1] if argv else None
+    mode = os.environ.get("ATTACHE_FAKE_CODEX_MODE", "").strip()
+
+    if mode == "hang":
+        time.sleep(float(os.environ.get("ATTACHE_FAKE_CODEX_HANG_SECONDS", "5")))
+
+    if mode == "exit_code":
+        code = int(os.environ.get("ATTACHE_FAKE_CODEX_EXIT_CODE", "1"))
+        message = os.environ.get("ATTACHE_FAKE_CODEX_STDERR", "fake codex: simulated failure")
+        sys.stderr.write(message)
+        sys.exit(code)
 
     manifest = load_manifest()
     session_file = manifest.get(session_id) if session_id else None

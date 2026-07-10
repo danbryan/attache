@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -1929,6 +1929,256 @@ if enabled("f5") {
         app.key(Key.escape)
         try waitUntil("settings window to close", timeout: 5) {
             (try? settingsWindow()) == nil
+        }
+    }
+}
+
+// The three negative-path flows below (INF-256/E4) share the same Tell Agent
+// stage/enable/confirm sequence f14 established (INF-250); the difference is
+// what happens to the confirmed instruction afterward. Kept as one helper so
+// the three flows don't drift out of sync with f14's proven sequence.
+func stageAndConfirmTellAgentInstruction(nonce: String, sessionID: String, prompt: String) throws {
+    try dismissOnboardingIfPresent()
+    try focusSessionInCommandK(query: nonce, sessionID: sessionID)
+    app.key(Key.l, command: true)
+    try selectConversationDestination("Tell Agent")
+    _ = try waitForElement("visible frozen Tell Agent target", in: try mainWindow(), timeout: 8) { element in
+        element.matches("Tell Codex") && element.matches(nonce)
+    }
+    try sendConversationPrompt(prompt)
+    let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                    role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                    timeout: 15)
+    guard enable.press() else {
+        throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+    }
+    let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                     role: kAXButtonRole as String, exactly: "Send to agent",
+                                     timeout: 12)
+    guard confirm.press() else {
+        throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+    }
+    try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+}
+
+func instructionState(sessionID: String) throws -> String {
+    let query = "SELECT state FROM instructions WHERE session_id='\(sessionID)' ORDER BY created_at DESC LIMIT 1;"
+    let output = try runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"")
+    return output.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+// MARK: Flow 17: a delivery failure surfaces the stderr tail and fails the
+// instruction (INF-256/E4). Uses the same fake Codex CLI as f14 (INF-250),
+// this time in ATTACHE_FAKE_CODEX_MODE=exit_code so the resume genuinely
+// fails, exercising B1's evidence-based .failed state end to end rather than
+// only in a Swift unit test.
+
+if enabled("f18") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_TWO_WAY_FAILURE_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_TWO_WAY_FAILURE_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_TWO_WAY_FAILURE_SESSION_FILE"] ?? ""
+    let instructionToken = env["ATTACHE_TWO_WAY_FAILURE_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_TWO_WAY_FAILURE_\(nonce)")
+    let prompt = env["ATTACHE_TWO_WAY_FAILURE_PROMPT"] ?? "reply exactly \(instructionToken) and do not use tools."
+    let stderrTail = env["ATTACHE_TWO_WAY_FAILURE_STDERR"] ?? ""
+
+    run.step("f18-delivery-failure", "environment identifies the disposable Codex session and fake failure text") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_FAILURE_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_FAILURE_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_FAILURE_SESSION_FILE is required") }
+        guard !stderrTail.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_FAILURE_STDERR is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+    }
+
+    run.step("f18-delivery-failure", "Tell Agent stages and confirms an instruction against the fake failing Codex CLI") {
+        try stageAndConfirmTellAgentInstruction(nonce: nonce, sessionID: sessionID, prompt: prompt)
+    }
+
+    // Assertion 1: A2/CallStatusPresentation's `.failed` rendering shows the
+    // exit-nonzero stderr tail verbatim (InstructionReplyEngine's
+    // "Delivery failed: <stderr tail>"), via the same "Conversation status:"
+    // AX label f14 checks for the delivered case.
+    run.step("f18-delivery-failure", "delivery failure renders the stderr tail in the conversation status") {
+        _ = try waitForElement("failed conversation status label", in: try mainWindow(), timeout: 60) { element in
+            element.matches("Conversation status:") && element.matches("Delivery failed") && element.matches(stderrTail)
+        }
+    }
+
+    // Assertion 2: the two-way log's instructions row shows state=failed with
+    // the stderr tail recorded as the error, matching E3/f14's precedent for
+    // querying SQLite directly.
+    run.step("f18-delivery-failure", "two-way log records the failed instruction with the stderr tail") {
+        let query = """
+        SELECT COUNT(*) FROM instructions \
+        WHERE session_id='\(sessionID)' AND state='failed' AND error LIKE '%\(stderrTail)%';
+        """
+        try waitUntil("failed instruction to land in the instructions table", timeout: 30, interval: 1) {
+            guard let output = try? runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"") else {
+                return false
+            }
+            return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) == 1
+        }
+    }
+}
+
+// MARK: Flow 18: a queued send visibly expires when its target session never
+// goes quiet (INF-256/E4, INF-248/B3). The fixture session's transcript is
+// kept "active" by a background appender started by the wrapper script, so
+// the send can never look idle; ATTACHE_TWO_WAY_EXPIRY_SECONDS (also set by
+// the wrapper) makes the 30-minute production window a few seconds instead.
+
+if enabled("f19") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_TWO_WAY_EXPIRY_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_TWO_WAY_EXPIRY_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_TWO_WAY_EXPIRY_SESSION_FILE"] ?? ""
+    let instructionToken = env["ATTACHE_TWO_WAY_EXPIRY_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_TWO_WAY_EXPIRY_\(nonce)")
+    let prompt = env["ATTACHE_TWO_WAY_EXPIRY_PROMPT"] ?? "reply exactly \(instructionToken) and do not use tools."
+
+    run.step("f19-expiry", "environment identifies the disposable, continuously active Codex session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_EXPIRY_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_EXPIRY_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_EXPIRY_SESSION_FILE is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+        guard ProcessInfo.processInfo.environment["ATTACHE_TWO_WAY_EXPIRY_SECONDS"] != nil else {
+            throw SmokeError(message: "ATTACHE_TWO_WAY_EXPIRY_SECONDS is required for a fast expiry")
+        }
+    }
+
+    run.step("f19-expiry", "Tell Agent stages and confirms an instruction against the never-quiet session") {
+        try stageAndConfirmTellAgentInstruction(nonce: nonce, sessionID: sessionID, prompt: prompt)
+    }
+
+    // Assertion 1 (docs/two-way.md, INF-248/B3): the expiry message names the
+    // window and the frozen target, rendered via the same "Conversation
+    // status:" AX label f14/f17 check.
+    run.step("f19-expiry", "the queued send visibly expires with a message naming the window and target") {
+        _ = try waitForElement("expired conversation status label", in: try mainWindow(), timeout: 60) { element in
+            element.matches("Conversation status:") && element.matches("Send expired after") && element.matches("to go quiet")
+        }
+    }
+
+    // Assertion 2: the two-way log records the expiry as a failed instruction.
+    run.step("f19-expiry", "two-way log records the expired instruction as failed") {
+        let query = """
+        SELECT COUNT(*) FROM instructions \
+        WHERE session_id='\(sessionID)' AND state='failed' AND error LIKE '%expired%';
+        """
+        try waitUntil("expired instruction to land in the instructions table", timeout: 15, interval: 1) {
+            guard let output = try? runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"") else {
+                return false
+            }
+            return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) == 1
+        }
+    }
+}
+
+// MARK: Flow 19: a restart interrupts an in-flight send and fails it closed
+// (INF-256/E4, docs/two-way.md "Restart fails closed"). The fake Codex CLI
+// runs in ATTACHE_FAKE_CODEX_MODE=hang so a delivery attempt, if the pump gets
+// that far before the kill, can never resolve to delivered/failed on its own.
+
+if enabled("f20") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_TWO_WAY_RESTART_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_TWO_WAY_RESTART_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_TWO_WAY_RESTART_SESSION_FILE"] ?? ""
+    let instructionToken = env["ATTACHE_TWO_WAY_RESTART_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_TWO_WAY_RESTART_\(nonce)")
+    let prompt = env["ATTACHE_TWO_WAY_RESTART_PROMPT"] ?? "reply exactly \(instructionToken) and do not use tools."
+
+    run.step("f20-restart-fails-closed", "environment identifies the disposable Codex session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_RESTART_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_RESTART_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_TWO_WAY_RESTART_SESSION_FILE is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+    }
+
+    // `AppModel.intakeStatus` (which holds the recovery message) only renders
+    // inside the Inbox's selected-card status line
+    // (Sources/AttacheApp/Views/VoicemailOverlay.swift's cardControlPanel,
+    // gated on `model.selectedCard != nil`); a fresh profile with zero cards
+    // has nothing to select, so the message would have nowhere to show
+    // regardless of whether it survives startup. Seed one unrelated card
+    // first so a card exists to select after relaunch, matching realistic
+    // usage (a user doing Tell Agent has almost always already received at
+    // least one prior update).
+    run.step("f20-restart-fails-closed", "a prior card exists so the Inbox has something to select after relaunch") {
+        let output = try runShell(
+            "EVENT_TITLE='Restart smoke prior card \(nonce)' " +
+            "EVENT_TEXT='Attaché restart smoke prior card for \(nonce).' " +
+            "EXTERNAL_SESSION_ID='restart-smoke-prior-\(nonce)' scripts/send-event.sh"
+        )
+        guard output.contains("accepted") else {
+            throw SmokeError(message: "prior-card event rejected: \(output)")
+        }
+    }
+
+    run.step("f20-restart-fails-closed", "Tell Agent stages and confirms an instruction against a hung delivery") {
+        try stageAndConfirmTellAgentInstruction(nonce: nonce, sessionID: sessionID, prompt: prompt)
+    }
+
+    run.step("f20-restart-fails-closed", "the app is terminated and relaunched while the instruction is still in flight") {
+        // Best-effort: give the confirmed instruction a chance to actually
+        // reach `delivering` (the fake CLI hangs once it does), but a
+        // `confirmed` instruction that was never delivered is an equally
+        // valid interrupted state, so this never blocks on reaching a
+        // specific one.
+        _ = try? waitUntil("instruction to reach delivering", timeout: 20, interval: 1) {
+            (try? instructionState(sessionID: sessionID)) == "delivering"
+        }
+        let state = (try? instructionState(sessionID: sessionID)) ?? ""
+        guard state == "confirmed" || state == "delivering" else {
+            throw SmokeError(message: "instruction was already terminal (\(state)) before the restart test could kill the app")
+        }
+        app.terminateAndWait()
+        try app.launch()
+        try dismissOnboardingIfPresent()
+    }
+
+    // Assertion 1 (docs/two-way.md, "Restart fails closed"): the startup
+    // recovery message is surfaced in the app's status area on launch, not
+    // just the audit row (TwoWayCoordinator.startupRecoveryMessage ->
+    // AppModel.intakeStatus, rendered in the selected card's status line in
+    // the full voicemail surface, `CompanionRootView.cardControlPanel`).
+    // That surface is distinct from the Command-K-style "Open inbox" search
+    // palette (`InboxOverlay`) the dock button / Cmd+I opens: reaching
+    // `cardControlPanel` requires the palette's own "follow up" action
+    // (Cmd+Return, `InboxOverlay.followUpSelection`), which posts
+    // `.attacheOpenVoicemailSurface` (`surfaceMode = .voicemail`) for
+    // whichever card is selected (the seeded prior card, here, since it is
+    // the palette's only entry).
+    run.step("f20-restart-fails-closed", "the startup recovery message is visible after relaunch") {
+        let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, containing: "Open inbox", timeout: 15)
+        guard button.press() else {
+            throw SmokeError(message: "AXPress failed on \(button.summary); actions: \(button.actionNames)")
+        }
+        _ = try waitForElement("prior card in inbox palette", in: try mainWindow(),
+                               containing: "Restart smoke prior card \(nonce)", timeout: 15)
+        app.key(Key.returnKey, command: true)
+        _ = try waitForElement("startup recovery message", in: try mainWindow(),
+                               containing: "Review the frozen target and resend", timeout: 15)
+        app.key(Key.escape)
+    }
+
+    // Assertion 2: the interrupted instruction is marked failed in the
+    // two-way log (matching E3/f14's SQLite precedent).
+    run.step("f20-restart-fails-closed", "the interrupted instruction is marked failed in the two-way log") {
+        let query = """
+        SELECT COUNT(*) FROM instructions \
+        WHERE session_id='\(sessionID)' AND state='failed' AND error LIKE '%restarted%';
+        """
+        try waitUntil("interrupted instruction to be marked failed", timeout: 15, interval: 1) {
+            guard let output = try? runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"") else {
+                return false
+            }
+            return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) == 1
         }
     }
 }

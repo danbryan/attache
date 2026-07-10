@@ -37,6 +37,26 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     /// documents its own override seam (INF-248/B3).
     public static let defaultExpiryWindow: TimeInterval = 30 * 60
 
+    /// Test-only override of `defaultExpiryWindow`, reachable by the packaged
+    /// app through `ATTACHE_TWO_WAY_EXPIRY_SECONDS` (INF-256/E4) so a release-
+    /// readiness smoke can drive a real expiry in seconds against the packaged
+    /// app, the same way `TwoWayCoordinator.init(expiryWindow:)` already lets a
+    /// Swift unit test override it directly (INF-248/B3).
+    ///
+    /// Safety-critical: inert unless `ATTACHE_UI_TEST=1` is ALSO present, so
+    /// `ATTACHE_TWO_WAY_EXPIRY_SECONDS` can never by itself shrink a real
+    /// user's 30-minute window. See `testExpiryWindowOverrideRequiresUITestFlag`
+    /// for the explicit non-bypass proof (env var set WITHOUT
+    /// `ATTACHE_UI_TEST=1` still returns `defaultExpiryWindow`).
+    public static func expiryWindow(fromEnvironment environment: [String: String]) -> TimeInterval {
+        guard environment["ATTACHE_UI_TEST"] == "1",
+              let raw = environment["ATTACHE_TWO_WAY_EXPIRY_SECONDS"],
+              let seconds = TimeInterval(raw),
+              seconds > 0
+        else { return defaultExpiryWindow }
+        return seconds
+    }
+
     /// How long a confirmed/pending instruction may wait before it is failed as
     /// expired rather than firing much later.
     public var expiryWindow: TimeInterval

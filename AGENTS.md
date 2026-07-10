@@ -107,6 +107,13 @@ swift test
 - `SMOKE_POSE=inbox|settings|live` (comma-separated, applied in order) poses the
   packaged app for screenshots via the smoke harness; `SMOKE_TEXTSCALE` sets
   text size and `SMOKE_POSE_SECONDS` the hold time.
+- `ATTACHE_TWO_WAY_EXPIRY_SECONDS=<n>` overrides the two-way instruction expiry
+  window (docs/two-way.md's 30-minute default) to `<n>` seconds, so
+  `scripts/two-way-negative-path-smoke.sh` can drive a real expiry against the
+  packaged app in seconds. Inert unless `ATTACHE_UI_TEST=1` is ALSO set (the
+  harness always sets it), so this can never shrink a real user's window by
+  itself; see `InstructionReplyEngine.expiryWindow(fromEnvironment:)` and its
+  tests for the explicit non-bypass proof (INF-256/E4).
 
 ## Safety Rules
 
@@ -295,7 +302,7 @@ Before claiming a change works, verify:
 - `swift build && swift test` pass,
 - `scripts/ui-smoke.sh` passes.
 - Before a release candidate, run `scripts/release-readiness-smoke.sh` as the
-  nine-gate pre-release suite. Set `ATTACHE_RELEASE_READINESS_WITH_CODEX=1`
+  ten-gate pre-release suite. Set `ATTACHE_RELEASE_READINESS_WITH_CODEX=1`
   when the candidate also needs the real Codex f7/f8 round trips in the same run.
 
 The UI smoke harness (INF-156) is the standard UI verification step. It builds

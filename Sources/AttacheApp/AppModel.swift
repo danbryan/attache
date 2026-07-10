@@ -787,7 +787,8 @@ final class AppModel: ObservableObject {
 
         twoWay = TwoWayCoordinator(
             store: self.store,
-            locateSessionFile: { CompanionSessionReader.sessionFileURL(forSessionID: $0) }
+            locateSessionFile: { CompanionSessionReader.sessionFileURL(forSessionID: $0) },
+            expiryWindow: InstructionReplyEngine.expiryWindow(fromEnvironment: environment)
         )
         if let recoveryMessage = twoWay.startupRecoveryMessage {
             intakeStatus = recoveryMessage
@@ -1121,7 +1122,17 @@ final class AppModel: ObservableObject {
             eventServer = server
             server.start()
             serverURLText = "http://127.0.0.1:7531/events"
-            intakeStatus = "Listening on \(serverURLText)."
+            // A pending two-way restart-recovery message (set above in init,
+            // from `TwoWayCoordinator.startupRecoveryMessage`) is safety-
+            // relevant (docs/two-way.md, "Restart fails closed": "the same
+            // message is surfaced in the app's status area on launch") and
+            // must not be silently clobbered by this routine status before
+            // the window is even shown; `startEventServer()` runs
+            // synchronously right after init, before the window appears
+            // (INF-256/E4).
+            if twoWay.startupRecoveryMessage == nil {
+                intakeStatus = "Listening on \(serverURLText)."
+            }
         } catch {
             intakeStatus = "Event intake blocked: \(error.localizedDescription)"
         }

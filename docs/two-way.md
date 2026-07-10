@@ -253,7 +253,7 @@ mandatory. The individual wrappers are `scripts/xai-tool-calling-canary.sh`,
 `scripts/ollama-tool-calling-canary.sh`, and
 `scripts/local-provider-tool-calling-canary.sh`.
 
-Pre-release coverage adds nine opt-in gates through
+Pre-release coverage adds ten opt-in gates through
 `scripts/release-readiness-smoke.sh`:
 
 1. `scripts/release-install-smoke.sh` builds a candidate, wraps it in a temporary
@@ -284,6 +284,14 @@ Pre-release coverage adds nine opt-in gates through
    server recovery, and Settings still work.
 9. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
    cards, and verifies Command-K plus inbox search remain responsive.
+10. `scripts/two-way-negative-path-smoke.sh` proves the three negative-path
+    invariants above end to end against disposable fake Codex sessions: a
+    delivery failure (fake codex exits nonzero) shows the stderr tail in the
+    call status and logs `failed`; a queued send against a session kept
+    perpetually non-idle visibly expires (via a test-only, opt-in-only
+    `ATTACHE_TWO_WAY_EXPIRY_SECONDS` window) naming the window and target; and
+    killing the app mid-send and relaunching surfaces the startup recovery
+    message and logs the interrupted instruction `failed`.
 
 The scripts fail closed on failed session creation, missing confirmation UI,
 transcript timeout, missing watcher card, missing required tool calls, failed
