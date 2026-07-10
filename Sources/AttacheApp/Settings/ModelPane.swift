@@ -75,7 +75,7 @@ struct ModelPane: View {
                 produces: "summaries",
                 sends: "your agent's output, session transcripts, and files it reads from your project",
                 onEnable: {
-                    model.cloudConsentPresentationAcknowledged = true
+                    model.acknowledgeCloudConsent(for: provider)
                     model.selectPresentationProvider(provider)
                     pendingCloudProvider = nil
                 },
@@ -125,7 +125,7 @@ struct ModelPane: View {
                 // the picker reverts because we don't apply until Enable.
                 if provider != model.presentationProvider,
                    model.presentationProviderSendsToCloud(provider),
-                   !model.cloudConsentPresentationAcknowledged {
+                   !model.cloudConsentAcknowledged(for: provider) {
                     pendingCloudProvider = provider
                 } else {
                     model.selectPresentationProvider(provider)

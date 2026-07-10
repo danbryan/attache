@@ -471,40 +471,68 @@ final class AppModel: ObservableObject {
             refreshPresentationStatus()
         }
     }
+    /// Set only while a conversation-recovery Switch-model action is applying
+    /// a new provider/model (`selectConversationRecoveryModel`/
+    /// `selectConversationRecoveryProvider`). The didSets below check this to
+    /// persist the choice to the `conversation` role's per-role keys instead
+    /// of the global `presentationLLM*` keys every other role falls back to
+    /// (INF-247): a call-time model switch must never change what
+    /// presentation/recap/tagging use. The in-memory published value still
+    /// updates normally either way, so the Settings > Model page and the
+    /// recovery menu keep reflecting the current selection.
+    private var isApplyingConversationRecoveryOverride = false
     @Published var presentationProvider: CompanionPresentationProvider = .ollama {
         didSet {
-            defaults.set(presentationProvider.rawValue, forKey: CompanionPreferenceKey.presentationLLMProvider)
+            let key = isApplyingConversationRecoveryOverride
+                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .provider)
+                : CompanionPreferenceKey.presentationLLMProvider
+            defaults.set(presentationProvider.rawValue, forKey: key)
             refreshPresentationStatus()
         }
     }
     @Published var presentationBaseURL: String = CompanionPresentationProvider.ollama.defaultBaseURL {
         didSet {
-            defaults.set(presentationBaseURL, forKey: CompanionPreferenceKey.presentationLLMBaseURL)
+            let key = isApplyingConversationRecoveryOverride
+                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .baseURL)
+                : CompanionPreferenceKey.presentationLLMBaseURL
+            defaults.set(presentationBaseURL, forKey: key)
             refreshPresentationStatus()
         }
     }
     @Published var presentationModel: String = CompanionPresentationProvider.ollama.defaultModel {
         didSet {
-            defaults.set(presentationModel, forKey: CompanionPreferenceKey.presentationLLMModel)
+            let key = isApplyingConversationRecoveryOverride
+                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .model)
+                : CompanionPreferenceKey.presentationLLMModel
+            defaults.set(presentationModel, forKey: key)
             refreshPresentationStatus()
         }
     }
     @Published var presentationReasoningEffort: String = CompanionPresentationProvider.ollama.defaultReasoningEffort {
         didSet {
-            defaults.set(presentationReasoningEffort, forKey: CompanionPreferenceKey.presentationReasoningEffort)
+            let key = isApplyingConversationRecoveryOverride
+                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .reasoningEffort)
+                : CompanionPreferenceKey.presentationReasoningEffort
+            defaults.set(presentationReasoningEffort, forKey: key)
             refreshPresentationStatus()
         }
     }
     @Published var presentationServiceTier: String = "default" {
         didSet {
-            defaults.set(presentationServiceTier, forKey: CompanionPreferenceKey.presentationServiceTier)
+            let key = isApplyingConversationRecoveryOverride
+                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .serviceTier)
+                : CompanionPreferenceKey.presentationServiceTier
+            defaults.set(presentationServiceTier, forKey: key)
             refreshPresentationStatus()
         }
     }
     @Published var presentationAPIKey: String = ""
     @Published var presentationAPIKeySecretRef: String = "" {
         didSet {
-            defaults.set(presentationAPIKeySecretRef, forKey: CompanionPreferenceKey.presentationLLMAPIKeySecretRef)
+            let key = isApplyingConversationRecoveryOverride
+                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .apiKeySecretRef)
+                : CompanionPreferenceKey.presentationLLMAPIKeySecretRef
+            defaults.set(presentationAPIKeySecretRef, forKey: key)
             refreshPresentationStatus()
         }
     }
@@ -1501,7 +1529,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        guard presentationService.isPresentationConfigured else {
+        guard presentationService.isPresentationConfigured(for: .recap) else {
             // Deterministic fallback: speak the template digest, ephemeral, and
             // leave the inbox untouched exactly as before.
             playback.preview(inboxDigestText(for: summarized))
@@ -1531,7 +1559,7 @@ final class AppModel: ObservableObject {
         intakeStatus = "Writing your recap…"
 
         Task { [weak self] in
-            let recapText = await self?.presentationService.complete(system: system, user: user)
+            let recapText = await self?.presentationService.complete(system: system, user: user, role: .recap)
             // persist/play mutate @Published state and the store, so hop back to
             // the main actor before touching either (mutating observed state
             // off-main re-enters SwiftUI's body and overflows the stack).
@@ -1947,7 +1975,9 @@ final class AppModel: ObservableObject {
     }
 
     func selectConversationRecoveryModel(_ option: CompanionPresentationModelOption) {
+        isApplyingConversationRecoveryOverride = true
         selectPresentationModel(option)
+        isApplyingConversationRecoveryOverride = false
         conversationDestination = .attache
         let confirmation = "Switched to \(presentationProvider.title) \(option.id). Review the restored draft, then retry."
         conversationStatus = confirmation
@@ -1955,13 +1985,20 @@ final class AppModel: ObservableObject {
     }
 
     func selectConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
+        isApplyingConversationRecoveryOverride = true
         selectPresentationProvider(provider)
         selectPresentationModelID(provider.defaultModel)
         conversationDestination = .attache
         let confirmation = "Switched to \(provider.title) \(presentationModel). Review the restored draft, then retry."
         conversationStatus = confirmation
         conversationRecoveryConfirmation = confirmation
-        loadPresentationModels()
+        // Model discovery for the new provider can still mutate
+        // presentationModel/presentationReasoningEffort/etc. once it
+        // completes; keep redirecting those writes to the conversation
+        // role's keys until it finishes (see loadPresentationModels' doc).
+        loadPresentationModels { [weak self] in
+            self?.isApplyingConversationRecoveryOverride = false
+        }
     }
 
     func retryConversationAfterFailure() {
@@ -2828,11 +2865,41 @@ final class AppModel: ObservableObject {
         ).provider
     }
 
-    /// One-time acknowledgment that cloud presentation/voice providers send data
-    /// off the Mac. Keyed by category so a user acknowledges once per category.
-    var cloudConsentPresentationAcknowledged: Bool {
-        get { defaults.bool(forKey: CompanionPreferenceKey.cloudConsentPresentation) }
-        set { defaults.set(newValue, forKey: CompanionPreferenceKey.cloudConsentPresentation) }
+    /// One-time acknowledgment that a cloud presentation provider sends data
+    /// off the Mac. Tracked per provider (INF-247), not as a single flag: a
+    /// user who consented to one cloud provider for one role should still be
+    /// asked before a different role starts sending data to a different
+    /// cloud provider. Migrated once from the legacy single
+    /// `cloudConsentPresentation` flag; see `migrateCloudConsentToPerProvider`.
+    func cloudConsentAcknowledged(for provider: CompanionPresentationProvider) -> Bool {
+        consentedCloudPresentationProviders().contains(provider.rawValue)
+    }
+
+    func acknowledgeCloudConsent(for provider: CompanionPresentationProvider) {
+        var providers = consentedCloudPresentationProviders()
+        guard providers.insert(provider.rawValue).inserted else { return }
+        defaults.set(Array(providers).sorted(), forKey: CompanionPreferenceKey.cloudConsentPresentationProviders)
+    }
+
+    private func consentedCloudPresentationProviders() -> Set<String> {
+        Set(defaults.array(forKey: CompanionPreferenceKey.cloudConsentPresentationProviders) as? [String] ?? [])
+    }
+
+    /// Runs once, gated by `cloudConsentPresentationMigrationDone`: if the
+    /// legacy single-flag consent was already given, credits whatever
+    /// provider is configured right now (the provider that flag's consent
+    /// actually applied to) so existing users aren't re-prompted for a
+    /// provider they already agreed to send data to. Pure defaults
+    /// read/write, no keychain, so it's safe to run inline on the launch
+    /// path (unlike `migrateLegacyPresentationKeys`). Idempotent: once the
+    /// migration flag is set, this is a no-op forever after, so a later
+    /// per-provider revocation is never re-populated from the stale legacy flag.
+    private func migrateCloudConsentToPerProvider() {
+        guard !defaults.bool(forKey: CompanionPreferenceKey.cloudConsentPresentationMigrationDone) else { return }
+        if defaults.bool(forKey: CompanionPreferenceKey.cloudConsentPresentation) {
+            acknowledgeCloudConsent(for: presentationProvider)
+        }
+        defaults.set(true, forKey: CompanionPreferenceKey.cloudConsentPresentationMigrationDone)
     }
 
     var cloudConsentVoiceAcknowledged: Bool {
@@ -3058,7 +3125,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func loadPresentationModels(preserveCurrentSelection: Bool = false) {
+    /// - Parameter completion: always called exactly once, sync or async,
+    ///   regardless of which branch below runs. `selectConversationRecoveryProvider`
+    ///   relies on this to know when it's safe to stop redirecting
+    ///   `presentationModel`/`presentationReasoningEffort`/etc. persistence to
+    ///   the `conversation` role's per-role keys (INF-247): the capability
+    ///   auto-correction inside the MainActor blocks below can still mutate
+    ///   those published vars after the synchronous part of a recovery
+    ///   switch returns, and that write must land on the same key the rest
+    ///   of the switch did.
+    func loadPresentationModels(preserveCurrentSelection: Bool = false, completion: (() -> Void)? = nil) {
         let provider = presentationProvider
         let baseURL = presentationBaseURL
         let apiKey = presentationAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -3070,6 +3146,7 @@ final class AppModel: ObservableObject {
            presentationAPIKeySecretRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             presentationModelOptions = []
             presentationModelDiscoveryStatus = "Enter or save a \(provider.title) API key to load models."
+            completion?()
             return
         }
 
@@ -3080,7 +3157,12 @@ final class AppModel: ObservableObject {
                 if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     key = apiKey
                 } else {
+                    // This discovers models for the single Settings > Model
+                    // page, which (until D3's per-role UI) is the shared
+                    // "main model" every role falls back to; .conversation
+                    // is the reasonable placeholder role for that page today.
                     let settings = CompanionPresentationSettings.load(
+                        role: .conversation,
                         defaults: self.defaults,
                         environment: self.presentationEnvironment,
                         resolveSecrets: true
@@ -3093,6 +3175,7 @@ final class AppModel: ObservableObject {
                     apiKey: key
                 )
                 await MainActor.run {
+                    defer { completion?() }
                     guard self.presentationProvider == provider,
                           self.presentationBaseURL == baseURL else { return }
                     self.presentationModelOptions = models
@@ -3108,6 +3191,7 @@ final class AppModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    defer { completion?() }
                     guard self.presentationProvider == provider,
                           self.presentationBaseURL == baseURL else { return }
                     self.presentationModelOptions = []
@@ -3608,7 +3692,7 @@ final class AppModel: ObservableObject {
     /// changed sessions after the first pass. Bounded per run to keep cost in check.
     func tagUntaggedSessions(maxPerRun: Int = 480, batchSize: Int = 12) {
         guard ProcessInfo.processInfo.environment["ATTACHE_DISABLE_TOPIC_TAGGING"] != "1" else { return }
-        guard !isTaggingSessions, presentationService.isPresentationConfigured else { return }
+        guard !isTaggingSessions, presentationService.isPresentationConfigured(for: .tagging) else { return }
         let pending = Array(sessionIndexer.untaggedRecords()
             .filter { enabledAgentSources.contains($0.sourceKind) }
             .prefix(maxPerRun))
@@ -3632,7 +3716,8 @@ final class AppModel: ObservableObject {
                 }
                 let reply = await self.presentationService.complete(
                     system: SessionTagger.systemPrompt,
-                    user: SessionTagger.userPrompt(for: items, knownTags: Array(vocabulary))
+                    user: SessionTagger.userPrompt(for: items, knownTags: Array(vocabulary)),
+                    role: .tagging
                 )
                 let tags = reply.map { SessionTagger.parse($0) } ?? [:]
                 vocabulary.formUnion(tags.values)
@@ -4479,7 +4564,12 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+        // Loads the single Settings > Model page state, which (until D3's
+        // per-role UI) is the shared "main model" every role falls back to;
+        // .conversation is the reasonable placeholder role for that page
+        // today (see the same call in loadPresentationModels).
         let presentationSettings = CompanionPresentationSettings.load(
+            role: .conversation,
             defaults: defaults,
             environment: presentationEnvironment,
             resolveSecrets: false
@@ -4492,6 +4582,11 @@ final class AppModel: ObservableObject {
         presentationServiceTier = presentationSettings.serviceTier ?? presentationSettings.provider.defaultServiceTier
         presentationAPIKeySecretRef = presentationSettings.apiKeySecretRef
         applyFallbackCapabilitiesForCurrentModel()
+        // Needs presentationProvider loaded above (it credits whatever
+        // provider was configured at migration time); pure defaults
+        // read/write, so unlike migrateLegacyPresentationKeys it's safe
+        // inline on the launch path.
+        migrateCloudConsentToPerProvider()
         if let value = defaults.string(forKey: CompanionPreferenceKey.speechProvider),
            let provider = CompanionSpeechProvider(rawValue: value) {
             speechProvider = provider
