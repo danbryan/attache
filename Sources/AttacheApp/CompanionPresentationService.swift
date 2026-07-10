@@ -82,6 +82,21 @@ final class CompanionPresentationService {
                     strategy: "plain-readback-after-llm-error"
                 )
                 failed.metadata["companion_presentation_error"] = error.localizedDescription
+                // Store the classified category too (INF-254), not just the raw
+                // error text, so a badge can show a short label ("rate limited")
+                // instead of a raw error dump. Uses the same structural
+                // classifier the live call's recovery menu uses (D1); this only
+                // reads the failure, it never offers a switch/retry action here
+                // (that only exists where a retry loop is possible).
+                let presentationError = error as? CompanionPresentationError
+                let recovery = ConversationRecovery.classify(
+                    errorMessage: error.localizedDescription,
+                    failedPrompt: "",
+                    httpStatus: presentationError?.httpStatus,
+                    urlErrorCode: presentationError?.urlErrorCode ?? (error as? URLError)?.code,
+                    isCLIProvider: settings.provider.isCLI
+                )
+                failed.metadata["companion_presentation_error_category"] = recovery.category.rawValue
                 presentedEvent = failed
             }
 
@@ -158,6 +173,13 @@ final class CompanionPresentationService {
                 var failed = fallback
                 failed.strategy = "deterministic-follow-up-fallback-after-llm-error"
                 failed.errorDescription = error.localizedDescription
+                // Structural detail alongside the text (INF-254), so a caller
+                // can classify via ConversationRecovery.classify and offer a
+                // Switch model / Retry affordance the same way the live call
+                // already does, instead of degrading silently.
+                let presentationError = error as? CompanionPresentationError
+                failed.errorHTTPStatus = presentationError?.httpStatus
+                failed.errorURLErrorCode = presentationError?.urlErrorCode ?? (error as? URLError)?.code
                 let failedResult = failed
                 await MainActor.run {
                     completion(.success(failedResult))
@@ -263,14 +285,18 @@ final class CompanionPresentationService {
 
     /// One-shot raw completion for background classification (used by both
     /// the inbox recap and topic tagging; callers pass their own role so each
-    /// can pick its own model, see INF-247). Returns nil if that role's LLM
-    /// isn't configured, so callers can bail cheaply instead of spinning.
-    func complete(system: String, user: String, role: ModelRole) async -> String? {
+    /// can pick its own model, see INF-247). Returns `nil` when the role's LLM
+    /// isn't configured at all (expected, not an error), so callers can bail
+    /// cheaply instead of spinning. Throws (INF-254) when it IS configured
+    /// but the request itself failed, so callers can classify the failure via
+    /// `ConversationRecovery.classify` instead of it vanishing into a
+    /// swallowed `try?`.
+    func complete(system: String, user: String, role: ModelRole) async throws -> String? {
         let unresolved = CompanionPresentationSettings.load(role: role, defaults: defaults, environment: environment, resolveSecrets: false)
         guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else { return nil }
         let settings = CompanionPresentationSettings.load(role: role, defaults: defaults, environment: environment)
         guard settings.isConfigured else { return nil }
-        return try? await Self.requestChatCompletion(
+        return try await Self.requestChatCompletion(
             messages: [
                 CompanionChatMessage(role: "system", content: system),
                 CompanionChatMessage(role: "user", content: user)
@@ -946,6 +972,12 @@ struct CompanionFollowUpAnswerResult: Equatable {
     var rawContextCharacterCount: Int
     var truncatedContext: Bool
     var errorDescription: String?
+    /// Structural detail behind `errorDescription` (INF-254), present only
+    /// when `strategy == "deterministic-follow-up-fallback-after-llm-error"`.
+    /// Lets a caller classify the failure via `ConversationRecovery.classify`
+    /// instead of re-parsing the description text.
+    var errorHTTPStatus: Int? = nil
+    var errorURLErrorCode: URLError.Code? = nil
 }
 
 /// The final spoken reply from a live `converse` turn, plus whether a CLI

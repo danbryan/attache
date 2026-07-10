@@ -30,6 +30,11 @@ public struct DiagnosticSnapshot {
     public var voiceProviderKind: String
     public var cardCount: Int
     public var instructionCount: Int
+    /// Background topic-tagging failures observed this launch. Tagging stays
+    /// silent to the user by design (it is low-stakes and high-volume), but a
+    /// silent failure is still worth counting somewhere a bug report can see
+    /// it (INF-254) rather than vanishing unobserved.
+    public var taggingFailureCount: Int
     public var logLines: [String]
 
     public init(
@@ -39,6 +44,7 @@ public struct DiagnosticSnapshot {
         voiceProviderKind: String,
         cardCount: Int,
         instructionCount: Int,
+        taggingFailureCount: Int = 0,
         logLines: [String] = []
     ) {
         self.appVersion = appVersion
@@ -47,6 +53,7 @@ public struct DiagnosticSnapshot {
         self.voiceProviderKind = voiceProviderKind
         self.cardCount = cardCount
         self.instructionCount = instructionCount
+        self.taggingFailureCount = taggingFailureCount
         self.logLines = logLines
     }
 
@@ -59,7 +66,8 @@ public struct DiagnosticSnapshot {
             "presentation_provider: \(presentationProviderKind)",
             "voice_provider: \(voiceProviderKind)",
             "cards: \(cardCount)",
-            "instructions: \(instructionCount)"
+            "instructions: \(instructionCount)",
+            "tagging_failures: \(taggingFailureCount)"
         ]
         if !logLines.isEmpty {
             lines.append("recent_log:")

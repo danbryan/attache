@@ -235,22 +235,52 @@ extension CompanionRootView {
     }
 
     var conversationRecoveryActions: some View {
+        recoveryActionsView(
+            providers: model.conversationRecoveryProviders,
+            models: model.conversationRecoveryModels,
+            currentProviderTitle: model.presentationProvider.title,
+            switchAccessibilityLabel: "Switch conversation model",
+            onSelectProvider: requestConversationRecoveryProvider,
+            onSelectModel: { model.selectConversationRecoveryModel($0) },
+            canRetry: model.canRetryConversationFailure,
+            retryAccessibilityLabel: "Retry failed conversation",
+            onRetry: { model.retryConversationAfterFailure() }
+        )
+    }
+
+    /// The Switch model / Retry recovery affordance (INF-244), reused as-is
+    /// for every surface that can classify a recoverable failure (INF-254:
+    /// recap, follow-up, live follow-up) instead of each building its own.
+    /// AX labels are parameters, not hardcoded, so each surface keeps its own
+    /// distinct label (existing UI smoke assertions target the live call's
+    /// exact strings; new surfaces get their own).
+    func recoveryActionsView(
+        providers: [CompanionPresentationProvider],
+        models: [CompanionPresentationModelOption],
+        currentProviderTitle: String,
+        switchAccessibilityLabel: String,
+        onSelectProvider: @escaping (CompanionPresentationProvider) -> Void,
+        onSelectModel: @escaping (CompanionPresentationModelOption) -> Void,
+        canRetry: Bool,
+        retryAccessibilityLabel: String,
+        onRetry: @escaping () -> Void
+    ) -> some View {
         HStack(spacing: 8) {
             Menu {
-                if !model.conversationRecoveryProviders.isEmpty {
+                if !providers.isEmpty {
                     Section("Use another provider") {
-                        ForEach(model.conversationRecoveryProviders) { provider in
+                        ForEach(providers) { provider in
                             Button(provider.menuTitle) {
-                                requestConversationRecoveryProvider(provider)
+                                onSelectProvider(provider)
                             }
                         }
                     }
                 }
-                if !model.conversationRecoveryModels.isEmpty {
-                    Section("Other \(model.presentationProvider.title) models") {
-                        ForEach(model.conversationRecoveryModels) { option in
+                if !models.isEmpty {
+                    Section("Other \(currentProviderTitle) models") {
+                        ForEach(models) { option in
                             Button(option.title) {
-                                model.selectConversationRecoveryModel(option)
+                                onSelectModel(option)
                             }
                         }
                     }
@@ -267,11 +297,9 @@ extension CompanionRootView {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .accessibilityLabel("Switch conversation model")
+            .accessibilityLabel(switchAccessibilityLabel)
 
-            Button {
-                model.retryConversationAfterFailure()
-            } label: {
+            Button(action: onRetry) {
                 Label("Retry", systemImage: "arrow.clockwise")
                     .typoCaption(.semibold)
                     .padding(.horizontal, 9)
@@ -279,8 +307,8 @@ extension CompanionRootView {
                     .background(Color.primary.opacity(0.08), in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(!model.canRetryConversationFailure)
-            .accessibilityLabel("Retry failed conversation")
+            .disabled(!canRetry)
+            .accessibilityLabel(retryAccessibilityLabel)
         }
     }
 

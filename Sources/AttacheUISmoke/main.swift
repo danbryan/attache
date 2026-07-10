@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -1361,6 +1361,102 @@ if enabled("f16") {
         }
         guard logText.contains("\"model\": \"attache-recovery-smoke\"") else {
             throw SmokeError(message: "retry did not use the selected model. Log:\n\(logText)")
+        }
+    }
+}
+
+// MARK: Flow 17: recap failure offers recovery, and a plain-readback card badges why (INF-254)
+
+if enabled("f17") {
+    let env = ProcessInfo.processInfo.environment
+    let providerLog = env["ATTACHE_RECAP_RECOVERY_PROVIDER_LOG"] ?? ""
+    let recoveryModel = env["ATTACHE_RECAP_RECOVERY_MODEL"] ?? ""
+
+    run.step("f17-recap-recovery", "environment identifies the deterministic recap provider log") {
+        guard !providerLog.isEmpty else { throw SmokeError(message: "ATTACHE_RECAP_RECOVERY_PROVIDER_LOG is required") }
+        guard !recoveryModel.isEmpty else { throw SmokeError(message: "ATTACHE_RECAP_RECOVERY_MODEL is required") }
+        guard FileManager.default.fileExists(atPath: providerLog) else {
+            throw SmokeError(message: "provider log does not exist: \(providerLog)")
+        }
+    }
+
+    run.step("f17-recap-recovery", "two waiting updates are posted (recap needs at least two)") {
+        try dismissOnboardingIfPresent()
+        let outputA = try runShell("EVENT_TITLE='Recap recovery A' EXTERNAL_SESSION_ID='recap-recovery-a' scripts/send-event.sh")
+        guard outputA.contains("accepted") else {
+            throw SmokeError(message: "server did not accept the first recap-recovery demo event: \(outputA)")
+        }
+        let outputB = try runShell("EVENT_TITLE='Recap recovery B' EXTERNAL_SESSION_ID='recap-recovery-b' scripts/send-event.sh")
+        guard outputB.contains("accepted") else {
+            throw SmokeError(message: "server did not accept the second recap-recovery demo event: \(outputB)")
+        }
+        // Both events' own per-event presentation also hits the usage-limit
+        // mock and falls back to plain readback, which the next step's badge
+        // assertion relies on (INF-254 spec item 2, exercised for free here
+        // instead of a separate script).
+    }
+
+    run.step("f17-recap-recovery", "Play recap starts a background recap over both updates") {
+        app.key(Key.i, command: true)
+        let recapButton = try waitForElement("play recap button", in: try mainWindow(),
+                                             role: kAXButtonRole as String, containing: "Play recap of everything waiting", timeout: 15)
+        guard recapButton.press() else {
+            throw SmokeError(message: "AXPress failed on play recap button: \(recapButton.summary); actions: \(recapButton.actionNames)")
+        }
+        // Pressing it closes the inbox palette immediately (INF-169 behavior,
+        // unchanged); the recap itself runs against the failing mock in the
+        // background from here.
+    }
+
+    run.step("f17-recap-recovery", "recap failure surfaces recovery and a plain-readback badge") {
+        // The recap failed (deterministic digest fallback played, unchanged),
+        // so neither demo card was archived. Re-open the inbox and follow up
+        // on the first one (⌘⏎, no arrow key pressed so it defaults to the
+        // first row) to reach the card detail panel: the same panel hosts
+        // both the recap recovery banner (independent of card selection) and
+        // this specific card's plain-readback badge.
+        app.key(Key.i, command: true)
+        _ = try waitForElement("recap recovery demo card in inbox", in: try mainWindow(), containing: "Recap recovery", timeout: 15)
+        app.key(Key.returnKey, command: true)
+
+        let badge = try waitForElement("plain-readback badge", in: try mainWindow(), containing: "Spoken plainly", timeout: 20)
+        // `PresentationFallbackBadge` collapses its children into one AX
+        // element and sets the notice text as its accessibility label, so the
+        // label itself (not just some collapsed-away inner Text node) must
+        // carry the notice.
+        guard badge.axDescription.localizedCaseInsensitiveContains("Spoken plainly") else {
+            throw SmokeError(message: "plain-readback badge's accessibility label does not carry the notice text: \(badge.summary)")
+        }
+
+        let switcher = try waitForElement("recap model recovery menu", in: try mainWindow(),
+                                          exactly: "Switch recap model", timeout: 20)
+        _ = switcher
+        let retry = try waitForElement("recap retry action", in: try mainWindow(),
+                                       role: kAXButtonRole as String, exactly: "Retry recap", timeout: 8)
+        guard retry.isEnabled else { throw SmokeError(message: "recap retry action is disabled after a recoverable failure") }
+    }
+
+    run.step("f17-recap-recovery", "switching the recap model then retrying actually succeeds") {
+        let switcher = try waitForElement("recap model recovery menu", in: try mainWindow(),
+                                          exactly: "Switch recap model", timeout: 8)
+        try selectPopup(switcher, item: recoveryModel)
+        _ = try waitForElement("recap model-switch confirmation", in: try mainWindow(),
+                               containing: "Switched recap to Ollama \(recoveryModel)", timeout: 8)
+
+        let retry = try waitForElement("recap retry action", in: try mainWindow(),
+                                       role: kAXButtonRole as String, exactly: "Retry recap", timeout: 8)
+        guard retry.press() else {
+            throw SmokeError(message: "AXPress failed on recap retry action: \(retry.summary); actions: \(retry.actionNames)")
+        }
+        // Unlike f16 (whose mock keeps failing every model), this recap's
+        // mock actually answers once the request names the switched model
+        // (INF-254's ATTACHE_SMOKE_PROVIDER_RECOVERY_MODEL), so a real recap
+        // card gets created and played: proof retry-after-switch succeeds,
+        // not just that it fired a second identical failing request.
+        _ = try waitForElement("recap success status", in: try mainWindow(), containing: "Playing your recap of 2 update", timeout: 20)
+        let logText = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
+        guard logText.contains("\"model\": \"\(recoveryModel)\"") else {
+            throw SmokeError(message: "retry did not use the selected recap model. Log:\n\(logText)")
         }
     }
 }
