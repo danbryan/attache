@@ -1,3 +1,4 @@
+import AttacheCore
 import SwiftUI
 
 extension CompanionRootView {
@@ -72,32 +73,15 @@ extension CompanionRootView {
             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.12)))
 
             if callProgressVisible {
-                HStack(alignment: .top, spacing: 7) {
-                    if model.isConversing {
-                        ProgressView().controlSize(.small)
-                            .accessibilityHidden(true)
-                    } else {
-                        Image(systemName: callStatusIsError ? "exclamationmark.triangle.fill" : "info.circle")
-                            .typoIcon(size: 10, .semibold)
-                            .foregroundStyle(callStatusIsError ? Color.red : accent)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    if let status = CallStatusPresentation.status(
+                        for: model.callPhase,
+                        now: context.date,
+                        deliveredAt: callSendDeliveredAt
+                    ) {
+                        callStatusRow(status)
                     }
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(callStatusDisplayText)
-                            .typoCaption(.medium, design: .monospaced)
-                            .foregroundStyle(callStatusIsError ? Color.red.opacity(0.88) : Color.primary.opacity(0.68))
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel("Conversation status: \(callStatusDisplayText)")
-
-                        if model.conversationRecovery?.offersModelSwitch == true {
-                            conversationRecoveryActions
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(model.conversationProgressText)
             }
         }
         .padding(10)
@@ -108,6 +92,51 @@ extension CompanionRootView {
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Live call composer")
+        .onChange(of: model.callPhase) { newPhase in
+            if case .sendDelivered = newPhase {
+                if callSendDeliveredAt == nil { callSendDeliveredAt = Date() }
+            } else {
+                callSendDeliveredAt = nil
+            }
+        }
+    }
+
+    // One status row for the whole call-phase surface (INF-244): icon (or
+    // spinner) plus text, styled from the phase alone, never from scanning
+    // status text for marker words.
+    @ViewBuilder
+    func callStatusRow(_ status: CallStatusPresentation.Status) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            switch status.icon {
+            case .spinner:
+                ProgressView().controlSize(.small)
+                    .accessibilityHidden(true)
+            case .symbol(let name):
+                Image(systemName: name)
+                    .typoIcon(size: 10, .semibold)
+                    .foregroundStyle(
+                        status.isError ? Color.red
+                            : status.isFreshDelivery ? Color.green
+                            : accent
+                    )
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                Text(status.text)
+                    .typoCaption(.medium, design: .monospaced)
+                    .foregroundStyle(status.isError ? Color.red.opacity(0.88) : Color.primary.opacity(0.68))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Conversation status: \(status.text)")
+
+                if model.conversationRecovery?.offersModelSwitch == true {
+                    conversationRecoveryActions
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .help(status.text)
     }
 
     var callDestinationPicker: some View {
@@ -191,35 +220,11 @@ extension CompanionRootView {
             && (model.conversationDestination != .agent || model.canSendToAgent)
     }
 
+    // Whether the phase-driven status row (INF-244) should render at all.
+    // `.idle` is the only phase with nothing to report; every other phase
+    // renders a distinct row via `CallStatusPresentation`.
     var callProgressVisible: Bool {
-        let status = model.conversationProgressText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !status.isEmpty else { return false }
-        if model.isAwaitingReply { return true }
-        return status != idleCallStatusText
-    }
-
-    var callStatusIsError: Bool {
-        let status = model.conversationProgressText.lowercased()
-        return status.contains("exited with code")
-            || status.contains("failed")
-            || status.contains("error")
-            || status.contains("problem")
-    }
-
-    var callStatusDisplayText: String {
-        let status = model.conversationProgressText
-        let lower = status.lowercased()
-        guard callStatusIsError,
-              let colon = status.firstIndex(of: ":") else { return status }
-        let detail = status[status.index(after: colon)...]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower.hasPrefix("codex exited") {
-            return detail.isEmpty ? "Codex couldn't respond." : "Codex couldn't respond: \(detail)"
-        }
-        if lower.hasPrefix("claude exited") {
-            return detail.isEmpty ? "Claude Code couldn't respond." : "Claude Code couldn't respond: \(detail)"
-        }
-        return status
+        model.callPhase != .idle
     }
 
     var idleCallStatusText: String {
