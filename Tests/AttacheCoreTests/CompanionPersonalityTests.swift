@@ -283,6 +283,9 @@ final class CompanionPersonalityTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Focused agent: Codex / Codex smoke"))
         XCTAssertTrue(prompt.contains("Latest agent reply: Three improvements were made."))
         XCTAssertTrue(prompt.contains("Find an artifact's exact path from the transcript"))
+        XCTAssertTrue(prompt.contains("blocked, failed, or expired"))
+        XCTAssertTrue(prompt.contains("Never say a send succeeded unless Attaché actually reported that it did"))
+        XCTAssertTrue(prompt.contains("Never invent a retry, workaround, or recovery option that was not reported to you"))
     }
 
     func testConversationPromptForbidsAgentMessagingWhenToolUnavailable() {
@@ -296,6 +299,38 @@ final class CompanionPersonalityTests: XCTestCase {
 
         XCTAssertFalse(prompt.contains("stage_agent_instruction"))
         XCTAssertTrue(prompt.contains("Do not address, write to, or imply you can message the work agent"))
+    }
+
+    // MARK: - Error-behavior guidance for blocked/failed/expired sends (INF-252)
+
+    /// The error-behavior block explains how to relay a blocked/failed/expired
+    /// send; that can matter in a conversation even when this turn's tool set
+    /// doesn't include stage_agent_instruction (e.g. a status about an earlier
+    /// send, or a focus change mid-call), so it must not be gated on
+    /// canStageAgentInstruction like the agent-instruction-only lines are.
+    func testErrorBehaviorBlockIsPresentRegardlessOfAgentInstructionToolAvailability() {
+        let withTool = CompanionPersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: "Codex smoke",
+            sessionSourceName: "Codex",
+            workingDirectory: "/tmp/smoke",
+            latestSummary: "Ready",
+            canStageAgentInstruction: true
+        )
+        let withoutTool = CompanionPersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: nil,
+            workingDirectory: nil,
+            latestSummary: nil,
+            canStageAgentInstruction: false
+        )
+
+        for prompt in [withTool, withoutTool] {
+            XCTAssertTrue(prompt.contains("blocked, failed, or expired"))
+            XCTAssertTrue(prompt.contains("say plainly what happened and the one next step"))
+            XCTAssertTrue(prompt.contains("Never say a send succeeded unless Attaché actually reported that it did"))
+            XCTAssertTrue(prompt.contains("Never invent a retry, workaround, or recovery option that was not reported to you"))
+        }
     }
 
     // MARK: - Watched sessions inventory (INF-239)
