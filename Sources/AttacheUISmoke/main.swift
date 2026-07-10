@@ -178,6 +178,27 @@ func selectSettingsSection(_ title: String, paneMarker: String) throws {
     _ = try waitForElement("\(title) pane content", in: try settingsWindow(), containing: paneMarker)
 }
 
+/// Opens the Model pane and expands the "Advanced: per-task models" disclosure
+/// if it is collapsed (INF-253/D3). The disclosure's expanded state is
+/// view-local, so navigating to another settings section and back collapses
+/// it again; call this every time the row controls are needed. Returns the
+/// Recap row's provider picker once expansion is confirmed.
+@discardableResult
+func expandAdvancedPerRoleModels() throws -> AXElement {
+    try selectSettingsSection("Model", paneMarker: "Provider")
+    let window = try settingsWindow()
+    if let recapProvider = window.firstDescendant(role: kAXPopUpButtonRole as String, containing: "Recap provider") {
+        return recapProvider
+    }
+    let disclosure = try waitForElement("Advanced per-task models disclosure", in: try settingsWindow(),
+                                        containing: "Advanced: per-task models")
+    guard disclosure.press() else {
+        throw SmokeError(message: "AXPress failed on \(disclosure.summary); actions: \(disclosure.actionNames)")
+    }
+    return try waitForElement("Recap provider picker", in: try settingsWindow(),
+                              role: kAXPopUpButtonRole as String, containing: "Recap provider", timeout: 8)
+}
+
 /// Opens a popup button and picks the menu item with the given title. The menu
 /// can attach under the popup or under the application element depending on
 /// the control, so both are searched.
@@ -1561,7 +1582,59 @@ if enabled("f5") {
         }
         chosenTextScale = slider.doubleValue ?? chosenTextScale
     }
-    run.step("f5-settings", "theme and engine persist across relaunch") {
+    run.step("f5-settings", "recap model override switches to LM Studio") {
+        let recapProvider = try expandAdvancedPerRoleModels()
+        guard recapProvider.stringValue.contains("Use main model") else {
+            throw SmokeError(message: "expected recap provider to start on \"Use main model\", found \"\(recapProvider.stringValue)\"")
+        }
+        try selectPopup(recapProvider, item: "LM Studio")
+        try waitUntil("recap provider to read LM Studio", timeout: 5) {
+            recapProvider.stringValue.contains("LM Studio")
+        }
+        // A per-role override reveals that role's own Model row once a real
+        // provider (not "Use main model") is chosen (INF-253/D3).
+        _ = try waitForElement("Recap model control", in: try settingsWindow(), containing: "Recap model")
+    }
+    run.step("f5-settings", "an un-keyed provider on a role shows the existing key-required state without crashing") {
+        // Conversation is the first Advanced row, so its on-screen position
+        // never shifts regardless of whether a later row (recap, just set to
+        // LM Studio above) has grown taller with its own Model/Reasoning/Speed
+        // controls. Groq requires an API key and is not configured in this
+        // profile; picking it for conversation must show the same
+        // key-required notice the main picker already uses, not crash
+        // (INF-253/D3 spec item 5).
+        _ = try expandAdvancedPerRoleModels()
+        let conversationProvider = try waitForElement("Conversation provider picker", in: try settingsWindow(),
+                                                       role: kAXPopUpButtonRole as String, containing: "Conversation provider")
+        try selectPopup(conversationProvider, item: "Groq")
+        // Groq also sends data to the cloud, so unless this profile already
+        // consented, the shared CloudConsentSheet (same one the main picker
+        // uses) appears before the selection applies; enable it to reach the
+        // un-keyed state this step is actually testing.
+        if let enable = (try? waitForElement("cloud consent Enable button", in: try settingsWindow(),
+                                             role: kAXButtonRole as String, exactly: "Enable", timeout: 3)) {
+            guard enable.press() else {
+                throw SmokeError(message: "AXPress failed on cloud consent Enable button: \(enable.summary)")
+            }
+        }
+        try waitUntil("conversation provider to read Groq", timeout: 5) {
+            conversationProvider.stringValue.contains("Groq")
+        }
+        _ = try waitForElement("Groq key-required notice", in: try settingsWindow(), containing: "needs an", timeout: 5)
+        // Rendered as a link-style button (`.buttonStyle(.link)`), so it's an
+        // AXLink, not an AXButton; match on text only.
+        _ = try waitForElement("key-required Integrations link", in: try settingsWindow(),
+                               exactly: "API key", timeout: 5)
+        guard (try? settingsWindow()) != nil else {
+            throw SmokeError(message: "settings window disappeared after selecting an un-keyed provider")
+        }
+        // Clean up so this role doesn't leave stray state for the rest of the suite.
+        try selectPopup(conversationProvider, item: "Use main model")
+        try waitUntil("conversation provider to read Use main model again", timeout: 5) {
+            conversationProvider.stringValue.contains("Use main model")
+        }
+    }
+    run.step("f5-settings", "theme, engine, and recap model override persist across relaunch") {
         app.terminateAndWait()
         try app.launch()
         app.activate()
@@ -1586,6 +1659,49 @@ if enabled("f5") {
         try waitUntil("persisted text size to match \(chosenTextScale)", timeout: 5) {
             abs((slider.doubleValue ?? 0) - chosenTextScale) < 0.03
         }
+        let recapProvider = try expandAdvancedPerRoleModels()
+        try waitUntil("persisted recap provider to read LM Studio", timeout: 5) {
+            recapProvider.stringValue.contains("LM Studio")
+        }
+        let defaultsOutput = try runShell("defaults read com.bryanlabs.attache attache.presentationLLM.recap.provider")
+        guard defaultsOutput.contains("lmStudio") else {
+            throw SmokeError(message: "expected persisted recap provider default to be lmStudio, found: \(defaultsOutput)")
+        }
+    }
+    run.step("f5-settings", "recap model override resets to Use main model and clears the per-role key") {
+        let recapProvider = try expandAdvancedPerRoleModels()
+        try selectPopup(recapProvider, item: "Use main model")
+        try waitUntil("recap provider to read Use main model", timeout: 5) {
+            recapProvider.stringValue.contains("Use main model")
+        }
+        // The role's Model row only shows while an override is set; resetting
+        // to "Use main model" must hide it again, not leave it dangling.
+        try waitForElementGone("Recap model control", in: try settingsWindow(), containing: "Recap model", timeout: 5)
+        _ = try runShell("""
+            for field in provider model reasoningEffort serviceTier; do
+              if defaults read com.bryanlabs.attache "attache.presentationLLM.recap.$field" >/dev/null 2>&1; then
+                echo "recap.$field key still present after reset" >&2
+                exit 1
+              fi
+            done
+            """)
+        // Fallback restored, not just a coincidentally-matching leftover: with
+        // every recap.* key gone, `CompanionPresentationSettings.load(role:
+        // .recap, ...)` re-resolves purely from the main/global keys (see
+        // PerRoleModelPaneTests.testResettingToUseMainModelClearsEveryRoleKeyAndRestoresFallback,
+        // which changes the global provider *between* setting and clearing
+        // the override to rule out a stale coincidental match). Here in the
+        // UI we confirm the main row itself still reads normally, i.e.
+        // clearing recap's override left the main model control unaffected.
+        let mainProvider = try waitForElement("Main model provider picker", in: try settingsWindow(),
+                                              role: kAXPopUpButtonRole as String, containing: "Main model provider")
+        guard !mainProvider.stringValue.isEmpty else {
+            throw SmokeError(message: "could not read the main provider value after clearing recap's override")
+        }
+        // The next step assumes it's still looking at Appearance's Text size
+        // slider (that's where the pre-existing relaunch step left it); hand
+        // settings back on that section since this step navigated to Model.
+        try selectSettingsSection("Appearance", paneMarker: "Text size")
     }
     run.step("f5-settings", "theme, engine, and text size return to what the user had") {
         let slider = try waitForElement("Text size slider", in: try settingsWindow(),
