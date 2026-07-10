@@ -60,6 +60,26 @@ final class CompanionPresentationCLIToolBridgeTests: XCTestCase {
         XCTAssertTrue(description.contains("Ask Codex what it changed"))
         XCTAssertTrue(description.contains("MUST use this tool"))
         XCTAssertTrue(description.contains("Do not substitute local read tools"))
+        XCTAssertTrue(description.contains("never guess or omit intended_agent"))
+    }
+
+    /// INF-246: `intended_agent` is optional (not in `required`) so its
+    /// absence stages exactly as before this ticket, and its enum is scoped
+    /// to the two live agent sources so an out-of-band value cannot slip in
+    /// undetected by the schema itself.
+    func testAgentInstructionToolSchemaAddsOptionalIntendedAgentEnum() {
+        let tools = CompanionPresentationService.conversationTools(allowAgentInstructionTool: true)
+        let function = tools
+            .compactMap { $0["function"] as? [String: Any] }
+            .first { $0["name"] as? String == "stage_agent_instruction" }
+        let parameters = function?["parameters"] as? [String: Any]
+        let properties = parameters?["properties"] as? [String: Any]
+        let intendedAgent = properties?["intended_agent"] as? [String: Any]
+        let required = parameters?["required"] as? [String]
+
+        XCTAssertEqual(intendedAgent?["type"] as? String, "string")
+        XCTAssertEqual(intendedAgent?["enum"] as? [String], ["codex", "claude_code"])
+        XCTAssertEqual(required, ["instruction"])
     }
 
     /// Opt-in live canary for the judgment boundary a deterministic provider

@@ -68,6 +68,15 @@ private struct PendingAgentSend {
 
 private struct AgentInstructionToolArguments: Decodable {
     let instruction: String
+    /// The agent the personality explicitly declared this instruction is for
+    /// (INF-246), matching `SourceKind.rawValue` ("codex" | "claude_code").
+    /// Optional: its absence must behave exactly as before this ticket.
+    let intendedAgent: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case instruction
+        case intendedAgent = "intended_agent"
+    }
 }
 
 struct CardPersonalityMarker: Equatable {
@@ -2532,12 +2541,17 @@ final class AppModel: ObservableObject {
     /// Stage or send a personality-requested agent instruction. The first-use
     /// enable sheet always gates the session; the user's send policy decides
     /// whether enabled-session instructions need a final confirmation sheet.
-    private func applyStageAgentInstructionTool(
+    ///
+    /// Not `private` (INF-246): unit tests call this directly to verify a
+    /// mismatched `intended_agent` produces no side effect (no
+    /// `PendingAgentSend`, no `requestSendToAgent` call, no staged
+    /// instruction), not just the returned string.
+    func applyStageAgentInstructionTool(
         arguments: String,
         target: AgentSendTarget?,
         sourceUtterance: String
     ) async -> String {
-        guard let instruction = Self.agentInstruction(fromToolArguments: arguments) else {
+        guard let decoded = Self.agentInstructionArguments(fromToolArguments: arguments) else {
             return "No instruction was provided to stage for the agent."
         }
         guard let target else {
@@ -2546,12 +2560,28 @@ final class AppModel: ObservableObject {
         // Freeze the complete send before crossing back to the UI actor. The
         // structured tool payload must never be recomputed from mutable call UI.
         let pending = PendingAgentSend(
-            text: instruction,
+            text: decoded.instruction,
             target: target,
             origin: .personalityTool,
             sourceUtterance: sourceUtterance
         )
-        return await MainActor.run { [pending] in
+        let intendedAgent = decoded.intendedAgent
+        return await MainActor.run { [pending, intendedAgent] in
+            // Fail-closed mismatch gate (INF-246): compare the model-declared
+            // intent against the already-frozen target's source and the
+            // currently watched sources. This is a refusal only - it never
+            // reroutes to a different target - and it runs before anything is
+            // staged, so a mismatch has zero side effects.
+            let focusedKind = SourceKind(rawValue: pending.target.sourceKind) ?? .generic
+            let watchedSources = Set(attachedTargets.values.map(\.sourceKind))
+            if let mismatch = AgentInstructionMismatch.evaluate(
+                intendedAgent: intendedAgent,
+                focusedSource: focusedKind,
+                focusedTitle: pending.target.displayTitle,
+                watchedSources: watchedSources
+            ) {
+                return mismatch.message
+            }
             requestSendToAgent(pending.text, target: pending.target, origin: pending.origin, sourceUtterance: pending.sourceUtterance)
             if showTwoWayEnable {
                 return "Attaché opened the first-use send-to-agent enable confirmation. Tell the user to review and confirm before anything is sent."
@@ -2565,12 +2595,22 @@ final class AppModel: ObservableObject {
     }
 
     static func agentInstruction(fromToolArguments arguments: String) -> String? {
+        agentInstructionArguments(fromToolArguments: arguments)?.instruction
+    }
+
+    /// Decodes both the instruction and the optional `intended_agent`
+    /// (INF-246) from a `stage_agent_instruction` tool call. `agentInstruction(fromToolArguments:)`
+    /// above stays in place, unchanged, for existing callers/tests that only
+    /// need the instruction text.
+    static func agentInstructionArguments(fromToolArguments arguments: String) -> (instruction: String, intendedAgent: String?)? {
         guard let decoded = try? JSONDecoder().decode(
             AgentInstructionToolArguments.self,
             from: Data(arguments.utf8)
         ) else { return nil }
         let instruction = decoded.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        return instruction.isEmpty ? nil : instruction
+        guard !instruction.isEmpty else { return nil }
+        let intendedAgent = decoded.intendedAgent?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (instruction, (intendedAgent?.isEmpty == false) ? intendedAgent : nil)
     }
 
     // MARK: - System media controls

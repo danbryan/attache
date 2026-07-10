@@ -738,8 +738,10 @@ if enabled("f8") {
     let providerLog = env["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"] ?? ""
     let pongToken = env["ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_SUM_\(nonce)_4")
     let directToken = env["ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_DIRECT_\(nonce)_9")
+    let mismatchToken = env["ATTACHE_PERSONALITY_TWO_WAY_MISMATCH_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_MISMATCH_\(nonce)_7")
     let firstPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT"] ?? "Tell Codex to reply exactly \(pongToken) and do not use tools."
     let secondPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_SECOND_PROMPT"] ?? "What did Codex say? Read the session transcript."
+    let mismatchPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_MISMATCH_PROMPT"] ?? "Tell Claude Code to reply exactly \(mismatchToken) and do not use tools."
     let directPrompt = env["ATTACHE_PERSONALITY_TWO_WAY_DIRECT_PROMPT"] ?? "Send Codex directly and tell it to reply exactly \(directToken) and do not use tools."
     var focusedSession = false
     var conversationOpened = false
@@ -904,6 +906,39 @@ if enabled("f8") {
                 return false
             }
             return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) >= 2
+        }
+    }
+
+    // INF-246: naming an agent that is not the frozen/watched target must be
+    // refused deterministically, never rerouted and never silently staged.
+    // This session only watches Codex (claudeCodeSourceEnabled is off in this
+    // smoke's setup), so declaring intended_agent "claude_code" here hits the
+    // "no watched session of that source" branch of AgentInstructionMismatch.
+    run.step("f8-personality-codex-two-way", "explicit handoff naming an unwatched agent is blocked, not staged") {
+        let personalityToolCountQuery = "SELECT COUNT(*) FROM instructions WHERE session_id='\(sessionID)' AND origin='personality_tool';"
+        let before = try runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(personalityToolCountQuery)\"")
+        let beforeCount = Int(before.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
+
+        try sendConversationPrompt(mismatchPrompt)
+        _ = try waitForElement("wrong-agent refusal reply", in: try mainWindow(),
+                               containing: "No staging occurred", timeout: 15)
+
+        guard (try mainWindow()).firstDescendant(containing: "Send this to") == nil else {
+            throw SmokeError(message: "mismatched intended_agent unexpectedly opened a send confirmation sheet")
+        }
+        // Give any (incorrect) async staging a moment to land before re-reading the DB.
+        Thread.sleep(forTimeInterval: 2)
+        let after = try runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(personalityToolCountQuery)\"")
+        let afterCount = Int(after.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
+        guard afterCount == beforeCount else {
+            throw SmokeError(message: "mismatched intended_agent unexpectedly staged an instruction (before=\(beforeCount), after=\(afterCount))")
+        }
+        guard !mismatchToken.isEmpty else {
+            throw SmokeError(message: "ATTACHE_PERSONALITY_TWO_WAY_MISMATCH_TOKEN/prompt is required")
+        }
+        let transcript = (try? String(contentsOfFile: sessionFile, encoding: .utf8)) ?? ""
+        guard !transcript.localizedCaseInsensitiveContains(mismatchToken) else {
+            throw SmokeError(message: "blocked mismatch payload unexpectedly reached the Codex transcript \(sessionFile)")
         }
     }
 }

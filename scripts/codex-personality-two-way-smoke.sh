@@ -22,7 +22,10 @@ provider, asks Attaché to stage an instruction for Codex from natural language,
 confirms the first send, verifies a second explicit personality handoff follows
 the direct-send policy, then asks the personality to read Codex's reply from the
 watched session. It also audits frozen target, origin, source utterance, and
-delivery checkpoint persistence.
+delivery checkpoint persistence. Finally (INF-246) it names Claude Code
+explicitly while only a Codex session is watched/focused, and asserts the
+mismatched intended_agent is refused: no instruction row is staged and no send
+confirmation sheet opens.
 EOF
 }
 
@@ -92,6 +95,7 @@ NONCE="$(date +%Y%m%d%H%M%S)_$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-' 
 READY_TOKEN="ATTACHE_READY_${NONCE}"
 PONG_TOKEN="ATTACHE_SUM_${NONCE}_4"
 DIRECT_TOKEN="ATTACHE_DIRECT_${NONCE}_9"
+MISMATCH_TOKEN="ATTACHE_MISMATCH_${NONCE}_7"
 READY_LOG="$TEMP_ROOT/codex-ready.log"
 READY_OUT="$TEMP_ROOT/codex-ready.txt"
 MODEL="attache-smoke-personality"
@@ -108,6 +112,7 @@ echo "==> Starting deterministic personality provider on 127.0.0.1:$PORT"
 ATTACHE_PERSONALITY_TWO_WAY_NONCE="$NONCE" \
 ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="$PONG_TOKEN" \
 ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN="$DIRECT_TOKEN" \
+ATTACHE_PERSONALITY_TWO_WAY_MISMATCH_TOKEN="$MISMATCH_TOKEN" \
 ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$PROVIDER_LOG" \
 ATTACHE_PERSONALITY_TWO_WAY_MODEL="$MODEL" \
 ATTACHE_PERSONALITY_TWO_WAY_PORT="$PORT" \
@@ -185,8 +190,10 @@ ATTACHE_PERSONALITY_TWO_WAY_SESSION_FILE="$SESSION_FILE" \
 ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$PROVIDER_LOG" \
 ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="$PONG_TOKEN" \
 ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN="$DIRECT_TOKEN" \
+ATTACHE_PERSONALITY_TWO_WAY_MISMATCH_TOKEN="$MISMATCH_TOKEN" \
 ATTACHE_PERSONALITY_TWO_WAY_FIRST_PROMPT="Tell Codex to reply exactly $PONG_TOKEN and do not use tools." \
 ATTACHE_PERSONALITY_TWO_WAY_DIRECT_PROMPT="Send Codex directly and tell it to reply exactly $DIRECT_TOKEN and do not use tools." \
+ATTACHE_PERSONALITY_TWO_WAY_MISMATCH_PROMPT="Tell Claude Code to reply exactly $MISMATCH_TOKEN and do not use tools." \
   scripts/ui-smoke.sh
 
 DATABASE="$HOME/Library/Application Support/Attache/Attache.sqlite"

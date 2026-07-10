@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 NONCE = os.environ["ATTACHE_PERSONALITY_TWO_WAY_NONCE"]
 PONG_TOKEN = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN"]
 DIRECT_TOKEN = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN", "")
+MISMATCH_TOKEN = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_MISMATCH_TOKEN", "")
 LOG_PATH = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"]
 MODEL = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_MODEL", "attache-smoke-personality")
 RESPONSE_DELAY_MS = int(os.environ.get("ATTACHE_SMOKE_PROVIDER_DELAY_MS", "0") or "0")
@@ -120,11 +121,35 @@ class Handler(BaseHTTPRequestHandler):
             self.send_bytes(response(tool_call("stage_agent_instruction", {"instruction": instruction})))
             return
 
+        if "Tell Claude Code" in user and not tools:
+            # INF-246: the focused/frozen target for this whole smoke is Codex
+            # (claudeCodeSourceEnabled is off), so an explicit intended_agent
+            # of "claude_code" here must be refused, never rerouted or
+            # silently staged for Codex instead.
+            instruction = f"Reply exactly {MISMATCH_TOKEN}. Do not use tools."
+            log({"event": "tool_call", "name": "stage_agent_instruction", "instruction": instruction, "intended_agent": "claude_code"})
+            maybe_delay()
+            self.send_bytes(response(tool_call(
+                "stage_agent_instruction",
+                {"instruction": instruction, "intended_agent": "claude_code"},
+            )))
+            return
+
         if any("Sending to" in content for content in tools):
             maybe_delay()
             self.send_bytes(response({
                 "role": "assistant",
                 "content": "Attaché is sending that directly to the frozen Codex target.",
+            }))
+            return
+
+        if any("No staging occurred" in content for content in tools):
+            matched = next(content for content in tools if "No staging occurred" in content)
+            log({"event": "wrong_agent_blocked", "message": matched})
+            maybe_delay()
+            self.send_bytes(response({
+                "role": "assistant",
+                "content": f"Attaché said: {matched}",
             }))
             return
 

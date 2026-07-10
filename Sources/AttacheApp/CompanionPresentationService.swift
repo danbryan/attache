@@ -326,11 +326,16 @@ final class CompanionPresentationService {
         if allowAgentInstructionTool {
             tools.append(["type": "function", "function": [
                 "name": "stage_agent_instruction",
-                "description": "Route an action to the focused work agent only when the user explicitly asks that agent to act. 'What did Codex say?' stays with Attaché, but 'Ask Codex what it changed' MUST use this tool. Asking the agent to answer, explain, check, read, summarize, or report is an action even when it concerns prior work or an artifact. Do not substitute local read tools for an explicit handoff, and do not redirect a request naming a different agent. Attaché applies the user's send policy, safety filter, and frozen session target.",
+                "description": "Route an action to the focused work agent only when the user explicitly asks that agent to act. 'What did Codex say?' stays with Attaché, but 'Ask Codex what it changed' MUST use this tool. Asking the agent to answer, explain, check, read, summarize, or report is an action even when it concerns prior work or an artifact. Do not substitute local read tools for an explicit handoff, and do not redirect a request naming a different agent. Attaché applies the user's send policy, safety filter, and frozen session target. Whenever the user names a specific agent (Codex or Claude Code), set intended_agent to that agent so Attaché can verify it against the focused session before staging; never guess or omit intended_agent when a name was given.",
                 "parameters": [
                     "type": "object",
                     "properties": [
-                        "instruction": ["type": "string", "description": "The concise instruction to send to the work agent after the user confirms."]
+                        "instruction": ["type": "string", "description": "The concise instruction to send to the work agent after the user confirms."],
+                        "intended_agent": [
+                            "type": "string",
+                            "enum": ["codex", "claude_code"],
+                            "description": "The agent the user explicitly named to receive this instruction. Always set this when the user names a specific agent; omit only when no agent was named. Attaché uses this solely to verify it matches the focused session; it never reroutes on a mismatch, only refuses."
+                        ]
                     ],
                     "required": ["instruction"]
                 ] as [String: Any]

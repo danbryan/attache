@@ -170,6 +170,177 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         XCTAssertNil(AppModel.agentInstruction(fromToolArguments: #"{"working_directory":"/tmp/wrong"}"#))
     }
 
+    // MARK: - intended_agent (INF-246)
+
+    func testAgentInstructionArgumentsDecodeIntendedAgentAlongsideInstruction() {
+        let withAgent = #"{"instruction":"reply exactly X","intended_agent":"claude_code"}"#
+        let decoded = AppModel.agentInstructionArguments(fromToolArguments: withAgent)
+        XCTAssertEqual(decoded?.instruction, "reply exactly X")
+        XCTAssertEqual(decoded?.intendedAgent, "claude_code")
+
+        let withoutAgent = #"{"instruction":"reply exactly X"}"#
+        XCTAssertNil(AppModel.agentInstructionArguments(fromToolArguments: withoutAgent)?.intendedAgent)
+
+        let blankAgent = #"{"instruction":"reply exactly X","intended_agent":"   "}"#
+        XCTAssertNil(AppModel.agentInstructionArguments(fromToolArguments: blankAgent)?.intendedAgent)
+    }
+
+    /// Absent `intended_agent` must behave exactly as before this ticket:
+    /// stages normally, no mismatch check runs at all.
+    func testApplyStageAgentInstructionToolStagesNormallyWhenIntendedAgentAbsent() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        let sessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.twoWay.setEnabled(true, sessionID: sessionID)
+        let target = AgentSendTarget(
+            sessionID: sessionID,
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Agent Send Test",
+            workingDirectory: nil
+        )
+
+        let message = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"reply exactly NO_INTENDED_AGENT"}"#,
+            target: target,
+            sourceUtterance: "tell it to reply"
+        )
+
+        XCTAssertNotNil(model.pendingInstruction)
+        XCTAssertEqual(model.twoWay.log.first?.state, .pending)
+        XCTAssertEqual(model.twoWay.log.first?.text, "reply exactly NO_INTENDED_AGENT")
+        XCTAssertTrue(message.contains("staged") || message.contains("confirmation"))
+    }
+
+    /// A matching `intended_agent` stages exactly as if it had been absent.
+    func testApplyStageAgentInstructionToolStagesNormallyWhenIntendedAgentMatchesFocusedSource() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        let sessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.twoWay.setEnabled(true, sessionID: sessionID)
+        let target = AgentSendTarget(
+            sessionID: sessionID,
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Agent Send Test",
+            workingDirectory: nil
+        )
+
+        _ = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"reply exactly MATCHING_AGENT","intended_agent":"codex"}"#,
+            target: target,
+            sourceUtterance: "ask codex to reply"
+        )
+
+        XCTAssertNotNil(model.pendingInstruction)
+        XCTAssertEqual(model.twoWay.log.first?.state, .pending)
+        XCTAssertEqual(model.twoWay.log.first?.text, "reply exactly MATCHING_AGENT")
+    }
+
+    /// The core safety case: the model names a different, currently-watched
+    /// agent than the frozen target. Nothing should be staged: no
+    /// `PendingAgentSend`, no `requestSendToAgent` side effect, no instruction
+    /// in the two-way log.
+    func testApplyStageAgentInstructionToolBlocksWrongAgentMismatchWithoutSideEffects() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        let sessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.twoWay.setEnabled(true, sessionID: sessionID)
+        let claudeSession = CodexSessionTarget(
+            id: "claude-\(UUID().uuidString)",
+            title: "Claude Session",
+            updatedAt: Date(),
+            category: .activeSession,
+            status: nil,
+            sourceKind: .claudeCode
+        )
+        model.attachCodexSession(claudeSession)
+        let target = AgentSendTarget(
+            sessionID: sessionID,
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Agent Send Test",
+            workingDirectory: nil
+        )
+
+        let message = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"reply exactly WRONG_AGENT","intended_agent":"claude_code"}"#,
+            target: target,
+            sourceUtterance: "ask claude code to reply"
+        )
+
+        XCTAssertNil(model.pendingInstruction)
+        XCTAssertTrue(model.twoWay.log.isEmpty)
+        XCTAssertFalse(model.showTwoWayEnable)
+        XCTAssertEqual(
+            message,
+            "The focused session is Codex (Agent Send Test). No staging occurred. Ask the user to focus a Claude Code session, or to confirm sending to Codex."
+        )
+    }
+
+    /// When the named agent has no watched session at all, the message must
+    /// say that rather than implying there is a session the user could focus.
+    func testApplyStageAgentInstructionToolBlocksWhenNoWatchedSessionOfNamedSourceExists() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        let sessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.twoWay.setEnabled(true, sessionID: sessionID)
+        let target = AgentSendTarget(
+            sessionID: sessionID,
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Agent Send Test",
+            workingDirectory: nil
+        )
+
+        let message = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"reply exactly NO_SESSION","intended_agent":"claude_code"}"#,
+            target: target,
+            sourceUtterance: "ask claude code to reply"
+        )
+
+        XCTAssertNil(model.pendingInstruction)
+        XCTAssertTrue(model.twoWay.log.isEmpty)
+        XCTAssertEqual(message, "No Claude Code sessions are currently being watched. No staging occurred.")
+    }
+
+    /// Fail closed (ticket title): an unrecognized `intended_agent` value is
+    /// refused, never silently ignored/treated as absent.
+    func testApplyStageAgentInstructionToolFailsClosedOnUnrecognizedIntendedAgent() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        let sessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.twoWay.setEnabled(true, sessionID: sessionID)
+        let target = AgentSendTarget(
+            sessionID: sessionID,
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Agent Send Test",
+            workingDirectory: nil
+        )
+
+        let message = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"reply exactly UNRECOGNIZED","intended_agent":"gemini"}"#,
+            target: target,
+            sourceUtterance: "ask gemini to reply"
+        )
+
+        XCTAssertNil(model.pendingInstruction)
+        XCTAssertTrue(model.twoWay.log.isEmpty)
+        XCTAssertTrue(message.contains("No staging occurred."))
+        XCTAssertTrue(message.contains("gemini"))
+    }
+
     private func seedWatchedSession(policy: AgentInstructionSendPolicy, defaults: UserDefaults) throws -> String {
         let sessionID = "agent-send-\(UUID().uuidString)"
         let target = CodexSessionTarget(

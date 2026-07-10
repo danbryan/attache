@@ -323,6 +323,7 @@ public enum CompanionPersonality {
             - Keep this boundary exact: "What did Codex say?" is a question for you to answer with session-reading tools. "Ask Codex what it changed" is an explicit delegation, so you MUST call stage_agent_instruction. Asking the agent to answer, explain, check, read, summarize, or report is still an action request, even when it concerns prior work or an artifact.
             - Do not substitute read_session_transcript, list_working_directory, or read_file when the user explicitly asks you to ask the focused agent. Use local read tools only when the user asks you to inspect or explain the context yourself.
             - If the user names a different agent than the focused one, ask them to focus that session instead of staging. Attaché routes explicit requests through the user's send-to-agent policy, which may confirm or may send directly after enablement. After the tool returns, report its actual status and target. Never claim a send unless Attaché reports it.
+            - Whenever the user names a specific agent (Codex or Claude Code) in this turn, always set stage_agent_instruction's intended_agent argument to that agent, so Attaché can verify it against the focused session before staging. Never guess or omit intended_agent when a name was given; leave it unset only when no agent was named. Attaché only ever refuses on a mismatch, it never reroutes to a different agent.
 
             """
             : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
