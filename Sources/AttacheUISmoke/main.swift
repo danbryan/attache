@@ -1606,7 +1606,14 @@ if enabled("f5") {
         _ = try expandAdvancedPerRoleModels()
         let conversationProvider = try waitForElement("Conversation provider picker", in: try settingsWindow(),
                                                        role: kAXPopUpButtonRole as String, containing: "Conversation provider")
-        try selectPopup(conversationProvider, item: "Groq")
+        // selectPopup's menu-item wait is a fixed 5s; under shared-machine
+        // load the popup's menu can occasionally take longer to attach, so
+        // retry once rather than fail the whole step on a single slow open.
+        do {
+            try selectPopup(conversationProvider, item: "Groq")
+        } catch {
+            try selectPopup(conversationProvider, item: "Groq")
+        }
         // Groq also sends data to the cloud, so unless this profile already
         // consented, the shared CloudConsentSheet (same one the main picker
         // uses) appears before the selection applies; enable it to reach the
