@@ -469,47 +469,93 @@ enum SessionDeliveryReadinessClassifier {
     }
 }
 
+/// Correlates a delivered instruction's reply positionally (INF-245/B2): the
+/// first completed assistant turn appearing after the instruction's delivery
+/// checkpoint belongs to that instruction. The engine's single-flight FIFO
+/// delivery (docs/two-way.md) guarantees the bytes between one instruction's
+/// checkpoint and the next belong to it, so position alone is sufficient.
+/// Exact text equality against the narrated (and possibly presentation-
+/// paraphrased) card text is checked only as a secondary confidence signal and
+/// must never gate the link - that requirement is what let any personality
+/// paraphrase silently break correlation before this change.
 enum SessionReplyCorrelation {
-    static func matches(
-        instructionText: String,
-        eventText: String,
-        transcriptText: String,
-        format: TranscriptFormat
-    ) -> Bool {
-        var sawInstruction = false
-        let expectedInstruction = normalized(instructionText)
-        let expectedReply = normalized(eventText)
-
+    /// Scans a transcript slice - already bounded to start immediately after a
+    /// delivery checkpoint - for the first completed assistant turn, regardless
+    /// of its text. Returns the raw reply text, or nil if the slice doesn't yet
+    /// contain one (the transcript watcher may simply be lagging the delivery).
+    static func firstCompletedAssistantTurn(transcriptText: String, format: TranscriptFormat) -> String? {
+        var pendingTools: Set<String> = []
         for line in transcriptText.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            let completed: String?
             switch format {
             case .codex:
-                guard let payload = object["payload"] as? [String: Any],
-                      payload["type"] as? String == "message" else { continue }
-                if payload["role"] as? String == "user",
-                   normalized(assistantText(fromCodexPayload: payload) ?? "") == expectedInstruction {
-                    sawInstruction = true
-                } else if sawInstruction,
-                          payload["role"] as? String == "assistant",
-                          payload["phase"] as? String == "final_answer",
-                          normalized(assistantText(fromCodexPayload: payload) ?? "") == expectedReply {
-                    return true
-                }
+                completed = codexCompletedAssistantText(object, pendingTools: &pendingTools)
             case .claude:
-                guard object["isSidechain"] as? Bool != true,
-                      let message = object["message"] as? [String: Any] else { continue }
-                if object["type"] as? String == "user",
-                   normalized(claudeMessageText(message) ?? "") == expectedInstruction {
-                    sawInstruction = true
-                } else if sawInstruction,
-                          object["type"] as? String == "assistant",
-                          normalized(claudeMessageText(message) ?? "") == expectedReply {
-                    return true
-                }
+                completed = claudeCompletedAssistantText(object, pendingTools: &pendingTools)
             }
+            if let completed { return completed }
         }
-        return false
+        return nil
+    }
+
+    /// Secondary confidence only: when the narrated card text also matches the
+    /// raw reply verbatim, that's extra confidence, but a mismatch (e.g. a
+    /// personality paraphrase) must never block a positional match already
+    /// found by `firstCompletedAssistantTurn`.
+    static func textConfirms(eventText: String, replyText: String) -> Bool {
+        normalized(eventText) == normalized(replyText)
+    }
+
+    private static func codexCompletedAssistantText(
+        _ object: [String: Any],
+        pendingTools: inout Set<String>
+    ) -> String? {
+        guard let payload = object["payload"] as? [String: Any],
+              let type = payload["type"] as? String else { return nil }
+        switch type {
+        case "function_call", "custom_tool_call", "local_shell_call":
+            if let id = (payload["call_id"] as? String) ?? (payload["id"] as? String) { pendingTools.insert(id) }
+        case "function_call_output", "custom_tool_call_output", "local_shell_call_output":
+            if let id = (payload["call_id"] as? String) ?? (payload["id"] as? String) { pendingTools.remove(id) }
+        case "message":
+            guard payload["role"] as? String == "assistant",
+                  payload["phase"] as? String == "final_answer",
+                  pendingTools.isEmpty else { return nil }
+            return assistantText(fromCodexPayload: payload)
+        default:
+            break
+        }
+        return nil
+    }
+
+    private static func claudeCompletedAssistantText(
+        _ object: [String: Any],
+        pendingTools: inout Set<String>
+    ) -> String? {
+        guard object["isSidechain"] as? Bool != true else { return nil }
+        switch object["type"] as? String {
+        case "assistant":
+            guard let message = object["message"] as? [String: Any],
+                  let blocks = message["content"] as? [[String: Any]] else { return nil }
+            var hasToolUse = false
+            for block in blocks where block["type"] as? String == "tool_use" {
+                hasToolUse = true
+                if let id = block["id"] as? String { pendingTools.insert(id) }
+            }
+            guard !hasToolUse, pendingTools.isEmpty else { return nil }
+            return claudeMessageText(message)
+        case "user":
+            guard let message = object["message"] as? [String: Any],
+                  let blocks = message["content"] as? [[String: Any]] else { return nil }
+            for block in blocks where block["type"] as? String == "tool_result" {
+                if let id = block["tool_use_id"] as? String { pendingTools.remove(id) }
+            }
+        default:
+            break
+        }
+        return nil
     }
 }
 

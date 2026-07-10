@@ -117,7 +117,13 @@ BACKUP_DIR="$(printf '%s\n' "$FRESH_OUTPUT" | sed -n 's/^Backup: //p' | tail -1)
 defaults write "$BUNDLE_ID" attache.onboardingCompleted -bool true
 defaults write "$BUNDLE_ID" attache.codexSourceEnabled -bool true
 defaults write "$BUNDLE_ID" attache.claudeCodeSourceEnabled -bool false
-defaults write "$BUNDLE_ID" attache.presentationLLMEnabled -bool false
+# Presentation is left enabled (the default) rather than forced off: reply
+# correlation is positional now (INF-245/B2), so this gate is the proof that a
+# personality paraphrase of the watched reply does not break linking the card
+# back to the delivered instruction. A profile with no configured presentation
+# provider still degrades to plain readback on its own; a real paraphrase run
+# additionally needs a presentation provider configured on the machine running
+# this gate.
 defaults write "$BUNDLE_ID" attache.voicemailMode -bool true
 defaults write "$BUNDLE_ID" attache.showActivityInsights -bool false
 defaults write "$BUNDLE_ID" attache.showTips -bool false

@@ -157,11 +157,20 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
 - **Deleted/archived target.** If the session is gone when delivery is attempted,
   the instruction fails with a clear reason; it is never redirected to a different
   session.
-- **Reply is narrated and correlated.** After delivery, the agent's reply is
-  observed by the watcher like any other update. A card links to an instruction
-  only when the transcript after the stored checkpoint contains that resumed user
-  turn followed by the matching completed assistant turn. Unrelated session
-  cards are not linked by proximity alone.
+- **Reply is narrated and correlated, positionally.** After delivery, the
+  agent's reply is observed by the watcher like any other update. A card links
+  to an instruction when the transcript after the stored delivery checkpoint
+  contains a completed assistant turn; the single-flight FIFO delivery
+  guarantee above means the bytes between one instruction's checkpoint and the
+  next belong to it, so position is sufficient and exact text equality against
+  the (possibly presentation-paraphrased) narrated card is only a secondary
+  confidence signal, never a gate (INF-245/B2). When the transcript hasn't yet
+  shown the completed turn but the delivery adapter already captured
+  `deliveryReplyText` synchronously from the resume's own output, that evidence
+  cross-checks and unblocks the link without waiting for the next transcript
+  poll. Unrelated session cards are not linked by proximity alone. Every
+  correlation miss for a session with an outstanding delivered instruction logs
+  a warning with the reason.
 
 ## Smoke and canary coverage
 

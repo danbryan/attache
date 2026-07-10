@@ -70,6 +70,11 @@ final class TwoWayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.log.first?.state, .failed)
     }
 
+    /// INF-245 (B2): correlation is positional, not exact-text. An offset that
+    /// doesn't yet extend past the checkpoint must not link (the reply hasn't
+    /// landed), and once it does, a personality's paraphrase of the reply must
+    /// still link - the dedicated positional/FIFO coverage lives in
+    /// SessionReplyCorrelationTests.swift.
     func testLinkResponseCardTiesReplyToInstruction() async throws {
         let store = try makeStore()
         let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
@@ -84,6 +89,17 @@ final class TwoWayCoordinatorTests: XCTestCase {
         let instruction = try coordinator.prepare(text: "make a change", sessionID: "s1", sourceKind: "codex")
         try await coordinator.confirmAndDeliver(id: instruction.id)
 
+        // Before the reply has landed in the transcript, an event whose offset
+        // doesn't extend past the checkpoint (the stub adapter reports 0) must
+        // not link.
+        coordinator.linkResponseCard(
+            cardID: "too-early",
+            sessionID: "s1",
+            eventText: "irrelevant",
+            transcriptEndOffset: 0
+        )
+        XCTAssertNil(coordinator.log.first(where: { $0.id == instruction.id })?.resultingCardID)
+
         let reply = "Finished the requested change."
         try append(
             """
@@ -97,18 +113,13 @@ final class TwoWayCoordinatorTests: XCTestCase {
             try FileManager.default.attributesOfItem(atPath: sessionFile.path)[.size] as? NSNumber
         ).int64Value)
 
-        coordinator.linkResponseCard(
-            cardID: "unrelated",
-            sessionID: "s1",
-            eventText: "An unrelated update.",
-            transcriptEndOffset: endOffset
-        )
-        XCTAssertNil(coordinator.log.first(where: { $0.id == instruction.id })?.resultingCardID)
-
+        // A personality could paraphrase the raw reply into wording that shares
+        // no words with it; the link must still succeed because correlation is
+        // positional, not textual.
         coordinator.linkResponseCard(
             cardID: "card-1",
             sessionID: "s1",
-            eventText: reply,
+            eventText: "All set - the change is in.",
             transcriptEndOffset: endOffset
         )
         XCTAssertEqual(coordinator.log.first(where: { $0.id == instruction.id })?.resultingCardID, "card-1")

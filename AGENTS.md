@@ -95,8 +95,11 @@ swift test
   `restore` puts it back. Always pair them, and never run `restore` twice in a
   row: a double restore clobbers the backup with current state.
 - `ATTACHE_FORCE_PLAIN_READBACK=1` skips LLM presentation and speaks events
-  verbatim. The two-way smokes rely on it because reply correlation currently
-  requires an exact text match.
+  verbatim. `scripts/codex-personality-two-way-smoke.sh` sets it so success
+  depends on Codex's watched answer, not a presentation-model paraphrase.
+  Reply correlation itself is positional (INF-245/B2), not exact-text, so
+  `scripts/codex-two-way-smoke.sh` (the f7 gate) leaves presentation at its
+  default rather than forcing plain readback.
 - `ATTACHE_DISABLE_TOPIC_TAGGING=1` turns off background topic tagging; most
   smoke scripts set it to keep runs deterministic and avoid stray LLM calls.
 - `ATTACHE_LIVE_CODEX_ROUTING_TEST=1` un-skips the real Codex routing canary in
