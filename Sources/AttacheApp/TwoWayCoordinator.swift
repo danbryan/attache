@@ -103,38 +103,73 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
         return changed
     }
 
-    /// Link a freshly-narrated card only when the transcript after the delivery
-    /// checkpoint proves the resumed user turn and its completed assistant reply.
+    /// Link a freshly-narrated card to the delivered instruction whose reply it
+    /// is. Correlation is positional first (INF-245/B2): the first completed
+    /// assistant turn found after an instruction's delivery checkpoint belongs
+    /// to it, regardless of whether the narrated card carries presentation-
+    /// rewritten (paraphrased) text that doesn't match the raw transcript
+    /// verbatim. Exact text equality is checked only as a secondary confidence
+    /// signal and never blocks a positional match. B1's captured delivery
+    /// evidence (`deliveryReplyText`/`deliveryReplyTurnID`) is a second
+    /// cross-check: when the transcript slice doesn't show a completed turn yet
+    /// (the watcher can lag the delivery), that synchronously-captured evidence
+    /// still proves the turn happened and unblocks the link. Every miss for a
+    /// session with an outstanding delivered instruction logs a warning with the
+    /// reason, so a correlation failure is never silent.
     func linkResponseCard(
         cardID: String,
         sessionID: String,
         eventText: String,
         transcriptEndOffset: Int64?
     ) {
-        guard let transcriptEndOffset,
-              let fileURL = locateSessionFile(sessionID) else { return }
         let delivered = engine.instructions(forSessionID: sessionID)
             .filter { $0.state == .delivered && $0.resultingCardID == nil }
             .sorted { $0.deliveredAt ?? .distantPast < $1.deliveredAt ?? .distantPast }
+        guard !delivered.isEmpty else { return }  // no outstanding two-way reply expected for this session
+
+        guard let transcriptEndOffset else {
+            AttacheLog.twoWay.warning("Correlation skipped for card \(cardID, privacy: .public) in session \(sessionID, privacy: .public): event carried no transcript end offset.")
+            return
+        }
+        let fileURL = locateSessionFile(sessionID)
+        if fileURL == nil {
+            AttacheLog.twoWay.warning("Correlation failed for card \(cardID, privacy: .public) in session \(sessionID, privacy: .public): could not locate the session transcript file.")
+        }
+
         for target in delivered {
-            guard let checkpoint = target.deliveryCheckpoint,
-                  checkpoint < transcriptEndOffset,
-                  let transcript = transcriptSlice(
-                    fileURL: fileURL,
-                    from: checkpoint,
-                    through: transcriptEndOffset
-                  ),
-                  let format = transcriptFormat(for: target.sourceKind),
-                  SessionReplyCorrelation.matches(
-                    instructionText: target.text,
-                    eventText: eventText,
-                    transcriptText: transcript,
-                    format: format
-                  ) else { continue }
+            guard let checkpoint = target.deliveryCheckpoint, checkpoint < transcriptEndOffset else { continue }
+            guard let format = transcriptFormat(for: target.sourceKind) else {
+                AttacheLog.twoWay.warning("Correlation failed for instruction \(target.id, privacy: .public): unrecognized source kind \(target.sourceKind, privacy: .public).")
+                continue
+            }
+
+            let positionalReply = fileURL
+                .flatMap { transcriptSlice(fileURL: $0, from: checkpoint, through: transcriptEndOffset) }
+                .flatMap { SessionReplyCorrelation.firstCompletedAssistantTurn(transcriptText: $0, format: format) }
+
+            var reply = positionalReply
+            var confirmedBy = "position"
+            if reply == nil, let evidence = target.deliveryReplyText {
+                // The transcript watcher can lag the delivery adapter, which
+                // already captured proof of a completed turn synchronously from
+                // the resume's own stdout (B1/INF-238). Fall back to that
+                // evidence instead of waiting for the next transcript poll.
+                reply = evidence
+                confirmedBy = "delivery-evidence"
+            }
+            guard let reply else { continue }
+
+            let textConfirmed = SessionReplyCorrelation.textConfirms(eventText: eventText, replyText: reply)
             engine.linkResponse(instructionID: target.id, cardID: cardID)
+            AttacheLog.twoWay.info("""
+                Linked card \(cardID, privacy: .public) to instruction \(target.id, privacy: .public) via \
+                \(confirmedBy, privacy: .public) (checkpoint \(checkpoint) < offset \(transcriptEndOffset)); \
+                exact-text confirms: \(textConfirmed), has turn id: \(target.deliveryReplyTurnID != nil).
+                """)
             refreshLog()
             return
         }
+        AttacheLog.twoWay.warning("Correlation miss for card \(cardID, privacy: .public) in session \(sessionID, privacy: .public): no outstanding delivered instruction's window (through offset \(transcriptEndOffset)) shows a completed reply yet.")
     }
 
     private func instructionIsReady(_ instruction: Instruction, now: Date) -> Bool {

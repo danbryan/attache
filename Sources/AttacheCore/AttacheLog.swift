@@ -16,6 +16,7 @@ public enum AttacheLog {
     public static let speech = Logger(subsystem: subsystem, category: "speech")
     public static let server = Logger(subsystem: subsystem, category: "server")
     public static let secrets = Logger(subsystem: subsystem, category: "secrets")
+    public static let twoWay = Logger(subsystem: subsystem, category: "two-way")
 }
 
 /// A privacy-safe diagnostic snapshot for a bug report: app version, enabled
