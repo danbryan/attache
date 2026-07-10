@@ -154,6 +154,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var conversationRecovery: ConversationRecovery?
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
+    /// The live-call phase, derived from `isConversing`, playback state,
+    /// mic state, `conversationRecovery`, and the two-way send log by the
+    /// pure `CallPhase.derive(from:)` reducer (see `refreshCallPhase()`).
+    /// Not yet consumed by any view (that's a later ticket, A2); computing
+    /// and publishing it here replaces nothing about today's rendering.
+    @Published private(set) var callPhase: CallPhase = .idle
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -588,7 +594,11 @@ final class AppModel: ObservableObject {
     private var revealTimer: Timer?
     private var conversationWaitTimer: Timer?
     private var conversationWaitStartedAt: Date?
-    private var expectingReplyAudio = false
+    // @Published (rather than a plain var) so refreshCallPhase()'s Combine
+    // subscription (setupConversationObservers()) picks up every transition,
+    // including the ones driven from playback callbacks in init rather than
+    // from a mutating method here.
+    @Published private var expectingReplyAudio = false
     private static let sessionIndexURL = CompanionAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
     private var sessionIndexer = SessionIndexer(cacheURL: AppModel.sessionIndexURL, scanners: [])
     private let sessionIndexQueue = DispatchQueue(label: "com.bryanlabs.attache.sessionindex")
@@ -2528,6 +2538,62 @@ final class AppModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in self?.handleConversationTranscript(text) }
             .store(in: &cancellables)
+
+        // One choke point for everything CallPhase.derive(from:) reads, so
+        // callPhase stays current without scattering refresh calls across
+        // every mutation site (playback.isPaused/.isBusy in particular only
+        // ever change inside SpeechPlaybackController, not here).
+        Publishers.MergeMany(
+            playback.$isPlaying.map { _ in () }.eraseToAnyPublisher(),
+            playback.$isPaused.map { _ in () }.eraseToAnyPublisher(),
+            playback.$isBusy.map { _ in () }.eraseToAnyPublisher(),
+            micTranscript.$isListening.map { _ in () }.eraseToAnyPublisher(),
+            micTranscript.$isPreparing.map { _ in () }.eraseToAnyPublisher(),
+            $isConversing.map { _ in () }.eraseToAnyPublisher(),
+            $conversationRecovery.map { _ in () }.eraseToAnyPublisher(),
+            $pendingAssistantReply.map { _ in () }.eraseToAnyPublisher(),
+            $expectingReplyAudio.map { _ in () }.eraseToAnyPublisher(),
+            $voiceInputMode.map { _ in () }.eraseToAnyPublisher(),
+            twoWay.$log.map { _ in () }.eraseToAnyPublisher()
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] in self?.refreshCallPhase() }
+        .store(in: &cancellables)
+    }
+
+    /// Pure-reducer wiring (INF-237): snapshot today's scattered call signals
+    /// into `CallSignals` and let `CallPhase.derive(from:)` decide the phase.
+    /// No UI reads `callPhase` yet; CallHUD/CompanionRootView still derive
+    /// their own status text and error styling exactly as before (A2 wires
+    /// the views to this).
+    private func refreshCallPhase() {
+        callPhase = CallPhase.derive(from: currentCallSignals())
+    }
+
+    private func currentCallSignals() -> CallSignals {
+        let failure = conversationRecovery.map {
+            CallSignals.Failure(category: $0.category, message: $0.errorMessage)
+        }
+        // The instruction most relevant to the live call composer: the newest
+        // one addressed to whatever session Tell Agent would target right
+        // now. `twoWay.log` is already newest-first.
+        let pendingSend = twoWayTarget.flatMap { target in
+            twoWay.log.first { $0.sessionID == target.sessionID }
+        }
+        return CallSignals(
+            isConversing: isConversing,
+            conversationWaitStartedAt: conversationWaitStartedAt,
+            micIsListening: micTranscript.isListening,
+            micIsPreparing: micTranscript.isPreparing,
+            voiceInputMode: voiceInputMode.rawValue,
+            playbackIsPlaying: playback.isPlaying,
+            playbackIsPaused: playback.isPaused,
+            playbackIsBusy: playback.isBusy,
+            expectingReplyAudio: expectingReplyAudio,
+            pendingAssistantReply: pendingAssistantReply,
+            pendingSend: pendingSend,
+            failure: failure
+        )
     }
 
     private func setupMediaRemote() {
