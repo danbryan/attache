@@ -11,22 +11,42 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
     private let engine: InstructionReplyEngine
     private let locateSessionFile: @Sendable (String) -> URL?
     private let quietWindow: TimeInterval
+    private let eventPumpDebounceInterval: TimeInterval
     private var observations: [String: SessionFileObservation] = [:]
+    private var pendingEventPump: DispatchWorkItem?
+
+    /// How long a burst of watcher `onEvent` signals is debounced before it
+    /// collapses to a single pump (INF-255/B4). A session writing many small
+    /// transcript updates in quick succession must trigger one pump after the
+    /// burst settles, not one per event. Overridable for tests, the same way
+    /// `AgentResumeDeliveryAdapter.defaultProcessTimeout` and
+    /// `InstructionReplyEngine.defaultExpiryWindow` document their own
+    /// override seams.
+    static let defaultEventPumpDebounceInterval: TimeInterval = 1
 
     /// Recent instructions, newest first, for the delivery-log surface.
     @Published private(set) var log: [Instruction] = []
     private(set) var startupRecoveryMessage: String?
+
+    /// Fires once per debounced event-driven pump, with whatever that pump
+    /// changed (may be empty). AppModel wires this to
+    /// `handleTwoWayDeliveryChanges` so a pump triggered by watcher activity
+    /// surfaces delivery/expiry the same way the periodic timer's pump does;
+    /// tests count invocations to prove a burst collapses to one pump.
+    var onEventDrivenPump: (([Instruction]) -> Void)?
 
     init(
         store: CardStore,
         locateSessionFile: @escaping @Sendable (String) -> URL?,
         quietWindow: TimeInterval = 6,
         expiryWindow: TimeInterval = InstructionReplyEngine.defaultExpiryWindow,
+        eventPumpDebounceInterval: TimeInterval = TwoWayCoordinator.defaultEventPumpDebounceInterval,
         adapters: [InstructionDeliveryAdapter]? = nil
     ) {
         self.engine = InstructionReplyEngine(store: store, expiryWindow: expiryWindow)
         self.locateSessionFile = locateSessionFile
         self.quietWindow = quietWindow
+        self.eventPumpDebounceInterval = eventPumpDebounceInterval
         let resolved = adapters ?? [
             AgentResumeDeliveryAdapter(vendor: .claude, locateSessionFile: locateSessionFile),
             AgentResumeDeliveryAdapter(vendor: .codex, locateSessionFile: locateSessionFile)
@@ -106,6 +126,30 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
         )
         refreshLog()
         return expired + delivered
+    }
+
+    /// Debounced entry point for the watcher's `onEvent` callback (INF-255/B4).
+    /// Session file activity observed by the watcher no longer waits for the
+    /// next periodic refresh timer tick: it schedules a pump after
+    /// `eventPumpDebounceInterval` settles, canceling any pump already
+    /// scheduled by an earlier event in the same burst so a run of rapid
+    /// events collapses to exactly one pump instead of one per event. This is
+    /// in ADDITION to the periodic timer, which stays as a backstop for a
+    /// session that goes quiet without any further watcher event to trigger
+    /// this path (e.g. a session that was already idle). Delegates to the
+    /// same `pump(now:)` used everywhere else, so quiet-window and expiry
+    /// semantics are unchanged; this only removes sampling latency.
+    func scheduleEventDrivenPump() {
+        pendingEventPump?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                let changed = await self.pump()
+                self.onEventDrivenPump?(changed)
+            }
+        }
+        pendingEventPump = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + eventPumpDebounceInterval, execute: work)
     }
 
     /// Link a freshly-narrated card to the delivered instruction whose reply it

@@ -87,10 +87,16 @@ Delivery only fires when the target session is **idle**, so a headless resume (a
 second writer) never interleaves with the agent writing the same file.
 `TwoWayCoordinator` resolves the session transcript and uses
 `SessionDeliveryReadinessClassifier` across a quiet window (default 6s).
-Readiness observations are sampled on the coordinator's ~8s refresh pump (not
-the watcher's 2s polls), so the practical delivery floor is one to two pump
-cycles (~8-16s) after the session goes quiet. A session is safe to resume when
-all hold:
+Readiness sampling is event-driven (INF-255/B4): the session watcher's
+`onEvent` callback schedules a pump whenever it observes file activity,
+debounced ~1s so a fast burst of updates collapses to a single pump rather than
+one per event. The coordinator's ~8s refresh timer still runs alongside it as
+a backstop, catching a session that goes quiet with no further watcher event to
+trigger the event-driven path (e.g. one that was already idle when Attaché
+started watching it). Together the practical delivery floor is the ~1s
+debounce after the watcher observes the session has gone quiet, not the ~8-16s
+floor of sampling on the timer alone; the 6s quiet window above is unchanged
+either way. A session is safe to resume when all hold:
 
 1. **No growth:** the session file's length is unchanged across the quiet window
    (no newly appended bytes).

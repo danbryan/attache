@@ -751,6 +751,9 @@ final class AppModel: ObservableObject {
         if let recoveryMessage = twoWay.startupRecoveryMessage {
             intakeStatus = recoveryMessage
         }
+        twoWay.onEventDrivenPump = { [weak self] changed in
+            self?.handleTwoWayDeliveryChanges(changed)
+        }
 
         playback.onFinished = { [weak self] cardID, success in
             self?.finishPlayback(cardID: cardID, success: success)
@@ -781,6 +784,15 @@ final class AppModel: ObservableObject {
         codexSessionWatcher.onEvent = { [weak self] event in
             DispatchQueue.main.async {
                 self?.receive(event)
+                // Event-driven delivery (INF-255/B4): session file activity the
+                // watcher observed can mean a two-way send's session just went
+                // quiet, so try a pump instead of waiting for the next periodic
+                // timer tick. Debounced inside the coordinator so a burst of
+                // rapid events collapses to one pump, not one per event. The
+                // periodic timer (`startCodexSessionRefreshTimer`) is untouched
+                // and remains the backstop for a session with no further event
+                // to trigger this path.
+                self?.twoWay.scheduleEventDrivenPump()
             }
         }
         codexSessionWatcher.onStatus = { [weak self] status in
@@ -3651,8 +3663,12 @@ final class AppModel: ObservableObject {
         codexSessionRefreshTimer?.invalidate()
         let timer = Timer(timeInterval: Self.codexSessionRefreshInterval, repeats: true) { [weak self] _ in
             self?.refreshCodexSessions(updateStatus: false)
-            // Deliver any confirmed instruction whose session has gone quiet. Run on
-            // the main actor so the shared store is never touched off-main.
+            // Deliver any confirmed instruction whose session has gone quiet.
+            // Run on the main actor so the shared store is never touched
+            // off-main. Event-driven pumps (INF-255/B4, `scheduleEventDrivenPump`
+            // via the watcher's `onEvent`) now cover the common case sooner; this
+            // timer stays as a backstop for a session that goes quiet with no
+            // further watcher event to trigger that path.
             if let twoWay = self?.twoWay {
                 Task { @MainActor in
                     let changed = await twoWay.pump()
