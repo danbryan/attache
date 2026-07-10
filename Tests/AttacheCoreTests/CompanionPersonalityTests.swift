@@ -294,4 +294,140 @@ final class CompanionPersonalityTests: XCTestCase {
         XCTAssertFalse(prompt.contains("stage_agent_instruction"))
         XCTAssertTrue(prompt.contains("Do not address, write to, or imply you can message the work agent"))
     }
+
+    // MARK: - Watched sessions inventory (INF-239)
+
+    func testWatchedSessionsBlockWordsEmptyCaseWhenNoOtherSessionsExist() {
+        XCTAssertEqual(
+            CompanionPersonality.watchedSessionsBlock([]),
+            "No other sessions are being watched."
+        )
+
+        let now = Date()
+        let onlyTheFocusedOne = CompanionPersonality.WatchedSessionSummary(
+            sourceName: "Codex",
+            title: "attache release prep",
+            updatedAt: now,
+            isFocused: true,
+            isTwoWayEnabled: true
+        )
+        XCTAssertEqual(
+            CompanionPersonality.watchedSessionsBlock([onlyTheFocusedOne], now: now),
+            "No other sessions are being watched."
+        )
+    }
+
+    func testWatchedSessionsBlockMarksFocusedAndTwoWayEnabledOnlyForFocusedEntry() {
+        let now = Date()
+        let focused = CompanionPersonality.WatchedSessionSummary(
+            sourceName: "Claude Code",
+            title: "Weekly Codex Improvement Review",
+            updatedAt: now.addingTimeInterval(-120),
+            isFocused: true,
+            isTwoWayEnabled: true
+        )
+        let other = CompanionPersonality.WatchedSessionSummary(
+            sourceName: "Codex",
+            title: "attache release prep",
+            updatedAt: now.addingTimeInterval(-3 * 3600),
+            isFocused: false,
+            isTwoWayEnabled: true // should never surface: two-way is focused-only per spec
+        )
+
+        let block = CompanionPersonality.watchedSessionsBlock([focused, other], now: now)
+
+        let expected = """
+        Watched sessions:
+        - Claude Code / "Weekly Codex Improvement Review" (focused, two-way enabled, active 2m ago)
+        - Codex / "attache release prep" (active 3h ago)
+        """
+        XCTAssertEqual(block, expected)
+    }
+
+    func testWatchedSessionsBlockCapsAtSixMostRecentFirst() {
+        let now = Date()
+        // 8 sessions, oldest first; the two oldest should be dropped by the cap.
+        let sessions = (0..<8).map { index -> CompanionPersonality.WatchedSessionSummary in
+            CompanionPersonality.WatchedSessionSummary(
+                sourceName: "Codex",
+                title: "session \(index)",
+                updatedAt: now.addingTimeInterval(-Double(8 - index) * 3600),
+                isFocused: false,
+                isTwoWayEnabled: false
+            )
+        }
+
+        let block = CompanionPersonality.watchedSessionsBlock(sessions, now: now)
+        let lines = block.split(separator: "\n")
+
+        XCTAssertEqual(lines.first, "Watched sessions:")
+        XCTAssertEqual(lines.count, 1 + 6, "expected the header plus exactly 6 capped entries")
+        // Most recent first: "session 7" (1h ago) leads, "session 2" (6h ago) is last kept.
+        XCTAssertTrue(lines[1].contains("session 7"))
+        XCTAssertTrue(lines[6].contains("session 2"))
+        XCTAssertFalse(block.contains("session 1\""))
+        XCTAssertFalse(block.contains("session 0\""))
+    }
+
+    func testWatchedSessionsBlockFallsBackToUntitledForBlankTitle() {
+        let now = Date()
+        let sessions = [
+            CompanionPersonality.WatchedSessionSummary(
+                sourceName: "Codex", title: "  ", updatedAt: now, isFocused: false, isTwoWayEnabled: false
+            ),
+            CompanionPersonality.WatchedSessionSummary(
+                sourceName: "Codex", title: "named", updatedAt: now.addingTimeInterval(-60), isFocused: false, isTwoWayEnabled: false
+            )
+        ]
+
+        let block = CompanionPersonality.watchedSessionsBlock(sessions, now: now)
+
+        XCTAssertTrue(block.contains("Codex / \"Untitled session\""))
+    }
+
+    func testConversationSystemPromptEmbedsWatchedSessionsBlock() {
+        let now = Date()
+        let watched = [
+            CompanionPersonality.WatchedSessionSummary(
+                sourceName: "Claude Code",
+                title: "Weekly Codex Improvement Review",
+                updatedAt: now,
+                isFocused: true,
+                isTwoWayEnabled: true
+            ),
+            CompanionPersonality.WatchedSessionSummary(
+                sourceName: "Codex",
+                title: "attache release prep",
+                updatedAt: now.addingTimeInterval(-3 * 3600),
+                isFocused: false,
+                isTwoWayEnabled: false
+            )
+        ]
+
+        let prompt = CompanionPersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: "Weekly Codex Improvement Review",
+            sessionSourceName: "Claude Code",
+            workingDirectory: nil,
+            latestSummary: nil,
+            canStageAgentInstruction: true,
+            watchedSessions: watched
+        )
+
+        XCTAssertTrue(prompt.contains("Watched sessions:"))
+        XCTAssertTrue(prompt.contains("- Claude Code / \"Weekly Codex Improvement Review\" (focused, two-way enabled, active just now)"))
+        XCTAssertTrue(prompt.contains("- Codex / \"attache release prep\" (active 3h ago)"))
+    }
+
+    func testConversationSystemPromptDefaultsToNoOtherSessionsWatched() {
+        let prompt = CompanionPersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: nil,
+            workingDirectory: nil,
+            latestSummary: nil,
+            canStageAgentInstruction: false
+        )
+
+        XCTAssertTrue(prompt.contains("No other sessions are being watched."))
+    }
 }

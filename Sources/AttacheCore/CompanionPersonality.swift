@@ -227,6 +227,72 @@ public enum CompanionPersonality {
         )
     }
 
+    /// One session Attaché is watching, for the conversation system prompt's
+    /// "Watched sessions" inventory (INF-239). Kept thin on purpose: no
+    /// working directory, no session id, for non-focused sessions, so the
+    /// model gets awareness ("did you mean the Claude Code session?")
+    /// without spending tokens it does not need. This is prompt context
+    /// only; the frozen send destination is decided elsewhere and never
+    /// reads this inventory (see AGENTS.md "no hidden phrase routing").
+    public struct WatchedSessionSummary: Equatable {
+        public var sourceName: String
+        public var title: String
+        public var updatedAt: Date
+        public var isFocused: Bool
+        public var isTwoWayEnabled: Bool
+
+        public init(
+            sourceName: String,
+            title: String,
+            updatedAt: Date,
+            isFocused: Bool,
+            isTwoWayEnabled: Bool
+        ) {
+            self.sourceName = sourceName
+            self.title = title
+            self.updatedAt = updatedAt
+            self.isFocused = isFocused
+            self.isTwoWayEnabled = isTwoWayEnabled
+        }
+    }
+
+    static let maxWatchedSessionEntries = 6
+
+    /// Renders the "Watched sessions" inventory block: what Attaché is
+    /// watching, most recent first, capped so the block stays token-lean.
+    /// Two-way enablement is only ever shown for the focused entry.
+    public static func watchedSessionsBlock(
+        _ sessions: [WatchedSessionSummary],
+        now: Date = Date()
+    ) -> String {
+        guard sessions.count > 1 else {
+            return "No other sessions are being watched."
+        }
+        let ranked = sessions.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxWatchedSessionEntries)
+        let lines = ranked.map { session -> String in
+            var tags: [String] = []
+            if session.isFocused {
+                tags.append("focused")
+                if session.isTwoWayEnabled { tags.append("two-way enabled") }
+            }
+            tags.append(relativeActiveTag(from: session.updatedAt, now: now))
+            let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "- \(session.sourceName) / \"\(title.isEmpty ? "Untitled session" : title)\" (\(tags.joined(separator: ", ")))"
+        }
+        return (["Watched sessions:"] + lines).joined(separator: "\n")
+    }
+
+    private static func relativeActiveTag(from date: Date, now: Date) -> String {
+        let delta = max(0, now.timeIntervalSince(date))
+        if delta < 45 { return "active just now" }
+        let minutes = Int((delta / 60).rounded())
+        if minutes < 60 { return "active \(minutes)m ago" }
+        let hours = Int((delta / 3600).rounded())
+        if hours < 24 { return "active \(hours)h ago" }
+        let days = Int((delta / 86400).rounded())
+        return "active \(days)d ago"
+    }
+
     /// System prompt for an ongoing voice conversation with the user (multi-turn, with
     /// tools to pull more session context). Distinct from the one-shot presentation
     /// and follow-up prompts.
@@ -238,7 +304,8 @@ public enum CompanionPersonality {
         workingDirectory: String?,
         latestSummary: String?,
         latestAgentReply: String? = nil,
-        canStageAgentInstruction: Bool = false
+        canStageAgentInstruction: Bool = false,
+        watchedSessions: [WatchedSessionSummary] = []
     ) -> String {
         let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
         let titleLine: String
@@ -262,6 +329,7 @@ public enum CompanionPersonality {
         let toolsLine = canStageAgentInstruction
             ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (route a user-requested instruction to the work agent), and rename_session. Only read or stage what you need.\n"
             : "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and rename_session. Only read what you need.\n"
+        let watchedSessionsSection = watchedSessionsBlock(watchedSessions)
         return """
         \(companionIdentityPrompt)
 
@@ -278,6 +346,7 @@ public enum CompanionPersonality {
 
         Current session context:
         \(titleLine)\(cwdLine)\(summaryLine)\(latestReplyLine)
+        \(watchedSessionsSection)
         """
     }
 
