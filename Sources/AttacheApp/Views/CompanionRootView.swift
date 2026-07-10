@@ -627,11 +627,10 @@ struct CompanionRootView: View {
         if model.onCall || liveBottomHUDVisible {
             VStack(spacing: 16) {
                 if model.onCall {
-                    // Fades with the chrome like everything else, but never
-                    // while typed text or a reply is in flight.
+                    // A call uses the same persistent-input convention as a
+                    // standard chat: keep the composer available while the user
+                    // listens, pauses, seeks, or starts drafting a follow-up.
                     onCallHUD
-                        .opacity(chromeAwake || !model.conversationDraft.isEmpty || model.isAwaitingReply || callProgressVisible ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.4), value: chromeAwake)
                         .transition(.opacity)
                 }
 

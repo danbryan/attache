@@ -444,9 +444,10 @@ if enabled("f3") {
         _ = try waitForElement("speaking indicator", in: try mainWindow(), containing: "Assistant speaking")
     }
     run.step("f3-transport", "live composer stays above captions and playback controls") {
-        let call = try waitForElement("Call control", in: try mainWindow(),
-                                      role: kAXButtonRole as String, containing: "Call the focused session")
-        guard call.press() else { throw SmokeError(message: "AXPress failed on \(call.summary)") }
+        // The idle dock may auto-hide during a long clip. Command-L is the
+        // supported call shortcut and must work independently of dock chrome.
+        app.activate()
+        app.key(Key.l, command: true)
 
         let window = try mainWindow()
         guard let originalWindowFrame = window.frame else {
