@@ -286,7 +286,7 @@ extension CompanionRootView {
 
     func requestConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
         if model.presentationProviderSendsToCloud(provider),
-           !model.cloudConsentPresentationAcknowledged {
+           !model.cloudConsentAcknowledged(for: provider) {
             pendingCallPresentationProvider = provider
         } else {
             model.selectConversationRecoveryProvider(provider)

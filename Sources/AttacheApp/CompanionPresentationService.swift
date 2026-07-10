@@ -32,6 +32,7 @@ final class CompanionPresentationService {
         }
 
         let unresolvedSettings = CompanionPresentationSettings.load(
+            role: .presentation,
             defaults: defaults,
             environment: environment,
             resolveSecrets: false
@@ -52,7 +53,7 @@ final class CompanionPresentationService {
         }
 
         Task {
-            let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+            let settings = CompanionPresentationSettings.load(role: .presentation, defaults: defaults, environment: environment)
             guard settings.isConfigured else {
                 await MainActor.run {
                     completion(Self.eventWithPlainReadbackPresentation(
@@ -100,6 +101,7 @@ final class CompanionPresentationService {
             danQuestion: danQuestion
         )
         let unresolvedSettings = CompanionPresentationSettings.load(
+            role: .conversation,
             defaults: defaults,
             environment: environment,
             resolveSecrets: false
@@ -113,7 +115,7 @@ final class CompanionPresentationService {
         }
 
         Task {
-            let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+            let settings = CompanionPresentationSettings.load(role: .conversation, defaults: defaults, environment: environment)
             guard settings.isConfigured else {
                 await MainActor.run {
                     completion(.success(fallback))
@@ -174,6 +176,7 @@ final class CompanionPresentationService {
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         let unresolved = CompanionPresentationSettings.load(
+            role: .conversation,
             defaults: defaults,
             environment: environment,
             resolveSecrets: false
@@ -184,7 +187,7 @@ final class CompanionPresentationService {
         }
 
         Task {
-            let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+            let settings = CompanionPresentationSettings.load(role: .conversation, defaults: defaults, environment: environment)
             guard settings.isConfigured else {
                 await MainActor.run { completion(.failure(CompanionPresentationError.notConfigured)) }
                 return
@@ -252,13 +255,14 @@ final class CompanionPresentationService {
         return text
     }
 
-    /// One-shot raw completion for background classification (e.g. topic tags).
-    /// Returns nil if the presentation LLM isn't configured, so callers can bail
-    /// cheaply instead of spinning.
-    func complete(system: String, user: String) async -> String? {
-        let unresolved = CompanionPresentationSettings.load(defaults: defaults, environment: environment, resolveSecrets: false)
+    /// One-shot raw completion for background classification (used by both
+    /// the inbox recap and topic tagging; callers pass their own role so each
+    /// can pick its own model, see INF-247). Returns nil if that role's LLM
+    /// isn't configured, so callers can bail cheaply instead of spinning.
+    func complete(system: String, user: String, role: ModelRole) async -> String? {
+        let unresolved = CompanionPresentationSettings.load(role: role, defaults: defaults, environment: environment, resolveSecrets: false)
         guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else { return nil }
-        let settings = CompanionPresentationSettings.load(defaults: defaults, environment: environment)
+        let settings = CompanionPresentationSettings.load(role: role, defaults: defaults, environment: environment)
         guard settings.isConfigured else { return nil }
         return try? await Self.requestChatCompletion(
             messages: [
@@ -269,11 +273,11 @@ final class CompanionPresentationService {
         )
     }
 
-    /// Whether the presentation LLM is configured enough to make background
+    /// Whether the given role's LLM is configured enough to make background
     /// calls. Deliberately keychain-free: presence comes from the defaults
     /// flag, and the actual calls resolve and re-check before requesting.
-    var isPresentationConfigured: Bool {
-        let unresolved = CompanionPresentationSettings.load(defaults: defaults, environment: environment, resolveSecrets: false)
+    func isPresentationConfigured(for role: ModelRole) -> Bool {
+        let unresolved = CompanionPresentationSettings.load(role: role, defaults: defaults, environment: environment, resolveSecrets: false)
         return unresolved.llmEnabled && unresolved.hasProviderConfiguration
     }
 
@@ -875,7 +879,20 @@ struct CompanionFollowUpAnswerResult: Equatable {
     var errorDescription: String?
 }
 
-struct CompanionPresentationSettings {
+/// The independent LLM consumers that can each select their own
+/// provider/model (INF-247). Follow-up answers ride `.conversation` (they go
+/// through the same `answerFollowUpQuestion` call as live conversation), and
+/// instruction phrasing is a tool argument of the converse call rather than a
+/// separate request, so it rides `.conversation` too; neither gets its own
+/// case.
+enum ModelRole: String, CaseIterable {
+    case conversation
+    case presentation
+    case recap
+    case tagging
+}
+
+struct CompanionPresentationSettings: Equatable {
     var llmEnabled: Bool
     var provider: CompanionPresentationProvider
     var baseURL: URL
@@ -904,7 +921,16 @@ struct CompanionPresentationSettings {
         return !model.isEmpty
     }
 
+    /// - Parameter role: which LLM consumer this load is for (INF-247).
+    ///   Every field below checks, in order: the global `ATTACHE_LLM_*` /
+    ///   `COMPANION_LLM_*` environment overrides (so smoke scripts and
+    ///   canaries keep affecting every role, not just one), then the
+    ///   `role`-specific default key, then the existing global default key,
+    ///   then the provider's built-in default. With no per-role key ever
+    ///   set, every role resolves byte-for-byte the same as before per-role
+    ///   selection existed.
     static func load(
+        role: ModelRole,
         defaults: UserDefaults,
         environment: [String: String],
         resolveSecrets: Bool = true
@@ -919,12 +945,14 @@ struct CompanionPresentationSettings {
         let explicitProviderText = firstNonEmpty(
             environment["ATTACHE_LLM_PROVIDER"],
             environment["COMPANION_LLM_PROVIDER"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .provider)),
             defaults.string(forKey: CompanionPreferenceKey.presentationLLMProvider),
             ""
         )
         let configuredBaseURLText = firstNonEmpty(
             environment["ATTACHE_LLM_BASE_URL"],
             environment["COMPANION_LLM_BASE_URL"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .baseURL)),
             defaults.string(forKey: CompanionPreferenceKey.presentationLLMBaseURL),
             ""
         )
@@ -937,6 +965,7 @@ struct CompanionPresentationSettings {
         let apiKeySecretRef = firstNonEmpty(
             environment["ATTACHE_LLM_API_KEY_SECRET_REF"],
             environment["COMPANION_LLM_API_KEY_SECRET_REF"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .apiKeySecretRef)),
             defaults.string(forKey: CompanionPreferenceKey.presentationLLMAPIKeySecretRef),
             ""
         )
@@ -949,6 +978,7 @@ struct CompanionPresentationSettings {
             environment["ATTACHE_LLM_API_KEY"],
             environment["COMPANION_LLM_API_KEY"],
             resolveSecrets ? configuredSecret(defaults: defaults, account: provider.developmentSecretAccount) : nil,
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .apiKey)),
             defaults.string(forKey: CompanionPreferenceKey.presentationLLMAPIKey),
             ""
         )
@@ -958,12 +988,14 @@ struct CompanionPresentationSettings {
         let model = firstNonEmpty(
             environment["ATTACHE_LLM_MODEL"],
             environment["COMPANION_LLM_MODEL"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model)),
             defaults.string(forKey: CompanionPreferenceKey.presentationLLMModel),
             provider.defaultModel
         )
         let configuredReasoningEffort = firstNonEmpty(
             environment["ATTACHE_REASONING_EFFORT"],
             environment["COMPANION_REASONING_EFFORT"],
+            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort)),
             defaults.string(forKey: CompanionPreferenceKey.presentationReasoningEffort),
             provider.defaultReasoningEffort
         )
@@ -971,6 +1003,7 @@ struct CompanionPresentationSettings {
         let serviceTier = provider.supportsServiceTier
             ? firstNonEmpty(
                 environment["ATTACHE_SERVICE_TIER"],
+                defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier)),
                 defaults.string(forKey: CompanionPreferenceKey.presentationServiceTier),
                 provider.defaultServiceTier
             )

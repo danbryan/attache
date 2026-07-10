@@ -285,7 +285,7 @@ struct CompanionRootView: View {
                 produces: "live answers",
                 sends: "your question and the attached session context",
                 onEnable: {
-                    model.cloudConsentPresentationAcknowledged = true
+                    model.acknowledgeCloudConsent(for: provider)
                     model.selectConversationRecoveryProvider(provider)
                     pendingCallPresentationProvider = nil
                 },

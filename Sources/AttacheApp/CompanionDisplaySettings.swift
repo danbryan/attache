@@ -408,11 +408,32 @@ enum CompanionPreferenceKey {
     static let presentationReasoningEffort = "attache.presentationReasoningEffort"
     static let presentationServiceTier = "attache.presentationServiceTier"
     static let narrationDetail = "attache.narrationDetail"
+    // Legacy single-flag consent, read-only going forward: migrated once (see
+    // AppModel.migrateCloudConsentToPerProvider) onto cloudConsentPresentationProviders.
     static let cloudConsentPresentation = "attache.cloudConsentPresentation"
+    static let cloudConsentPresentationProviders = "attache.cloudConsentPresentationProviders"
+    static let cloudConsentPresentationMigrationDone = "attache.cloudConsentPresentationMigrationDone"
     static let cloudConsentVoice = "attache.cloudConsentVoice"
     static let ollamaBaseURL = "attache.ollamaBaseURL"
     static let lmStudioBaseURL = "attache.lmStudioBaseURL"
     static let customBaseURL = "attache.customBaseURL"
+
+    /// The `presentationLLM*` fields that `CompanionPresentationSettings.load(role:)`
+    /// can override per `ModelRole` (INF-247). `llmEnabled` and the persona
+    /// `personalityPrompt` are deliberately excluded: they aren't a per-role
+    /// "which model" choice, so they stay global-only.
+    enum PresentationLLMField: String {
+        case provider, baseURL, apiKey, apiKeySecretRef, model, reasoningEffort, serviceTier
+    }
+
+    /// A per-role override key, e.g. `attache.presentationLLM.recap.model`.
+    /// `CompanionPresentationSettings.load(role:)` checks this before falling
+    /// back to the matching global `presentationLLM*` key, so with no
+    /// per-role keys ever set, every role resolves exactly as it did before
+    /// per-role selection existed.
+    static func presentationLLMRoleKey(_ role: ModelRole, _ field: PresentationLLMField) -> String {
+        "attache.presentationLLM.\(role.rawValue).\(field.rawValue)"
+    }
 }
 
 extension CompanionTheme {
