@@ -9,6 +9,16 @@ cd "$ROOT"
 BUNDLE_ID="com.bryanlabs.attache"
 TEMP_ROOT=""
 BACKUP_DIR=""
+# INF-250: CLILanguageModel.candidatePath() checks "~/.local/bin/<name>" before
+# any other location, and AgentResumeDeliveryAdapter's default locateExecutable
+# resolves through it, not a caller-supplied PATH override. Installing the fake
+# `codex` there (backed up and restored below) makes the packaged app's own
+# delivery adapter spawn the fake CLI instead of any real one on this machine,
+# so the second Tell Agent turn delivers for real with no live credentials.
+LOCAL_BIN_DIR="$HOME/.local/bin"
+LOCAL_BIN_CODEX="$LOCAL_BIN_DIR/codex"
+FAKE_CODEX_BACKUP=""
+FAKE_CODEX_INSTALLED=0
 
 usage() {
   cat <<EOF
@@ -17,7 +27,9 @@ Usage:
 
 Creates a disposable fake Codex session, configures Attaché with a text-only
 CLI personality provider, switches the live conversation to Tell Agent, and
-proves Attaché stages the raw instruction through the normal confirmation UI.
+proves Attaché both (a) stages a raw instruction through the normal
+confirmation UI and cancels it, and (b) stages, confirms, and delivers a
+second instruction end to end against a fake `codex` CLI (INF-250).
 EOF
 }
 
@@ -36,6 +48,16 @@ PY
 
 cleanup() {
   pkill -f "$ROOT/dist/Attache.app/Contents/MacOS/Attache" 2>/dev/null || true
+  if [[ "$FAKE_CODEX_INSTALLED" == "1" ]]; then
+    if [[ -n "$FAKE_CODEX_BACKUP" ]]; then
+      cp -a "$FAKE_CODEX_BACKUP" "$LOCAL_BIN_CODEX" || {
+        echo "warning: could not restore the real $LOCAL_BIN_CODEX; restore manually from $FAKE_CODEX_BACKUP" >&2
+      }
+    else
+      rm -f "$LOCAL_BIN_CODEX"
+    fi
+    FAKE_CODEX_INSTALLED=0
+  fi
   if [[ -n "$BACKUP_DIR" ]]; then
     scripts/simulate-fresh-user.sh restore "$BACKUP_DIR" >/dev/null || {
       echo "warning: state restore failed; restore manually with:" >&2
@@ -70,6 +92,7 @@ CODEX_TEST_HOME="$TEMP_ROOT/codex-home"
 META_FILE="$TEMP_ROOT/fake-codex.json"
 NONCE="$(date +%Y%m%d%H%M%S)_$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-' | cut -c1-8)"
 TOKEN="ATTACHE_AGENT_MODE_$NONCE"
+DELIVER_TOKEN="ATTACHE_AGENT_MODE_DELIVER_$NONCE"
 
 python3 scripts/create-fake-codex-home.py \
   --home "$CODEX_TEST_HOME" \
@@ -81,9 +104,21 @@ python3 scripts/create-fake-codex-home.py \
 
 SESSION_ID="$(json_field "$META_FILE" target_session_id)"
 SESSION_FILE="$(json_field "$META_FILE" target_session_file)"
+FAKE_CODEX_EXECUTABLE="$(json_field "$META_FILE" fake_codex_executable)"
 [[ -n "$SESSION_ID" && -f "$SESSION_FILE" ]] || fail "fake Codex session was not created"
+[[ -n "$FAKE_CODEX_EXECUTABLE" && -x "$FAKE_CODEX_EXECUTABLE" ]] || fail "fake codex executable was not created"
 
 echo "==> Disposable agent-destination session: $SESSION_ID"
+echo "==> Installing the fake codex CLI ahead of any real one on this machine"
+mkdir -p "$LOCAL_BIN_DIR"
+if [[ -e "$LOCAL_BIN_CODEX" || -L "$LOCAL_BIN_CODEX" ]]; then
+  FAKE_CODEX_BACKUP="$TEMP_ROOT/codex.real-backup"
+  cp -a "$LOCAL_BIN_CODEX" "$FAKE_CODEX_BACKUP"
+fi
+cp "$FAKE_CODEX_EXECUTABLE" "$LOCAL_BIN_CODEX"
+chmod 700 "$LOCAL_BIN_CODEX"
+FAKE_CODEX_INSTALLED=1
+
 echo "==> Switching Attaché to a fresh text-only personality profile"
 FRESH_OUTPUT="$(scripts/simulate-fresh-user.sh fresh)"
 echo "$FRESH_OUTPUT"
@@ -111,6 +146,8 @@ ATTACHE_AGENT_MODE_SESSION_ID="$SESSION_ID" \
 ATTACHE_AGENT_MODE_SESSION_FILE="$SESSION_FILE" \
 ATTACHE_AGENT_MODE_TOKEN="$TOKEN" \
 ATTACHE_AGENT_MODE_PROMPT="reply exactly $TOKEN and do not use tools" \
+ATTACHE_AGENT_MODE_DELIVER_TOKEN="$DELIVER_TOKEN" \
+ATTACHE_AGENT_MODE_DELIVER_PROMPT="reply exactly $DELIVER_TOKEN and do not use tools" \
   scripts/ui-smoke.sh
 
 echo "==> Agent destination smoke passed for session $SESSION_ID"
