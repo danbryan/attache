@@ -417,7 +417,13 @@ final class CompanionPresentationService {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch let urlError as URLError {
+            throw CompanionPresentationError.transport(urlError)
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CompanionPresentationError.invalidResponse
         }
@@ -684,7 +690,13 @@ final class CompanionPresentationService {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch let urlError as URLError {
+            throw CompanionPresentationError.transport(urlError)
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CompanionPresentationError.invalidResponse
         }
@@ -996,11 +1008,14 @@ struct CompanionPresentationSettings {
     }
 }
 
-private enum CompanionPresentationError: LocalizedError {
+// Not private: AppModel inspects `httpStatus` / `urlErrorCode` to classify
+// conversation failures structurally (see ConversationRecovery.classify).
+enum CompanionPresentationError: LocalizedError {
     case emptyResponse
     case invalidResponse
     case httpStatus(Int, String)
     case notConfigured
+    case transport(URLError)
 
     var errorDescription: String? {
         switch self {
@@ -1013,7 +1028,25 @@ private enum CompanionPresentationError: LocalizedError {
             return "LLM request failed with HTTP \(status): \(clipped)"
         case .notConfigured:
             return "No personality LLM is configured. Set one up in Settings → Model."
+        case .transport(let urlError):
+            return "LLM request failed: \(urlError.localizedDescription)"
         }
+    }
+
+    /// The HTTP status code, when the failure carries one. `nil` for
+    /// transport-level failures (timeout, connection loss) and other
+    /// non-HTTP errors.
+    var httpStatus: Int? {
+        if case .httpStatus(let status, _) = self { return status }
+        return nil
+    }
+
+    /// The URLError code, when the failure is a transport-level failure
+    /// (timeout, connection loss, DNS failure, etc.) rather than an HTTP
+    /// response.
+    var urlErrorCode: URLError.Code? {
+        if case .transport(let urlError) = self { return urlError.code }
+        return nil
     }
 }
 

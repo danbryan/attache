@@ -1870,9 +1870,15 @@ final class AppModel: ObservableObject {
                 case .failure(let error):
                     let errorMessage = error.localizedDescription
                     let message = "I hit a problem: \(errorMessage)"
+                    let presentationError = error as? CompanionPresentationError
+                    let httpStatus = presentationError?.httpStatus
+                    let urlErrorCode = presentationError?.urlErrorCode ?? (error as? URLError)?.code
                     let recovery = ConversationRecovery.classify(
                         errorMessage: errorMessage,
-                        failedPrompt: trimmed
+                        failedPrompt: trimmed,
+                        httpStatus: httpStatus,
+                        urlErrorCode: urlErrorCode,
+                        isCLIProvider: self.presentationProvider.isCLI
                     )
                     self.conversationRecovery = recovery
                     self.conversationStatus = errorMessage
