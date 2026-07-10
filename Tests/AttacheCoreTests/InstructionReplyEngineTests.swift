@@ -209,6 +209,60 @@ final class InstructionReplyEngineTests: XCTestCase {
         XCTAssertEqual(expired.first?.error, "Send expired after 1 min waiting for the agent to go quiet.")
     }
 
+    /// INF-256 (E4): `ATTACHE_TWO_WAY_EXPIRY_SECONDS` must be structurally
+    /// inert without `ATTACHE_UI_TEST=1` also present, so it can never be a
+    /// way to shrink a real user's 30-minute expiry window by itself. This is
+    /// the explicit non-bypass proof the ticket's success criteria requires,
+    /// not just a convention.
+    func testExpiryWindowOverrideRequiresUITestFlag() {
+        let withoutUITest = InstructionReplyEngine.expiryWindow(fromEnvironment: [
+            "ATTACHE_TWO_WAY_EXPIRY_SECONDS": "2"
+        ])
+        XCTAssertEqual(withoutUITest, InstructionReplyEngine.defaultExpiryWindow)
+
+        let withUITest = InstructionReplyEngine.expiryWindow(fromEnvironment: [
+            "ATTACHE_UI_TEST": "1",
+            "ATTACHE_TWO_WAY_EXPIRY_SECONDS": "2"
+        ])
+        XCTAssertEqual(withUITest, 2)
+
+        // A near-miss value ("true" instead of "1") must not count either:
+        // the gate is the exact string the harness sets, not any truthy value.
+        let nearMiss = InstructionReplyEngine.expiryWindow(fromEnvironment: [
+            "ATTACHE_UI_TEST": "true",
+            "ATTACHE_TWO_WAY_EXPIRY_SECONDS": "2"
+        ])
+        XCTAssertEqual(nearMiss, InstructionReplyEngine.defaultExpiryWindow)
+    }
+
+    /// With the flag present, a missing, non-numeric, or non-positive override
+    /// value still falls back to the production default rather than crashing
+    /// or disabling expiry outright.
+    func testExpiryWindowOverrideIgnoresInvalidOrMissingValue() {
+        XCTAssertEqual(
+            InstructionReplyEngine.expiryWindow(fromEnvironment: ["ATTACHE_UI_TEST": "1"]),
+            InstructionReplyEngine.defaultExpiryWindow
+        )
+        XCTAssertEqual(
+            InstructionReplyEngine.expiryWindow(fromEnvironment: [
+                "ATTACHE_UI_TEST": "1",
+                "ATTACHE_TWO_WAY_EXPIRY_SECONDS": "not-a-number"
+            ]),
+            InstructionReplyEngine.defaultExpiryWindow
+        )
+        XCTAssertEqual(
+            InstructionReplyEngine.expiryWindow(fromEnvironment: [
+                "ATTACHE_UI_TEST": "1",
+                "ATTACHE_TWO_WAY_EXPIRY_SECONDS": "0"
+            ]),
+            InstructionReplyEngine.defaultExpiryWindow
+        )
+        XCTAssertEqual(
+            InstructionReplyEngine.expiryWindow(fromEnvironment: [:]),
+            InstructionReplyEngine.defaultExpiryWindow
+        )
+    }
+
     func testLogAndResponseLinking() async throws {
         let store = try makeStore()
         let engine = InstructionReplyEngine(store: store)
