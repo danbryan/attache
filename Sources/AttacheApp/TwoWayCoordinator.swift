@@ -52,6 +52,11 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
             AgentResumeDeliveryAdapter(vendor: .codex, locateSessionFile: locateSessionFile)
         ]
         resolved.forEach { engine.register($0) }
+        // Durable enablement (INF-242/B5): restore persisted per-session
+        // enablement, but only for sessions whose transcript still exists -
+        // the same existence check delivery already relies on. A session
+        // that's been deleted or rotated away does not come back enabled.
+        engine.restoreEnablement(sessionExists: { locateSessionFile($0) != nil })
         let recovered = engine.recoverInterruptedInstructions()
         if !recovered.isEmpty {
             let noun = recovered.count == 1 ? "request was" : "requests were"

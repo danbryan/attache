@@ -315,4 +315,109 @@ final class InstructionReplyEngineTests: XCTestCase {
         XCTAssertTrue(recovered.allSatisfy { $0.state == .failed })
         XCTAssertTrue(recovered.allSatisfy { $0.error?.contains("restarted") == true })
     }
+
+    // MARK: - Durable enablement (INF-242/B5)
+
+    /// The default option from the ticket: enablement is persisted in SQLite,
+    /// not memory-only. A fresh `InstructionReplyEngine`/`CardStore` pointed at
+    /// the same underlying file (simulating a relaunch, not a real app
+    /// restart) must still see the session enabled.
+    func testEnablementPersistsAcrossFreshEngineAndStore() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-instr-\(UUID().uuidString).sqlite")
+        let store1 = try CardStore(databaseURL: url)
+        let engine1 = InstructionReplyEngine(store: store1)
+        engine1.setTwoWayEnabled(true, forSessionID: "s1")
+        XCTAssertTrue(engine1.isTwoWayEnabled(forSessionID: "s1"))
+
+        let store2 = try CardStore(databaseURL: url)
+        let engine2 = InstructionReplyEngine(store: store2)
+
+        XCTAssertTrue(engine2.isTwoWayEnabled(forSessionID: "s1"))
+    }
+
+    /// Disabling is durable too: it must write through so a relaunch doesn't
+    /// resurrect a session the user explicitly turned off.
+    func testDisablingPersistsAcrossFreshEngineAndStore() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-instr-\(UUID().uuidString).sqlite")
+        let store1 = try CardStore(databaseURL: url)
+        let engine1 = InstructionReplyEngine(store: store1)
+        engine1.setTwoWayEnabled(true, forSessionID: "s1")
+        engine1.setTwoWayEnabled(false, forSessionID: "s1")
+
+        let store2 = try CardStore(databaseURL: url)
+        let engine2 = InstructionReplyEngine(store: store2)
+
+        XCTAssertFalse(engine2.isTwoWayEnabled(forSessionID: "s1"))
+    }
+
+    /// A session whose transcript has been deleted between "enable" and
+    /// "relaunch" must not come back enabled: `restoreEnablement` is the
+    /// startup-only check (driven by `TwoWayCoordinator` with the same
+    /// existence check delivery already relies on) that a persisted row alone
+    /// is not enough. The stale row is also pruned, not just masked in the
+    /// in-memory cache, so a subsequent fresh engine sees it gone too.
+    func testEnablementIsNotRestoredWhenSessionTranscriptIsGone() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-instr-\(UUID().uuidString).sqlite")
+        let transcriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-transcript-\(UUID().uuidString).jsonl")
+        try Data("placeholder".utf8).write(to: transcriptURL)
+
+        let store1 = try CardStore(databaseURL: url)
+        let engine1 = InstructionReplyEngine(store: store1)
+        engine1.setTwoWayEnabled(true, forSessionID: "s1")
+
+        // The session's transcript is gone before the "relaunch."
+        try FileManager.default.removeItem(at: transcriptURL)
+
+        let store2 = try CardStore(databaseURL: url)
+        let engine2 = InstructionReplyEngine(store: store2)
+        // Loaded from the persisted table before restoration runs.
+        XCTAssertTrue(engine2.isTwoWayEnabled(forSessionID: "s1"))
+
+        let pruned = engine2.restoreEnablement(sessionExists: { sessionID in
+            sessionID == "s1" ? FileManager.default.fileExists(atPath: transcriptURL.path) : true
+        })
+
+        XCTAssertEqual(pruned, ["s1"])
+        XCTAssertFalse(engine2.isTwoWayEnabled(forSessionID: "s1"))
+
+        // The row was pruned in SQLite, not only in engine2's in-memory cache.
+        let store3 = try CardStore(databaseURL: url)
+        let engine3 = InstructionReplyEngine(store: store3)
+        XCTAssertFalse(engine3.isTwoWayEnabled(forSessionID: "s1"))
+    }
+
+    /// A session whose transcript still exists survives `restoreEnablement`
+    /// unchanged, so the check is genuinely conditional, not a blanket reset.
+    func testEnablementIsRestoredWhenSessionTranscriptStillExists() throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+
+        let pruned = engine.restoreEnablement(sessionExists: { _ in true })
+
+        XCTAssertTrue(pruned.isEmpty)
+        XCTAssertTrue(engine.isTwoWayEnabled(forSessionID: "s1"))
+    }
+
+    /// The `two_way_enablement` migration (`CREATE TABLE IF NOT EXISTS`) must
+    /// be safe to run repeatedly against the same DB file, and re-enabling the
+    /// same session must upsert rather than duplicate a row.
+    func testTwoWayEnablementMigrationIsIdempotentAndDoesNotDuplicateRows() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-instr-\(UUID().uuidString).sqlite")
+
+        let store1 = try CardStore(databaseURL: url)
+        try store1.setTwoWayEnabled(sessionID: "s1", enabledAt: now)
+        try store1.setTwoWayEnabled(sessionID: "s1", enabledAt: now.addingTimeInterval(5))
+
+        // Re-opening re-runs migrate(); it must not error or duplicate rows.
+        let store2 = try CardStore(databaseURL: url)
+        _ = try CardStore(databaseURL: url)
+
+        XCTAssertEqual(try store2.fetchEnabledSessionIDs(), ["s1"])
+    }
 }
