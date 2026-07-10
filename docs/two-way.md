@@ -35,10 +35,14 @@ form.
 ## Delivery approach
 
 Attaché delivers a confirmed instruction using the vendor's **own headless
-resume** primitive (`claude -p --resume <id> "<text>"`,
-`codex exec resume --skip-git-repo-check <id> "<text>"`), **queued until the
-target session is idle**. The `--skip-git-repo-check` flag lets Codex resume
-sessions whose working directory is not a Git checkout.
+resume** primitive (`claude -p --resume <id> --output-format json "<text>"`,
+`codex exec resume --skip-git-repo-check --json <id> "<text>"`), **queued until
+the target session is idle**. The `--skip-git-repo-check` flag lets Codex
+resume sessions whose working directory is not a Git checkout. Both invocations
+add a structured-output flag so delivery can parse evidence of a completed
+assistant turn out of stdout instead of trusting exit code 0 alone (see Data
+model below); stdout and stderr are each captured to a bounded (~1MB) buffer
+under a hard process timeout (default 5 minutes).
 One mechanism reaches all four surfaces, because:
 
 - It uses the vendor's own writer, so it never forges agent-authored history and
@@ -70,9 +74,9 @@ on-disk session storage per vendor
 
 | Surface | Mechanism | On disk | Delivery |
 |---|---|---|---|
-| **Claude Code CLI** | `claude -p --resume <id> "<text>"` | Appends real turns to the *same* session JSONL, keeps the *same* `session_id`, no fork file. A later resume sees the full history including the appended turn. | headless resume, queued until idle |
+| **Claude Code CLI** | `claude -p --resume <id> --output-format json "<text>"` | Appends real turns to the *same* session JSONL, keeps the *same* `session_id`, no fork file. A later resume sees the full history including the appended turn. | headless resume, queued until idle |
 | **Claude Code Desktop** | same headless resume (shared `~/.claude/projects`) | Append lands in shared storage. Present on the session's next open/restart; live visibility while the desktop app holds the session open can lag, so the UX shows "delivered, may need a Desktop refresh". | headless resume, queued until idle |
-| **Codex CLI** | `codex exec resume --skip-git-repo-check <id> "<text>"` | Resume-by-id appends to the shared rollout file, id and filename unchanged (no fork). | headless resume, queued until idle |
+| **Codex CLI** | `codex exec resume --skip-git-repo-check --json <id> "<text>"` | Resume-by-id appends to the shared rollout file, id and filename unchanged (no fork). | headless resume, queued until idle |
 | **Codex Desktop** | same headless resume (shared `~/.codex/sessions`) | Same as Codex CLI on disk; desktop live visibility can lag, same "may need a refresh" hint. | headless resume, queued until idle |
 | *(rejected)* raw JSONL injection | write a turn directly into the session file | Invisible to the desktop apps until restart; forges history; breaks on format changes. | not used |
 | *(future)* live-into-running-process | vendor remote-control / app-server, or Attaché-as-MCP inbox | Reaches a *running* process without a second writer. Not in this design. | later enhancement |
@@ -296,10 +300,21 @@ Instruction {
   deliveredAt: Date?
   deliveryMechanism: String?     // e.g. "headless-resume"
   deliveryCheckpoint: Int64?     // transcript byte offset immediately before resume
-  error: String?                 // failure reason / stderr on failure
+  deliveryReplyText: String?     // assistant reply parsed from the resume output as delivery evidence
+  deliveryReplyTurnID: String?   // turn/session identifier parsed from the resume output, if present
+  error: String?                 // failure reason / stderr tail on failure
   resultingCardID: String?       // the narration card the agent's reply produced
 }
 ```
+
+Delivery evidence (`deliveryReplyText`/`deliveryReplyTurnID`) comes from parsing the
+resume's own output rather than trusting exit code alone: Claude via `--output-format
+json` (a single JSON result object; delivered requires `type == "result"`, `subtype ==
+"success"`, `is_error == false`, and a non-empty `result`), Codex via `--json` (JSONL
+thread events; delivered requires a completed `agent_message` item). Exit 0 without
+that evidence is recorded `failed` with `"exited 0 but no assistant turn in output"`,
+not `delivered`, so a stale session id or a silently rejected turn can no longer look
+like a successful send.
 
 Delivery goes through the `InstructionDeliveryAdapter` protocol: the engine is
 agent-agnostic and talks only to `capability(forSessionID:)` and

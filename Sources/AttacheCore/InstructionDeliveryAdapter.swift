@@ -35,10 +35,20 @@ public enum InstructionDeliveryError: Error, Equatable, Sendable {
 public struct DeliveryReceipt: Equatable, Sendable {
     public var mechanism: String   // e.g. "headless-resume"
     public var transcriptCheckpoint: Int64?
+    /// The assistant reply text parsed from the resume output, when the adapter
+    /// found evidence of a completed turn (INF-238). Stored on the instruction so
+    /// a future reply-correlation pass (B2) can use it instead of scanning the
+    /// transcript from scratch.
+    public var replyText: String?
+    /// A turn/session identifier parsed from the resume output, when present
+    /// (e.g. Claude's `session_id`, Codex's `thread_id`).
+    public var replyTurnID: String?
 
-    public init(mechanism: String, transcriptCheckpoint: Int64? = nil) {
+    public init(mechanism: String, transcriptCheckpoint: Int64? = nil, replyText: String? = nil, replyTurnID: String? = nil) {
         self.mechanism = mechanism
         self.transcriptCheckpoint = transcriptCheckpoint
+        self.replyText = replyText
+        self.replyTurnID = replyTurnID
     }
 }
 

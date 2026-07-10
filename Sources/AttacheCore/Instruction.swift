@@ -42,6 +42,8 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
     public var sourceUtterance: String?      // original user wording before personality rewriting
     public var targetDisplayName: String?    // frozen label shown at confirmation time
     public var deliveryCheckpoint: Int64?    // transcript byte offset before headless resume
+    public var deliveryReplyText: String?    // assistant reply text parsed from the resume output (INF-238)
+    public var deliveryReplyTurnID: String?  // turn/session identifier parsed from the resume output, if present
 
     public init(
         id: String,
@@ -58,7 +60,9 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         origin: InstructionOrigin = .legacy,
         sourceUtterance: String? = nil,
         targetDisplayName: String? = nil,
-        deliveryCheckpoint: Int64? = nil
+        deliveryCheckpoint: Int64? = nil,
+        deliveryReplyText: String? = nil,
+        deliveryReplyTurnID: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -75,6 +79,8 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         self.sourceUtterance = sourceUtterance
         self.targetDisplayName = targetDisplayName
         self.deliveryCheckpoint = deliveryCheckpoint
+        self.deliveryReplyText = deliveryReplyText
+        self.deliveryReplyTurnID = deliveryReplyTurnID
     }
 
     public var isTerminal: Bool {

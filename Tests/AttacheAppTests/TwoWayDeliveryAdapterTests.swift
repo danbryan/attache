@@ -8,7 +8,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
 
     func testClaudeResumeArguments() {
         let args = AgentResumeDeliveryAdapter.resumeArguments(vendor: .claude, sessionID: "sid-1", instruction: "run the tests")
-        XCTAssertEqual(args, ["-p", "--resume", "sid-1", "run the tests"])
+        XCTAssertEqual(args, ["-p", "--resume", "sid-1", "--output-format", "json", "run the tests"])
         // Must NOT carry the summarizer's sandbox/deny flags: this path is meant to act.
         XCTAssertFalse(args.contains("--tools"))
         XCTAssertFalse(args.contains("--permission-mode"))
@@ -16,7 +16,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
 
     func testCodexResumeArguments() {
         let args = AgentResumeDeliveryAdapter.resumeArguments(vendor: .codex, sessionID: "sid-2", instruction: "commit it")
-        XCTAssertEqual(args, ["exec", "resume", "--skip-git-repo-check", "sid-2", "commit it"])
+        XCTAssertEqual(args, ["exec", "resume", "--skip-git-repo-check", "--json", "sid-2", "commit it"])
     }
 
     func testMergedPathIncludesHomebrewNodeForFinderLaunchedApp() {
@@ -67,7 +67,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .claude,
             locateSessionFile: { _ in sessionFile },
             locateExecutable: { _ in "/usr/local/bin/claude" },
-            spawn: { _, _ in (0, "") }
+            spawn: { _, _, _ in ProcessRunResult(exitCode: 0, stdout: Self.claudeSuccessJSON(result: "DONE"), stderr: "", timedOut: false) }
         )
         let instruction = Instruction(id: "i1", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
@@ -75,8 +75,93 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         case .success(let receipt):
             XCTAssertEqual(receipt.mechanism, "headless-resume")
             XCTAssertEqual(receipt.transcriptCheckpoint, 10)
+            XCTAssertEqual(receipt.replyText, "DONE")
         case .failure(let error): XCTFail("expected success, got \(error)")
         }
+    }
+
+    // MARK: - INF-238: delivery evidence, both vendors
+
+    func testDeliverSuccessWithEvidenceClaude() async {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/claude" },
+            spawn: { _, _, _ in
+                ProcessRunResult(
+                    exitCode: 0,
+                    stdout: Self.claudeSuccessJSON(result: "Tests pass.", sessionID: "692006d2-abf1-4780-99b2-eb0ce808ba05"),
+                    stderr: "",
+                    timedOut: false
+                )
+            }
+        )
+        let instruction = Instruction(id: "i-claude-ok", sessionID: "s1", sourceKind: "claude_code", text: "run the tests", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .success(let receipt) = result else {
+            return XCTFail("expected success, got \(result)")
+        }
+        XCTAssertEqual(receipt.replyText, "Tests pass.")
+        XCTAssertEqual(receipt.replyTurnID, "692006d2-abf1-4780-99b2-eb0ce808ba05")
+    }
+
+    func testDeliverSuccessWithEvidenceCodex() async {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .codex,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/codex" },
+            spawn: { _, _, _ in
+                ProcessRunResult(exitCode: 0, stdout: Self.codexSuccessJSONL(text: "PONG", threadID: "019f4d3d-aca0-74d3-a693-e2089d62ca7d"), stderr: "", timedOut: false)
+            }
+        )
+        let instruction = Instruction(id: "i-codex-ok", sessionID: "s1", sourceKind: "codex", text: "reply pong", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .success(let receipt) = result else {
+            return XCTFail("expected success, got \(result)")
+        }
+        XCTAssertEqual(receipt.replyText, "PONG")
+        XCTAssertEqual(receipt.replyTurnID, "019f4d3d-aca0-74d3-a693-e2089d62ca7d")
+    }
+
+    func testDeliverFailsWhenExitZeroWithoutEvidenceClaude() async {
+        // A stale/wrong session id or a rejected turn can exit 0 with empty or
+        // unparseable stdout; exit code alone must never be treated as delivered.
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/claude" },
+            spawn: { _, _, _ in ProcessRunResult(exitCode: 0, stdout: "", stderr: "", timedOut: false) }
+        )
+        let instruction = Instruction(id: "i-claude-noev", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .failure(.deliveryFailed(let detail)) = result else {
+            return XCTFail("expected deliveryFailed, got \(result)")
+        }
+        XCTAssertEqual(detail, "exited 0 but no assistant turn in output")
+    }
+
+    func testDeliverFailsWhenExitZeroWithoutEvidenceCodex() async {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .codex,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/codex" },
+            // Realistic partial stream: the thread started but never produced a
+            // completed agent_message (e.g. it only ran a tool call).
+            spawn: { _, _, _ in
+                ProcessRunResult(
+                    exitCode: 0,
+                    stdout: #"{"type":"thread.started","thread_id":"t1"}"# + "\n" + #"{"type":"turn.started"}"#,
+                    stderr: "",
+                    timedOut: false
+                )
+            }
+        )
+        let instruction = Instruction(id: "i-codex-noev", sessionID: "s1", sourceKind: "codex", text: "go", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .failure(.deliveryFailed(let detail)) = result else {
+            return XCTFail("expected deliveryFailed, got \(result)")
+        }
+        XCTAssertEqual(detail, "exited 0 but no assistant turn in output")
     }
 
     func testDeliverFailsWithStderrOnNonZeroExit() async {
@@ -84,7 +169,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .codex,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/codex" },
-            spawn: { _, _ in (1, "session is busy") }
+            spawn: { _, _, _ in ProcessRunResult(exitCode: 1, stdout: "", stderr: "session is busy", timedOut: false) }
         )
         let instruction = Instruction(id: "i2", sessionID: "s1", sourceKind: "codex", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
@@ -93,6 +178,93 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         } else {
             XCTFail("expected deliveryFailed")
         }
+    }
+
+    func testDeliverFailsWithStderrOnNonZeroExitClaude() async {
+        // Verified real contract: an invalid/stale session id exits 1 with a
+        // plain-text stderr message and empty stdout.
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/claude" },
+            spawn: { _, _, _ in
+                ProcessRunResult(
+                    exitCode: 1,
+                    stdout: "",
+                    stderr: "No conversation found with session ID: 00000000-0000-0000-0000-000000000000",
+                    timedOut: false
+                )
+            }
+        )
+        let instruction = Instruction(id: "i-claude-fail", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .failure(.deliveryFailed(let detail)) = result else {
+            return XCTFail("expected deliveryFailed, got \(result)")
+        }
+        XCTAssertEqual(detail, "No conversation found with session ID: 00000000-0000-0000-0000-000000000000")
+    }
+
+    func testDeliverFailsOnTimeoutClaude() async {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/claude" },
+            processTimeout: 5,
+            spawn: { _, _, _ in ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: true) }
+        )
+        let instruction = Instruction(id: "i-claude-timeout", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .failure(.deliveryFailed(let detail)) = result else {
+            return XCTFail("expected deliveryFailed, got \(result)")
+        }
+        XCTAssertTrue(detail.lowercased().contains("timed out"), "expected a timeout message, got: \(detail)")
+    }
+
+    func testDeliverFailsOnTimeoutCodex() async {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .codex,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/codex" },
+            processTimeout: 5,
+            spawn: { _, _, _ in ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: true) }
+        )
+        let instruction = Instruction(id: "i-codex-timeout", sessionID: "s1", sourceKind: "codex", text: "go", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .failure(.deliveryFailed(let detail)) = result else {
+            return XCTFail("expected deliveryFailed, got \(result)")
+        }
+        XCTAssertTrue(detail.lowercased().contains("timed out"), "expected a timeout message, got: \(detail)")
+    }
+
+    func testDefaultSpawnEnforcesRealHardTimeout() async {
+        // Exercises the real `defaultSpawn` (not an injected stub): a process
+        // that outlives the (short, test-only) timeout must be cut off and
+        // reported as timed out, rather than hanging the caller.
+        let start = Date()
+        let result = await AgentResumeDeliveryAdapter.defaultSpawn("/bin/sleep", ["10"], timeout: 1)
+        XCTAssertTrue(result.timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 8, "the hard timeout should cut the subprocess off well before it exits on its own")
+    }
+
+    private nonisolated static func claudeSuccessJSON(result: String, sessionID: String = "692006d2-abf1-4780-99b2-eb0ce808ba05") -> String {
+        let payload: [String: Any] = [
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": result,
+            "session_id": sessionID
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: payload)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private nonisolated static func codexSuccessJSONL(text: String, threadID: String = "019f4d3d-aca0-74d3-a693-e2089d62ca7d") -> String {
+        [
+            #"{"type":"thread.started","thread_id":"\#(threadID)"}"#,
+            #"{"type":"turn.started"}"#,
+            #"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"\#(text)"}}"#,
+            #"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}"#
+        ].joined(separator: "\n")
     }
 
     func testDeliveryReadinessRequiresStableCompletedCodexTurn() {
@@ -143,7 +315,10 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .claude,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/claude" },
-            spawn: { _, _ in spawnCount += 1; return (0, "") }
+            spawn: { _, _, _ in
+                spawnCount += 1
+                return ProcessRunResult(exitCode: 0, stdout: Self.claudeSuccessJSON(result: "done"), stderr: "", timedOut: false)
+            }
         )
         engine.register(adapter)
         engine.setTwoWayEnabled(true, forSessionID: "s1")

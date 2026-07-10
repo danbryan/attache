@@ -161,6 +161,8 @@ public final class InstructionReplyEngine: @unchecked Sendable {
                 inFlight.deliveredAt = now
                 inFlight.deliveryMechanism = receipt.mechanism
                 inFlight.deliveryCheckpoint = receipt.transcriptCheckpoint
+                inFlight.deliveryReplyText = receipt.replyText
+                inFlight.deliveryReplyTurnID = receipt.replyTurnID
                 inFlight.error = nil
             case .failure(let error):
                 inFlight.state = .failed
