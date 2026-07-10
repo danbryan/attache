@@ -94,6 +94,16 @@ swift test
 - `scripts/simulate-fresh-user.sh fresh` backs up and clears local app state;
   `restore` puts it back. Always pair them, and never run `restore` twice in a
   row: a double restore clobbers the backup with current state.
+- `ATTACHE_FORCE_PLAIN_READBACK=1` skips LLM presentation and speaks events
+  verbatim. The two-way smokes rely on it because reply correlation currently
+  requires an exact text match.
+- `ATTACHE_DISABLE_TOPIC_TAGGING=1` turns off background topic tagging; most
+  smoke scripts set it to keep runs deterministic and avoid stray LLM calls.
+- `ATTACHE_LIVE_CODEX_ROUTING_TEST=1` un-skips the real Codex routing canary in
+  `swift test` (wrapped by `scripts/codex-personality-routing-canary.sh`).
+- `SMOKE_POSE=inbox|settings|live` (comma-separated, applied in order) poses the
+  packaged app for screenshots via the smoke harness; `SMOKE_TEXTSCALE` sets
+  text size and `SMOKE_POSE_SECONDS` the hold time.
 
 ## Safety Rules
 
@@ -314,17 +324,21 @@ Harness notes:
   nearby AX tree; fix missing labels in the app rather than weakening the harness
   (drive controls by label, never by pixel coordinates).
 
-Still manual: menu bar state changes and the visualizer reacting to playback.
+Still manual: menu bar state changes. The visualizer reacting to playback is
+now asserted by f3, which requires nonzero analyzed energy during muted
+playback.
 
 ## Repository History
 
 The public history (`origin`, `github.com/danbryan/attache`) starts at the single
 commit `Attaché 0.1.0` (2026-07-05), a deliberate clean slate for the public
 launch. The full prior development history lives in the private archive
-`github.com/bryanlabs/attache`, already wired as the `archive` remote. For
-archaeology (why a decision was made, when a regression appeared):
+`github.com/bryanlabs/attache`. The `archive` remote is not present in a fresh
+clone (check `git remote -v`); add it once per clone. For archaeology (why a
+decision was made, when a regression appeared):
 
 ```bash
+git remote add archive git@github.com:bryanlabs/attache.git   # once per clone
 git fetch archive
 git log archive/main   # browse the pre-launch history
 ```

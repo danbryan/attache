@@ -11,3 +11,4 @@ audio-assets/
 tmp/
 dist/
 scratch/
+scripts/__pycache__/

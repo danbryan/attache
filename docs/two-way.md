@@ -36,7 +36,9 @@ form.
 
 Attaché delivers a confirmed instruction using the vendor's **own headless
 resume** primitive (`claude -p --resume <id> "<text>"`,
-`codex exec resume <id> "<text>"`), **queued until the target session is idle**.
+`codex exec resume --skip-git-repo-check <id> "<text>"`), **queued until the
+target session is idle**. The `--skip-git-repo-check` flag lets Codex resume
+sessions whose working directory is not a Git checkout.
 One mechanism reaches all four surfaces, because:
 
 - It uses the vendor's own writer, so it never forges agent-authored history and
@@ -70,7 +72,7 @@ on-disk session storage per vendor
 |---|---|---|---|
 | **Claude Code CLI** | `claude -p --resume <id> "<text>"` | Appends real turns to the *same* session JSONL, keeps the *same* `session_id`, no fork file. A later resume sees the full history including the appended turn. | headless resume, queued until idle |
 | **Claude Code Desktop** | same headless resume (shared `~/.claude/projects`) | Append lands in shared storage. Present on the session's next open/restart; live visibility while the desktop app holds the session open can lag, so the UX shows "delivered, may need a Desktop refresh". | headless resume, queued until idle |
-| **Codex CLI** | `codex exec resume <id> "<text>"` | Resume-by-id appends to the shared rollout file, id and filename unchanged (no fork). | headless resume, queued until idle |
+| **Codex CLI** | `codex exec resume --skip-git-repo-check <id> "<text>"` | Resume-by-id appends to the shared rollout file, id and filename unchanged (no fork). | headless resume, queued until idle |
 | **Codex Desktop** | same headless resume (shared `~/.codex/sessions`) | Same as Codex CLI on disk; desktop live visibility can lag, same "may need a refresh" hint. | headless resume, queued until idle |
 | *(rejected)* raw JSONL injection | write a turn directly into the session file | Invisible to the desktop apps until restart; forges history; breaks on format changes. | not used |
 | *(future)* live-into-running-process | vendor remote-control / app-server, or Attaché-as-MCP inbox | Reaches a *running* process without a second writer. Not in this design. | later enhancement |
@@ -80,9 +82,11 @@ on-disk session storage per vendor
 Delivery only fires when the target session is **idle**, so a headless resume (a
 second writer) never interleaves with the agent writing the same file.
 `TwoWayCoordinator` resolves the session transcript and uses
-`SessionDeliveryReadinessClassifier` across a quiet window (default 6s), which
-lines up with the watcher's own ~6s completed-turn debounce (three 2s polls). A
-session is safe to resume when all hold:
+`SessionDeliveryReadinessClassifier` across a quiet window (default 6s).
+Readiness observations are sampled on the coordinator's ~8s refresh pump (not
+the watcher's 2s polls), so the practical delivery floor is one to two pump
+cycles (~8-16s) after the session goes quiet. A session is safe to resume when
+all hold:
 
 1. **No growth:** the session file's length is unchanged across the quiet window
    (no newly appended bytes).
@@ -95,9 +99,11 @@ session is safe to resume when all hold:
 
 The debounce is deliberately conservative so a model pausing briefly between tool
 calls is not mistaken for done. While the target is not idle, the instruction
-stays queued; the transition to idle is the trigger to deliver. Confirmed
-instructions expire (fail) after a bounded window (default 30 minutes) so an
-undeliverable one never fires hours later.
+stays queued; the transition to idle is the trigger to deliver. Instructions
+expire (fail) after a bounded window (default 30 minutes) measured from
+creation, for pending and confirmed alike, so an undeliverable one never fires
+hours later. A slow confirmation therefore consumes part of the delivery
+window.
 
 ## Safety
 
@@ -106,6 +112,9 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
 
 - **Off by default, per session.** Two-way must be explicitly enabled for a
   specific session. No global preference bypasses session-level enablement.
+  Enablement is held in memory only: an app restart resets every session to
+  off, and interrupted instructions fail closed (surfaced at startup) rather
+  than resuming.
 - **Confirm by default, direct by explicit preference.** The default
   `AgentInstructionSendPolicy` creates an instruction as `pending` and only
   leaves that state after explicit visual confirmation. A power-user preference
