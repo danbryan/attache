@@ -7,13 +7,24 @@ private final class MockAdapter: InstructionDeliveryAdapter, @unchecked Sendable
     var requiresIdle: Bool
     var canDeliver: Bool
     var shouldFail: Bool
+    var replyText: String?
+    var replyTurnID: String?
     private(set) var delivered: [String] = []
 
-    init(sourceKind: String = "codex", requiresIdle: Bool = false, canDeliver: Bool = true, shouldFail: Bool = false) {
+    init(
+        sourceKind: String = "codex",
+        requiresIdle: Bool = false,
+        canDeliver: Bool = true,
+        shouldFail: Bool = false,
+        replyText: String? = nil,
+        replyTurnID: String? = nil
+    ) {
         self.sourceKind = sourceKind
         self.requiresIdle = requiresIdle
         self.canDeliver = canDeliver
         self.shouldFail = shouldFail
+        self.replyText = replyText
+        self.replyTurnID = replyTurnID
     }
 
     func capability(forSessionID sessionID: String) -> DeliveryCapability {
@@ -25,7 +36,7 @@ private final class MockAdapter: InstructionDeliveryAdapter, @unchecked Sendable
     func deliver(_ instruction: Instruction) async -> Result<DeliveryReceipt, InstructionDeliveryError> {
         if shouldFail { return .failure(.deliveryFailed("mock failure")) }
         delivered.append(instruction.id)
-        return .success(DeliveryReceipt(mechanism: "headless-resume"))
+        return .success(DeliveryReceipt(mechanism: "headless-resume", replyText: replyText, replyTurnID: replyTurnID))
     }
 }
 
@@ -221,6 +232,26 @@ final class InstructionReplyEngineTests: XCTestCase {
         XCTAssertEqual(result.first?.state, .failed)
         XCTAssertTrue(result.first?.error?.contains("changed before delivery") == true)
         XCTAssertTrue(adapter.delivered.isEmpty)
+    }
+
+    func testDeliveryEvidencePersistsOnTheInstructionRecord() async throws {
+        // INF-238: the adapter's parsed reply text and turn identifier must
+        // survive onto the stored/fetched instruction, not just live on the
+        // in-memory receipt, so a later reply-correlation pass (B2) can use it.
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        let adapter = MockAdapter(replyText: "Tests pass.", replyTurnID: "thread-abc-123")
+        engine.register(adapter)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let created = try engine.submit(text: "run the tests", sessionID: "s1", sourceKind: "codex", now: now)
+        _ = try engine.confirm(id: created.id, now: now)
+
+        _ = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+
+        let fetched = try XCTUnwrap(store.fetchInstruction(id: created.id))
+        XCTAssertEqual(fetched.state, .delivered)
+        XCTAssertEqual(fetched.deliveryReplyText, "Tests pass.")
+        XCTAssertEqual(fetched.deliveryReplyTurnID, "thread-abc-123")
     }
 
     func testRecoveryFailsEveryNonterminalInstructionClosed() throws {
