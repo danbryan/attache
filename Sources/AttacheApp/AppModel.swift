@@ -151,6 +151,7 @@ final class AppModel: ObservableObject {
     @Published var conversationDestination: ConversationDestination = .attache
     @Published private(set) var conversationTargetSnapshot: ConversationTargetSnapshot?
     @Published private(set) var conversationStatus: String = ""
+    @Published private(set) var conversationRecovery: ConversationRecovery?
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
@@ -1722,6 +1723,7 @@ final class AppModel: ObservableObject {
     func clearConversation() {
         conversationMessages = []
         conversationStatus = ""
+        conversationRecovery = nil
     }
 
     func cycleVoiceInputMode() {
@@ -1805,6 +1807,8 @@ final class AppModel: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAwaitingReply else { return }
 
+        removeFailedTurnsBeforeRetry()
+        conversationRecovery = nil
         conversationDraft = ""
         appendConversationTurn(role: .user, text: trimmed)
 
@@ -1864,13 +1868,83 @@ final class AppModel: ObservableObject {
                 case .success(let reply):
                     self.surfaceConversationReply(reply)
                 case .failure(let error):
-                    let message = "I hit a problem: \(error.localizedDescription)"
-                    self.conversationStatus = error.localizedDescription
+                    let errorMessage = error.localizedDescription
+                    let message = "I hit a problem: \(errorMessage)"
+                    let recovery = ConversationRecovery.classify(
+                        errorMessage: errorMessage,
+                        failedPrompt: trimmed
+                    )
+                    self.conversationRecovery = recovery
+                    self.conversationStatus = errorMessage
                     self.appendConversationTurn(role: .assistant, text: message)
-                    self.maybeResumeContinuousListening()
+                    if recovery.offersModelSwitch {
+                        // Preserve the user's exact words. Switching only changes
+                        // the selected brain; retry remains an explicit action.
+                        self.conversationDraft = trimmed
+                        self.loadPresentationModels(preserveCurrentSelection: true)
+                    } else {
+                        self.maybeResumeContinuousListening()
+                    }
                 }
             }
         )
+    }
+
+    var conversationRecoveryProviders: [CompanionPresentationProvider] {
+        connectedTextProviders.filter { $0 != presentationProvider }
+    }
+
+    var conversationRecoveryModels: [CompanionPresentationModelOption] {
+        var options = presentationModelOptions.filter { $0.id != presentationModel }
+        if presentationModel != "default", !options.contains(where: { $0.id == "default" }) {
+            options.insert(CompanionPresentationModelOption(
+                id: "default",
+                detail: "use \(presentationProvider.title)'s configured model",
+                reasoningEfforts: CompanionPresentationModelService.fallbackReasoningEfforts(
+                    provider: presentationProvider,
+                    modelID: "default"
+                )
+            ), at: 0)
+        }
+        return options
+    }
+
+    var canRetryConversationFailure: Bool {
+        guard conversationRecovery?.offersModelSwitch == true, !isAwaitingReply else { return false }
+        return !conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func selectConversationRecoveryModel(_ option: CompanionPresentationModelOption) {
+        selectPresentationModel(option)
+        conversationDestination = .attache
+        conversationStatus = "Switched to \(presentationProvider.title) \(option.id). Review the restored draft, then retry."
+    }
+
+    func selectConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
+        selectPresentationProvider(provider)
+        selectPresentationModelID(provider.defaultModel)
+        conversationDestination = .attache
+        conversationStatus = "Switched to \(provider.title) \(presentationModel). Review the restored draft, then retry."
+        loadPresentationModels()
+    }
+
+    func retryConversationAfterFailure() {
+        guard let recovery = conversationRecovery, !isAwaitingReply else { return }
+        let editedDraft = conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        sendConversationMessage(editedDraft.isEmpty ? recovery.failedPrompt : editedDraft)
+    }
+
+    private func removeFailedTurnsBeforeRetry() {
+        guard let recovery = conversationRecovery else { return }
+        let assistantFailure = "I hit a problem: \(recovery.errorMessage)"
+        if conversationMessages.last?.role == .assistant,
+           conversationMessages.last?.text == assistantFailure {
+            conversationMessages.removeLast()
+        }
+        if conversationMessages.last?.role == .user,
+           conversationMessages.last?.text == recovery.failedPrompt {
+            conversationMessages.removeLast()
+        }
     }
 
     private func surfaceConversationReply(_ reply: String) {
@@ -2802,7 +2876,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func loadPresentationModels() {
+    func loadPresentationModels(preserveCurrentSelection: Bool = false) {
         let provider = presentationProvider
         let baseURL = presentationBaseURL
         let apiKey = presentationAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2842,7 +2916,7 @@ final class AppModel: ObservableObject {
                     self.presentationModelOptions = models
                     if models.contains(where: { $0.id == self.presentationModel }) {
                         self.applyCurrentPresentationModelCapabilities()
-                    } else if let first = models.first {
+                    } else if !preserveCurrentSelection, let first = models.first {
                         self.selectPresentationModel(first)
                     }
                     self.presentationModelDiscoveryStatus = models.isEmpty

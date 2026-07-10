@@ -52,6 +52,7 @@ struct CompanionRootView: View {
     @State var inboxVisible = false
     @State private var historyVisible = false
     @State var callHolding = false
+    @State var pendingCallPresentationProvider: CompanionPresentationProvider?
     @State private var railExpanded = false
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
@@ -271,6 +272,19 @@ struct CompanionRootView: View {
                 instruction: instruction,
                 onSend: { model.confirmStagedInstruction() },
                 onCancel: { model.discardStagedInstruction() }
+            )
+        }
+        .sheet(item: $pendingCallPresentationProvider) { provider in
+            CloudConsentSheet(
+                providerName: provider.title,
+                produces: "live answers",
+                sends: "your question and the attached session context",
+                onEnable: {
+                    model.cloudConsentPresentationAcknowledged = true
+                    model.selectConversationRecoveryProvider(provider)
+                    pendingCallPresentationProvider = nil
+                },
+                onCancel: { pendingCallPresentationProvider = nil }
             )
         }
         .background(

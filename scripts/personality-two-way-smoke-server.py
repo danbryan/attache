@@ -11,6 +11,7 @@ DIRECT_TOKEN = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_DIRECT_TOKEN", "")
 LOG_PATH = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"]
 MODEL = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_MODEL", "attache-smoke-personality")
 RESPONSE_DELAY_MS = int(os.environ.get("ATTACHE_SMOKE_PROVIDER_DELAY_MS", "0") or "0")
+ERROR_MODE = os.environ.get("ATTACHE_SMOKE_PROVIDER_ERROR", "")
 
 
 def log(event):
@@ -83,6 +84,7 @@ class Handler(BaseHTTPRequestHandler):
         log({
             "event": "request",
             "last_user": user,
+            "model": payload.get("model", ""),
             "tool_results": tools,
             "tool_names": [
                 call.get("function", {}).get("name", "")
@@ -90,6 +92,19 @@ class Handler(BaseHTTPRequestHandler):
                 for call in message.get("tool_calls", []) or []
             ],
         })
+
+        if ERROR_MODE == "usage_limit":
+            maybe_delay()
+            self.send_json(
+                {
+                    "error": {
+                        "type": "usage_limit",
+                        "message": "You've hit your usage limit. Switch models or providers and try again.",
+                    }
+                },
+                status=429,
+            )
+            return
 
         if "Send Codex directly" in user and not tools:
             instruction = f"Reply exactly {DIRECT_TOKEN}. Do not use tools."
@@ -152,11 +167,11 @@ class Handler(BaseHTTPRequestHandler):
             "content": "I need the attached session context before I can answer.",
         }))
 
-    def send_json(self, value):
-        self.send_bytes(json.dumps(value).encode("utf-8"))
+    def send_json(self, value, status=200):
+        self.send_bytes(json.dumps(value).encode("utf-8"), status=status)
 
-    def send_bytes(self, data):
-        self.send_response(200)
+    def send_bytes(self, data, status=200):
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()

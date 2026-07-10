@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -1140,6 +1140,83 @@ if enabled("f15") {
         app.key(Key.escape)
         try? waitForElementGone("history search field", in: try mainWindow(),
                                 role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
+    }
+}
+
+// MARK: Flow 16: usage failures restore the prompt and offer explicit model recovery
+
+if enabled("f16") {
+    let env = ProcessInfo.processInfo.environment
+    let prompt = env["ATTACHE_CONVERSATION_RECOVERY_PROMPT"] ?? "ATTACHE_CONVERSATION_RECOVERY"
+    let providerLog = env["ATTACHE_CONVERSATION_RECOVERY_PROVIDER_LOG"] ?? ""
+
+    run.step("f16-conversation-recovery", "environment identifies the deterministic usage-limit provider") {
+        guard !prompt.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_RECOVERY_PROMPT is required") }
+        guard !providerLog.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_RECOVERY_PROVIDER_LOG is required") }
+        guard FileManager.default.fileExists(atPath: providerLog) else {
+            throw SmokeError(message: "provider log does not exist: \(providerLog)")
+        }
+    }
+
+    run.step("f16-conversation-recovery", "usage failure restores the draft and exposes model recovery") {
+        try dismissOnboardingIfPresent()
+        app.key(Key.l, command: true)
+        try selectConversationDestination("Ask Attaché")
+        let field = try waitForElement("call message field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, exactly: "Call message",
+                                       timeout: 20)
+        _ = field.setFocused()
+        if !field.setValue(prompt) { app.type(prompt) }
+        let send = try waitForElement("call send button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send call message",
+                                      timeout: 8)
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on call send button: \(send.summary); actions: \(send.actionNames)")
+        }
+        _ = try waitForElement("usage-limit status", in: try mainWindow(), containing: "usage limit", timeout: 20)
+        try waitUntil("failed prompt to return to the composer", timeout: 8, interval: 0.25) {
+            field.stringValue == prompt
+        }
+        _ = try waitForElement("model recovery menu", in: try mainWindow(),
+                               exactly: "Switch conversation model", timeout: 8)
+        let retry = try waitForElement("retry action", in: try mainWindow(),
+                                       role: kAXButtonRole as String, exactly: "Retry failed conversation", timeout: 8)
+        guard retry.isEnabled else { throw SmokeError(message: "retry action is disabled after a recoverable failure") }
+
+        let before = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
+        let requestCount = occurrenceCount(of: #"\"event\": \"request\""#, in: before)
+        Thread.sleep(forTimeInterval: 1.5)
+        let after = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
+        guard occurrenceCount(of: #"\"event\": \"request\""#, in: after) == requestCount else {
+            throw SmokeError(message: "usage failure retried without an explicit user action")
+        }
+    }
+
+    run.step("f16-conversation-recovery", "model selection is applied before an explicit retry") {
+        let switcher = try waitForElement("model recovery menu", in: try mainWindow(),
+                                          exactly: "Switch conversation model", timeout: 8)
+        try selectPopup(switcher, item: "attache-recovery-smoke")
+        _ = try waitForElement("model-switch confirmation", in: try mainWindow(),
+                               containing: "Switched to Ollama attache-recovery-smoke", timeout: 8)
+
+        let retry = try waitForElement("retry action", in: try mainWindow(),
+                                       role: kAXButtonRole as String, exactly: "Retry failed conversation", timeout: 8)
+        guard retry.press() else {
+            throw SmokeError(message: "AXPress failed on retry action: \(retry.summary); actions: \(retry.actionNames)")
+        }
+        _ = try waitForElement("usage-limit status after retry", in: try mainWindow(), containing: "usage limit", timeout: 20)
+        let field = try waitForElement("restored retry draft", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, exactly: "Call message", timeout: 8)
+        guard field.stringValue == prompt else {
+            throw SmokeError(message: "retry did not restore the failed prompt; value=\(field.stringValue)")
+        }
+        let logText = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
+        guard occurrenceCount(of: #"\"event\": \"request\""#, in: logText) == 2 else {
+            throw SmokeError(message: "expected exactly two provider requests after explicit retry. Log:\n\(logText)")
+        }
+        guard logText.contains(#"\"model\": \"attache-recovery-smoke\""#) else {
+            throw SmokeError(message: "retry did not use the selected model. Log:\n\(logText)")
+        }
     }
 }
 

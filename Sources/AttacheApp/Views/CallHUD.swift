@@ -81,12 +81,19 @@ extension CompanionRootView {
                             .typoIcon(size: 10, .semibold)
                             .foregroundStyle(callStatusIsError ? Color.red : accent)
                     }
-                    Text(callStatusDisplayText)
-                        .typoCaption(.medium, design: .monospaced)
-                        .foregroundStyle(callStatusIsError ? Color.red.opacity(0.88) : Color.primary.opacity(0.68))
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(callStatusDisplayText)
+                            .typoCaption(.medium, design: .monospaced)
+                            .foregroundStyle(callStatusIsError ? Color.red.opacity(0.88) : Color.primary.opacity(0.68))
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if model.conversationRecovery?.offersModelSwitch == true {
+                            conversationRecoveryActions
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(model.conversationProgressText)
@@ -219,6 +226,75 @@ extension CompanionRootView {
         model.conversationContextSession == nil
             ? "No session attached — I can still chat."
             : "Talking about \(model.conversationContextSession?.displayTitle ?? "this session")."
+    }
+
+    var conversationRecoveryActions: some View {
+        HStack(spacing: 8) {
+            Menu {
+                if !model.conversationRecoveryProviders.isEmpty {
+                    Section("Use another provider") {
+                        ForEach(model.conversationRecoveryProviders) { provider in
+                            Button(provider.menuTitle) {
+                                requestConversationRecoveryProvider(provider)
+                            }
+                        }
+                    }
+                }
+                if !model.conversationRecoveryModels.isEmpty {
+                    Section("Other \(model.presentationProvider.title) models") {
+                        ForEach(model.conversationRecoveryModels) { option in
+                            Button(option.title) {
+                                model.selectConversationRecoveryModel(option)
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button("Open Model settings…") { openModelSettings() }
+            } label: {
+                Label("Switch model", systemImage: "arrow.triangle.2.circlepath")
+                    .typoCaption(.semibold)
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(accent.opacity(0.12), in: Capsule())
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Switch conversation model")
+
+            Button {
+                model.retryConversationAfterFailure()
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+                    .typoCaption(.semibold)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canRetryConversationFailure)
+            .accessibilityLabel("Retry failed conversation")
+        }
+    }
+
+    func requestConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
+        if model.presentationProviderSendsToCloud(provider),
+           !model.cloudConsentPresentationAcknowledged {
+            pendingCallPresentationProvider = provider
+        } else {
+            model.selectConversationRecoveryProvider(provider)
+        }
+    }
+
+    func openModelSettings() {
+        NotificationCenter.default.post(name: .attacheOpenSettings, object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NotificationCenter.default.post(
+                name: .attacheOpenSettingsSection,
+                object: SettingsSection.model.rawValue
+            )
+        }
     }
 
     func sendCallMessage() {
