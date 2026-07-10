@@ -114,6 +114,18 @@ swift test
   harness always sets it), so this can never shrink a real user's window by
   itself; see `InstructionReplyEngine.expiryWindow(fromEnvironment:)` and its
   tests for the explicit non-bypass proof (INF-256/E4).
+- `CLAUDE_CONFIG_DIR=<dir>` is the real Claude Code CLI's own override for
+  `~/.claude` (verified against the real CLI on this machine, INF-257/E2), the
+  Claude analog of `CODEX_HOME`. `ClaudePaths.home()` is the one place
+  Attaché resolves it, and `ClaudeCodeSessionScanner`, `CodexSessionWatcher`,
+  `SessionActivityWatcher`, and `CompanionSessionReader.sessionFileURL` all
+  read Claude Code session state through it, so a disposable
+  `CLAUDE_CONFIG_DIR` set on the app's own environment is honored end to end:
+  session discovery, the live watcher, and the two-way delivery adapter's
+  readiness/transcript lookup all agree with whatever `claude` itself is
+  using. `scripts/claude-two-way-smoke.sh` (the f21 gate) sets it to a
+  disposable directory holding only an extracted `claudeAiOauth` credential,
+  never the real `~/.claude`.
 
 ## Safety Rules
 
@@ -303,7 +315,10 @@ Before claiming a change works, verify:
 - `scripts/ui-smoke.sh` passes.
 - Before a release candidate, run `scripts/release-readiness-smoke.sh` as the
   ten-gate pre-release suite. Set `ATTACHE_RELEASE_READINESS_WITH_CODEX=1`
-  when the candidate also needs the real Codex f7/f8 round trips in the same run.
+  when the candidate also needs the real Codex f7/f8 round trips in the same
+  run, and `ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1` when it also needs the
+  real Claude Code f21 round trip (`scripts/claude-two-way-smoke.sh`,
+  INF-257/E2); both are opt-in and independent of each other.
 
 The UI smoke harness (INF-156) is the standard UI verification step. It builds
 and packages an unsigned app, switches to a fresh-user profile (backing up real

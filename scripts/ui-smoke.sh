@@ -19,6 +19,7 @@ set -euo pipefail
 #   scripts/codex-two-way-smoke.sh           real Codex send/watch round trip
 #   scripts/codex-personality-two-way-smoke.sh
 #                                             fake local personality + real Codex
+#   scripts/claude-two-way-smoke.sh          real Claude Code send/watch round trip
 #   scripts/provider-canaries.sh             provider tool-calling contracts
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

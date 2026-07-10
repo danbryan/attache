@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -2180,6 +2180,122 @@ if enabled("f20") {
             }
             return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) == 1
         }
+    }
+}
+
+// MARK: Flow 21: real Claude Code watch plus send-to-agent round trip
+// (INF-257/E2). The Claude analog of f7: the same off-call composer, the same
+// enable/confirm sequence, and the same transcript + SQLite evidence, but
+// against a real, disposable Claude Code session born via `claude -p`
+// instead of Codex. Reply correlation is positional (INF-245/B2), so this
+// gate also leaves presentation at its default rather than forcing plain
+// readback, matching f7's precedent.
+
+if enabled("f21") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_CLAUDE_TWO_WAY_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_CLAUDE_TWO_WAY_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_CLAUDE_TWO_WAY_SESSION_FILE"] ?? ""
+    let pongToken = env["ATTACHE_CLAUDE_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_PONG_\(nonce)")
+    let instruction = env["ATTACHE_CLAUDE_TWO_WAY_INSTRUCTION"] ?? "reply exactly \(pongToken) and do not use tools."
+    var focusedSession = false
+    var composerOpened = false
+    var instructionStaged = false
+    var enableConfirmed = false
+    var sendConfirmed = false
+
+    run.step("f21-claude-two-way", "environment identifies the disposable Claude Code session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_CLAUDE_TWO_WAY_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_CLAUDE_TWO_WAY_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_CLAUDE_TWO_WAY_SESSION_FILE is required") }
+        guard !pongToken.isEmpty else { throw SmokeError(message: "ATTACHE_CLAUDE_TWO_WAY_PONG_TOKEN is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+    }
+
+    run.step("f21-claude-two-way", "spawned Claude Code session appears in Command-K search") {
+        try focusSessionInCommandK(query: nonce, sessionID: sessionID)
+        focusedSession = true
+    }
+
+    run.step("f21-claude-two-way", "live send composer opens for the focused session") {
+        guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
+        _ = try openLiveInstructionComposer()
+        composerOpened = true
+    }
+
+    run.step("f21-claude-two-way", "instruction is entered and staged for send-to-agent") {
+        guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
+        try enterLiveInstruction(instruction, mustContain: pongToken)
+        try waitUntil("Send to Agent button to enable", timeout: 8, interval: 0.5) {
+            (try? mainWindow())?
+                .firstDescendant(role: kAXButtonRole as String, exactly: "Send to Agent")?
+                .isEnabled == true
+        }
+        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send to Agent")
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
+        }
+        instructionStaged = true
+    }
+
+    run.step("f21-claude-two-way", "first-use send-to-agent enable sheet confirms") {
+        guard instructionStaged else { throw SmokeError(message: "skipped: instruction was not staged") }
+        let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                        timeout: 12)
+        guard enable.press() else {
+            throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+        }
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: pongToken, timeout: 12)
+        enableConfirmed = true
+    }
+
+    run.step("f21-claude-two-way", "per-instruction confirmation sends to Claude Code") {
+        guard enableConfirmed else { throw SmokeError(message: "skipped: send-to-agent was not enabled") }
+        let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                         role: kAXButtonRole as String, exactly: "Send to agent",
+                                         timeout: 12)
+        guard confirm.press() else {
+            throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+        }
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+        sendConfirmed = true
+    }
+
+    run.step("f21-claude-two-way", "Claude Code transcript records the resumed instruction and pong reply") {
+        guard sendConfirmed else { throw SmokeError(message: "skipped: instruction was not sent to Claude Code") }
+        try waitForFile(sessionFile, toContain: "resumed Claude Code instruction and pong reply", timeout: 240, interval: 2) { text in
+            text.contains("reply exactly \(pongToken)")
+                && occurrenceCount(of: pongToken, in: text) >= 2
+        }
+    }
+
+    run.step("f21-claude-two-way", "Attaché files the Claude Code pong as a watched-session card") {
+        var resultingSummary = ""
+        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
+            let command = """
+            sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
+              "SELECT c.summary FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
+            """
+            guard let output = try? runShell(command) else { return false }
+            resultingSummary = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !resultingSummary.isEmpty
+        }
+        app.activate()
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(resultingSummary) { app.type(resultingSummary) }
+        _ = try waitForInboxCardRow(containing: resultingSummary, timeout: 30)
+        app.key(Key.escape)
+        try? waitForElementGone("inbox search field", in: try mainWindow(),
+                                role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
     }
 }
 
