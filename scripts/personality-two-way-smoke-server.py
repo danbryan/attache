@@ -13,6 +13,13 @@ LOG_PATH = os.environ["ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG"]
 MODEL = os.environ.get("ATTACHE_PERSONALITY_TWO_WAY_MODEL", "attache-smoke-personality")
 RESPONSE_DELAY_MS = int(os.environ.get("ATTACHE_SMOKE_PROVIDER_DELAY_MS", "0") or "0")
 ERROR_MODE = os.environ.get("ATTACHE_SMOKE_PROVIDER_ERROR", "")
+# When set alongside ERROR_MODE=usage_limit, a request naming this model
+# succeeds with a deterministic reply instead of also failing (INF-254): lets
+# a recovery smoke prove "switch model, retry, and it actually succeeds"
+# against the same deterministic-failure mechanism f16 already uses, instead
+# of building a second mock. Unset (the f16 default), every request fails,
+# unchanged.
+RECOVERY_MODEL = os.environ.get("ATTACHE_SMOKE_PROVIDER_RECOVERY_MODEL", "")
 
 
 def log(event):
@@ -94,7 +101,8 @@ class Handler(BaseHTTPRequestHandler):
             ],
         })
 
-        if ERROR_MODE == "usage_limit":
+        recovered = bool(RECOVERY_MODEL) and payload.get("model", "") == RECOVERY_MODEL
+        if ERROR_MODE == "usage_limit" and not recovered:
             maybe_delay()
             self.send_json(
                 {
@@ -105,6 +113,14 @@ class Handler(BaseHTTPRequestHandler):
                 },
                 status=429,
             )
+            return
+
+        if recovered:
+            maybe_delay()
+            self.send_bytes(response({
+                "role": "assistant",
+                "content": f"ATTACHE_RECOVERY_SUCCEEDED_{NONCE}",
+            }))
             return
 
         if "Send Codex directly" in user and not tools:

@@ -53,6 +53,11 @@ struct CompanionRootView: View {
     @State private var historyVisible = false
     @State var callHolding = false
     @State var pendingCallPresentationProvider: CompanionPresentationProvider?
+    // Cloud consent for the recap / follow-up / live follow-up recovery
+    // menus (INF-254): one generic pending switch instead of one state var
+    // and sheet per surface, since the consent moment is identical everywhere
+    // except which underlying `select...RecoveryProvider` runs on Enable.
+    @State var pendingRecoveryProviderSwitch: PendingRecoveryProviderSwitch?
     @State private var railExpanded = false
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
@@ -290,6 +295,19 @@ struct CompanionRootView: View {
                     pendingCallPresentationProvider = nil
                 },
                 onCancel: { pendingCallPresentationProvider = nil }
+            )
+        }
+        .sheet(item: $pendingRecoveryProviderSwitch) { pending in
+            CloudConsentSheet(
+                providerName: pending.provider.title,
+                produces: pending.surface.consentProduces,
+                sends: pending.surface.consentSends,
+                onEnable: {
+                    model.acknowledgeCloudConsent(for: pending.provider)
+                    applyRecoveryProviderSwitch(pending.provider, surface: pending.surface)
+                    pendingRecoveryProviderSwitch = nil
+                },
+                onCancel: { pendingRecoveryProviderSwitch = nil }
             )
         }
         .background(

@@ -10,6 +10,7 @@ final class DiagnosticSnapshotTests: XCTestCase {
             voiceProviderKind: "system",
             cardCount: 42,
             instructionCount: 3,
+            taggingFailureCount: 2,
             logLines: ["watcher: tail read failed for session abc"]
         )
         let text = snapshot.rendered()
@@ -18,7 +19,15 @@ final class DiagnosticSnapshotTests: XCTestCase {
         XCTAssertTrue(text.contains("presentation_provider: ollama"))
         XCTAssertTrue(text.contains("cards: 42"))
         XCTAssertTrue(text.contains("instructions: 3"))
+        XCTAssertTrue(text.contains("tagging_failures: 2"))
         XCTAssertTrue(text.contains("watcher: tail read failed"))
+    }
+
+    func testTaggingFailureCountDefaultsToZero() {
+        let snapshot = DiagnosticSnapshot(
+            appVersion: "0.1.1", enabledSources: [], presentationProviderKind: "none",
+            voiceProviderKind: "system", cardCount: 0, instructionCount: 0)
+        XCTAssertTrue(snapshot.rendered().contains("tagging_failures: 0"))
     }
 
     func testEmptySourcesRenderNone() {

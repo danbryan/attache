@@ -175,6 +175,31 @@ final class AppModel: ObservableObject {
     /// Not yet consumed by any view (that's a later ticket, A2); computing
     /// and publishing it here replaces nothing about today's rendering.
     @Published private(set) var callPhase: CallPhase = .idle
+
+    // MARK: - Recap / follow-up recovery (INF-254)
+    //
+    // Same shape as the live call's `conversationRecovery` above, extended to
+    // two more surfaces that used to degrade silently: the inbox recap and
+    // follow-up answers. Each surface keeps its own recovery state (retrying
+    // means something different per surface: replay the same cards, or
+    // re-ask the same question) but all three classify with the identical
+    // `ConversationRecovery.classify` (D1) and only offer the affordance when
+    // `offersModelSwitch` is true.
+    @Published private(set) var recapRecovery: ConversationRecovery?
+    @Published private(set) var recapRecoveryConfirmation: String?
+    private var recapRetryCards: [VoicemailCard] = []
+    @Published private(set) var followUpRecovery: ConversationRecovery?
+    @Published private(set) var liveFollowUpRecovery: ConversationRecovery?
+    /// Incremented whenever background topic tagging (`.tagging` role) fails.
+    /// Tagging stays silent to the user by design (per docs/reviews); this is
+    /// the diagnostics-only counter the review asked for instead. It maps
+    /// onto `AttacheCore.DiagnosticSnapshot.taggingFailureCount`, the closest
+    /// existing "diagnostics surface" in the codebase, though nothing in the
+    /// shipped app constructs a `DiagnosticSnapshot` yet (it exists today only
+    /// as a data structure exercised by unit tests) - wiring an actual
+    /// bug-report UI to it is out of scope here.
+    @Published private(set) var taggingFailureCount: Int = 0
+
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -1551,6 +1576,13 @@ final class AppModel: ObservableObject {
     func playInboxRecap(for cards: [VoicemailCard]) {
         applySpeechConfiguration()
 
+        // A fresh attempt (whether the user pressed "Play recap" again or this
+        // is the explicit retry after a failure) supersedes any stale recovery
+        // banner from a previous attempt (INF-254).
+        recapRecovery = nil
+        recapRecoveryConfirmation = nil
+        recapRetryCards = []
+
         let summarized = cards
         guard !summarized.isEmpty else {
             playback.preview(inboxDigestText(for: summarized))
@@ -1587,21 +1619,48 @@ final class AppModel: ObservableObject {
         intakeStatus = "Writing your recap…"
 
         Task { [weak self] in
-            let recapText = await self?.presentationService.complete(system: system, user: user, role: .recap)
-            // persist/play mutate @Published state and the store, so hop back to
-            // the main actor before touching either (mutating observed state
-            // off-main re-enters SwiftUI's body and overflows the stack).
-            await MainActor.run {
-                guard let self else { return }
-                let trimmed = CompanionPersonality.stripDashes(recapText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
-                guard !trimmed.isEmpty else {
-                    // The LLM was configured but returned nothing usable: fall
-                    // back to the deterministic digest and leave the inbox as is.
+            guard let self else { return }
+            do {
+                let recapText = try await self.presentationService.complete(system: system, user: user, role: .recap)
+                // persist/play mutate @Published state and the store, so hop back
+                // to the main actor before touching either (mutating observed
+                // state off-main re-enters SwiftUI's body and overflows the stack).
+                await MainActor.run {
+                    let trimmed = CompanionPersonality.stripDashes(recapText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+                    guard !trimmed.isEmpty else {
+                        // The LLM was configured but returned nothing usable: fall
+                        // back to the deterministic digest and leave the inbox as
+                        // is. Not a classified failure (no thrown error), so no
+                        // recovery is offered, matching prior behavior exactly.
+                        self.playback.preview(self.inboxDigestText(for: summarized))
+                        self.intakeStatus = "Recap unavailable; played the quick digest instead."
+                        return
+                    }
+                    self.deliverRecap(trimmed, summarizing: summarized, personality: personality)
+                }
+            } catch {
+                // The deterministic fallback itself is unchanged (INF-254): still
+                // play the digest. This only ADDS a recovery affordance alongside
+                // it when the failure is structurally recoverable.
+                await MainActor.run {
                     self.playback.preview(self.inboxDigestText(for: summarized))
                     self.intakeStatus = "Recap unavailable; played the quick digest instead."
-                    return
+                    let presentationError = error as? CompanionPresentationError
+                    let recovery = ConversationRecovery.classify(
+                        errorMessage: error.localizedDescription,
+                        failedPrompt: "",
+                        httpStatus: presentationError?.httpStatus,
+                        urlErrorCode: presentationError?.urlErrorCode ?? (error as? URLError)?.code,
+                        isCLIProvider: self.recapEffectiveProvider.isCLI
+                    )
+                    if recovery.offersModelSwitch {
+                        self.recapRecovery = recovery
+                        self.recapRetryCards = summarized
+                        // Model discovery for the recap recovery menu (same
+                        // pattern the live-call failure handler already uses).
+                        self.loadPresentationModels(preserveCurrentSelection: true)
+                    }
                 }
-                self.deliverRecap(trimmed, summarizing: summarized, personality: personality)
             }
         }
     }
@@ -2033,6 +2092,167 @@ final class AppModel: ObservableObject {
         guard let recovery = conversationRecovery, !isAwaitingReply else { return }
         let editedDraft = conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         sendConversationMessage(editedDraft.isEmpty ? recovery.failedPrompt : editedDraft)
+    }
+
+    // MARK: - Role-scoped recovery (recap / follow-up, INF-254)
+    //
+    // The live call's recovery above predates the per-role model plumbing
+    // (D2/D3) and switches by temporarily redirecting the main model row's
+    // setters at the `.conversation` role's key (`isApplyingConversationRecoveryOverride`).
+    // Recap and follow-up did not exist as separate roles back then; they use
+    // the generic per-role mechanism D3 already built for Settings > Model >
+    // Advanced (`selectRoleProvider`/`selectRoleModel`/`loadRoleModels`)
+    // directly, so a recovery switch here updates only the failing role's
+    // override, never the global keys other roles fall back to (the same
+    // requirement the live call's mechanism satisfies its own way).
+
+    /// The provider a role is currently using: its own override if one is
+    /// set, else the main model row, mirroring
+    /// `CompanionPresentationSettings.load(role:)`'s own fallback.
+    private func effectiveRecoveryProvider(for role: ModelRole) -> CompanionPresentationProvider {
+        roleModelProvider[role] ?? presentationProvider
+    }
+
+    private func effectiveRecoveryModelID(for role: ModelRole) -> String {
+        roleModelID[role] ?? presentationModel
+    }
+
+    private func recoveryProviders(for role: ModelRole) -> [CompanionPresentationProvider] {
+        connectedTextProviders.filter { $0 != effectiveRecoveryProvider(for: role) }
+    }
+
+    private func recoveryModelOptions(for role: ModelRole) -> [CompanionPresentationModelOption] {
+        let currentModelID = effectiveRecoveryModelID(for: role)
+        // No override yet: the role is using the main row, so its discovered
+        // models are the main row's (`presentationModelOptions`), exactly what
+        // the live call's own `conversationRecoveryModels` reads.
+        let source = roleModelProvider[role] != nil ? (roleModelOptions[role] ?? []) : presentationModelOptions
+        var options = source.filter { $0.id != currentModelID }
+        if currentModelID != "default", !options.contains(where: { $0.id == "default" }) {
+            let provider = effectiveRecoveryProvider(for: role)
+            options.insert(CompanionPresentationModelOption(
+                id: "default",
+                detail: "use \(provider.title)'s configured model",
+                reasoningEfforts: CompanionPresentationModelService.fallbackReasoningEfforts(provider: provider, modelID: "default")
+            ), at: 0)
+        }
+        return options
+    }
+
+    /// Switches one role's override to a new provider (never the global
+    /// fallback other roles read) and starts model discovery for it.
+    private func selectRoleRecoveryProvider(_ provider: CompanionPresentationProvider, for role: ModelRole) {
+        selectRoleProvider(provider, for: role)
+        loadRoleModels(for: role)
+    }
+
+    /// Picks a model within a role's current effective provider. Seeds an
+    /// explicit override for that provider first if the role was still on
+    /// "Use main model" (a mere failure never seeds one on its own; only this
+    /// explicit user action does).
+    private func selectRoleRecoveryModel(_ option: CompanionPresentationModelOption, for role: ModelRole) {
+        if roleModelProvider[role] == nil {
+            selectRoleProvider(effectiveRecoveryProvider(for: role), for: role)
+        }
+        selectRoleModel(option, for: role)
+    }
+
+    var recapEffectiveProvider: CompanionPresentationProvider { effectiveRecoveryProvider(for: .recap) }
+    /// Both follow-up surfaces (card-based and live/session-based) ride the
+    /// `.conversation` role (see `ModelRole`'s doc), so they share this one
+    /// "which provider is follow-up currently using" reading.
+    var followUpEffectiveProvider: CompanionPresentationProvider { effectiveRecoveryProvider(for: .conversation) }
+    var recapRecoveryProviders: [CompanionPresentationProvider] { recoveryProviders(for: .recap) }
+    var recapRecoveryModels: [CompanionPresentationModelOption] { recoveryModelOptions(for: .recap) }
+
+    var canRetryRecapFailure: Bool {
+        recapRecovery?.offersModelSwitch == true && !recapRetryCards.isEmpty
+    }
+
+    func selectRecapRecoveryProvider(_ provider: CompanionPresentationProvider) {
+        selectRoleRecoveryProvider(provider, for: .recap)
+        recapRecoveryConfirmation = "Switched recap to \(provider.title). Retry the recap when ready."
+    }
+
+    func selectRecapRecoveryModel(_ option: CompanionPresentationModelOption) {
+        selectRoleRecoveryModel(option, for: .recap)
+        recapRecoveryConfirmation = "Switched recap to \(recapEffectiveProvider.title) \(option.id). Retry the recap when ready."
+    }
+
+    /// Replays the recap for the same cards that failed, exactly like the
+    /// user pressing "Play recap" again; `playInboxRecap` itself clears the
+    /// recovery state at the top of a fresh attempt.
+    func retryRecapAfterFailure() {
+        guard canRetryRecapFailure else { return }
+        let cards = recapRetryCards
+        playInboxRecap(for: cards)
+    }
+
+    var followUpRecoveryProviders: [CompanionPresentationProvider] { recoveryProviders(for: .conversation) }
+    var followUpRecoveryModels: [CompanionPresentationModelOption] { recoveryModelOptions(for: .conversation) }
+
+    var canRetryFollowUpFailure: Bool {
+        followUpRecovery?.offersModelSwitch == true
+            && !isGeneratingFollowUpAnswer
+            && !followUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func selectFollowUpRecoveryProvider(_ provider: CompanionPresentationProvider) {
+        selectRoleRecoveryProvider(provider, for: .conversation)
+        followUpStatus = "Switched to \(provider.title). Ask Attaché again to retry."
+    }
+
+    func selectFollowUpRecoveryModel(_ option: CompanionPresentationModelOption) {
+        selectRoleRecoveryModel(option, for: .conversation)
+        followUpStatus = "Switched to \(effectiveRecoveryProvider(for: .conversation).title) \(option.id). Ask Attaché again to retry."
+    }
+
+    /// Re-asks the same question, exactly like pressing "Ask Again".
+    func retryFollowUpAfterFailure() {
+        guard canRetryFollowUpFailure else { return }
+        createFollowUpAnswer()
+    }
+
+    var liveFollowUpRecoveryProviders: [CompanionPresentationProvider] { recoveryProviders(for: .conversation) }
+    var liveFollowUpRecoveryModels: [CompanionPresentationModelOption] { recoveryModelOptions(for: .conversation) }
+
+    var canRetryLiveFollowUpFailure: Bool {
+        liveFollowUpRecovery?.offersModelSwitch == true
+            && !isGeneratingLiveFollowUpAnswer
+            && !liveFollowUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func selectLiveFollowUpRecoveryProvider(_ provider: CompanionPresentationProvider) {
+        selectRoleRecoveryProvider(provider, for: .conversation)
+        liveFollowUpStatus = "Switched to \(provider.title). Ask Attaché again to retry."
+    }
+
+    func selectLiveFollowUpRecoveryModel(_ option: CompanionPresentationModelOption) {
+        selectRoleRecoveryModel(option, for: .conversation)
+        liveFollowUpStatus = "Switched to \(effectiveRecoveryProvider(for: .conversation).title) \(option.id). Ask Attaché again to retry."
+    }
+
+    /// Re-asks the same question, exactly like pressing "Ask Again".
+    func retryLiveFollowUpAfterFailure() {
+        guard canRetryLiveFollowUpFailure else { return }
+        createLiveFollowUpAnswer()
+    }
+
+    /// Classifies a follow-up answer's failure (INF-254) when it degraded via
+    /// the LLM-error fallback strategy; `nil` for every other strategy
+    /// (including the deliberate "not configured" fallback, which is not a
+    /// failure) or when the classification isn't recoverable.
+    private func classifyFollowUpRecovery(_ answer: CompanionFollowUpAnswerResult) -> ConversationRecovery? {
+        guard answer.strategy == "deterministic-follow-up-fallback-after-llm-error",
+              let errorDescription = answer.errorDescription else { return nil }
+        let recovery = ConversationRecovery.classify(
+            errorMessage: errorDescription,
+            failedPrompt: "",
+            httpStatus: answer.errorHTTPStatus,
+            urlErrorCode: answer.errorURLErrorCode,
+            isCLIProvider: effectiveRecoveryProvider(for: .conversation).isCLI
+        )
+        return recovery.offersModelSwitch ? recovery : nil
     }
 
     private func removeFailedTurnsBeforeRetry() {
@@ -3961,11 +4181,22 @@ final class AppModel: ObservableObject {
                         project: self.curatedProjectName(forCWD: record.project)
                     )
                 }
-                let reply = await self.presentationService.complete(
-                    system: SessionTagger.systemPrompt,
-                    user: SessionTagger.userPrompt(for: items, knownTags: Array(vocabulary)),
-                    role: .tagging
-                )
+                // Tagging failures stay silent to the user by design (this is
+                // deliberate, per docs/reviews/2026-07-10-app-review.md): a
+                // failed batch is simply skipped, exactly as before. The only
+                // change (INF-254) is counting the failure for the
+                // diagnostics snapshot instead of it vanishing unobserved.
+                let reply: String?
+                do {
+                    reply = try await self.presentationService.complete(
+                        system: SessionTagger.systemPrompt,
+                        user: SessionTagger.userPrompt(for: items, knownTags: Array(vocabulary)),
+                        role: .tagging
+                    )
+                } catch {
+                    reply = nil
+                    await MainActor.run { self.taggingFailureCount += 1 }
+                }
                 let tags = reply.map { SessionTagger.parse($0) } ?? [:]
                 vocabulary.formUnion(tags.values)
                 if !tags.isEmpty {
@@ -4245,6 +4476,9 @@ final class AppModel: ObservableObject {
         followUpAnswerText = ""
         isGeneratingFollowUpAnswer = true
         followUpStatus = "Asking Attaché about \(target)."
+        // A fresh attempt (typed question or explicit retry) supersedes any
+        // stale recovery banner from a previous failure (INF-254).
+        followUpRecovery = nil
 
         presentationService.answerFollowUpQuestion(
             card: card,
@@ -4262,6 +4496,7 @@ final class AppModel: ObservableObject {
                     target: target,
                     answer: answer
                 )
+                self.followUpRecovery = self.classifyFollowUpRecovery(answer)
             case .failure(let error):
                 self.followUpStatus = "Answer failed for \(target): \(error.localizedDescription)"
             }
@@ -4272,6 +4507,7 @@ final class AppModel: ObservableObject {
         followUpAnswerRequestID = nil
         followUpAnswerText = ""
         isGeneratingFollowUpAnswer = false
+        followUpRecovery = nil
         resetFollowUpAnswerStatus()
     }
 
@@ -4319,6 +4555,9 @@ final class AppModel: ObservableObject {
         liveFollowUpAnswerText = ""
         isGeneratingLiveFollowUpAnswer = true
         liveFollowUpStatus = "Asking Attaché about \(session.displayTitle)."
+        // A fresh attempt (typed question or explicit retry) supersedes any
+        // stale recovery banner from a previous failure (INF-254).
+        liveFollowUpRecovery = nil
 
         presentationService.answerFollowUpQuestion(
             card: followUpContextCard(for: session),
@@ -4336,6 +4575,7 @@ final class AppModel: ObservableObject {
                     target: target,
                     answer: answer
                 )
+                self.liveFollowUpRecovery = self.classifyFollowUpRecovery(answer)
             case .failure(let error):
                 self.liveFollowUpStatus = "Answer failed for \(target): \(error.localizedDescription)"
             }
@@ -4346,6 +4586,7 @@ final class AppModel: ObservableObject {
         liveFollowUpAnswerRequestID = nil
         liveFollowUpAnswerText = ""
         isGeneratingLiveFollowUpAnswer = false
+        liveFollowUpRecovery = nil
         resetLiveFollowUpAnswerStatus()
     }
 

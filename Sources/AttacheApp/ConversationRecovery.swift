@@ -71,3 +71,19 @@ struct ConversationRecovery: Equatable {
         )
     }
 }
+
+extension ConversationFailureCategory {
+    /// Short, user-facing label for a compact badge (INF-254), e.g. a
+    /// plain-readback card's "spoken plainly · rate limited" notice. The full
+    /// error text stays available separately; this is only the at-a-glance
+    /// word or two.
+    var shortLabel: String {
+        switch self {
+        case .usageOrRateLimit: return "rate limited"
+        case .modelUnavailable: return "model unavailable"
+        case .transient: return "connection issue"
+        case .auth: return "authentication issue"
+        case .other: return "unexpected error"
+        }
+    }
+}

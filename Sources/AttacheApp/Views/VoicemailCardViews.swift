@@ -83,3 +83,51 @@ struct StatusPill: View {
         }
     }
 }
+
+/// The plain-readback fallback badge (INF-254): a short category-derived
+/// notice ("Spoken plainly · rate limited"), tappable to reveal the full
+/// underlying error text, with the same text also reachable on hover and via
+/// an accessibility label. `.id(card.id)` at the call site resets
+/// `isExpanded` when the selected card changes, so a stale expansion never
+/// bleeds from one card's error onto another's.
+struct PresentationFallbackBadge: View {
+    var notice: String
+    var fullText: String?
+    @State private var isExpanded = false
+
+    var body: some View {
+        let trimmedFullText = fullText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasFullText = !(trimmedFullText ?? "").isEmpty
+        Button {
+            isExpanded.toggle()
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(notice, systemImage: "exclamationmark.triangle")
+                    .typoCaption(.medium)
+                    .foregroundStyle(.yellow.opacity(0.92))
+                    .lineLimit(3)
+                if isExpanded, hasFullText {
+                    Text(trimmedFullText ?? "")
+                        .typoCaption(design: .monospaced)
+                        .foregroundStyle(.yellow.opacity(0.72))
+                        .lineLimit(6)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .disabled(!hasFullText)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.yellow.opacity(0.18))
+        )
+        .help(hasFullText ? trimmedFullText ?? "" : notice)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(hasFullText ? "\(notice). Full error: \(trimmedFullText ?? "")" : notice)
+        .accessibilityAddTraits(.isButton)
+    }
+}

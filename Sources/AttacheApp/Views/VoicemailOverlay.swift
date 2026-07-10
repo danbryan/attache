@@ -76,6 +76,11 @@ extension CompanionRootView {
 
             Divider().overlay(Color.primary.opacity(0.12))
 
+            if let recovery = model.recapRecovery, recovery.offersModelSwitch {
+                recapRecoveryBanner(recovery)
+                Divider().overlay(Color.primary.opacity(0.12))
+            }
+
             if visibleCards.isEmpty {
                 VStack(spacing: 12) {
                     Spacer(minLength: 48)
@@ -178,17 +183,11 @@ extension CompanionRootView {
                     .lineLimit(3)
 
                 if let notice = presentationNotice(for: card) {
-                    Label(notice, systemImage: "exclamationmark.triangle")
-                        .typoCaption(.medium)
-                        .foregroundStyle(.yellow.opacity(0.92))
-                        .lineLimit(3)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(Color.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.yellow.opacity(0.18))
-                        )
+                    PresentationFallbackBadge(
+                        notice: notice,
+                        fullText: metadataDictionary(for: card)["companion_presentation_error"]
+                    )
+                    .id(card.id)
                 }
 
                 followUp(for: card)
@@ -297,6 +296,8 @@ extension CompanionRootView {
             .buttonStyle(.bordered)
             .controlSize(.small)
 
+            liveFollowUpRecoveryActions()
+
             if model.isGeneratingLiveFollowUpAnswer {
                 ProgressView()
                     .controlSize(.small)
@@ -391,6 +392,8 @@ extension CompanionRootView {
                 }
                 .disabled(model.isGeneratingFollowUpAnswer || model.followUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+
+            followUpRecoveryActions()
 
             if model.isGeneratingFollowUpAnswer {
                 ProgressView()
@@ -576,6 +579,14 @@ extension CompanionRootView {
         case "plain-readback-personality-unavailable":
             return "Read the source output verbatim because personality summary is not configured."
         case "plain-readback-after-llm-error":
+            // Short category-derived label (INF-254) instead of a raw error
+            // dump, e.g. "Spoken plainly · rate limited"; the full error text
+            // is still available on tap/hover via the badge itself. Falls
+            // back to the old generic wording for any card written before
+            // the category was recorded in metadata.
+            if let category = ConversationFailureCategory(rawValue: metadata["companion_presentation_error_category"] ?? "") {
+                return "Spoken plainly · \(category.shortLabel)"
+            }
             return "Read the source output verbatim because personality summary couldn't run."
         default:
             return nil
@@ -717,6 +728,132 @@ extension CompanionRootView {
             return "\(sign)\(milliseconds / 1000)s"
         }
         return "\(sign)\(String(format: "%.2f", seconds))s"
+    }
+}
+
+// MARK: - Recap / follow-up recovery (INF-254)
+
+/// Which recovery surface a pending cloud-consent switch belongs to. Recap
+/// and both follow-up flows share the identical consent sheet mechanism the
+/// live call already has (`pendingCallPresentationProvider`); this only adds
+/// the "which surface, so which `select...RecoveryProvider` runs on Enable"
+/// distinction, since `.followUp` and `.liveFollowUp` both act on the
+/// `.conversation` role and can't be told apart by role alone.
+enum RecoverySurface {
+    case recap
+    case followUp
+    case liveFollowUp
+
+    var consentProduces: String {
+        switch self {
+        case .recap: return "your recap"
+        case .followUp, .liveFollowUp: return "an answer"
+        }
+    }
+
+    var consentSends: String {
+        switch self {
+        case .recap: return "your waiting updates' summaries"
+        case .followUp, .liveFollowUp: return "your question and the attached update's context"
+        }
+    }
+}
+
+struct PendingRecoveryProviderSwitch: Identifiable {
+    let id = UUID()
+    let surface: RecoverySurface
+    let provider: CompanionPresentationProvider
+}
+
+extension CompanionRootView {
+    /// Switches a recovery surface's provider, gating on cloud consent first
+    /// exactly like the live call's `requestConversationRecoveryProvider`.
+    func requestRecoveryProvider(_ provider: CompanionPresentationProvider, surface: RecoverySurface) {
+        if model.presentationProviderSendsToCloud(provider), !model.cloudConsentAcknowledged(for: provider) {
+            pendingRecoveryProviderSwitch = PendingRecoveryProviderSwitch(surface: surface, provider: provider)
+        } else {
+            applyRecoveryProviderSwitch(provider, surface: surface)
+        }
+    }
+
+    func applyRecoveryProviderSwitch(_ provider: CompanionPresentationProvider, surface: RecoverySurface) {
+        switch surface {
+        case .recap: model.selectRecapRecoveryProvider(provider)
+        case .followUp: model.selectFollowUpRecoveryProvider(provider)
+        case .liveFollowUp: model.selectLiveFollowUpRecoveryProvider(provider)
+        }
+    }
+
+    /// The recap failure banner: shown in the inbox panel (independent of
+    /// card selection, since a failed recap never produces a card to attach
+    /// itself to) whenever a recoverable failure is outstanding. The
+    /// deterministic digest fallback already played by the time this shows;
+    /// this only offers the Switch model / Retry affordance alongside it.
+    @ViewBuilder
+    func recapRecoveryBanner(_ recovery: ConversationRecovery) -> some View {
+        let statusText = model.recapRecoveryConfirmation ?? "Recap couldn't run: \(recovery.category.shortLabel)."
+        VStack(alignment: .leading, spacing: 8) {
+            Text(statusText)
+                .typoCaption(.medium, design: .monospaced)
+                .foregroundStyle(Color.red.opacity(0.88))
+                .lineLimit(3)
+                .accessibilityLabel("Recap status: \(statusText)")
+            recoveryActionsView(
+                providers: model.recapRecoveryProviders,
+                models: model.recapRecoveryModels,
+                currentProviderTitle: model.recapEffectiveProvider.title,
+                switchAccessibilityLabel: "Switch recap model",
+                onSelectProvider: { requestRecoveryProvider($0, surface: .recap) },
+                onSelectModel: { model.selectRecapRecoveryModel($0) },
+                canRetry: model.canRetryRecapFailure,
+                retryAccessibilityLabel: "Retry recap",
+                onRetry: { model.retryRecapAfterFailure() }
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red.opacity(0.18)))
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+    }
+
+    /// The card-based "Ask Attaché" follow-up's recovery affordance
+    /// (`createFollowUpAnswer`, rendered inside `followUp(for:)`).
+    @ViewBuilder
+    func followUpRecoveryActions() -> some View {
+        if let recovery = model.followUpRecovery, recovery.offersModelSwitch {
+            recoveryActionsView(
+                providers: model.followUpRecoveryProviders,
+                models: model.followUpRecoveryModels,
+                currentProviderTitle: model.followUpEffectiveProvider.title,
+                switchAccessibilityLabel: "Switch follow-up model",
+                onSelectProvider: { requestRecoveryProvider($0, surface: .followUp) },
+                onSelectModel: { model.selectFollowUpRecoveryModel($0) },
+                canRetry: model.canRetryFollowUpFailure,
+                retryAccessibilityLabel: "Retry follow-up answer",
+                onRetry: { model.retryFollowUpAfterFailure() }
+            )
+        }
+    }
+
+    /// The live/session-context follow-up's recovery affordance
+    /// (`createLiveFollowUpAnswer`, rendered inside `liveSessionComposer(for:)`).
+    @ViewBuilder
+    func liveFollowUpRecoveryActions() -> some View {
+        if let recovery = model.liveFollowUpRecovery, recovery.offersModelSwitch {
+            recoveryActionsView(
+                providers: model.liveFollowUpRecoveryProviders,
+                models: model.liveFollowUpRecoveryModels,
+                currentProviderTitle: model.followUpEffectiveProvider.title,
+                switchAccessibilityLabel: "Switch live follow-up model",
+                onSelectProvider: { requestRecoveryProvider($0, surface: .liveFollowUp) },
+                onSelectModel: { model.selectLiveFollowUpRecoveryModel($0) },
+                canRetry: model.canRetryLiveFollowUpFailure,
+                retryAccessibilityLabel: "Retry live follow-up answer",
+                onRetry: { model.retryLiveFollowUpAfterFailure() }
+            )
+        }
     }
 }
 

@@ -39,6 +39,30 @@ trap cleanup EXIT
 
 command -v python3 >/dev/null 2>&1 || fail "python3 was not found on PATH"
 
+free_port() {
+  python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+}
+
+wait_for_ready() {
+  local log="$1" pid="$2" label="$3"
+  for _ in {1..50}; do
+    if grep -q '"event": "ready"' "$log"; then
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 TEMP_ROOT="$(mktemp -d /tmp/attache-conversation-recovery.XXXXXX)"
 PROVIDER_LOG="$TEMP_ROOT/personality-provider.jsonl"
 PROVIDER_STDOUT="$TEMP_ROOT/personality-provider.log"
@@ -47,14 +71,7 @@ chmod 600 "$PROVIDER_LOG"
 
 NONCE="$(date +%Y%m%d%H%M%S)_$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-' | cut -c1-8)"
 MODEL="attache-recovery-smoke"
-PORT="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+PORT="$(free_port)"
 
 echo "==> Starting deterministic usage-limit provider on 127.0.0.1:$PORT"
 ATTACHE_PERSONALITY_TWO_WAY_NONCE="$NONCE" \
@@ -66,17 +83,10 @@ ATTACHE_SMOKE_PROVIDER_ERROR=usage_limit \
   python3 scripts/personality-two-way-smoke-server.py >"$PROVIDER_STDOUT" 2>&1 &
 SERVER_PID=$!
 
-for _ in {1..50}; do
-  if grep -q '"event": "ready"' "$PROVIDER_LOG"; then
-    break
-  fi
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    cat "$PROVIDER_STDOUT" >&2 || true
-    fail "usage-limit provider exited before becoming ready"
-  fi
-  sleep 0.1
-done
-grep -q '"event": "ready"' "$PROVIDER_LOG" || fail "usage-limit provider did not become ready"
+wait_for_ready "$PROVIDER_LOG" "$SERVER_PID" "usage-limit provider" || {
+  cat "$PROVIDER_STDOUT" >&2 || true
+  fail "usage-limit provider did not become ready"
+}
 
 echo "==> Switching Attaché to a fresh test profile"
 FRESH_OUTPUT="$(scripts/simulate-fresh-user.sh fresh)"
@@ -103,3 +113,71 @@ ATTACHE_CONVERSATION_RECOVERY_PROVIDER_LOG="$PROVIDER_LOG" \
   scripts/ui-smoke.sh
 
 echo "==> Conversation recovery smoke passed"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+scripts/simulate-fresh-user.sh restore "$BACKUP_DIR" >/dev/null || {
+  echo "warning: state restore failed; restore manually with:" >&2
+  echo "  scripts/simulate-fresh-user.sh restore \"$BACKUP_DIR\"" >&2
+}
+BACKUP_DIR=""
+
+# INF-254 (D4): recap failure offers the same Switch model / Retry affordance
+# as the live call, and retrying after switching models actually succeeds
+# (unlike f16 above, whose mock keeps failing every model on purpose - this
+# scenario needs one that starts failing and then answers once the request
+# names the recovered model, so it reuses the exact same deterministic mock
+# server with its new ATTACHE_SMOKE_PROVIDER_RECOVERY_MODEL knob instead of a
+# second mock). The same run also exercises the plain-readback badge (spec
+# item 2): the two demo cards' own per-event presentation hits the identical
+# failing mock and falls back to plain readback with a classified category.
+RECAP_NONCE="$(date +%Y%m%d%H%M%S)_$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-' | cut -c1-8)"
+RECAP_MODEL="attache-recap-recovery-smoke"
+RECAP_PORT="$(free_port)"
+RECAP_PROVIDER_LOG="$TEMP_ROOT/recap-personality-provider.jsonl"
+RECAP_PROVIDER_STDOUT="$TEMP_ROOT/recap-personality-provider.log"
+: > "$RECAP_PROVIDER_LOG"
+chmod 600 "$RECAP_PROVIDER_LOG"
+
+echo "==> Starting deterministic recap recovery provider on 127.0.0.1:$RECAP_PORT"
+ATTACHE_PERSONALITY_TWO_WAY_NONCE="$RECAP_NONCE" \
+ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="ATTACHE_UNUSED_${RECAP_NONCE}" \
+ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$RECAP_PROVIDER_LOG" \
+ATTACHE_PERSONALITY_TWO_WAY_MODEL="$RECAP_MODEL" \
+ATTACHE_PERSONALITY_TWO_WAY_PORT="$RECAP_PORT" \
+ATTACHE_SMOKE_PROVIDER_ERROR=usage_limit \
+ATTACHE_SMOKE_PROVIDER_RECOVERY_MODEL="$RECAP_MODEL" \
+  python3 scripts/personality-two-way-smoke-server.py >"$RECAP_PROVIDER_STDOUT" 2>&1 &
+SERVER_PID=$!
+
+wait_for_ready "$RECAP_PROVIDER_LOG" "$SERVER_PID" "recap recovery provider" || {
+  cat "$RECAP_PROVIDER_STDOUT" >&2 || true
+  fail "recap recovery provider did not become ready"
+}
+
+echo "==> Switching Attaché to a fresh test profile for the recap scenario"
+FRESH_OUTPUT="$(scripts/simulate-fresh-user.sh fresh)"
+echo "$FRESH_OUTPUT"
+BACKUP_DIR="$(printf '%s\n' "$FRESH_OUTPUT" | sed -n 's/^Backup: //p' | tail -1)"
+[[ -n "$BACKUP_DIR" ]] || fail "could not determine Attaché backup dir"
+
+defaults write "$BUNDLE_ID" attache.onboardingCompleted -bool true
+defaults write "$BUNDLE_ID" attache.codexSourceEnabled -bool false
+defaults write "$BUNDLE_ID" attache.claudeCodeSourceEnabled -bool false
+defaults write "$BUNDLE_ID" attache.presentationLLMEnabled -bool true
+defaults write "$BUNDLE_ID" attache.voicemailMode -bool true
+defaults write "$BUNDLE_ID" attache.showActivityInsights -bool false
+defaults write "$BUNDLE_ID" attache.showTips -bool false
+
+echo "==> Running Attaché recap recovery UI smoke"
+SMOKE_ONLY=f17 \
+SMOKE_KEEP_STATE=1 \
+ATTACHE_DISABLE_TOPIC_TAGGING=1 \
+ATTACHE_LLM_PROVIDER=ollama \
+ATTACHE_LLM_BASE_URL="http://127.0.0.1:${RECAP_PORT}/v1" \
+ATTACHE_RECAP_RECOVERY_PROVIDER_LOG="$RECAP_PROVIDER_LOG" \
+ATTACHE_RECAP_RECOVERY_MODEL="$RECAP_MODEL" \
+  scripts/ui-smoke.sh
+
+echo "==> Recap recovery smoke passed"
