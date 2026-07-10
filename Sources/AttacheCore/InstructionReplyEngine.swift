@@ -25,13 +25,21 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     private var enabledSessions: Set<String> = []
     private var submittedSnapshots: [String: Instruction] = [:]
 
+    /// Default `expiryWindow` (docs/two-way.md: "Instructions expire (fail)
+    /// after a bounded window (default 30 minutes)"). Exposed so callers that
+    /// only have a session-level coordinator (`TwoWayCoordinator`) can still
+    /// reference the production default when overriding it for a fast-expiry
+    /// test, the same way `AgentResumeDeliveryAdapter.defaultProcessTimeout`
+    /// documents its own override seam (INF-248/B3).
+    public static let defaultExpiryWindow: TimeInterval = 30 * 60
+
     /// How long a confirmed/pending instruction may wait before it is failed as
     /// expired rather than firing much later.
     public var expiryWindow: TimeInterval
 
     public init(
         store: CardStore,
-        expiryWindow: TimeInterval = 30 * 60,
+        expiryWindow: TimeInterval = InstructionReplyEngine.defaultExpiryWindow,
         idGenerator: @escaping () -> String = { UUID().uuidString }
     ) {
         self.store = store
@@ -192,13 +200,22 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     }
 
     /// Fail any pending/confirmed instruction older than the expiry window, so an
-    /// undeliverable instruction doesn't fire hours later.
+    /// undeliverable instruction doesn't fire hours later. The message names the
+    /// window and the frozen target so a caller that surfaces `error` verbatim
+    /// (`CallPhase.derive`, `AppModel.handleTwoWayDeliveryChanges`) shows the
+    /// user something concrete instead of a bare "expired" (INF-248/B3;
+    /// docs/two-way.md's "Waiting and expiry are invisible" fix).
     @discardableResult
     public func expireStale(now: Date) -> [Instruction] {
         let candidates = (try? store.fetchInstructions(inStates: [.pending, .confirmed])) ?? []
         var expired: [Instruction] = []
         for instruction in candidates where now.timeIntervalSince(instruction.createdAt) > expiryWindow {
-            expired.append(markFailed(instruction, error: "Expired before it could be delivered."))
+            let minutes = max(1, Int((expiryWindow / 60).rounded()))
+            let target = instruction.targetDisplayName ?? "the agent"
+            expired.append(markFailed(
+                instruction,
+                error: "Send expired after \(minutes) min waiting for \(target) to go quiet."
+            ))
         }
         return expired
     }

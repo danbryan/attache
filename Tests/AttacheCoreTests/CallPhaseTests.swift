@@ -83,15 +83,26 @@ final class CallPhaseTests: XCTestCase {
         ))
         XCTAssertEqual(
             CallPhase.derive(from: signals),
-            .sendQueued(target: "Weekly Codex Improvement Review", since: confirmedAt, reason: nil)
+            .sendQueued(
+                target: "Weekly Codex Improvement Review",
+                since: confirmedAt,
+                reason: "Sending to Weekly Codex Improvement Review when the session is quiet"
+            )
         )
     }
 
+    /// INF-248 (B3): a still-`.pending` instruction is waiting on the user's
+    /// own confirmation, not on the session going quiet, so its reason must
+    /// say so rather than reusing the confirmed/delivering wording.
     func testSendQueuedForAPendingInstructionFallsBackToCreatedAtAsSince() {
         let signals = CallSignals(pendingSend: instruction(state: .pending, createdAt: referenceDate))
         XCTAssertEqual(
             CallPhase.derive(from: signals),
-            .sendQueued(target: "Weekly Codex Improvement Review", since: referenceDate, reason: nil)
+            .sendQueued(
+                target: "Weekly Codex Improvement Review",
+                since: referenceDate,
+                reason: "Waiting for you to confirm the send to Weekly Codex Improvement Review"
+            )
         )
     }
 
@@ -99,7 +110,11 @@ final class CallPhaseTests: XCTestCase {
         let signals = CallSignals(pendingSend: instruction(state: .delivering, createdAt: referenceDate))
         XCTAssertEqual(
             CallPhase.derive(from: signals),
-            .sendQueued(target: "Weekly Codex Improvement Review", since: referenceDate, reason: nil)
+            .sendQueued(
+                target: "Weekly Codex Improvement Review",
+                since: referenceDate,
+                reason: "Sending to Weekly Codex Improvement Review when the session is quiet"
+            )
         )
     }
 

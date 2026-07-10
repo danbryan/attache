@@ -159,6 +159,80 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         XCTAssertTrue(model.intakeStatus.contains("focused") || model.intakeStatus.contains("Focus"))
     }
 
+    // MARK: - handleTwoWayDeliveryChanges surfaces every change (INF-248/B3)
+
+    /// The old implementation was `changed.sorted(by: createdAt).last`, so a
+    /// pump batch containing both a delivered instruction and a failed one
+    /// only ever surfaced the newest-created instruction's status; nothing
+    /// happened for the other one. This proves every instruction in the batch
+    /// is now applied (ascending by `createdAt`), while the truly newest one
+    /// still ends up as the visible status line - so the fix does not change
+    /// today's precedence for what the string says, it just stops the older
+    /// instruction from being skipped over entirely.
+    func testHandleTwoWayDeliveryChangesAppliesEveryInstructionNewestLast() throws {
+        _ = NSApplication.shared
+        let model = try AppModel(store: CardStore.inMemory())
+
+        let olderFailed = Instruction(
+            id: "older-failed",
+            sessionID: "s-old",
+            sourceKind: "codex",
+            text: "run the tests",
+            state: .failed,
+            createdAt: Date(timeIntervalSince1970: 100),
+            error: "Send expired after 30 min waiting for Weekly Codex Improvement Review to go quiet.",
+            targetDisplayName: "Weekly Codex Improvement Review"
+        )
+        let newerDelivered = Instruction(
+            id: "newer-delivered",
+            sessionID: "s-new",
+            sourceKind: "codex",
+            text: "run it again",
+            state: .delivered,
+            createdAt: Date(timeIntervalSince1970: 200),
+            targetDisplayName: "Second Session"
+        )
+
+        // Passed in reverse-of-creation order to prove the handler sorts by
+        // createdAt itself rather than trusting caller order.
+        model.handleTwoWayDeliveryChanges([newerDelivered, olderFailed])
+
+        XCTAssertEqual(model.intakeStatus, "Sent to Second Session. Watching for the reply…")
+        XCTAssertEqual(model.liveFollowUpStatus, "Sent to Second Session. Watching for the reply…")
+    }
+
+    /// The expiry message (`InstructionReplyEngine.expireStale`) is already a
+    /// complete sentence, so the failed-status formatting must show it
+    /// verbatim rather than prefixing another "Send failed:" in front of it -
+    /// this also keeps the off-call composer status consistent with
+    /// `CallPhase.derive`'s on-call formatting, which already shows a failed
+    /// send's error message with no added prefix.
+    func testHandleTwoWayDeliveryChangesShowsExpiryMessageVerbatim() throws {
+        _ = NSApplication.shared
+        let model = try AppModel(store: CardStore.inMemory())
+        let expired = Instruction(
+            id: "expired",
+            sessionID: "s1",
+            sourceKind: "codex",
+            text: "run the tests",
+            state: .failed,
+            createdAt: Date(),
+            error: "Send expired after 30 min waiting for Weekly Codex Improvement Review to go quiet.",
+            targetDisplayName: "Weekly Codex Improvement Review"
+        )
+
+        model.handleTwoWayDeliveryChanges([expired])
+
+        XCTAssertEqual(
+            model.intakeStatus,
+            "Send expired after 30 min waiting for Weekly Codex Improvement Review to go quiet."
+        )
+        XCTAssertEqual(
+            model.liveFollowUpStatus,
+            "Send expired after 30 min waiting for Weekly Codex Improvement Review to go quiet."
+        )
+    }
+
     func testPersonalityToolArgumentsFreezeOnlyTheStructuredInstruction() {
         let arguments = #"{"instruction":"  Reply exactly TOOL_PAYLOAD. Do not use tools.  ","working_directory":"/tmp/wrong"}"#
 
