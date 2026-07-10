@@ -445,12 +445,13 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         }
     }
 
-    func testFakeClaudeDeliveryReportsSuccessEvenWithoutEvidenceToday() async throws {
-        // Pins the exact gap the 2026-07-10 review calls out (section 1, item 1):
-        // AgentResumeDeliveryAdapter.deliver() only checks the exit code, so a
-        // silent no-op (exit 0, no transcript evidence) is indistinguishable from
-        // a real delivery today. `ATTACHE_FAKE_CLAUDE_MODE=no_evidence` simulates
-        // exactly that: the fake CLI exits 0 without touching the transcript.
+    func testFakeClaudeDeliveryFailsWhenExitZeroWithoutEvidence() async throws {
+        // The exact gap the 2026-07-10 review called out (section 1, item 1):
+        // a silent no-op (exit 0, no transcript evidence) must not be recorded
+        // as a delivered turn. B1 (INF-238) fixed this by requiring parsed
+        // evidence, not just exit code 0. `ATTACHE_FAKE_CLAUDE_MODE=no_evidence`
+        // simulates the no-op: the fake CLI exits 0 without touching the
+        // transcript or printing a result JSON object.
         let fixture = try makeFakeClaudeHome(nonce: "noevidence-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(atPath: fixture.home) }
         setenv("ATTACHE_FAKE_CLAUDE_HOME", fixture.home, 1)
@@ -471,10 +472,12 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
 
         let result = await adapter.deliver(instruction)
 
-        guard case .success = result else {
-            return XCTFail("expected today's exit-code-only verdict (success), got \(result)")
+        if case .failure(.deliveryFailed(let detail)) = result {
+            XCTAssertEqual(detail, "exited 0 but no assistant turn in output")
+        } else {
+            XCTFail("expected deliveryFailed for exit-0-without-evidence, got \(result)")
         }
-        XCTAssertEqual(Self.fileSize(sessionFileURL), beforeSize, "no_evidence mode must not append a turn; the adapter's success verdict rests on exit code alone")
+        XCTAssertEqual(Self.fileSize(sessionFileURL), beforeSize, "no_evidence mode must not append a turn")
     }
 
     func testFakeClaudeDeliveryFailsWithStderrForUnknownSession() async throws {
@@ -504,17 +507,12 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         }
     }
 
-    func testFakeClaudeDeliveryHangBlocksForItsFullDurationTodayNoTimeoutExists() async throws {
-        // AgentResumeDeliveryAdapter.deliver() has no built-in timeout, and
-        // AttacheCore.withTimeout does not actually bound a Process-based CLI call
-        // that never checks Task.isCancelled: withTaskGroup awaits every child
-        // task before returning even after cancelAll() and an onTimeout() value
-        // have been produced (verified empirically: wrapping a 3s-hanging
-        // withCheckedContinuation operation in withTimeout(seconds: 0.5) still
-        // took ~3.2s wall-clock to return). So this test pins today's real
-        // behavior instead of a guard that does not exist: a hung claude process
-        // blocks delivery for its full duration (review section 1, item 3:
-        // "waiting and expiry are invisible").
+    func testFakeClaudeDeliveryShortHangStillResolvesNormally() async throws {
+        // B1 (INF-238) added a hard process timeout, but it defaults to 5
+        // minutes, so a brief hang well under that ceiling must still resolve
+        // as a normal, evidence-backed success once the fake CLI wakes up
+        // (the dedicated timeout tests in this file cover the ceiling itself,
+        // e.g. testDeliverFailsOnTimeoutClaude / testDefaultSpawnEnforcesRealHardTimeout).
         let hangSeconds = 1.2
         let fixture = try makeFakeClaudeHome(nonce: "hang-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(atPath: fixture.home) }
@@ -539,10 +537,10 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         let result = await adapter.deliver(instruction)
         let elapsed = Date().timeIntervalSince(start)
 
-        XCTAssertGreaterThanOrEqual(elapsed, hangSeconds - 0.2, "a hung claude process should block delivery for its full duration; nothing in AgentResumeDeliveryAdapter bounds it")
+        XCTAssertGreaterThanOrEqual(elapsed, hangSeconds - 0.2, "delivery should wait out the hang rather than give up early")
         switch result {
         case .success:
-            break // the fake CLI wakes up and completes normally; no timeout fired because none exists
+            break // the fake CLI wakes up and completes normally; the hang is well under the timeout ceiling
         case .failure(let error):
             XCTFail("expected the hang to resolve into a normal success once the fake CLI woke up, got \(error)")
         }
