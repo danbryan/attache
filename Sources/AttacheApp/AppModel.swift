@@ -539,6 +539,22 @@ final class AppModel: ObservableObject {
     @Published private(set) var presentationModelOptions: [CompanionPresentationModelOption] = []
     @Published private(set) var presentationModelDiscoveryStatus: String = "Model discovery not checked"
     @Published private(set) var presentationStatus: String = "Presentation LLM not checked"
+    // MARK: Per-role model overrides (Settings > Model > Advanced disclosure, INF-253/D3)
+    //
+    // A role missing from `roleModelProvider` means "Use main model": it falls
+    // back to the main provider/model above, exactly like
+    // `CompanionPresentationSettings.load(role:)` already resolves an unset
+    // per-role key (D2/INF-247). Populated once at launch by
+    // `loadRoleModelOverrides()` and mutated only through `selectRoleProvider`,
+    // `selectRoleModel`/`selectRoleModelID`, and `setRoleReasoningEffort`/
+    // `setRoleServiceTier` below, which keep these dictionaries and the
+    // matching `presentationLLMRoleKey` defaults entries in sync.
+    @Published private(set) var roleModelProvider: [ModelRole: CompanionPresentationProvider] = [:]
+    @Published private(set) var roleModelID: [ModelRole: String] = [:]
+    @Published private(set) var roleReasoningEffort: [ModelRole: String] = [:]
+    @Published private(set) var roleServiceTier: [ModelRole: String] = [:]
+    @Published private(set) var roleModelOptions: [ModelRole: [CompanionPresentationModelOption]] = [:]
+    @Published private(set) var roleModelDiscoveryStatus: [ModelRole: String] = [:]
     @Published private(set) var companionMemoryStatus: String = "Memory not checked"
     @Published private(set) var speechVoiceOptions: [CompanionVoiceOption] = []
     @Published private(set) var elevenLabsVoiceOptions: [RemoteVoiceOption] = []
@@ -3198,10 +3214,11 @@ final class AppModel: ObservableObject {
                 if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     key = apiKey
                 } else {
-                    // This discovers models for the single Settings > Model
-                    // page, which (until D3's per-role UI) is the shared
-                    // "main model" every role falls back to; .conversation
-                    // is the reasonable placeholder role for that page today.
+                    // This discovers models for the main Settings > Model row,
+                    // which is the shared "main model" any role with no
+                    // per-role override (see roleModelProvider/D3) falls back
+                    // to; .conversation is the reasonable placeholder role for
+                    // that row.
                     let settings = CompanionPresentationSettings.load(
                         role: .conversation,
                         defaults: self.defaults,
@@ -3252,6 +3269,191 @@ final class AppModel: ObservableObject {
         presentationModel = id
         applyCurrentPresentationModelCapabilities()
         refreshPresentationStatus()
+    }
+
+    // MARK: Per-role model overrides (Settings > Model > Advanced, INF-253/D3)
+
+    /// Restores whichever per-role overrides were saved previously, so the
+    /// Advanced disclosure reflects them on launch. A role with no stored
+    /// `.provider` key stays out of every dictionary here, which the UI reads
+    /// as "Use main model".
+    private func loadRoleModelOverrides() {
+        for role in ModelRole.allCases {
+            guard let rawProvider = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .provider)),
+                  let provider = CompanionPresentationProvider(rawValue: rawProvider) else { continue }
+            roleModelProvider[role] = provider
+            roleModelID[role] = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+                ?? provider.defaultModel
+            roleReasoningEffort[role] = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+                ?? provider.defaultReasoningEffort
+            roleServiceTier[role] = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+                ?? provider.defaultServiceTier
+        }
+    }
+
+    /// The reasoning-effort levels available for a role's current override,
+    /// from its discovered models when loaded, else the same provider
+    /// fallback table the main row uses. Empty means the control is hidden,
+    /// same convention as `selectedPresentationReasoningOptions`.
+    func roleReasoningOptions(for role: ModelRole) -> [String] {
+        guard let provider = roleModelProvider[role] else { return [] }
+        let modelID = roleModelID[role] ?? provider.defaultModel
+        if let option = (roleModelOptions[role] ?? []).first(where: { $0.id == modelID }) {
+            return option.reasoningEfforts
+        }
+        return CompanionPresentationModelService.fallbackReasoningEfforts(provider: provider, modelID: modelID)
+    }
+
+    /// Same idea as `selectedPresentationServiceTierOptions`, scoped to one role.
+    func roleServiceTierOptions(for role: ModelRole) -> [CompanionPresentationServiceTierOption] {
+        guard let provider = roleModelProvider[role] else { return [] }
+        let modelID = roleModelID[role] ?? provider.defaultModel
+        let options: [CompanionPresentationServiceTierOption]
+        if let option = (roleModelOptions[role] ?? []).first(where: { $0.id == modelID }) {
+            options = option.serviceTiers
+        } else {
+            options = CompanionPresentationModelService.fallbackServiceTierOptions(provider: provider, modelID: modelID)
+        }
+        guard !options.isEmpty else { return [] }
+        if options.contains(where: { $0.id == "default" }) { return options }
+        return [CompanionPresentationServiceTierOption(id: "default", title: "Default", detail: "Use the provider's default tier")] + options
+    }
+
+    /// Clamps a role's stored reasoning-effort/service-tier choice to what its
+    /// current provider/model actually supports, the same guard the main row
+    /// applies in `applyCapabilitiesForSelectedModel`/`applyFallbackCapabilitiesForCurrentModel`.
+    private func clampRoleCapabilities(for role: ModelRole) {
+        let reasoningOptions = roleReasoningOptions(for: role)
+        let currentReasoning = (roleReasoningEffort[role] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if reasoningOptions.isEmpty {
+            roleReasoningEffort[role] = "none"
+        } else if currentReasoning.isEmpty || currentReasoning == "none" || (currentReasoning != "default" && !reasoningOptions.contains(currentReasoning)) {
+            roleReasoningEffort[role] = "default"
+        }
+        defaults.set(roleReasoningEffort[role], forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+
+        let serviceOptions = roleServiceTierOptions(for: role).map(\.id)
+        let currentService = (roleServiceTier[role] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if serviceOptions.isEmpty {
+            roleServiceTier[role] = "default"
+        } else if currentService.isEmpty || !serviceOptions.contains(currentService) {
+            roleServiceTier[role] = "default"
+        }
+        defaults.set(roleServiceTier[role], forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+    }
+
+    /// Sets, or clears when `provider` is nil ("Use main model"), the role's
+    /// provider override. Clearing removes every per-role key for that role
+    /// so `CompanionPresentationSettings.load(role:)` falls all the way back
+    /// to the global `presentationLLM*` keys instead of leaving a stale but
+    /// coincidentally-matching per-role value behind.
+    func selectRoleProvider(_ provider: CompanionPresentationProvider?, for role: ModelRole) {
+        guard let provider else {
+            roleModelProvider.removeValue(forKey: role)
+            roleModelID.removeValue(forKey: role)
+            roleReasoningEffort.removeValue(forKey: role)
+            roleServiceTier.removeValue(forKey: role)
+            roleModelOptions.removeValue(forKey: role)
+            roleModelDiscoveryStatus.removeValue(forKey: role)
+            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .provider))
+            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+            return
+        }
+        roleModelProvider[role] = provider
+        roleModelID[role] = provider.defaultModel
+        roleModelOptions[role] = []
+        roleModelDiscoveryStatus[role] = "Model discovery not checked"
+        defaults.set(provider.rawValue, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .provider))
+        defaults.set(provider.defaultModel, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+        clampRoleCapabilities(for: role)
+    }
+
+    func selectRoleModel(_ option: CompanionPresentationModelOption, for role: ModelRole) {
+        guard roleModelProvider[role] != nil else { return }
+        roleModelID[role] = option.id
+        defaults.set(option.id, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+        clampRoleCapabilities(for: role)
+    }
+
+    func selectRoleModelID(_ id: String, for role: ModelRole) {
+        guard roleModelProvider[role] != nil else { return }
+        roleModelID[role] = id
+        defaults.set(id, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+        clampRoleCapabilities(for: role)
+    }
+
+    func setRoleReasoningEffort(_ value: String, for role: ModelRole) {
+        guard roleModelProvider[role] != nil else { return }
+        roleReasoningEffort[role] = value
+        defaults.set(value, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+    }
+
+    func setRoleServiceTier(_ value: String, for role: ModelRole) {
+        guard roleModelProvider[role] != nil else { return }
+        roleServiceTier[role] = value
+        defaults.set(value, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+    }
+
+    /// Model discovery for one role's override, scoped to that role's own
+    /// provider. Unlike `loadPresentationModels` (which discovers for the
+    /// single main-model row this pane also shows), this fetches for
+    /// whichever provider a role currently points at. It reuses the exact
+    /// same underlying network call (`CompanionPresentationModelService.fetchModels`)
+    /// and the same stored Integrations key per provider; no second discovery
+    /// mechanism, just a per-role wrapper around the same service.
+    func loadRoleModels(for role: ModelRole) {
+        guard let provider = roleModelProvider[role] else { return }
+        let baseURL = endpointForIntegration(provider)
+        let apiKey = readConfiguredSecret(account: provider.developmentSecretAccount) ?? ""
+        if provider.requiresAPIKey, apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            roleModelOptions[role] = []
+            roleModelDiscoveryStatus[role] = "\(provider.title) needs an API key in Integrations to load models."
+            return
+        }
+        roleModelDiscoveryStatus[role] = "Loading \(provider.title) models..."
+        Task {
+            do {
+                let models = try await CompanionPresentationModelService.fetchModels(
+                    provider: provider,
+                    baseURLText: baseURL,
+                    apiKey: apiKey
+                )
+                await MainActor.run {
+                    guard self.roleModelProvider[role] == provider else { return }
+                    self.roleModelOptions[role] = models
+                    if !models.contains(where: { $0.id == self.roleModelID[role] }), let first = models.first {
+                        self.selectRoleModel(first, for: role)
+                    } else {
+                        self.clampRoleCapabilities(for: role)
+                    }
+                    self.roleModelDiscoveryStatus[role] = models.isEmpty
+                        ? "\(provider.title) returned no models."
+                        : "Loaded \(models.count) \(provider.title) models."
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.roleModelProvider[role] == provider else { return }
+                    self.roleModelOptions[role] = []
+                    self.roleModelDiscoveryStatus[role] = "\(provider.title) model discovery failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// Jumps Integrations to `provider`'s row, e.g. from the "needs a key"
+    /// notice on a per-role Advanced row. Mirrors the
+    /// `CompanionSpeechProvider` overload above.
+    func focusIntegration(for provider: CompanionPresentationProvider) {
+        switch provider {
+        case .xai: integrationFocusProviderID = "xai"
+        case .ollama: integrationFocusProviderID = "ollama"
+        case .lmStudio: integrationFocusProviderID = "lmstudio"
+        case .groq: integrationFocusProviderID = "groq"
+        case .custom: integrationFocusProviderID = "custom"
+        case .claudeCLI, .codexCLI: integrationFocusProviderID = nil
+        }
     }
 
     // MARK: Personalities
@@ -4609,10 +4811,11 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-        // Loads the single Settings > Model page state, which (until D3's
-        // per-role UI) is the shared "main model" every role falls back to;
-        // .conversation is the reasonable placeholder role for that page
-        // today (see the same call in loadPresentationModels).
+        // Loads the main Settings > Model row state, which is the shared
+        // "main model" any role with no per-role override falls back to;
+        // .conversation is the reasonable placeholder role for that row (see
+        // the same call in loadPresentationModels, and roleModelProvider/D3
+        // for the per-role overrides loaded just below).
         let presentationSettings = CompanionPresentationSettings.load(
             role: .conversation,
             defaults: defaults,
@@ -4627,6 +4830,7 @@ final class AppModel: ObservableObject {
         presentationServiceTier = presentationSettings.serviceTier ?? presentationSettings.provider.defaultServiceTier
         presentationAPIKeySecretRef = presentationSettings.apiKeySecretRef
         applyFallbackCapabilitiesForCurrentModel()
+        loadRoleModelOverrides()
         // Needs presentationProvider loaded above (it credits whatever
         // provider was configured at migration time); pure defaults
         // read/write, so unlike migrateLegacyPresentationKeys it's safe
