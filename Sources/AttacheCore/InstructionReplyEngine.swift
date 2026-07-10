@@ -41,13 +41,30 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     /// expired rather than firing much later.
     public var expiryWindow: TimeInterval
 
+    /// Default `deliveringStrandTimeout`: slightly longer than
+    /// `AgentResumeDeliveryAdapter.defaultProcessTimeout` (5 minutes, INF-248/B1)
+    /// since a real delivery attempt should never legitimately run longer than
+    /// that adapter-level timeout. Anything still `.delivering` past this window
+    /// is presumed stuck (a bug, an adapter call that never returned despite
+    /// B1's timeout, or a crash-recovered scenario the engine hasn't seen) and
+    /// is failed at runtime by `deliverReadyInstructions`, not just at the next
+    /// app launch (INF-249/B6).
+    public static let defaultDeliveringStrandTimeout: TimeInterval = 6 * 60
+
+    /// How long a `.delivering` instruction may sit without a terminal result
+    /// before the runtime backstop (as opposed to startup's
+    /// `recoverInterruptedInstructions`) fails it closed.
+    public var deliveringStrandTimeout: TimeInterval
+
     public init(
         store: CardStore,
         expiryWindow: TimeInterval = InstructionReplyEngine.defaultExpiryWindow,
+        deliveringStrandTimeout: TimeInterval = InstructionReplyEngine.defaultDeliveringStrandTimeout,
         idGenerator: @escaping () -> String = { UUID().uuidString }
     ) {
         self.store = store
         self.expiryWindow = expiryWindow
+        self.deliveringStrandTimeout = deliveringStrandTimeout
         self.idGenerator = idGenerator
         // Durable enablement (INF-242/B5): a fresh engine pointed at the same
         // SQLite file restores whatever was persisted, instead of every
@@ -163,15 +180,36 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     /// if the transcript is safe to resume and no delivery is already in flight,
     /// deliver the oldest one (FIFO, single-flight per session). Returns the
     /// instructions whose state changed.
+    ///
+    /// Also runs the runtime strand-recovery backstop (INF-249/B6): any
+    /// `.delivering` instruction older than `deliveringStrandTimeout` is failed
+    /// here, during normal pump operation, rather than only at the next app
+    /// launch (`recoverInterruptedInstructions`, which stays fail-closed and
+    /// unchanged).
     @discardableResult
     public func deliverReadyInstructions(
         instructionIsReady: (Instruction) -> Bool,
         now: Date
     ) async -> [Instruction] {
         let confirmed = (try? store.fetchInstructions(inStates: [.confirmed])) ?? []
-        let alreadyDelivering = Set(((try? store.fetchInstructions(inStates: [.delivering])) ?? []).map(\.sessionID))
-        var handledSessions = alreadyDelivering
+        let delivering = (try? store.fetchInstructions(inStates: [.delivering])) ?? []
         var changed: [Instruction] = []
+
+        // Runtime strand recovery: a `.delivering` instruction stuck past the
+        // timeout is presumed dead and failed closed; a session it frees up can
+        // then take its next confirmed instruction in this same pump.
+        var handledSessions: Set<String> = []
+        for instruction in delivering {
+            let since = instruction.deliveringAt ?? instruction.confirmedAt ?? instruction.createdAt
+            if now.timeIntervalSince(since) > deliveringStrandTimeout {
+                changed.append(markFailed(instruction, error: Self.strandedDeliveryMessage(
+                    timeout: deliveringStrandTimeout,
+                    target: instruction.targetDisplayName
+                )))
+            } else {
+                handledSessions.insert(instruction.sessionID)  // genuinely still in flight
+            }
+        }
 
         for instruction in confirmed {   // created_at ASC = FIFO
             let session = instruction.sessionID
@@ -198,10 +236,21 @@ public final class InstructionReplyEngine: @unchecked Sendable {
             }
             if capability.requiresIdle && !instructionIsReady(instruction) { continue }
 
-            // Persist single-flight before the async gap so a concurrent pump sees it.
+            // Persist single-flight before the async gap so a concurrent pump sees
+            // it. This write is the single-flight guarantee's actual enforcement
+            // point: if it fails, we must NOT proceed to `adapter.deliver` (a
+            // concurrent pump could not have seen this instruction as
+            // `.delivering` and might double-deliver it), so fail closed instead
+            // and never call the adapter.
             var inFlight = instruction
             inFlight.state = .delivering
-            try? store.upsertInstruction(inFlight)
+            inFlight.deliveringAt = now
+            do {
+                try store.upsertInstruction(inFlight)
+            } catch {
+                changed.append(markFailed(instruction, error: Self.storageFailureMessage(error)))
+                continue
+            }
 
             switch await adapter.deliver(inFlight) {
             case .success(let receipt):
@@ -216,9 +265,20 @@ public final class InstructionReplyEngine: @unchecked Sendable {
                 inFlight.state = .failed
                 inFlight.error = Self.describe(error)
             }
-            try? store.upsertInstruction(inFlight)
-            submittedSnapshots.removeValue(forKey: inFlight.id)
-            changed.append(inFlight)
+
+            do {
+                try store.upsertInstruction(inFlight)
+                submittedSnapshots.removeValue(forKey: inFlight.id)
+                changed.append(inFlight)
+            } catch {
+                // The delivery attempt genuinely completed (in memory `inFlight`
+                // holds its real outcome), but persisting the final state failed.
+                // Do not leave it silently stuck showing `.delivering` in SQLite:
+                // mark it failed (best effort; if that write also fails there is
+                // no further fallback, but this call's returned `changed` still
+                // makes the failure visible to the caller instead of vanishing).
+                changed.append(markFailed(inFlight, error: Self.storageFailureMessage(error)))
+            }
         }
         return changed
     }
@@ -305,5 +365,26 @@ public final class InstructionReplyEngine: @unchecked Sendable {
         case .sessionGone: return "The target session was deleted or archived."
         case .deliveryFailed(let reason): return "Delivery failed: \(reason)"
         }
+    }
+
+    /// Message for a `try? store.upsertInstruction` that would have silently
+    /// swallowed a write failure at a delivery-state transition (INF-249/B6).
+    /// Used both when the pre-delivery "mark as delivering" write fails (so the
+    /// adapter is never called) and when the post-delivery final-state write
+    /// fails (so a delivery that genuinely completed doesn't vanish silently).
+    /// Stable substring for callers/tests to key off of: "storage error".
+    private static func storageFailureMessage(_ error: Error) -> String {
+        "Could not save the delivery state (storage error: \(error)). Marked failed; review and resend."
+    }
+
+    /// Message for the runtime strand-recovery backstop: a `.delivering`
+    /// instruction discovered stuck past `deliveringStrandTimeout` during a
+    /// normal pump call, as opposed to `recoverInterruptedInstructions`'s
+    /// startup-only "Attaché restarted before delivery completed" message.
+    /// Stable substring: "interrupted".
+    private static func strandedDeliveryMessage(timeout: TimeInterval, target: String?) -> String {
+        let minutes = max(1, Int((timeout / 60).rounded()))
+        let name = target ?? "the agent"
+        return "Delivery to \(name) was interrupted: still in progress after \(minutes) min with no result. Review and resend."
     }
 }

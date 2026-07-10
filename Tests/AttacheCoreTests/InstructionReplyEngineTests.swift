@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import AttacheCore
 
 /// A mock adapter that records deliveries and can be told to be idle-gated or fail.
@@ -9,6 +10,12 @@ private final class MockAdapter: InstructionDeliveryAdapter, @unchecked Sendable
     var shouldFail: Bool
     var replyText: String?
     var replyTurnID: String?
+    /// Invoked at the start of `deliver`, before it returns a result. Lets a
+    /// test simulate storage breaking mid-delivery (INF-249/B6): the write
+    /// marking the instruction `.delivering` has already succeeded by the time
+    /// this runs, so it isolates a failure in the POST-delivery final-state
+    /// write from a failure in the PRE-delivery one.
+    var onDeliver: (() -> Void)?
     private(set) var delivered: [String] = []
 
     init(
@@ -34,9 +41,44 @@ private final class MockAdapter: InstructionDeliveryAdapter, @unchecked Sendable
     }
 
     func deliver(_ instruction: Instruction) async -> Result<DeliveryReceipt, InstructionDeliveryError> {
+        onDeliver?()
         if shouldFail { return .failure(.deliveryFailed("mock failure")) }
         delivered.append(instruction.id)
         return .success(DeliveryReceipt(mechanism: "headless-resume", replyText: replyText, replyTurnID: replyTurnID))
+    }
+}
+
+/// Forces the next WRITE through a `CardStore` under test to fail, without any
+/// filesystem-permission trick: a `CardStore` keeps one SQLite connection open
+/// for its whole lifetime, and an already-open, already-writable file
+/// descriptor keeps writing successfully even after `chflags`/`chmod` locks the
+/// path down (verified empirically; permission bits and immutability flags are
+/// enforced at `open()`, not on every `write()`). Instead, open an independent
+/// second connection to the same on-disk file and install `BEFORE
+/// INSERT`/`BEFORE UPDATE` triggers that always abort, so the next
+/// `upsertInstruction` (an INSERT ... ON CONFLICT DO UPDATE) fails with a real,
+/// surfaced SQLite error (INF-249/B6's failure-injection seam) while ordinary
+/// SELECT reads on the store under test keep working (dropping the table
+/// outright was tried first and rejected: `fetchInstructions` also reads
+/// through `try?`, so it silently returns an empty array once the table is
+/// gone, which starves the pump before it ever reaches the write path).
+private func breakInstructionWrites(atPath path: String) {
+    var handle: OpaquePointer?
+    guard sqlite3_open(path, &handle) == SQLITE_OK else {
+        XCTFail("failed to open a second connection to \(path)")
+        return
+    }
+    defer { sqlite3_close(handle) }
+    let sql = """
+        CREATE TRIGGER test_break_instructions_insert BEFORE INSERT ON instructions
+        BEGIN SELECT RAISE(ABORT, 'induced write failure'); END;
+        CREATE TRIGGER test_break_instructions_update BEFORE UPDATE ON instructions
+        BEGIN SELECT RAISE(ABORT, 'induced write failure'); END;
+        """
+    guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
+        let message = handle.flatMap { sqlite3_errmsg($0).map { String(cString: $0) } } ?? "unknown"
+        XCTFail("failed to install write-breaking triggers: \(message)")
+        return
     }
 }
 
@@ -419,5 +461,164 @@ final class InstructionReplyEngineTests: XCTestCase {
         _ = try CardStore(databaseURL: url)
 
         XCTAssertEqual(try store2.fetchEnabledSessionIDs(), ["s1"])
+    }
+
+    // MARK: - Transaction integrity: no silent `try?` on state transitions (INF-249/B6)
+
+    /// If the write that marks an instruction `.delivering` (the single-flight
+    /// guarantee's actual enforcement point) fails, the engine must not proceed
+    /// to call the adapter at all, and must surface the instruction as `.failed`
+    /// in the pump's returned `changed` array instead of silently leaving it
+    /// `.confirmed` forever.
+    func testStorageWriteFailureBeforeDeliveringFailsClosedWithoutCallingAdapter() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-instr-\(UUID().uuidString).sqlite")
+        let store = try CardStore(databaseURL: url)
+        let engine = InstructionReplyEngine(store: store)
+        let adapter = MockAdapter()
+        engine.register(adapter)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+
+        let created = try engine.submit(text: "run it", sessionID: "s1", sourceKind: "codex", now: now)
+        _ = try engine.confirm(id: created.id, now: now)
+
+        breakInstructionWrites(atPath: store.databasePath)
+
+        let out = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.id, created.id)
+        XCTAssertEqual(out.first?.state, .failed)
+        XCTAssertTrue(out.first?.error?.contains("storage error") == true, "got: \(out.first?.error ?? "nil")")
+        XCTAssertTrue(adapter.delivered.isEmpty, "the adapter must never be called once the delivering write fails")
+    }
+
+    /// If the write that persists the FINAL state (`.delivered`/`.failed`) after
+    /// the adapter genuinely ran fails, the delivery attempt already happened
+    /// for real (the adapter recorded it), but the DB may still show the
+    /// instruction as `.delivering`. The failure must still be visible through
+    /// the pump's returned `changed` array (best effort at persisting `.failed`
+    /// too), matching the "surfaced through `changed`" contract the coordinator
+    /// and `AppModel` already rely on for expiry (B3).
+    func testStorageWriteFailureAfterDeliveryStillSurfacesFailureInChanged() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-instr-\(UUID().uuidString).sqlite")
+        let store = try CardStore(databaseURL: url)
+        let engine = InstructionReplyEngine(store: store)
+        let adapter = MockAdapter()
+        adapter.onDeliver = { breakInstructionWrites(atPath: store.databasePath) }
+        engine.register(adapter)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+
+        let created = try engine.submit(text: "run it", sessionID: "s1", sourceKind: "codex", now: now)
+        _ = try engine.confirm(id: created.id, now: now)
+
+        let out = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+
+        // The adapter really ran: the delivery attempt genuinely completed.
+        XCTAssertEqual(adapter.delivered, [created.id])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.id, created.id)
+        XCTAssertEqual(out.first?.state, .failed)
+        XCTAssertTrue(out.first?.error?.contains("storage error") == true, "got: \(out.first?.error ?? "nil")")
+    }
+
+    /// A `.delivering` instruction stuck past `deliveringStrandTimeout` is
+    /// recovered by a normal pump call (`deliverReadyInstructions`), not just by
+    /// `recoverInterruptedInstructions`/a fresh engine construction, so a stuck
+    /// delivery doesn't require a full app restart to clear.
+    func testStrandedDeliveringInstructionIsRecoveredAtRuntimeDuringPump() async throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store, deliveringStrandTimeout: 60)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+
+        try store.upsertInstruction(Instruction(
+            id: "stuck-1",
+            sessionID: "s1",
+            sourceKind: "codex",
+            text: "run the tests",
+            state: .delivering,
+            createdAt: now,
+            confirmedAt: now,
+            deliveringAt: now,
+            targetDisplayName: "Weekly Codex Improvement Review"
+        ))
+
+        // 2 minutes later, well past the 60s test timeout, via a normal pump call.
+        let out = await engine.deliverReadyInstructions(
+            sessionIsIdle: { _ in true },
+            now: now.addingTimeInterval(120)
+        )
+
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out.first?.id, "stuck-1")
+        XCTAssertEqual(out.first?.state, .failed)
+        XCTAssertTrue(out.first?.error?.contains("interrupted") == true, "got: \(out.first?.error ?? "nil")")
+        XCTAssertTrue(out.first?.error?.contains("Weekly Codex Improvement Review") == true)
+
+        // Persisted, not just returned in-memory.
+        XCTAssertEqual(try store.fetchInstruction(id: "stuck-1")?.state, .failed)
+    }
+
+    /// A `.delivering` instruction younger than the timeout is left alone (not
+    /// a false-positive strand recovery) and still enforces single-flight: a
+    /// freshly confirmed instruction in the same session does not deliver while
+    /// it's genuinely still in flight.
+    func testRecentDeliveringInstructionIsNotRecoveredAndStillBlocksSingleFlight() async throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store, deliveringStrandTimeout: 300)
+        let adapter = MockAdapter()
+        engine.register(adapter)
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+
+        try store.upsertInstruction(Instruction(
+            id: "in-flight-1",
+            sessionID: "s1",
+            sourceKind: "codex",
+            text: "already going",
+            state: .delivering,
+            createdAt: now,
+            confirmedAt: now,
+            deliveringAt: now
+        ))
+
+        let queued = try engine.submit(text: "second one", sessionID: "s1", sourceKind: "codex", now: now)
+        _ = try engine.confirm(id: queued.id, now: now)
+
+        let out = await engine.deliverReadyInstructions(
+            sessionIsIdle: { _ in true },
+            now: now.addingTimeInterval(10)
+        )
+
+        XCTAssertTrue(out.isEmpty)
+        XCTAssertTrue(adapter.delivered.isEmpty)
+        XCTAssertEqual(try store.fetchInstruction(id: "in-flight-1")?.state, .delivering)
+        XCTAssertEqual(try store.fetchInstruction(id: queued.id)?.state, .confirmed)
+    }
+
+    /// A normal successful delivery records when it entered `.delivering`, so
+    /// the runtime strand-recovery check above has real data to compare
+    /// against instead of falling back to `confirmedAt`/`createdAt`.
+    func testDeliveringAtIsRecordedWhenDeliveryBegins() async throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        engine.register(MockAdapter())
+        engine.setTwoWayEnabled(true, forSessionID: "s1")
+        let created = try engine.submit(text: "run the deploy script", sessionID: "s1", sourceKind: "codex", now: now)
+        _ = try engine.confirm(id: created.id, now: now)
+
+        _ = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+
+        let fetched = try XCTUnwrap(store.fetchInstruction(id: created.id))
+        XCTAssertEqual(fetched.state, .delivered)
+        XCTAssertEqual(fetched.deliveringAt, now)
+    }
+
+    /// Sanity check on the chosen default: the runtime strand timeout should be
+    /// longer than `AgentResumeDeliveryAdapter.defaultProcessTimeout` (5 min,
+    /// INF-248/B1), since a real delivery attempt should never legitimately run
+    /// longer than that adapter-level timeout.
+    func testDefaultDeliveringStrandTimeoutIsLongerThanTheProcessTimeout() {
+        XCTAssertGreaterThan(InstructionReplyEngine.defaultDeliveringStrandTimeout, 5 * 60)
     }
 }
