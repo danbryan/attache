@@ -849,7 +849,24 @@ struct CompanionRootView: View {
     private var liveTransportBar: some View {
         let card = model.selectedCard
         let active = card.map { isActiveCard($0) } ?? false
+        // INF-251 (A3): on-call the top bar is suppressed, so its "session ·
+        // project" provenance (`cardContext`) moves here as a leading caption,
+        // the same data the top bar would have shown for this card. Off-call,
+        // the top bar still carries it, so this stays hidden there to avoid
+        // showing it twice.
+        let provenance = (model.onCall ? card.map(cardContext) : nil).flatMap { $0.isEmpty ? nil : $0 }
         return VStack(spacing: 9) {
+            if let provenance {
+                HStack {
+                    Text(provenance)
+                        .typoCaption(.medium, design: .monospaced)
+                        .foregroundStyle(.primary.opacity(0.52))
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Call context \(provenance)")
+            }
             HStack(spacing: 11) {
                 PlaybackScrubberSlider(
                     timeline: playback.clock,
@@ -932,8 +949,19 @@ struct CompanionRootView: View {
             || model.isGeneratingLiveFollowUpAnswer
     }
 
+    // INF-251 (A3): on-call, the composer (`onCallHUD`/`CallStatusPresentation`)
+    // is the single status home, so the top bar would only duplicate it
+    // ("Assistant speaking" vs the composer's "Speaking…"). The one exception
+    // is the live mic transcript: it has nowhere else to render eyes-up while
+    // a turn is being captured, so it stays up exactly while the mic is
+    // active (mirrors the condition `topTranscriptOverlay` already uses to
+    // decide transcript-vs-status content, left untouched below). Off-call,
+    // this function is byte-for-byte what it was before this ticket.
     private var topOverlayVisible: Bool {
-        playback.isPlaying
+        if model.onCall {
+            return micTranscript.isPreparing || micTranscript.isListening || !micTranscript.transcript.isEmpty
+        }
+        return playback.isPlaying
             || playback.isPaused
             || playback.isBusy
             || micTranscript.isPreparing
@@ -943,9 +971,8 @@ struct CompanionRootView: View {
     }
 
     // INF-244: the top bar must not go silent while the call is thinking.
-    // This is the only change `topOverlayVisible` gets in this ticket; the
-    // rest of the on-call top-bar behavior (suppressing it on-call, moving
-    // provenance into the transport bar) is ticket A3.
+    // Only reachable off-call now (see `topOverlayVisible` above): on-call,
+    // the composer already shows "Thinking… Xs" via `CallStatusPresentation`.
     private var callPhaseIsThinking: Bool {
         switch model.callPhase {
         case .thinking: return true
