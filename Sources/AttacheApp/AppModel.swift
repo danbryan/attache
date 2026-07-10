@@ -2357,7 +2357,8 @@ final class AppModel: ObservableObject {
             workingDirectory: context?.workingDirectory,
             latestSummary: conversationLatestSummary,
             latestAgentReply: conversationLatestAgentReply,
-            canStageAgentInstruction: context?.agentSendTarget != nil
+            canStageAgentInstruction: context?.agentSendTarget != nil,
+            watchedSessions: watchedSessionSummaries(context: context)
         )
         var messages = [CompanionChatMessage(role: "system", content: system)]
         // Cap the in-RAM transcript sent per turn so a long multi-call conversation
@@ -2367,6 +2368,40 @@ final class AppModel: ObservableObject {
             messages.append(CompanionChatMessage(role: turn.role == .user ? "user" : "assistant", content: turn.text))
         }
         return messages
+    }
+
+    /// Rebuilds the "Watched sessions" inventory fresh on every turn (INF-239)
+    /// so "active Nm ago" stays honest. Sourced from the same watch list the
+    /// UI shows (`attachedTargets`); two-way enablement is reported only for
+    /// the explicitly focused session, never for the rest. This is prompt
+    /// context for the model to read and mention, not a routing input, per
+    /// AGENTS.md's "no hidden phrase routing" decision: the frozen send
+    /// destination is unaffected by anything built here.
+    private func watchedSessionSummaries(context: ConversationTargetSnapshot?) -> [CompanionPersonality.WatchedSessionSummary] {
+        let focusedSessionID = (context?.isExplicitlyFocused == true) ? context?.target.id : nil
+        var summaries = attachedTargets.values.map { target -> CompanionPersonality.WatchedSessionSummary in
+            let isFocused = focusedSessionID != nil && target.id == focusedSessionID
+            return CompanionPersonality.WatchedSessionSummary(
+                sourceName: target.sourceKind.displayName,
+                title: target.displayTitle,
+                updatedAt: target.updatedAt,
+                isFocused: isFocused,
+                isTwoWayEnabled: isFocused && twoWay.isEnabled(sessionID: target.id)
+            )
+        }
+        // Safety net: if the focused session hasn't landed in attachedTargets
+        // yet (e.g. mid-restore), still surface it so the block never omits
+        // the one session the model is otherwise told is focused.
+        if let focusedSessionID, let context, !summaries.contains(where: { $0.isFocused }) {
+            summaries.append(CompanionPersonality.WatchedSessionSummary(
+                sourceName: context.target.sourceKind.displayName,
+                title: context.target.displayTitle,
+                updatedAt: context.target.updatedAt,
+                isFocused: true,
+                isTwoWayEnabled: twoWay.isEnabled(sessionID: focusedSessionID)
+            ))
+        }
+        return summaries
     }
 
     private static let maxConversationTurnsPerRequest = 24
