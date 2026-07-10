@@ -278,6 +278,46 @@ final class TwoWayCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.startupRecoveryMessage?.contains("Review the frozen target and resend") == true)
     }
 
+    /// INF-242 (B5) regression: durable enablement must not change the
+    /// existing restart-fails-closed behavior for in-flight instructions. A
+    /// "relaunch" (fresh `CardStore` + fresh `TwoWayCoordinator` pointed at the
+    /// same file, exactly the app-startup path via `locateSessionFile`) both
+    /// restores the session's enablement, because its transcript still
+    /// exists, and still fails the interrupted confirmed instruction closed
+    /// with the startup recovery message. `recoverInterruptedInstructions` is
+    /// untouched by this ticket; this proves the two mechanisms coexist.
+    func testEnablementPersistsAcrossRestartWhileInterruptedInstructionStillFailsClosed() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-coord-\(UUID().uuidString).sqlite")
+        let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
+        try writeReadyCodexSession(to: sessionFile)
+
+        // First "run": enable two-way for s1, and leave a confirmed
+        // instruction in flight (never reaches .delivered), as if Attaché
+        // crashed mid-send.
+        let store1 = try CardStore(databaseURL: url)
+        let engine1 = InstructionReplyEngine(store: store1)
+        engine1.setTwoWayEnabled(true, forSessionID: "s1")
+        let created = try engine1.submit(text: "queued", sessionID: "s1", sourceKind: "codex", now: Date())
+        _ = try engine1.confirm(id: created.id, now: Date())
+
+        // "Relaunch": a fresh CardStore connection to the same file and a
+        // fresh TwoWayCoordinator, the real app-startup path.
+        let store2 = try CardStore(databaseURL: url)
+        let coordinator = TwoWayCoordinator(
+            store: store2,
+            locateSessionFile: { _ in sessionFile },
+            adapters: [StubAdapter()]
+        )
+
+        // Enablement survived: the transcript still exists.
+        XCTAssertTrue(coordinator.isEnabled(sessionID: "s1"))
+        // The confirmed-but-undelivered instruction still fails closed.
+        XCTAssertEqual(coordinator.log.first(where: { $0.id == created.id })?.state, .failed)
+        XCTAssertTrue(coordinator.log.first(where: { $0.id == created.id })?.error?.contains("restarted") == true)
+        XCTAssertTrue(coordinator.startupRecoveryMessage?.contains("Review the frozen target and resend") == true)
+    }
+
     private func writeReadyCodexSession(to url: URL) throws {
         try Data("""
         {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"text":"Ready."}]}}

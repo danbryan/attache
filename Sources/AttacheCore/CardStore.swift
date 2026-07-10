@@ -170,6 +170,37 @@ public final class CardStore: @unchecked Sendable {
         return try fetchCard(id: cardID)
     }
 
+    // MARK: - Two-way enablement (per-session persistence, INF-242/B5)
+
+    /// Persist that two-way is enabled for `sessionID`, so `InstructionReplyEngine`
+    /// restores it across a relaunch instead of resetting every session to off
+    /// (docs/two-way.md, "Off by default, per session"). Idempotent: enabling an
+    /// already-enabled session just refreshes `enabled_at`.
+    public func setTwoWayEnabled(sessionID: String, enabledAt: Date) throws {
+        try execute(
+            """
+            INSERT INTO two_way_enablement (session_id, enabled_at)
+            VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET enabled_at = excluded.enabled_at
+            """,
+            [.text(sessionID), .int64(Int64(enabledAt.timeIntervalSince1970))]
+        )
+    }
+
+    /// Remove the persisted enablement row: the user disabled two-way for the
+    /// session, or startup restoration found the session's transcript is gone
+    /// (INF-242/B5).
+    public func clearTwoWayEnabled(sessionID: String) throws {
+        try execute("DELETE FROM two_way_enablement WHERE session_id = ?", [.text(sessionID)])
+    }
+
+    /// All session ids currently persisted as two-way enabled.
+    public func fetchEnabledSessionIDs() throws -> [String] {
+        try query(sql: "SELECT session_id FROM two_way_enablement", bindings: []) {
+            columnText($0, 0) ?? ""
+        }
+    }
+
     // MARK: - Instructions (two-way)
 
     private static let instructionColumns =
@@ -482,6 +513,11 @@ public final class CardStore: @unchecked Sendable {
             CREATE INDEX IF NOT EXISTS idx_instructions_session
             ON instructions(session_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_instructions_state ON instructions(state);
+
+            CREATE TABLE IF NOT EXISTS two_way_enablement (
+                session_id TEXT PRIMARY KEY,
+                enabled_at INTEGER NOT NULL
+            );
             """
         )
         try addColumnIfMissing(table: "instructions", column: "origin", definition: "TEXT NOT NULL DEFAULT 'legacy'")

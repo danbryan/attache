@@ -22,7 +22,11 @@ public final class InstructionReplyEngine: @unchecked Sendable {
     private let store: CardStore
     private let idGenerator: () -> String
     private var adapters: [String: InstructionDeliveryAdapter] = [:]
-    private var enabledSessions: Set<String> = []
+    /// Fast in-memory cache of two-way-enabled sessions, backed by the
+    /// persisted `two_way_enablement` table (INF-242/B5): loaded from `store`
+    /// in `init` and kept in sync by `setTwoWayEnabled`, so the hot
+    /// `isTwoWayEnabled` read path never touches SQLite.
+    private var enabledSessions: Set<String>
     private var submittedSnapshots: [String: Instruction] = [:]
 
     /// Default `expiryWindow` (docs/two-way.md: "Instructions expire (fail)
@@ -45,6 +49,11 @@ public final class InstructionReplyEngine: @unchecked Sendable {
         self.store = store
         self.expiryWindow = expiryWindow
         self.idGenerator = idGenerator
+        // Durable enablement (INF-242/B5): a fresh engine pointed at the same
+        // SQLite file restores whatever was persisted, instead of every
+        // session starting off. `restoreEnablement` below then prunes any
+        // session whose transcript no longer exists.
+        self.enabledSessions = Set((try? store.fetchEnabledSessionIDs()) ?? [])
     }
 
     // MARK: Adapters
@@ -53,14 +62,45 @@ public final class InstructionReplyEngine: @unchecked Sendable {
         adapters[adapter.sourceKind] = adapter
     }
 
-    // MARK: Per-session enable (off by default)
+    // MARK: Per-session enable (off by default, persisted; docs/two-way.md, INF-242/B5)
 
     public func isTwoWayEnabled(forSessionID sessionID: String) -> Bool {
         enabledSessions.contains(sessionID)
     }
 
+    /// Enabling/disabling is durable: it is written through to the
+    /// `two_way_enablement` table so a relaunch's fresh engine (see `init`)
+    /// restores it. This replaces the former memory-only gate; restart still
+    /// fails in-flight instructions closed (`recoverInterruptedInstructions`),
+    /// which is unrelated and unchanged.
     public func setTwoWayEnabled(_ enabled: Bool, forSessionID sessionID: String) {
-        if enabled { enabledSessions.insert(sessionID) } else { enabledSessions.remove(sessionID) }
+        if enabled {
+            enabledSessions.insert(sessionID)
+            try? store.setTwoWayEnabled(sessionID: sessionID, enabledAt: Date())
+        } else {
+            enabledSessions.remove(sessionID)
+            try? store.clearTwoWayEnabled(sessionID: sessionID)
+        }
+    }
+
+    /// Startup-only: prune persisted enablement for any session whose
+    /// transcript no longer exists, so a deleted or rotated-away session
+    /// cannot silently come back enabled just because its row survived in
+    /// SQLite (docs/two-way.md, "Off by default, per session"; INF-242/B5).
+    /// The core knows nothing about vendor session files, so the caller
+    /// supplies the existence check; `TwoWayCoordinator` calls this once at
+    /// init with the same `locateSessionFile` it already uses for delivery.
+    /// Stale rows are cleaned up eagerly here (deleted from
+    /// `two_way_enablement`), not left for a lazy pass later. Returns the
+    /// pruned session ids.
+    @discardableResult
+    public func restoreEnablement(sessionExists: (String) -> Bool) -> [String] {
+        let stale = enabledSessions.filter { !sessionExists($0) }
+        for sessionID in stale {
+            enabledSessions.remove(sessionID)
+            try? store.clearTwoWayEnabled(sessionID: sessionID)
+        }
+        return Array(stale)
     }
 
     // MARK: Submit / confirm / cancel

@@ -122,9 +122,16 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
 
 - **Off by default, per session.** Two-way must be explicitly enabled for a
   specific session. No global preference bypasses session-level enablement.
-  Enablement is held in memory only: an app restart resets every session to
-  off, and interrupted instructions fail closed (surfaced at startup) rather
-  than resuming.
+  Enablement is durable: it is persisted in SQLite (`two_way_enablement`,
+  written through by `InstructionReplyEngine.setTwoWayEnabled`) and restored
+  when a fresh engine loads, so a restart no longer silently resets every
+  session to off. Restoration still checks that the session's transcript file
+  exists before honoring the persisted row (the same check delivery already
+  relies on): a session that has been deleted or rotated away does not come
+  back enabled, and its stale row is pruned. This is separate from instruction
+  state - interrupted pending/confirmed/delivering instructions still fail
+  closed on restart (surfaced at startup) rather than resuming; that recovery
+  path (`recoverInterruptedInstructions`) is unchanged (INF-242/B5).
 - **Confirm by default, direct by explicit preference.** The default
   `AgentInstructionSendPolicy` creates an instruction as `pending` and only
   leaves that state after explicit visual confirmation. A power-user preference
