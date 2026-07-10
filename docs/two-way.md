@@ -152,7 +152,7 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
 
 ## Smoke and canary coverage
 
-Two-way has three intentionally separate verification layers:
+Two-way has four intentionally separate verification layers:
 
 1. **Default UI smoke:** `scripts/ui-smoke.sh` is free/local and excludes paid
    or network-dependent flows. It should stay green before every release.
