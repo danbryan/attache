@@ -56,6 +56,11 @@ struct CompanionRootView: View {
     @State private var railExpanded = false
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
+    // When `model.callPhase` last became `.sendDelivered` (INF-244): drives how
+    // long the call composer's status row keeps its "just delivered" emphasis.
+    // Tracked here (not in `CallStatusPresentation`, which stays pure) because
+    // `CallPhase` itself carries no timestamp for that case.
+    @State var callSendDeliveredAt: Date?
 
     init(model: AppModel) {
         self.model = model
@@ -916,12 +921,25 @@ struct CompanionRootView: View {
             || micTranscript.isPreparing
             || micTranscript.isListening
             || !micTranscript.transcript.isEmpty
+            || callPhaseIsThinking
+    }
+
+    // INF-244: the top bar must not go silent while the call is thinking.
+    // This is the only change `topOverlayVisible` gets in this ticket; the
+    // rest of the on-call top-bar behavior (suppressing it on-call, moving
+    // provenance into the transport bar) is ticket A3.
+    private var callPhaseIsThinking: Bool {
+        switch model.callPhase {
+        case .thinking: return true
+        default: return false
+        }
     }
 
     private var topStatusText: String {
         if playback.isPlaying && !playback.isPaused { return "Assistant speaking" }
         if playback.isPaused { return "Playback paused" }
-        if playback.isBusy { return "Preparing voice…" }
+        if playback.isBusy { return CallStatusPresentation.preparingAudioText }
+        if callPhaseIsThinking { return "Thinking…" }
         if model.unreadCount > 0 { return "\(model.unreadCount) unread update\(model.unreadCount == 1 ? "" : "s")" }
         return "Listening for agent updates"
     }
