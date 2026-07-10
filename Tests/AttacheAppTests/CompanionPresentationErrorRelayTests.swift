@@ -149,7 +149,7 @@ final class CompanionPresentationErrorRelayTests: XCTestCase {
         )
         let user = "Tell Claude Code to reply exactly \(mismatchToken) and do not use tools."
 
-        let result: Result<String, Error> = await withCheckedContinuation { continuation in
+        let result: Result<CompanionConversationReply, Error> = await withCheckedContinuation { continuation in
             service.converse(
                 messages: [
                     CompanionChatMessage(role: "system", content: system),
@@ -180,7 +180,7 @@ final class CompanionPresentationErrorRelayTests: XCTestCase {
             )
         }
 
-        let reply = try result.get()
+        let reply = try result.get().text
         XCTAssertTrue(reply.contains("Attaché said:"), "expected the mock's canned relay wrapper; got: \(reply)")
         XCTAssertTrue(reply.contains("No staging occurred."), "reply dropped the reason marker; got: \(reply)")
         XCTAssertTrue(
