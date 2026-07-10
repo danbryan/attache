@@ -1024,7 +1024,8 @@ if enabled("f9") {
     }
 }
 
-// MARK: Flow 14: explicit agent destination stages without provider tools
+// MARK: Flow 14: explicit agent destination stages without provider tools,
+// then (INF-250) delivers a second turn end to end against a fake Codex CLI.
 
 if enabled("f14") {
     let env = ProcessInfo.processInfo.environment
@@ -1033,14 +1034,22 @@ if enabled("f14") {
     let sessionFile = env["ATTACHE_AGENT_MODE_SESSION_FILE"] ?? env["ATTACHE_AGENT_INTENT_SESSION_FILE"] ?? ""
     let instructionToken = env["ATTACHE_AGENT_MODE_TOKEN"] ?? env["ATTACHE_AGENT_INTENT_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_AGENT_MODE_\(nonce)")
     let prompt = env["ATTACHE_AGENT_MODE_PROMPT"] ?? env["ATTACHE_AGENT_INTENT_PROMPT"] ?? "reply exactly \(instructionToken) and do not use tools."
+    // Second turn (INF-250): confirmed instead of canceled, delivered against
+    // the fake `codex` CLI installed at ~/.local/bin/codex by
+    // scripts/agent-destination-smoke.sh (see create-fake-codex-home.py).
+    let deliverToken = env["ATTACHE_AGENT_MODE_DELIVER_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_AGENT_MODE_DELIVER_\(nonce)")
+    let deliverPrompt = env["ATTACHE_AGENT_MODE_DELIVER_PROMPT"] ?? "reply exactly \(deliverToken) and do not use tools."
     var focusedSession = false
     var stagedInstruction = false
+    var deliverStaged = false
+    var deliverConfirmed = false
 
     run.step("f14-agent-destination", "environment identifies the disposable Codex session") {
         guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_NONCE is required") }
         guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_SESSION_ID is required") }
         guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_SESSION_FILE is required") }
         guard !instructionToken.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_TOKEN is required") }
+        guard !deliverToken.isEmpty else { throw SmokeError(message: "ATTACHE_AGENT_MODE_DELIVER_TOKEN is required") }
         guard FileManager.default.fileExists(atPath: sessionFile) else {
             throw SmokeError(message: "session file does not exist: \(sessionFile)")
         }
@@ -1093,6 +1102,86 @@ if enabled("f14") {
         let transcript = (try? String(contentsOfFile: sessionFile, encoding: .utf8)) ?? ""
         guard !transcript.contains(instructionToken) else {
             throw SmokeError(message: "unconfirmed explicit agent instruction appeared in transcript \(sessionFile)")
+        }
+    }
+
+    // INF-250: a second Tell Agent turn, this time confirmed instead of
+    // canceled, delivered end to end against the fake `codex` CLI. Two-way is
+    // already enabled for this session from the first turn above, so this
+    // instruction goes straight to the per-instruction confirmation sheet
+    // (no "Enable send-to-agent" sheet a second time).
+    run.step("f14-agent-destination", "Tell Agent stages a second instruction for real delivery") {
+        try selectConversationDestination("Tell Agent")
+        _ = try waitForElement("visible frozen Tell Agent target", in: try mainWindow(), timeout: 8) { element in
+            element.matches("Tell Codex") && element.matches(nonce)
+        }
+        try sendConversationPrompt(deliverPrompt)
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: deliverToken, timeout: 12)
+        deliverStaged = true
+    }
+
+    run.step("f14-agent-destination", "confirming the second instruction delivers it through the fake Codex CLI") {
+        guard deliverStaged else { throw SmokeError(message: "skipped: second instruction was not staged") }
+        let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                         role: kAXButtonRole as String, exactly: "Send to agent",
+                                         timeout: 12)
+        guard confirm.press() else {
+            throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+        }
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+        deliverConfirmed = true
+    }
+
+    // Assertion 1 (INF-250): the fake codex records the resume invocation with
+    // the exact text sent. The fake CLI (create-fake-codex-home.py) appends the
+    // exact argument it received as a user response_item, so this proves the
+    // real delivery path (not a canceled stage) reached the fake CLI verbatim.
+    run.step("f14-agent-destination", "fake Codex records the resume invocation with the exact text sent") {
+        guard deliverConfirmed else { throw SmokeError(message: "skipped: second instruction was not confirmed") }
+        try waitForFile(sessionFile, toContain: "delivered Tell Agent instruction", timeout: 60, interval: 1) { text in
+            text.contains(deliverPrompt)
+        }
+    }
+
+    // Assertion 2 (INF-250): Tell Agent is deliberately one-shot (see
+    // AppModel.sendConversationMessage's "Tell Agent is deliberately one-shot"
+    // comment); confirm the destination reset holds for the delivered turn too,
+    // not just the canceled one.
+    run.step("f14-agent-destination", "Tell Agent resets to Ask Attaché after the delivered turn") {
+        let ask = try waitForElement("Ask Attaché destination", in: try mainWindow(),
+                                     role: kAXRadioButtonRole as String, containing: "Ask Attaché", timeout: 8)
+        try waitUntil("Ask Attaché to be selected after the delivered Tell Agent turn", timeout: 8) {
+            ask.stringValue == "1"
+        }
+    }
+
+    // Assertion 3 (INF-250): A2's distinct .sendDelivered visual renders, via
+    // the exact AX label CallHUD.swift exposes ("Conversation status: " plus
+    // CallStatusPresentation's "Sent to \(target) · watching for the reply").
+    run.step("f14-agent-destination", "delivered send renders A2's distinct sendDelivered status") {
+        guard deliverConfirmed else { throw SmokeError(message: "skipped: second instruction was not delivered") }
+        _ = try waitForElement("delivered conversation status label", in: try mainWindow(), timeout: 60) { element in
+            element.matches("Conversation status:") && element.matches("watching for the reply")
+        }
+    }
+
+    // Assertion 4 (INF-250): the two-way log's instructions row shows
+    // origin=tell_agent, state=delivered for this exact instruction. No
+    // settings/history view renders origin as text (grepped for
+    // InstructionOrigin/origin renderers), so this queries the store directly,
+    // matching f7/f8's existing precedent for delivery-state assertions.
+    run.step("f14-agent-destination", "two-way log records delivered state with origin=tell_agent") {
+        let query = """
+        SELECT COUNT(*) FROM instructions \
+        WHERE session_id='\(sessionID)' AND origin='tell_agent' AND state='delivered' \
+        AND text='\(deliverPrompt)';
+        """
+        try waitUntil("delivered tell_agent instruction to land in the instructions table", timeout: 30, interval: 1) {
+            guard let output = try? runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"") else {
+                return false
+            }
+            return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) == 1
         }
     }
 }
