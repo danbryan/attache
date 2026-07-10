@@ -152,6 +152,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var conversationTargetSnapshot: ConversationTargetSnapshot?
     @Published private(set) var conversationStatus: String = ""
     @Published private(set) var conversationRecovery: ConversationRecovery?
+    /// Set when the user picks a new model/provider from the recovery menu,
+    /// cleared the moment a new attempt starts (`sendConversationMessage`).
+    /// `CallStatusPresentation` shows this in place of the stale failure
+    /// message while `callPhase` is still `.failed` (the phase itself does
+    /// not change until the retry actually runs).
+    @Published private(set) var conversationRecoveryConfirmation: String?
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
     /// The live-call phase, derived from `isConversing`, playback state,
@@ -1819,6 +1825,7 @@ final class AppModel: ObservableObject {
 
         removeFailedTurnsBeforeRetry()
         conversationRecovery = nil
+        conversationRecoveryConfirmation = nil
         conversationDraft = ""
         appendConversationTurn(role: .user, text: trimmed)
 
@@ -1933,14 +1940,18 @@ final class AppModel: ObservableObject {
     func selectConversationRecoveryModel(_ option: CompanionPresentationModelOption) {
         selectPresentationModel(option)
         conversationDestination = .attache
-        conversationStatus = "Switched to \(presentationProvider.title) \(option.id). Review the restored draft, then retry."
+        let confirmation = "Switched to \(presentationProvider.title) \(option.id). Review the restored draft, then retry."
+        conversationStatus = confirmation
+        conversationRecoveryConfirmation = confirmation
     }
 
     func selectConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
         selectPresentationProvider(provider)
         selectPresentationModelID(provider.defaultModel)
         conversationDestination = .attache
-        conversationStatus = "Switched to \(provider.title) \(presentationModel). Review the restored draft, then retry."
+        let confirmation = "Switched to \(provider.title) \(presentationModel). Review the restored draft, then retry."
+        conversationStatus = confirmation
+        conversationRecoveryConfirmation = confirmation
         loadPresentationModels()
     }
 

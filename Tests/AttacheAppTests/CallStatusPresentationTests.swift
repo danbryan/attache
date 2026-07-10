@@ -191,6 +191,42 @@ final class CallStatusPresentationTests: XCTestCase {
         )
     }
 
+    // MARK: - Recovery model-switch confirmation (f16 regression coverage)
+
+    func testRecoveryConfirmationReplacesTheFailedMessageWhileStillFailed() {
+        // Picking a new model from the recovery menu does not itself change
+        // the phase (AppModel's callPhase stays .failed until an actual
+        // retry runs), so without this override the composer would keep
+        // showing the stale error instead of confirming the switch.
+        let status = CallStatusPresentation.status(
+            for: .failed(.usageOrRateLimit, message: "LLM request failed with HTTP 429"),
+            now: referenceDate,
+            recoveryConfirmation: "Switched to Ollama attache-recovery-smoke. Review the restored draft, then retry."
+        )
+        XCTAssertEqual(status?.text, "Switched to Ollama attache-recovery-smoke. Review the restored draft, then retry.")
+        XCTAssertFalse(status?.isError ?? true)
+        XCTAssertEqual(status?.icon, .symbol("checkmark.circle.fill"))
+    }
+
+    func testNoRecoveryConfirmationLeavesFailedStatusUnchanged() {
+        let status = CallStatusPresentation.status(
+            for: .failed(.usageOrRateLimit, message: "LLM request failed with HTTP 429"),
+            now: referenceDate,
+            recoveryConfirmation: nil
+        )
+        XCTAssertEqual(status?.text, "LLM request failed with HTTP 429")
+        XCTAssertTrue(status?.isError ?? false)
+    }
+
+    func testRecoveryConfirmationHasNoEffectOnNonFailedPhases() {
+        let status = CallStatusPresentation.status(
+            for: .thinking(since: referenceDate),
+            now: referenceDate,
+            recoveryConfirmation: "Switched to Ollama x"
+        )
+        XCTAssertEqual(status?.text, "Thinking…")
+    }
+
     // MARK: - Every phase is visually distinct (success criterion)
 
     func testEveryNonIdlePhaseProducesADistinctStatus() {

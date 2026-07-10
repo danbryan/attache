@@ -45,8 +45,16 @@ enum CallStatusPresentation {
     /// job to track, since `CallPhase` itself carries no timestamp for that
     /// case); pass `nil` if unknown or not applicable.
     ///
+    /// `recoveryConfirmation`, when non-nil, is shown in place of a
+    /// `.failed` phase's message: picking a new model/provider from the
+    /// recovery menu does not itself change the phase (the underlying
+    /// failure is still the last thing that happened until an actual retry
+    /// runs), so without this the composer would keep showing the stale
+    /// error instead of confirming the switch. The caller clears it the
+    /// moment a new attempt starts.
+    ///
     /// Returns `nil` for `.idle`: no status region renders.
-    static func status(for phase: CallPhase, now: Date, deliveredAt: Date? = nil) -> Status? {
+    static func status(for phase: CallPhase, now: Date, deliveredAt: Date? = nil, recoveryConfirmation: String? = nil) -> Status? {
         switch phase {
         case .idle:
             return nil
@@ -85,6 +93,9 @@ enum CallStatusPresentation {
             )
 
         case .failed(let category, let message):
+            if let confirmation = recoveryConfirmation {
+                return Status(text: confirmation, icon: .symbol("checkmark.circle.fill"), isError: false, isFreshDelivery: false)
+            }
             return Status(text: message, icon: .symbol(icon(for: category)), isError: true, isFreshDelivery: false)
         }
     }

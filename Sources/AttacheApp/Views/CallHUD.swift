@@ -77,7 +77,8 @@ extension CompanionRootView {
                     if let status = CallStatusPresentation.status(
                         for: model.callPhase,
                         now: context.date,
-                        deliveredAt: callSendDeliveredAt
+                        deliveredAt: callSendDeliveredAt,
+                        recoveryConfirmation: model.conversationRecoveryConfirmation
                     ) {
                         callStatusRow(status)
                     }
