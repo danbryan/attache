@@ -129,7 +129,13 @@ EVENT_TEXT="This card was filed by the stable app before the upgrade." \
 EXTERNAL_SESSION_ID="upgrade-smoke-$NONCE" \
   scripts/send-event.sh >/dev/null
 
-python3 - "$HOME/Library/Application Support/Attache/Attache.sqlite" "$SEEDED_TITLE" <<'PY'
+# AppModel.receive(_:) processes an accepted event on an async Task and
+# returns before it lands in SQLite (it posts 200 as soon as the event is
+# queued, not once persisted), so poll instead of checking once immediately
+# after send-event.sh returns, mirroring wait_for_token's own retry style.
+wait_for_seeded_card() {
+  for _ in {1..40}; do
+    if python3 - "$HOME/Library/Application Support/Attache/Attache.sqlite" "$SEEDED_TITLE" <<'PY'
 import sqlite3
 import sys
 
@@ -139,9 +145,16 @@ count = con.execute(
     "select count(*) from sessions where title = ?",
     (title,),
 ).fetchone()[0]
-if count < 1:
-    raise SystemExit("seeded card was not persisted by the stable app")
+sys.exit(0 if count >= 1 else 1)
 PY
+    then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+wait_for_seeded_card || fail "seeded card was not persisted by the stable app"
 
 stop_stable
 rm -rf "$INSTALL_APP"
