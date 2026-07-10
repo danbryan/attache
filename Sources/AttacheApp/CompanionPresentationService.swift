@@ -173,7 +173,7 @@ final class CompanionPresentationService {
         messages: [CompanionChatMessage],
         allowAgentInstructionTool: Bool = false,
         executeTool: @escaping (String, String) async -> String,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping (Result<CompanionConversationReply, Error>) -> Void
     ) {
         let unresolved = CompanionPresentationSettings.load(
             role: .conversation,
@@ -211,17 +211,22 @@ final class CompanionPresentationService {
         allowAgentInstructionTool: Bool,
         settings: CompanionPresentationSettings,
         executeTool: @escaping (String, String) async -> String
-    ) async throws -> String {
+    ) async throws -> CompanionConversationReply {
         var payloadMessages: [[String: Any]] = messages.map { ["role": $0.role, "content": $0.content] }
         let tools = conversationTools(allowAgentInstructionTool: allowAgentInstructionTool)
         let maxToolRounds = 8   // room to page/search across a long session (INF-165)
+        // Sticky across rounds: if any round in this conversation attempted and
+        // lost a CLI tool call (INF-243), the final reply still flags it even
+        // though a later round produced the text the user actually hears.
+        var toolCallLost = false
 
         for _ in 0..<maxToolRounds {
             let result = try await requestChat(messages: payloadMessages, tools: tools, settings: settings)
+            if result.toolCallLost { toolCallLost = true }
             if result.toolCalls.isEmpty {
                 let text = sanitizeFollowUpAnswerOutput(result.content)
                 guard !text.isEmpty else { throw CompanionPresentationError.emptyResponse }
-                return text
+                return CompanionConversationReply(text: text, toolCallLost: toolCallLost)
             }
             payloadMessages.append([
                 "role": "assistant",
@@ -250,9 +255,10 @@ final class CompanionPresentationService {
 
         // Tool budget spent: force a final answer with no further tool calls.
         let final = try await requestChat(messages: payloadMessages, tools: nil, settings: settings)
+        if final.toolCallLost { toolCallLost = true }
         let text = sanitizeFollowUpAnswerOutput(final.content)
         guard !text.isEmpty else { throw CompanionPresentationError.emptyResponse }
-        return text
+        return CompanionConversationReply(text: text, toolCallLost: toolCallLost)
     }
 
     /// One-shot raw completion for background classification (used by both
@@ -351,6 +357,11 @@ final class CompanionPresentationService {
     private struct ConversationChatResult {
         var content: String
         var toolCalls: [ConversationToolCall]
+        // Set when a CLI personality attempted a tool call (INF-243) that never
+        // recovered into a valid directive, even after the one corrective retry.
+        // The turn still degrades into a spoken answer; this only flags that a
+        // tool call was attempted and lost so a caller can surface it.
+        var toolCallLost: Bool = false
     }
 
     struct CLIToolCallDirective: Equatable {
@@ -381,16 +392,24 @@ final class CompanionPresentationService {
             if let tools, !tools.isEmpty {
                 chatMessages.insert(cliToolBridgeMessage(tools: tools), at: 0)
             }
-            let text = try await CLILanguageModel(
+            let model = CLILanguageModel(
                 tool: tool, model: settings.model,
                 reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier
-            ).complete(messages: chatMessages)
-            let directives = parseCLIToolDirectives(in: text)
+            )
+            let text = try await model.complete(messages: chatMessages)
+            let toolsOffered = tools?.isEmpty == false
+            let resolution = await resolveCLIToolCall(text: text, toolsOffered: toolsOffered) {
+                var retryMessages = chatMessages
+                retryMessages.append(CompanionChatMessage(role: "assistant", content: text))
+                retryMessages.append(CompanionChatMessage(role: "user", content: cliCorrectiveRetryPrompt))
+                return try await model.complete(messages: retryMessages)
+            }
             return ConversationChatResult(
-                content: directives.isEmpty ? text : "",
-                toolCalls: directives.map {
+                content: resolution.directives.isEmpty ? text : "",
+                toolCalls: resolution.directives.map {
                     ConversationToolCall(id: "cli-\(UUID().uuidString)", name: $0.name, arguments: $0.arguments)
-                }
+                },
+                toolCallLost: resolution.toolCallLost
             )
         }
         var url = settings.baseURL
@@ -486,6 +505,56 @@ final class CompanionPresentationService {
             if !directives.isEmpty { return directives }
         }
         return []
+    }
+
+    /// The one corrective follow-up turn sent when a CLI personality's reply
+    /// shows signs of an attempted tool call that failed to parse (INF-243).
+    static let cliCorrectiveRetryPrompt = "Your last reply attempted a tool call but was not a single valid JSON object. Re-emit exactly one JSON object in the documented format, with no prose."
+
+    /// Resolves a CLI turn's tool-call directives, retrying once when the reply
+    /// looks like an attempted-but-malformed tool call (INF-243). A silent
+    /// non-tool answer never retries; only genuine attempted calls do.
+    ///
+    /// - Parameters:
+    ///   - text: the model's raw reply to the original turn.
+    ///   - toolsOffered: whether this turn actually offered Attaché tools; a
+    ///     retry is never worth attempting otherwise.
+    ///   - retry: sends one corrective follow-up turn and returns the model's
+    ///     new raw reply. Invoked at most once.
+    /// - Returns: the recovered directives (empty if none), and whether a tool
+    ///   call was attempted but ultimately lost even after the retry.
+    static func resolveCLIToolCall(
+        text: String,
+        toolsOffered: Bool,
+        retry: () async throws -> String
+    ) async -> (directives: [CLIToolCallDirective], toolCallLost: Bool) {
+        let directives = parseCLIToolDirectives(in: text)
+        guard directives.isEmpty else { return (directives, false) }
+        guard toolsOffered, cliTextIndicatesAttemptedToolCall(text) else { return ([], false) }
+
+        guard let retryText = try? await retry() else {
+            return ([], true)
+        }
+        let retryDirectives = parseCLIToolDirectives(in: retryText)
+        guard !retryDirectives.isEmpty else {
+            return ([], true)
+        }
+        return (retryDirectives, false)
+    }
+
+    /// True when free text shows signs of an attempted (possibly malformed)
+    /// Attaché tool-call JSON, as opposed to a plain conversational answer that
+    /// never tried to call a tool at all.
+    private static func cliTextIndicatesAttemptedToolCall(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains("attache_tool_call") { return true }
+        if fencedJSON(in: trimmed) != nil { return true }
+        if let object = firstJSONObject(in: trimmed) {
+            let parsesAsJSON = object.data(using: .utf8)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) } != nil
+            if !parsesAsJSON { return true }
+        }
+        return false
     }
 
     private static func cliJSONCandidates(in text: String) -> [String] {
@@ -877,6 +946,17 @@ struct CompanionFollowUpAnswerResult: Equatable {
     var rawContextCharacterCount: Int
     var truncatedContext: Bool
     var errorDescription: String?
+}
+
+/// The final spoken reply from a live `converse` turn, plus whether a CLI
+/// personality attempted a tool call that never recovered into a valid
+/// directive even after the one corrective retry (INF-243). The reply itself
+/// is always a usable spoken answer either way; `toolCallLost` only tells a
+/// caller that a tool call was attempted and silently dropped, so it can
+/// surface that instead of leaving the loss invisible.
+struct CompanionConversationReply: Equatable {
+    var text: String
+    var toolCallLost: Bool = false
 }
 
 /// The independent LLM consumers that can each select their own

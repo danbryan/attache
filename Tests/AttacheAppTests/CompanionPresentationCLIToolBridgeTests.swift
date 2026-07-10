@@ -82,6 +82,195 @@ final class CompanionPresentationCLIToolBridgeTests: XCTestCase {
         XCTAssertEqual(required, ["instruction"])
     }
 
+    // MARK: - INF-243: corrective retry on a malformed CLI tool-call attempt
+
+    /// Prose-wrapped JSON: the model explains itself before and after the tool
+    /// call, and the embedded object is missing the comma before "arguments"
+    /// (a common LLM mistake) so it fails JSON parsing even though it is
+    /// brace-balanced. The corrective retry should recover once it returns
+    /// clean JSON.
+    func testCorrectiveRetryRecoversProseWrappedMalformedToolCall() async {
+        let original = #"""
+        Sure, I'll do that: {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}} let me know if you need anything else
+        """#
+        let recorder = RetryRecorder()
+        let cleaned = #"{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: original,
+            toolsOffered: true
+        ) {
+            await recorder.record()
+            return cleaned
+        }
+
+        XCTAssertEqual(resolution.directives.count, 1)
+        XCTAssertEqual(resolution.directives.first?.name, "stage_agent_instruction")
+        XCTAssertFalse(resolution.toolCallLost)
+        let retries = await recorder.count
+        XCTAssertEqual(retries, 1, "expected exactly one corrective retry turn")
+    }
+
+    /// Two JSON objects concatenated with no separator: the first (benign,
+    /// no tool-call shape) is what `firstJSONObject` would extract today, so
+    /// the real tool call in the second object is missed unless the whole
+    /// text is recognized as an attempted call and retried.
+    func testCorrectiveRetryRecoversFromConcatenatedJSONObjects() async {
+        let original = #"""
+        {"note":"thinking it over"}{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}
+        """#
+        let recorder = RetryRecorder()
+        let cleaned = #"{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: original,
+            toolsOffered: true
+        ) {
+            await recorder.record()
+            return cleaned
+        }
+
+        XCTAssertEqual(resolution.directives.count, 1)
+        XCTAssertEqual(resolution.directives.first?.name, "stage_agent_instruction")
+        XCTAssertFalse(resolution.toolCallLost)
+        let retries = await recorder.count
+        XCTAssertEqual(retries, 1, "expected exactly one corrective retry turn")
+    }
+
+    /// Trailing commentary after a valid-looking JSON block that still fails
+    /// to parse (the same missing-comma mistake, this time with no prose
+    /// before it, only after).
+    func testCorrectiveRetryRecoversFromTrailingCommentaryAfterMalformedJSON() async {
+        let original = #"""
+        {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}} Let me know if that's not what you meant.
+        """#
+        let recorder = RetryRecorder()
+        let cleaned = #"{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: original,
+            toolsOffered: true
+        ) {
+            await recorder.record()
+            return cleaned
+        }
+
+        XCTAssertEqual(resolution.directives.count, 1)
+        XCTAssertEqual(resolution.directives.first?.name, "stage_agent_instruction")
+        XCTAssertFalse(resolution.toolCallLost)
+        let retries = await recorder.count
+        XCTAssertEqual(retries, 1, "expected exactly one corrective retry turn")
+    }
+
+    /// A malformed attempt that never contains the literal "attache_tool_call"
+    /// substring or a fenced block, only a brace-balanced object that fails to
+    /// parse as JSON (the `tool_call` spelling, missing the comma before
+    /// "arguments"). This isolates the third detection signal on its own.
+    func testCorrectiveRetryRecoversFromBraceBalancedButInvalidJSONWithoutKeywordSubstring() async {
+        let original = #"""
+        Sure: {"tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}} okay?
+        """#
+        let recorder = RetryRecorder()
+        let cleaned = #"{"tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
+
+        XCTAssertFalse(original.contains("attache_tool_call"))
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: original,
+            toolsOffered: true
+        ) {
+            await recorder.record()
+            return cleaned
+        }
+
+        XCTAssertEqual(resolution.directives.count, 1)
+        XCTAssertEqual(resolution.directives.first?.name, "stage_agent_instruction")
+        XCTAssertFalse(resolution.toolCallLost)
+        let retries = await recorder.count
+        XCTAssertEqual(retries, 1, "expected exactly one corrective retry turn")
+    }
+
+    /// If the corrective retry ALSO fails to parse, degrade like today (empty
+    /// directives so the caller falls back to the raw text as a spoken
+    /// answer) but flag `toolCallLost` so a caller can notice the loss. Only
+    /// one retry is ever attempted, never a loop.
+    func testCorrectiveRetryGivesUpAfterOneAttemptAndFlagsToolCallLost() async {
+        let original = #"""
+        Sure, I'll do that: {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}}
+        """#
+        let recorder = RetryRecorder()
+        let stillBroken = "Sorry, here's another try: still not JSON."
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: original,
+            toolsOffered: true
+        ) {
+            await recorder.record()
+            return stillBroken
+        }
+
+        XCTAssertTrue(resolution.directives.isEmpty)
+        XCTAssertTrue(resolution.toolCallLost)
+        let retries = await recorder.count
+        XCTAssertEqual(retries, 1, "expected exactly one corrective retry turn, never a loop")
+    }
+
+    /// A plain conversational answer with no JSON-like content anywhere must
+    /// never trigger the retry codepath at all, not just produce the same
+    /// final result. The retry closure would fail the test if invoked.
+    func testCorrectiveRetryNeverInvokedForPlainConversationalAnswer() async {
+        let plainAnswer = "Sure, everything looks good and no changes are needed. Let me know if you have other questions."
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: plainAnswer,
+            toolsOffered: true
+        ) {
+            XCTFail("retry should never be invoked for a plain non-tool answer")
+            return ""
+        }
+
+        XCTAssertTrue(resolution.directives.isEmpty)
+        XCTAssertFalse(resolution.toolCallLost)
+    }
+
+    /// Even a clearly malformed attempted tool call must not retry when no
+    /// tools were actually offered on this turn (e.g. the final forced-answer
+    /// call in the tool-round loop, which passes `tools: nil`).
+    func testCorrectiveRetryNeverInvokedWhenToolsWereNotOffered() async {
+        let malformedLookingText = #"""
+        {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}}
+        """#
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: malformedLookingText,
+            toolsOffered: false
+        ) {
+            XCTFail("retry should never be invoked when tools were not offered")
+            return ""
+        }
+
+        XCTAssertTrue(resolution.directives.isEmpty)
+        XCTAssertFalse(resolution.toolCallLost)
+    }
+
+    /// A successful tool call on the first try must never retry.
+    func testCorrectiveRetryNeverInvokedWhenFirstReplyAlreadyParses() async {
+        let validCall = #"""
+        {"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}
+        """#
+
+        let resolution = await CompanionPresentationService.resolveCLIToolCall(
+            text: validCall,
+            toolsOffered: true
+        ) {
+            XCTFail("retry should never be invoked when the first reply already parses")
+            return ""
+        }
+
+        XCTAssertEqual(resolution.directives.count, 1)
+        XCTAssertFalse(resolution.toolCallLost)
+    }
+
     /// Opt-in live canary for the judgment boundary a deterministic provider
     /// cannot exercise. It uses the production conversation prompt, production
     /// CLI tool bridge, and the phrasing from the July 10 routing incident.
@@ -115,7 +304,7 @@ final class CompanionPresentationCLIToolBridgeTests: XCTestCase {
         )
         let user = "Could you just ask Codex to tell you the items from the artifact and then report it to me? Describe the three improvements from the HTML report in detail."
 
-        let result: Result<String, Error> = await withCheckedContinuation { continuation in
+        let result: Result<CompanionConversationReply, Error> = await withCheckedContinuation { continuation in
             service.converse(
                 messages: [
                     CompanionChatMessage(role: "system", content: system),
@@ -152,5 +341,16 @@ private actor LiveToolCallRecorder {
 
     func append(name: String, arguments: String) {
         calls.append(Call(name: name, arguments: arguments))
+    }
+}
+
+/// Counts corrective-retry invocations so a test can assert the retry
+/// codepath ran exactly once, or never ran at all, not just that the final
+/// result happens to match.
+private actor RetryRecorder {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
     }
 }

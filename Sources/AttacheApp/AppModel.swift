@@ -1920,7 +1920,7 @@ final class AppModel: ObservableObject {
                 self.endConversationWait()
                 switch result {
                 case .success(let reply):
-                    self.surfaceConversationReply(reply)
+                    self.surfaceConversationReply(reply.text, toolCallLost: reply.toolCallLost)
                 case .failure(let error):
                     let errorMessage = error.localizedDescription
                     let message = "I hit a problem: \(errorMessage)"
@@ -2020,7 +2020,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func surfaceConversationReply(_ reply: String) {
+    private func surfaceConversationReply(_ reply: String, toolCallLost: Bool = false) {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         // Keep the HUD in an audio-prep state until the normal delivery path,
@@ -2033,7 +2033,7 @@ final class AppModel: ObservableObject {
         // replayable history card, while live delivery uses the same preview
         // playback/caption path as other immediate voice responses.
         livePlaybackQueue.replyStarted()
-        _ = persistConversationReply(trimmed)
+        _ = persistConversationReply(trimmed, toolCallLost: toolCallLost)
         playback.preview(trimmed)
         revealTimer?.invalidate()
         revealTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
@@ -2041,7 +2041,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func persistConversationReply(_ reply: String) -> VoicemailCard? {
+    private func persistConversationReply(_ reply: String, toolCallLost: Bool = false) -> VoicemailCard? {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -2054,6 +2054,13 @@ final class AppModel: ObservableObject {
             "companion_presentation_strategy": "companion-direct-chat",
             "companion_direct_reply": "true"
         ]
+        // INF-243: a CLI personality attempted a tool call that never
+        // recovered into a valid directive, even after the one corrective
+        // retry. The card still carries the spoken degrade above; this only
+        // flags that a tool call was attempted and lost.
+        if toolCallLost {
+            metadata["companion_tool_call_lost"] = "true"
+        }
         if let personality {
             metadata["companion_personality_id"] = personality.id
             metadata["companion_personality_name"] = personality.name
