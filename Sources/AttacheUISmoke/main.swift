@@ -323,6 +323,10 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
 
 print("UI smoke starting: app=\(appPath)")
 
+// A unique title prevents a state-preserving smoke run from selecting an older
+// short fixture that happens to share the generic Shell smoke title.
+let primarySmokeEventTitle = "Shell smoke update \(UUID().uuidString.prefix(8))"
+
 // The launch is a precondition for every flow, not part of flow 1: without it,
 // a SMOKE_ONLY subset would run against nothing.
 guard run.requiredStep("setup", "app launches and shows a window", { try app.launch() }) else {
@@ -365,7 +369,13 @@ if enabled("f1") {
 
 if enabled("f2") {
     run.step("f2-event", "send-event.sh is accepted by the token-guarded server") {
-        let output = try runShell("scripts/send-event.sh")
+        // Keep this fixture long enough for the headed harness to exercise
+        // pause, seek, resume, visualizer motion, and live-call geometry before
+        // playback naturally completes, even on a fast machine.
+        let smokeText = """
+        Attaché accepted a local Codex-style event from the helper script. This longer playback fixture verifies that the unread voicemail opens normally, captions advance with the spoken words, the audio bars continue moving, seeking remains responsive, and the live call composer stays in its own lane above every playback control. The fixture is intentionally detailed so the smoke harness can inspect the active interface without racing the end of a short clip.
+        """
+        let output = try runShell("EVENT_TITLE='\(primarySmokeEventTitle)' EVENT_TEXT='\(smokeText)' scripts/send-event.sh")
         guard output.contains("accepted") else {
             throw SmokeError(message: "server did not accept the demo event: \(output)")
         }
@@ -381,7 +391,7 @@ if enabled("f2") {
         guard button.press() else {
             throw SmokeError(message: "AXPress failed on \(button.summary); actions: \(button.actionNames)")
         }
-        _ = try waitForElement("demo card in inbox", in: try mainWindow(), containing: "Shell smoke update")
+        _ = try waitForElement("demo card in inbox", in: try mainWindow(), containing: primarySmokeEventTitle)
         overlayOpened = true
     }
     run.step("f2-event", "playback starts on demand") {
@@ -392,7 +402,7 @@ if enabled("f2") {
         _ = field.setFocused()
         if !field.setValue("Shell smoke") { app.type("Shell smoke") }
         let row = try waitForElement("card row play action", in: try mainWindow(),
-                                     containing: "Play Shell smoke update")
+                                     containing: "Play \(primarySmokeEventTitle)")
         guard row.press() else {
             throw SmokeError(message: "AXPress failed on \(row.summary); actions: \(row.actionNames)")
         }
@@ -433,12 +443,72 @@ if enabled("f3") {
         guard resume.press() else { throw SmokeError(message: "AXPress failed on \(resume.summary)") }
         _ = try waitForElement("speaking indicator", in: try mainWindow(), containing: "Assistant speaking")
     }
+    run.step("f3-transport", "live composer stays above captions and playback controls") {
+        let call = try waitForElement("Call control", in: try mainWindow(),
+                                      role: kAXButtonRole as String, containing: "Call the focused session")
+        guard call.press() else { throw SmokeError(message: "AXPress failed on \(call.summary)") }
+
+        let window = try mainWindow()
+        guard let originalWindowFrame = window.frame else {
+            throw SmokeError(message: "main window did not expose AX geometry")
+        }
+        let constrainedSize = CGSize(
+            width: min(originalWindowFrame.width, 940),
+            height: min(originalWindowFrame.height, 620)
+        )
+        guard window.setSize(constrainedSize) else {
+            throw SmokeError(message: "could not resize the main window for constrained-layout verification")
+        }
+        defer { _ = window.setSize(originalWindowFrame.size) }
+
+        let composer = try waitForElement("live call composer", in: try mainWindow(),
+                                          containing: "Live call composer")
+        let caption = try waitForElement("visible karaoke caption", in: try mainWindow(), timeout: 10) { element in
+            guard let frame = element.frame else { return false }
+            return element.matchesExactly("Assistant speaking")
+                && frame.width > 100
+                && frame.height > 20
+        }
+        let slider = try waitForElement("seek slider", in: try mainWindow(),
+                                        role: kAXSliderRole as String, containing: "Seek playback")
+        let pause = try waitForElement("Pause control", in: try mainWindow(),
+                                       role: kAXButtonRole as String, containing: "Pause")
+
+        do {
+            try waitUntil("live composer to settle above the playback lane", timeout: 3, interval: 0.1) {
+                guard let composerFrame = composer.frame,
+                      let captionFrame = caption.frame,
+                      let sliderFrame = slider.frame,
+                      let pauseFrame = pause.frame else { return false }
+                let protectedFrames = [captionFrame, sliderFrame, pauseFrame]
+                return protectedFrames.allSatisfy { !composerFrame.intersects($0) }
+                    && composerFrame.maxY + 8 <= (protectedFrames.map(\.minY).min() ?? .greatestFiniteMagnitude)
+            }
+        } catch {
+            let frames = [composer.frame, caption.frame, slider.frame, pause.frame]
+                .map { $0.map(NSStringFromRect) ?? "missing" }
+                .joined(separator: ", ")
+            throw SmokeError(message: "live composer did not settle into its reserved lane: \(frames)")
+        }
+
+        // The primary control must remain directly actionable while the call
+        // composer is present, not merely exposed somewhere in the AX tree.
+        guard pause.press() else { throw SmokeError(message: "Pause is not actionable with the composer visible") }
+        let resume = try waitForElement("Resume control", in: try mainWindow(),
+                                        role: kAXButtonRole as String, containing: "Resume")
+        guard resume.press() else { throw SmokeError(message: "Resume is not actionable with the composer visible") }
+    }
     run.step("f3-transport", "captions are visible during playback") {
-        // The caption layer and the speaking indicator are one AX element; the
-        // caption text is exposed as its value.
-        let layer = try waitForElement("caption layer", in: try mainWindow(), containing: "speaking")
-        try waitUntil("caption layer to carry the spoken text", timeout: 5) {
-            layer.stringValue.count > 10
+        _ = try waitForElement("visible karaoke caption", in: try mainWindow(), timeout: 5) { element in
+            guard let frame = element.frame else { return false }
+            return element.matchesExactly("Assistant speaking")
+                && frame.width > 100
+                && frame.height > 20
+        }
+        let transcript = try waitForElement("caption transcript", in: try mainWindow(),
+                                            containing: "Assistant speaking transcript")
+        guard transcript.matchText.count > 40 else {
+            throw SmokeError(message: "caption transcript did not expose the spoken text: \(transcript.summary)")
         }
     }
     run.step("f3-transport", "muted smoke playback still drives the audio visualizer") {
@@ -450,37 +520,59 @@ if enabled("f3") {
             return numbers.contains(where: { $0 > 0 })
         }
     }
+    run.step("f3-transport", "hang up returns playback to the inbox") {
+        let hangUp = try waitForElement("Hang up control", in: try mainWindow(),
+                                        role: kAXButtonRole as String, containing: "Hang up")
+        guard hangUp.press() else { throw SmokeError(message: "AXPress failed on \(hangUp.summary)") }
+    }
 }
 
 // MARK: Flow 4: Command-K search opens, filters, and closes
 
 if enabled("f4") {
+    var commandKSessionID: String?
     run.step("f4-commandk", "Command-K opens the switcher") {
         app.activate()
         app.key(Key.k, command: true)
         _ = try waitForElement("switcher search field", in: try mainWindow(),
                                role: kAXTextFieldRole as String, containing: "Search name")
+        let row = try waitForElement("session row", in: try mainWindow(), timeout: 15) { element in
+            element.role == kAXButtonRole as String
+                && element.matches("Session ")
+                && element.matchText.components(separatedBy: .whitespacesAndNewlines)
+                    .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+                    .contains { UUID(uuidString: $0) != nil }
+        }
+        commandKSessionID = row.matchText.components(separatedBy: .whitespacesAndNewlines)
+            .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            .first { UUID(uuidString: $0) != nil }
     }
-    run.step("f4-commandk", "search filters to the demo card") {
+    run.step("f4-commandk", "search filters to an exact session ID") {
+        guard let commandKSessionID else {
+            throw SmokeError(message: "could not capture a session ID from the initial Command-K results")
+        }
         let field = try waitForElement("switcher search field", in: try mainWindow(),
                                        role: kAXTextFieldRole as String, containing: "Search name")
         var attempts: [String] = []
         try waitUntil("query text to land in the search field", timeout: 12, interval: 0.8) {
-            if field.stringValue.contains("smoke") { return true }
+            if field.stringValue.contains(commandKSessionID) { return true }
             app.activate()
             _ = field.setFocused()
-            if !field.setValue("smoke") {
-                app.type("smoke")
+            if !field.setValue(commandKSessionID) {
+                app.type(commandKSessionID)
                 attempts.append("typed (value now \"\(field.stringValue)\")")
             } else {
                 attempts.append("set (value now \"\(field.stringValue)\")")
             }
-            return field.stringValue.contains("smoke")
+            return field.stringValue.contains(commandKSessionID)
         }
-        guard field.stringValue.contains("smoke") else {
+        guard field.stringValue.contains(commandKSessionID) else {
             throw SmokeError(message: "search field never accepted text; attempts: \(attempts.joined(separator: ", "))")
         }
-        _ = try waitForElement("filtered result", in: try mainWindow(), containing: "Shell smoke update")
+        _ = try waitForElement("filtered session", in: try mainWindow(), timeout: 10) { element in
+            element.role == kAXButtonRole as String
+                && element.matches(commandKSessionID)
+        }
     }
     run.step("f4-commandk", "Escape closes the switcher") {
         // A just-rendered result list can swallow the first Escape; retry once.

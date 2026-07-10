@@ -99,8 +99,8 @@ extension CompanionRootView {
         .readingPlate(theme: model.theme, cornerRadius: 18, minimumOpacity: 0.66)
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(accent.opacity(0.22)))
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, onCallHUDBottomPadding)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Live call composer")
     }
 
     var callDestinationPicker: some View {
@@ -259,9 +259,5 @@ extension CompanionRootView {
                 Label(mode.title, systemImage: model.voiceInputMode == mode ? "checkmark" : mode.iconName)
             }
         }
-    }
-
-    var onCallHUDBottomPadding: CGFloat {
-        liveTransportVisible ? liveBottomHUDMaxHeight + 96 : 78
     }
 }

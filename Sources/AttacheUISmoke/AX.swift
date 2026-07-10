@@ -73,6 +73,19 @@ struct AXElement {
         return (names as? [String]) ?? []
     }
 
+    var frame: CGRect? {
+        guard let positionValue = copyAttribute(kAXPositionAttribute),
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              let sizeValue = copyAttribute(kAXSizeAttribute),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else { return nil }
+        return CGRect(origin: origin, size: size)
+    }
+
     /// Everything a human-readable matcher could go by, joined for matching.
     var matchText: String {
         [title, axDescription, help, placeholder, stringValue, identifier]
@@ -99,6 +112,7 @@ struct AXElement {
         if !placeholder.isEmpty { parts.append("placeholder=\"\(placeholder)\"") }
         let value = stringValue
         if !value.isEmpty { parts.append("value=\"\(value.prefix(60))\"") }
+        if let frame { parts.append("frame=\(NSStringFromRect(frame))") }
         return parts.joined(separator: " ")
     }
 
@@ -125,6 +139,12 @@ struct AXElement {
 
     func setFocused() -> Bool {
         AXUIElementSetAttributeValue(raw, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success
+    }
+
+    func setSize(_ requestedSize: CGSize) -> Bool {
+        var size = requestedSize
+        guard let value = AXValueCreate(.cgSize, &size) else { return false }
+        return AXUIElementSetAttributeValue(raw, kAXSizeAttribute as CFString, value) == .success
     }
 
     func raiseWindow() {

@@ -153,17 +153,8 @@ struct CompanionRootView: View {
                 liveModeOverlay
                     .transition(.opacity)
 
-                liveBottomHUD
+                liveCallPlaybackHUD
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
-
-                if model.onCall {
-                    // Fades with the chrome like everything else, but never
-                    // while typed text or a reply is in flight.
-                    onCallHUD
-                        .opacity(chromeAwake || !model.conversationDraft.isEmpty || model.isAwaitingReply || callProgressVisible ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.4), value: chromeAwake)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
 
                 if controlsVisible {
                     slimDock
@@ -626,28 +617,50 @@ struct CompanionRootView: View {
         }
     }
 
+    /// The bottom of the live surface is one ordered interaction stack:
+    /// composer, captions, transport, then the dock below it. Keeping these
+    /// views in the same VStack makes overlap impossible for card playback and
+    /// conversational preview playback alike, while leaving the composer
+    /// available for notes or a follow-up during a long response.
     @ViewBuilder
-    private var liveBottomHUD: some View {
-        if liveBottomHUDVisible {
-            VStack(spacing: 14) {
-                if captionOverlayVisible {
-                    bottomResponseOverlay
-                        .padding(.horizontal, 10)
+    private var liveCallPlaybackHUD: some View {
+        if model.onCall || liveBottomHUDVisible {
+            VStack(spacing: 16) {
+                if model.onCall {
+                    // Fades with the chrome like everything else, but never
+                    // while typed text or a reply is in flight.
+                    onCallHUD
+                        .opacity(chromeAwake || !model.conversationDraft.isEmpty || model.isAwaitingReply || callProgressVisible ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.4), value: chromeAwake)
+                        .transition(.opacity)
                 }
-                if liveTransportVisible {
-                    liveTransportBar
-                        .padding(.horizontal, 6)
-                } else if livePreviewTransportVisible {
-                    livePreviewTransportBar
-                        .padding(.horizontal, 6)
+
+                if liveBottomHUDVisible {
+                    liveBottomHUDContent
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(maxHeight: liveBottomHUDMaxHeight, alignment: .bottom)
             .padding(.horizontal, 24)
             .padding(.bottom, 80)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
+    }
+
+    private var liveBottomHUDContent: some View {
+        VStack(spacing: 14) {
+            if captionOverlayVisible {
+                bottomResponseOverlay
+                    .padding(.horizontal, 10)
+            }
+            if liveTransportVisible {
+                liveTransportBar
+                    .padding(.horizontal, 6)
+            } else if livePreviewTransportVisible {
+                livePreviewTransportBar
+                    .padding(.horizontal, 6)
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // Focus status lives in the bottom dock (focus button + status card), so
@@ -789,7 +802,10 @@ struct CompanionRootView: View {
     }
 
     private var liveComposerBottomPadding: CGFloat {
-        liveBottomHUDVisible ? liveBottomHUDMaxHeight + 28 : 22
+        // The off-call send composer is still an independent overlay. Reserve
+        // the bottom HUD's content height, its 80-point dock clearance, and a
+        // 16-point visual gap so it follows the same no-overlap contract.
+        liveBottomHUDVisible ? liveBottomHUDMaxHeight + 96 : 22
     }
 
     // Transport controls for the speaking recap: scrub bar, time, and
