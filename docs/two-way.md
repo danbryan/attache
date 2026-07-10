@@ -176,6 +176,14 @@ Two-way has three intentionally separate verification layers:
    tagging so success depends on Codex's watched answer, not a presentation-model
    paraphrase. It still uses real Codex auth/network, but it does not require
    xAI, Claude, Anthropic, OpenAI, Groq, Ollama, or LM Studio credentials.
+4. **Real Codex personality routing canary:**
+   `scripts/codex-personality-routing-canary.sh` runs the production
+   conversation prompt and CLI tool bridge against the real Codex personality
+   brain. It uses the exact explicit artifact-delegation wording from the July
+   10 incident and fails unless the first app tool selected is
+   `stage_agent_instruction` with the requested report context. This closes the
+   intent-classification gap that the deterministic personality provider cannot
+   exercise. It runs as part of the opt-in Codex release-readiness extras.
 
 Attaché intentionally does **not** use a host-side natural-language intent
 router to decide whether a live message should go to the personality or the

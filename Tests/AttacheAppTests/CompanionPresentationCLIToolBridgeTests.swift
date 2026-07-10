@@ -1,3 +1,4 @@
+import AttacheCore
 import XCTest
 @testable import AttacheApp
 
@@ -59,5 +60,77 @@ final class CompanionPresentationCLIToolBridgeTests: XCTestCase {
         XCTAssertTrue(description.contains("Ask Codex what it changed"))
         XCTAssertTrue(description.contains("MUST use this tool"))
         XCTAssertTrue(description.contains("Do not substitute local read tools"))
+    }
+
+    /// Opt-in live canary for the judgment boundary a deterministic provider
+    /// cannot exercise. It uses the production conversation prompt, production
+    /// CLI tool bridge, and the phrasing from the July 10 routing incident.
+    func testLiveCodexRoutesExplicitArtifactDelegationToAgentTool() async throws {
+        guard ProcessInfo.processInfo.environment["ATTACHE_LIVE_CODEX_ROUTING_TEST"] == "1" else {
+            throw XCTSkip("Set ATTACHE_LIVE_CODEX_ROUTING_TEST=1 to run the real Codex routing canary.")
+        }
+
+        let suiteName = "AttacheLiveCodexRoutingCanary-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("Could not create isolated defaults for the live routing canary.")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+
+        let model = ProcessInfo.processInfo.environment["ATTACHE_LIVE_CODEX_MODEL"] ?? "default"
+        let service = CompanionPresentationService(defaults: defaults, environment: [
+            "ATTACHE_LLM_PROVIDER": "codex_cli",
+            "ATTACHE_LLM_MODEL": model,
+            "ATTACHE_REASONING_EFFORT": "low"
+        ])
+        let recorder = LiveToolCallRecorder()
+        let system = CompanionPersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: "Weekly Codex Improvement Review",
+            sessionSourceName: "Codex",
+            workingDirectory: "/tmp/attache-routing-canary",
+            latestSummary: "Three improvements were completed and an HTML report was generated.",
+            latestAgentReply: "The detailed results are in the HTML report.",
+            canStageAgentInstruction: true
+        )
+        let user = "Could you just ask Codex to tell you the items from the artifact and then report it to me? Describe the three improvements from the HTML report in detail."
+
+        let result: Result<String, Error> = await withCheckedContinuation { continuation in
+            service.converse(
+                messages: [
+                    CompanionChatMessage(role: "system", content: system),
+                    CompanionChatMessage(role: "user", content: user)
+                ],
+                allowAgentInstructionTool: true,
+                executeTool: { name, arguments in
+                    await recorder.append(name: name, arguments: arguments)
+                    if name == "stage_agent_instruction" {
+                        return "Attaché opened the per-message confirmation sheet. Nothing has been sent yet."
+                    }
+                    return "This tool is unavailable in the routing canary. Follow the user's explicit delegation request."
+                },
+                completion: { continuation.resume(returning: $0) }
+            )
+        }
+        _ = try result.get()
+
+        let calls = await recorder.calls
+        XCTAssertEqual(calls.first?.name, "stage_agent_instruction", "The real personality chose \(calls.first?.name ?? "no tool") before the explicit agent handoff.")
+        let arguments = calls.first?.arguments ?? ""
+        XCTAssertTrue(arguments.localizedCaseInsensitiveContains("three improvements"))
+        XCTAssertTrue(arguments.localizedCaseInsensitiveContains("HTML report"))
+    }
+}
+
+private actor LiveToolCallRecorder {
+    struct Call: Sendable {
+        let name: String
+        let arguments: String
+    }
+
+    private(set) var calls: [Call] = []
+
+    func append(name: String, arguments: String) {
+        calls.append(Call(name: name, arguments: arguments))
     }
 }

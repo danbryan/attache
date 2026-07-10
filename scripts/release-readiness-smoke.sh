@@ -69,6 +69,8 @@ echo "==> Gate 9/9: load"
 scripts/load-smoke.sh
 
 if [[ "${ATTACHE_RELEASE_READINESS_WITH_CODEX:-0}" == "1" ]]; then
+  echo "==> Extra: real Codex personality routing"
+  scripts/codex-personality-routing-canary.sh
   echo "==> Extra: real Codex direct two-way"
   scripts/codex-two-way-smoke.sh
   echo "==> Extra: real Codex personality two-way"
