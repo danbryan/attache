@@ -88,6 +88,7 @@ extension CompanionRootView {
                             .lineLimit(2)
                             .truncationMode(.tail)
                             .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("Conversation status: \(callStatusDisplayText)")
 
                         if model.conversationRecovery?.offersModelSwitch == true {
                             conversationRecoveryActions
@@ -97,7 +98,6 @@ extension CompanionRootView {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(model.conversationProgressText)
-                .accessibilityLabel("Conversation status: \(callStatusDisplayText)")
             }
         }
         .padding(10)

@@ -1,5 +1,6 @@
 import AttacheCore
 import Foundation
+import os
 
 final class CompanionPresentationService {
     private let defaults: UserDefaults
@@ -227,6 +228,9 @@ final class CompanionPresentationService {
                 }
             ])
             for call in result.toolCalls {
+                AttacheLog.presentation.info(
+                    "conversation tool requested name=\(call.name, privacy: .public) argument_chars=\(call.arguments.count)"
+                )
                 // Bound each tool call so a stalled tool can't hang the turn; the
                 // model gets a structured timeout result and keeps going.
                 let toolResult = await withTimeout(seconds: 10) {
@@ -234,6 +238,9 @@ final class CompanionPresentationService {
                 } onTimeout: {
                     "The \(call.name) tool did not respond in time. Answer from what you already have and tell the user you could not check that in time."
                 }
+                AttacheLog.presentation.info(
+                    "conversation tool completed name=\(call.name, privacy: .public) result_chars=\(toolResult.count)"
+                )
                 payloadMessages.append(["role": "tool", "tool_call_id": call.id, "content": toolResult])
             }
         }
@@ -270,7 +277,7 @@ final class CompanionPresentationService {
         return unresolved.llmEnabled && unresolved.hasProviderConfiguration
     }
 
-    private static func conversationTools(allowAgentInstructionTool: Bool) -> [[String: Any]] {
+    static func conversationTools(allowAgentInstructionTool: Bool) -> [[String: Any]] {
         var tools: [[String: Any]] = [
             ["type": "function", "function": [
                 "name": "read_session_transcript",
@@ -294,12 +301,12 @@ final class CompanionPresentationService {
             ]],
             ["type": "function", "function": [
                 "name": "list_working_directory",
-                "description": "List the files in the session's working directory to see what exists before reading.",
+                "description": "List the files in the session's working directory to see what exists before reading. Do not use this to hunt for an artifact when its exact path can be found in the session transcript, and do not probe unrelated protected folders.",
                 "parameters": ["type": "object", "properties": [String: Any]()] as [String: Any]
             ]],
             ["type": "function", "function": [
                 "name": "read_file",
-                "description": "Read a file inside the session's working directory.",
+                "description": "Read a file inside the session's working directory. Use an exact path learned from session context or transcript search; never guess a Desktop, Documents, or other protected-folder path.",
                 "parameters": [
                     "type": "object",
                     "properties": ["path": ["type": "string", "description": "Path relative to the working directory."]],
@@ -319,7 +326,7 @@ final class CompanionPresentationService {
         if allowAgentInstructionTool {
             tools.append(["type": "function", "function": [
                 "name": "stage_agent_instruction",
-                "description": "Route an action to the focused work agent only when the user explicitly asks that agent to act. Do not use this for questions about the agent, and do not redirect a request naming a different agent. Attaché applies the user's send policy, safety filter, and frozen session target.",
+                "description": "Route an action to the focused work agent only when the user explicitly asks that agent to act. 'What did Codex say?' stays with Attaché, but 'Ask Codex what it changed' MUST use this tool. Asking the agent to answer, explain, check, read, summarize, or report is an action even when it concerns prior work or an artifact. Do not substitute local read tools for an explicit handoff, and do not redirect a request naming a different agent. Attaché applies the user's send policy, safety filter, and frozen session target.",
                 "parameters": [
                     "type": "object",
                     "properties": [

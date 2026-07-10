@@ -1184,10 +1184,10 @@ if enabled("f16") {
         guard retry.isEnabled else { throw SmokeError(message: "retry action is disabled after a recoverable failure") }
 
         let before = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
-        let requestCount = occurrenceCount(of: #"\"event\": \"request\""#, in: before)
+        let requestCount = occurrenceCount(of: "\"event\": \"request\"", in: before)
         Thread.sleep(forTimeInterval: 1.5)
         let after = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
-        guard occurrenceCount(of: #"\"event\": \"request\""#, in: after) == requestCount else {
+        guard occurrenceCount(of: "\"event\": \"request\"", in: after) == requestCount else {
             throw SmokeError(message: "usage failure retried without an explicit user action")
         }
     }
@@ -1211,10 +1211,10 @@ if enabled("f16") {
             throw SmokeError(message: "retry did not restore the failed prompt; value=\(field.stringValue)")
         }
         let logText = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
-        guard occurrenceCount(of: #"\"event\": \"request\""#, in: logText) == 2 else {
+        guard occurrenceCount(of: "\"event\": \"request\"", in: logText) == 2 else {
             throw SmokeError(message: "expected exactly two provider requests after explicit retry. Log:\n\(logText)")
         }
-        guard logText.contains(#"\"model\": \"attache-recovery-smoke\""#) else {
+        guard logText.contains("\"model\": \"attache-recovery-smoke\"") else {
             throw SmokeError(message: "retry did not use the selected model. Log:\n\(logText)")
         }
     }

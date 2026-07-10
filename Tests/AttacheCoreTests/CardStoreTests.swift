@@ -2,6 +2,31 @@ import AttacheCore
 import XCTest
 
 final class CardStoreTests: XCTestCase {
+    func testConcurrentInstructionReadsAndWritesSerializePreparedStatements() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-card-store-concurrency-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try CardStore(databaseURL: root.appendingPathComponent("cards.sqlite"))
+
+        let iterations = 400
+        DispatchQueue.concurrentPerform(iterations: iterations) { index in
+            let instruction = Instruction(
+                id: "instruction-\(index % 8)",
+                sessionID: "session-\(index % 4)",
+                sourceKind: "codex",
+                text: "Reply \(index)",
+                state: .pending,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                origin: .personalityTool
+            )
+            try? store.upsertInstruction(instruction)
+            _ = try? store.fetchInstruction(id: instruction.id)
+            _ = try? store.fetchInstructions(forSessionID: instruction.sessionID)
+        }
+
+        XCTAssertFalse(try store.fetchInstructionLog(limit: iterations).isEmpty)
+    }
+
     func testEventCreatesUnreadCardAndPersistsAcrossStoreRestart() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("AttacheTests-\(UUID().uuidString)", isDirectory: true)

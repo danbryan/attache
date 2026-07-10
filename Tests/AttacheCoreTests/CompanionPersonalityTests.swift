@@ -265,15 +265,21 @@ final class CompanionPersonalityTests: XCTestCase {
             sessionSourceName: "Codex",
             workingDirectory: "/tmp/smoke",
             latestSummary: "Ready",
+            latestAgentReply: "Three improvements were made.",
             canStageAgentInstruction: true
         )
 
         XCTAssertTrue(prompt.contains("stage_agent_instruction"))
-        XCTAssertTrue(prompt.contains("Questions about what the agent said, did, can do, or should do stay in this conversation"))
+        XCTAssertTrue(prompt.contains("\"What did Codex say?\" is a question for you"))
+        XCTAssertTrue(prompt.contains("\"Ask Codex what it changed\" is an explicit delegation"))
+        XCTAssertTrue(prompt.contains("MUST call stage_agent_instruction"))
+        XCTAssertTrue(prompt.contains("Do not substitute read_session_transcript"))
         XCTAssertTrue(prompt.contains("If the user names a different agent than the focused one"))
         XCTAssertTrue(prompt.contains("may confirm or may send directly"))
         XCTAssertTrue(prompt.contains("Never claim a send unless Attaché reports it"))
         XCTAssertTrue(prompt.contains("Focused agent: Codex / Codex smoke"))
+        XCTAssertTrue(prompt.contains("Latest agent reply: Three improvements were made."))
+        XCTAssertTrue(prompt.contains("Find an artifact's exact path from the transcript"))
     }
 
     func testConversationPromptForbidsAgentMessagingWhenToolUnavailable() {

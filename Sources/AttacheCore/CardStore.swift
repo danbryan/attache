@@ -24,16 +24,21 @@ public enum CardStoreError: Error, LocalizedError {
     }
 }
 
-public final class CardStore {
+public final class CardStore: @unchecked Sendable {
     private var db: OpaquePointer?
     private let databaseURL: URL
     private let audioAssetsURL: URL
+    /// A store is normally driven from the main actor, but async delivery can
+    /// resume on a cooperative executor while watcher work reaches the same
+    /// connection. SQLite's connection mutex does not make reusing one prepared
+    /// statement concurrently safe, so guard the handle, statement cache, and
+    /// shared coders as one recursive critical section.
+    private let lock = NSRecursiveLock()
     private let dateFormatter = ISO8601DateFormatter()
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     /// Compiled statements keyed by SQL text, kept for the lifetime of the store
-    /// so repeated reads/writes skip re-parsing. Assumes serialized access (the
-    /// store is driven from the main actor), the same as the raw sqlite3 handle.
+    /// so repeated reads/writes skip re-parsing. Access is serialized by `lock`.
     private var statementCache: [String: OpaquePointer] = [:]
 
     public convenience init(databaseURL: URL, audioAssetsURL: URL? = nil) throws {
@@ -628,11 +633,15 @@ public final class CardStore {
     }
 
     private func encodeJSON<T: Encodable>(_ value: T) throws -> String {
+        lock.lock()
+        defer { lock.unlock() }
         let data = try encoder.encode(value)
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 
     private func exec(_ sql: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
         guard let db else { throw CardStoreError.missingDatabase }
         var errorMessage: UnsafeMutablePointer<CChar>?
         if sqlite3_exec(db, sql, nil, nil, &errorMessage) != SQLITE_OK {
@@ -643,6 +652,8 @@ public final class CardStore {
     }
 
     private func execute(_ sql: String, _ bindings: [SQLiteBinding]) throws {
+        lock.lock()
+        defer { lock.unlock() }
         let stmt = try cachedStatement(sql)
         defer { sqlite3_reset(stmt) }
         try bind(bindings, to: stmt)
@@ -652,6 +663,8 @@ public final class CardStore {
     }
 
     private func query<T>(sql: String, bindings: [SQLiteBinding], map: (OpaquePointer?) throws -> T) throws -> [T] {
+        lock.lock()
+        defer { lock.unlock() }
         let stmt = try cachedStatement(sql)
         defer { sqlite3_reset(stmt) }
         try bind(bindings, to: stmt)
@@ -720,7 +733,9 @@ public final class CardStore {
     }
 
     private func formatDate(_ date: Date) -> String {
-        dateFormatter.string(from: date)
+        lock.lock()
+        defer { lock.unlock() }
+        return dateFormatter.string(from: date)
     }
 }
 

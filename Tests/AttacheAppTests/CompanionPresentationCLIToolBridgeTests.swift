@@ -47,4 +47,17 @@ final class CompanionPresentationCLIToolBridgeTests: XCTestCase {
         XCTAssertTrue(message.content.contains("stage_agent_instruction"))
         XCTAssertTrue(message.content.contains(#"{"attache_tool_call":{"name":"tool_name","arguments":{}}}"#))
     }
+
+    func testAgentInstructionToolDescriptionDistinguishesQuestionFromDelegation() {
+        let tools = CompanionPresentationService.conversationTools(allowAgentInstructionTool: true)
+        let function = tools
+            .compactMap { $0["function"] as? [String: Any] }
+            .first { $0["name"] as? String == "stage_agent_instruction" }
+        let description = function?["description"] as? String ?? ""
+
+        XCTAssertTrue(description.contains("What did Codex say?"))
+        XCTAssertTrue(description.contains("Ask Codex what it changed"))
+        XCTAssertTrue(description.contains("MUST use this tool"))
+        XCTAssertTrue(description.contains("Do not substitute local read tools"))
+    }
 }

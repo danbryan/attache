@@ -2340,6 +2340,7 @@ final class AppModel: ObservableObject {
             sessionSourceName: context?.target.sourceKind.displayName,
             workingDirectory: context?.workingDirectory,
             latestSummary: conversationLatestSummary,
+            latestAgentReply: conversationLatestAgentReply,
             canStageAgentInstruction: context?.agentSendTarget != nil
         )
         var messages = [CompanionChatMessage(role: "system", content: system)]
@@ -2374,12 +2375,35 @@ final class AppModel: ObservableObject {
         return cards.first(where: { $0.externalSessionID == id && $0.projectPath != nil })?.projectPath
     }
 
-    private var conversationLatestSummary: String? {
-        let id = conversationTargetSnapshot?.target.id ?? talkContextSession?.id
-        if let id, let summary = cards.first(where: { $0.externalSessionID == id })?.summary {
-            return summary
+    var conversationLatestSummary: String? {
+        conversationLatestAgentCard?.summary
+    }
+
+    /// Give the personality enough of the latest real agent reply to answer a
+    /// specific follow-up without relying on the deliberately terse card summary.
+    /// Earlier turns and longer output still stay behind the bounded read tools.
+    var conversationLatestAgentReply: String? {
+        guard let raw = conversationLatestAgentCard?.rawText else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let limit = 6_000
+        guard trimmed.count > limit else { return trimmed }
+        return String(trimmed.prefix(limit)) + "\n[latest reply truncated; use read_session_transcript for more]"
+    }
+
+    /// Conversation replies are filed as cards too, but they are Attaché's own
+    /// history, not new evidence from the work agent. Keep the initial agent
+    /// context stable across a multi-turn call instead of replacing it with the
+    /// personality's previous answer after every turn.
+    private var conversationLatestAgentCard: VoicemailCard? {
+        let id = conversationTargetSnapshot?.target.id
+            ?? talkContextSession?.id
+            ?? selectedCard?.externalSessionID
+        if let id {
+            return cards.first { $0.externalSessionID == id && !isDirectConversationReply($0) }
         }
-        return selectedCard?.summary
+        guard let selectedCard, !isDirectConversationReply(selectedCard) else { return nil }
+        return selectedCard
     }
 
     private static func executeConversationTool(

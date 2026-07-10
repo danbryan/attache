@@ -237,6 +237,7 @@ public enum CompanionPersonality {
         sessionSourceName: String? = nil,
         workingDirectory: String?,
         latestSummary: String?,
+        latestAgentReply: String? = nil,
         canStageAgentInstruction: Bool = false
     ) -> String {
         let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
@@ -248,8 +249,15 @@ public enum CompanionPersonality {
         }
         let cwdLine = workingDirectory.map { "- Working directory: \($0)\n" } ?? ""
         let summaryLine = latestSummary.map { "- Latest update: \($0)\n" } ?? ""
+        let latestReplyLine = latestAgentReply.map { "- Latest agent reply: \($0)\n" } ?? ""
         let agentInstructionLine = canStageAgentInstruction
-            ? "- Use stage_agent_instruction only when the user explicitly asks the focused work agent to take an action. Questions about what the agent said, did, can do, or should do stay in this conversation. If the user names a different agent than the focused one, ask them to focus that session instead of staging. Attaché routes explicit requests through the user's send-to-agent policy, which may confirm or may send directly after enablement. After the tool returns, report its actual status and target. Never claim a send unless Attaché reports it.\n"
+            ? """
+            - Use stage_agent_instruction only when the user explicitly asks the focused work agent to take an action.
+            - Keep this boundary exact: "What did Codex say?" is a question for you to answer with session-reading tools. "Ask Codex what it changed" is an explicit delegation, so you MUST call stage_agent_instruction. Asking the agent to answer, explain, check, read, summarize, or report is still an action request, even when it concerns prior work or an artifact.
+            - Do not substitute read_session_transcript, list_working_directory, or read_file when the user explicitly asks you to ask the focused agent. Use local read tools only when the user asks you to inspect or explain the context yourself.
+            - If the user names a different agent than the focused one, ask them to focus that session instead of staging. Attaché routes explicit requests through the user's send-to-agent policy, which may confirm or may send directly after enablement. After the tool returns, report its actual status and target. Never claim a send unless Attaché reports it.
+
+            """
             : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
         let toolsLine = canStageAgentInstruction
             ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (route a user-requested instruction to the work agent), and rename_session. Only read or stage what you need.\n"
@@ -262,14 +270,14 @@ public enum CompanionPersonality {
         Live conversation task:
         - You are in a back-and-forth voice conversation with the user about their work. This is your own chat with the user, not the work agent.
         - Speak directly to the user. Replies are read aloud, so keep them short and listenable: headline first, then the key point. No long lists, no code blocks, no reciting paths, hashes, or URLs.
-        - You start with the session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing.
+        - You start with the session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing. When a summary mentions a count but omits the items, read the transcript for the specifics. Find an artifact's exact path from the transcript before reading it; never guess a path or probe an unrelated protected folder.
         \(agentInstructionLine)\(toolsLine)
         - You can also rename this session for Attaché with rename_session when the user asks to name or relabel it (for example "let's call this the tax cleanup session"). This only changes Attaché's label. Confirm the new name briefly after renaming.
         - Preserve uncertainty. Do not invent file contents, results, approvals, or repository state. If a tool returns nothing useful, say what is missing.
         - Output only your spoken reply. No labels, no markdown fences, no stage directions.
 
         Current session context:
-        \(titleLine)\(cwdLine)\(summaryLine)
+        \(titleLine)\(cwdLine)\(summaryLine)\(latestReplyLine)
         """
     }
 

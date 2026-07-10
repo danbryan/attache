@@ -57,6 +57,16 @@ if [[ "${SMOKE_KEEP_STATE:-0}" != "1" ]]; then
     exit 1
   fi
   trap restore_state EXIT
+
+  # The standard suite exercises Command-K against real local Codex session
+  # metadata. A truly fresh profile has every agent source disabled until the
+  # user chooses one in onboarding, while flow 1 deliberately tests the Skip
+  # path. Enable only the source that flow 4 explicitly intends to exercise in
+  # this disposable profile. The dedicated no-key first-run flow remains fully
+  # disconnected.
+  if [[ -z "${SMOKE_ONLY:-}" || ",${SMOKE_ONLY}," == *",f4,"* ]]; then
+    defaults write com.bryanlabs.attache attache.codexSourceEnabled -bool true
+  fi
 fi
 
 echo "==> Running UI smoke flows"
