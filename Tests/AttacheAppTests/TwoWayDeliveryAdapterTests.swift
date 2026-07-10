@@ -175,4 +175,201 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
     private func codexAssistant(_ text: String, phase: String) -> String {
         #"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"\#(phase)","content":[{"text":"\#(text)"}]}}"#
     }
+
+    // MARK: - INF-241: fake Claude home fixture, end-to-end delivery coverage
+    //
+    // These run scripts/create-fake-claude-home.py for real and spawn its
+    // generated fake `claude` executable through AgentResumeDeliveryAdapter's
+    // *real* defaultSpawn (no injected `spawn` stub), so the `claude -p --resume
+    // --output-format json` branch is exercised end to end with no network and
+    // no real claude CLI involved.
+
+    private struct FakeClaudeHome {
+        let home: String
+        let executable: String
+        let targetSessionID: String
+        let targetSessionFile: String
+    }
+
+    private static var repoRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    /// Runs scripts/create-fake-claude-home.py and parses its JSON summary.
+    private func makeFakeClaudeHome(nonce: String) throws -> FakeClaudeHome {
+        let script = Self.repoRoot.appendingPathComponent("scripts/create-fake-claude-home.py")
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("attache-fake-claude-\(UUID().uuidString)")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", script.path, "--home", home.path, "--nonce", nonce]
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "create-fake-claude-home.py exited nonzero")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: String])
+        return FakeClaudeHome(
+            home: try XCTUnwrap(json["home"]),
+            executable: try XCTUnwrap(json["fake_claude_executable"]),
+            targetSessionID: try XCTUnwrap(json["target_session_id"]),
+            targetSessionFile: try XCTUnwrap(json["target_session_file"])
+        )
+    }
+
+    private static func fileSize(_ url: URL) -> Int64? {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return nil }
+        return Int64(size)
+    }
+
+    private static func tailLines(of url: URL, limit: Int = 20) -> [String] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return Array(text.split(whereSeparator: \.isNewline).map(String.init).suffix(limit))
+    }
+
+    func testFakeClaudeDeliverySucceedsWithEvidenceEndToEnd() async throws {
+        let fixture = try makeFakeClaudeHome(nonce: "success-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+        setenv("ATTACHE_FAKE_CLAUDE_HOME", fixture.home, 1)
+        defer { unsetenv("ATTACHE_FAKE_CLAUDE_HOME") }
+
+        let sessionFileURL = URL(fileURLWithPath: fixture.targetSessionFile)
+        let beforeSize = Self.fileSize(sessionFileURL)
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in sessionFileURL },
+            locateExecutable: { _ in fixture.executable }
+        )
+        let instruction = Instruction(id: "i-success", sessionID: fixture.targetSessionID, sourceKind: "claude_code", text: "run the tests", createdAt: now)
+
+        let result = await adapter.deliver(instruction)
+
+        switch result {
+        case .success(let receipt):
+            XCTAssertEqual(receipt.mechanism, "headless-resume")
+            XCTAssertEqual(receipt.transcriptCheckpoint, beforeSize)
+        case .failure(let error):
+            XCTFail("expected success, got \(error)")
+        }
+
+        // Evidence: the fake CLI appended a real-shaped, non-sidechain, completed
+        // assistant turn (mirroring the real `--output-format json` success
+        // contract), so the readiness classifier now sees a completed turn and the
+        // file actually grew.
+        let tail = Self.tailLines(of: sessionFileURL)
+        XCTAssertTrue(SessionDeliveryReadinessClassifier.turnIsComplete(tailLines: tail, format: .claude))
+        XCTAssertTrue(tail.contains { $0.contains("DONE: run the tests") })
+        if let before = beforeSize, let after = Self.fileSize(sessionFileURL) {
+            XCTAssertGreaterThan(after, before)
+        } else {
+            XCTFail("expected readable file sizes before and after delivery")
+        }
+    }
+
+    func testFakeClaudeDeliveryReportsSuccessEvenWithoutEvidenceToday() async throws {
+        // Pins the exact gap the 2026-07-10 review calls out (section 1, item 1):
+        // AgentResumeDeliveryAdapter.deliver() only checks the exit code, so a
+        // silent no-op (exit 0, no transcript evidence) is indistinguishable from
+        // a real delivery today. `ATTACHE_FAKE_CLAUDE_MODE=no_evidence` simulates
+        // exactly that: the fake CLI exits 0 without touching the transcript.
+        let fixture = try makeFakeClaudeHome(nonce: "noevidence-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+        setenv("ATTACHE_FAKE_CLAUDE_HOME", fixture.home, 1)
+        setenv("ATTACHE_FAKE_CLAUDE_MODE", "no_evidence", 1)
+        defer {
+            unsetenv("ATTACHE_FAKE_CLAUDE_HOME")
+            unsetenv("ATTACHE_FAKE_CLAUDE_MODE")
+        }
+
+        let sessionFileURL = URL(fileURLWithPath: fixture.targetSessionFile)
+        let beforeSize = Self.fileSize(sessionFileURL)
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in sessionFileURL },
+            locateExecutable: { _ in fixture.executable }
+        )
+        let instruction = Instruction(id: "i-noevidence", sessionID: fixture.targetSessionID, sourceKind: "claude_code", text: "run the tests", createdAt: now)
+
+        let result = await adapter.deliver(instruction)
+
+        guard case .success = result else {
+            return XCTFail("expected today's exit-code-only verdict (success), got \(result)")
+        }
+        XCTAssertEqual(Self.fileSize(sessionFileURL), beforeSize, "no_evidence mode must not append a turn; the adapter's success verdict rests on exit code alone")
+    }
+
+    func testFakeClaudeDeliveryFailsWithStderrForUnknownSession() async throws {
+        let fixture = try makeFakeClaudeHome(nonce: "nonzero-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+        setenv("ATTACHE_FAKE_CLAUDE_HOME", fixture.home, 1)
+        defer { unsetenv("ATTACHE_FAKE_CLAUDE_HOME") }
+
+        // A stale/rotated session id: Attaché still has a local transcript file
+        // (locateSessionFile resolves fine), but it isn't in the fake CLI's
+        // fixture manifest, exactly like the real CLI's verified failure mode.
+        let staleSessionID = UUID().uuidString.lowercased()
+        let sessionFileURL = URL(fileURLWithPath: fixture.targetSessionFile)
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in sessionFileURL },
+            locateExecutable: { _ in fixture.executable }
+        )
+        let instruction = Instruction(id: "i-nonzero", sessionID: staleSessionID, sourceKind: "claude_code", text: "run the tests", createdAt: now)
+
+        let result = await adapter.deliver(instruction)
+
+        if case .failure(.deliveryFailed(let detail)) = result {
+            XCTAssertEqual(detail, "No conversation found with session ID: \(staleSessionID)")
+        } else {
+            XCTFail("expected deliveryFailed, got \(result)")
+        }
+    }
+
+    func testFakeClaudeDeliveryHangBlocksForItsFullDurationTodayNoTimeoutExists() async throws {
+        // AgentResumeDeliveryAdapter.deliver() has no built-in timeout, and
+        // AttacheCore.withTimeout does not actually bound a Process-based CLI call
+        // that never checks Task.isCancelled: withTaskGroup awaits every child
+        // task before returning even after cancelAll() and an onTimeout() value
+        // have been produced (verified empirically: wrapping a 3s-hanging
+        // withCheckedContinuation operation in withTimeout(seconds: 0.5) still
+        // took ~3.2s wall-clock to return). So this test pins today's real
+        // behavior instead of a guard that does not exist: a hung claude process
+        // blocks delivery for its full duration (review section 1, item 3:
+        // "waiting and expiry are invisible").
+        let hangSeconds = 1.2
+        let fixture = try makeFakeClaudeHome(nonce: "hang-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+        setenv("ATTACHE_FAKE_CLAUDE_HOME", fixture.home, 1)
+        setenv("ATTACHE_FAKE_CLAUDE_MODE", "hang", 1)
+        setenv("ATTACHE_FAKE_CLAUDE_HANG_SECONDS", String(hangSeconds), 1)
+        defer {
+            unsetenv("ATTACHE_FAKE_CLAUDE_HOME")
+            unsetenv("ATTACHE_FAKE_CLAUDE_MODE")
+            unsetenv("ATTACHE_FAKE_CLAUDE_HANG_SECONDS")
+        }
+
+        let sessionFileURL = URL(fileURLWithPath: fixture.targetSessionFile)
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in sessionFileURL },
+            locateExecutable: { _ in fixture.executable }
+        )
+        let instruction = Instruction(id: "i-hang", sessionID: fixture.targetSessionID, sourceKind: "claude_code", text: "run the tests", createdAt: now)
+
+        let start = Date()
+        let result = await adapter.deliver(instruction)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertGreaterThanOrEqual(elapsed, hangSeconds - 0.2, "a hung claude process should block delivery for its full duration; nothing in AgentResumeDeliveryAdapter bounds it")
+        switch result {
+        case .success:
+            break // the fake CLI wakes up and completes normally; no timeout fired because none exists
+        case .failure(let error):
+            XCTFail("expected the hang to resolve into a normal success once the fake CLI woke up, got \(error)")
+        }
+    }
 }
