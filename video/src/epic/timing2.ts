@@ -147,15 +147,17 @@ export const outro = (() => {
 })();
 
 export type SceneSpec = { key: string; lenSec: number };
+// Personalities ("it talks your way") runs BEFORE the conversational block
+// (live + two-way), per direction: establish how it speaks, then talk to it.
 export const SCENES2: SceneSpec[] = [
   { key: "hook", lenSec: hook.len },
   { key: "title", lenSec: title.len },
   { key: "pin", lenSec: pin.len },
   { key: "inbox", lenSec: inbox.len },
   { key: "ambient", lenSec: ambient.len },
+  { key: "personalities", lenSec: personalities.len },
   { key: "live", lenSec: live.len },
   { key: "twoway", lenSec: twoway.len },
-  { key: "personalities", lenSec: personalities.len },
   { key: "brain", lenSec: brain.len },
   { key: "outro", lenSec: outro.len },
 ];

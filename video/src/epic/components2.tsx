@@ -488,7 +488,7 @@ export const Mark2: React.FC<{
     { x: 164, y: 168, tail: "M178 168 L 172 160 L 186 168 Z", color: "#10A37F" },
   ];
   return (
-    <svg width={size} height={size} viewBox="0 0 240 240" fill="none" style={{ display: "block" }}>
+    <svg width={size} height={size} viewBox="-6 -12 252 252" fill="none" style={{ display: "block" }}>
       {[
         "M92 62 A 40 40 0 0 1 148 62",
         "M76 40 A 66 66 0 0 1 164 40",

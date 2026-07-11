@@ -4,7 +4,7 @@
   "scripts": {
     "studio": "remotion studio",
     "render": "remotion render Tutorial ../dist/attache-tutorial.mp4",
-    "render2": "remotion render Promo2 ../dist/attache-promo-v5.mp4"
+    "render2": "remotion render Promo2 ../dist/attache-promo-v6.mp4"
   },
   "dependencies": {
     "@remotion/cli": "4.0.246",
