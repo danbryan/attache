@@ -18,17 +18,21 @@ struct HistoryOverlay: View {
     @State private var collapsedGroups: Set<String> = []
     @FocusState private var fieldFocused: Bool
 
-    /// Minimal All / Recaps filter over history, keyed on the recap metadata
-    /// marker written by the inbox recap.
+    /// All / Recaps / Sent filter over history. All and Recaps are heard
+    /// history (`VoicemailCard`, keyed on the recap metadata marker written by
+    /// the inbox recap); Sent switches the list to what the user sent to an
+    /// agent (`Instruction`, from `TwoWayCoordinator.log`) instead.
     private enum HistoryKindFilter: String, CaseIterable, Identifiable {
         case all
         case recaps
+        case sent
 
         var id: String { rawValue }
         var title: String {
             switch self {
             case .all: return NSLocalizedString("All", comment: "")
             case .recaps: return NSLocalizedString("Recaps", comment: "")
+            case .sent: return NSLocalizedString("Sent", comment: "")
             }
         }
     }
@@ -77,12 +81,45 @@ struct HistoryOverlay: View {
             }
     }
 
+    /// Sent tab: what the user sent to an agent, from `TwoWayCoordinator.log`
+    /// (INF-264), searched and scoped the same way heard history is.
+    private var visibleInstructions: [Instruction] {
+        let raw = model.sentInstructions(for: scope)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return raw }
+        return raw.filter { searchableText(for: $0).localizedCaseInsensitiveContains(needle) }
+    }
+
+    private struct InstructionGroup: Identifiable {
+        let id: String
+        let title: String
+        let instructions: [Instruction]
+    }
+
+    private var instructionGroups: [InstructionGroup] {
+        let bySession = Dictionary(grouping: visibleInstructions, by: \.sessionID)
+        return bySession
+            .map { sessionID, instructions in
+                InstructionGroup(
+                    id: sessionID,
+                    title: instructionGroupTitle(sessionID: sessionID, instructions: instructions),
+                    instructions: instructions.sorted { $0.createdAt > $1.createdAt }
+                )
+            }
+            .sorted { lhs, rhs in
+                let lhsFocused = lhs.id == model.attachedCodexSessionID
+                let rhsFocused = rhs.id == model.attachedCodexSessionID
+                if lhsFocused != rhsFocused { return lhsFocused }
+                return mostRecentInstruction(lhs.instructions) > mostRecentInstruction(rhs.instructions)
+            }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "clock.arrow.circlepath").foregroundStyle(model.theme.signatureColor)
                 Text("History").typoSection()
-                Text("recaps & replies")
+                Text(kindFilter == .sent ? "sent to agents" : "recaps & replies")
                     .typoCaption(.medium, design: .monospaced)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -114,9 +151,9 @@ struct HistoryOverlay: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
-                .help("Show all history or recaps only")
+                .help("Show all history, recaps only, or what you sent to agents")
                 .accessibilityLabel("Filter history by kind")
-                Text("\(visibleCards.count)")
+                Text("\(kindFilter == .sent ? visibleInstructions.count : visibleCards.count)")
                     .typoCaption(.medium, monoDigit: true)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -127,15 +164,29 @@ struct HistoryOverlay: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if visibleCards.isEmpty {
-                        Text(emptyStateText)
-                            .typoBody().foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-                    }
-                    ForEach(groups) { group in
-                        groupHeader(group)
-                        if !collapsedGroups.contains(group.id) {
-                            ForEach(group.cards) { card in row(card) }
+                    if kindFilter == .sent {
+                        if visibleInstructions.isEmpty {
+                            Text(emptyStateText)
+                                .typoBody().foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                        }
+                        ForEach(instructionGroups) { group in
+                            instructionGroupHeader(group)
+                            if !collapsedGroups.contains(group.id) {
+                                ForEach(group.instructions) { instruction in instructionRow(instruction) }
+                            }
+                        }
+                    } else {
+                        if visibleCards.isEmpty {
+                            Text(emptyStateText)
+                                .typoBody().foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                        }
+                        ForEach(groups) { group in
+                            groupHeader(group)
+                            if !collapsedGroups.contains(group.id) {
+                                ForEach(group.cards) { card in row(card) }
+                            }
                         }
                     }
                 }
@@ -144,7 +195,7 @@ struct HistoryOverlay: View {
             .frame(maxHeight: 380)
 
             Divider()
-            Text("↑↓ move · ⏎ play · esc close")
+            Text(kindFilter == .sent ? "↑↓ move · ⏎ open reply · esc close" : "↑↓ move · ⏎ play · esc close")
                 .typoCaption(.medium)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
@@ -166,10 +217,33 @@ struct HistoryOverlay: View {
             // key; assigning in the same pass silently loses focus.
             DispatchQueue.main.async { fieldFocused = true }
         }
+        .onChange(of: kindFilter) { _ in
+            // Selection/hover IDs belong to whichever list was on screen;
+            // switching tabs would otherwise leave a stale highlight (or none)
+            // pointing at an id from the other list.
+            selectedID = nil
+            hoveredID = nil
+        }
     }
 
     private var emptyStateText: String {
-        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kindFilter == .sent {
+            if !needle.isEmpty { return "No sent messages match." }
+            switch scope {
+            case .focused:
+                return model.attachedCodexSessionID == nil
+                    ? "No focused session. Press ⌘K to focus a session."
+                    : "Nothing sent to the focused session yet."
+            case .watched:
+                return model.attachedTargets.isEmpty
+                    ? "No watched sessions. Press ⌘K and pin a session to watch it."
+                    : "Nothing sent to watched sessions yet."
+            case .all:
+                return "Nothing sent to an agent yet."
+            }
+        }
+        if !needle.isEmpty {
             return "No history matches."
         }
         switch scope {
@@ -263,13 +337,164 @@ struct HistoryOverlay: View {
         .accessibilityAction { play(card) }
     }
 
+    private func instructionGroupHeader(_ group: InstructionGroup) -> some View {
+        let collapsed = collapsedGroups.contains(group.id)
+        return HStack(spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.14)) {
+                    if collapsed { collapsedGroups.remove(group.id) } else { collapsedGroups.insert(group.id) }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .typoIcon(size: 8, .bold)
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 10)
+                    Text("\(group.title.uppercased())  (\(group.instructions.count))")
+                        .typoCaption(.bold)
+                        .lineLimit(1)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(collapsed ? "Expand this group" : "Collapse this group")
+            .accessibilityLabel("\(group.title), \(group.instructions.count) sent, \(collapsed ? "collapsed" : "expanded")")
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12).padding(.top, 9).padding(.bottom, 1)
+    }
+
+    private func instructionRowTitle(_ instruction: Instruction) -> some View {
+        HStack(spacing: 7) {
+            Text(instruction.text)
+                .typoBody(.semibold)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            SourceBadge(sourceKind: instruction.sourceKind, displayName: instruction.targetDisplayName ?? instruction.sourceKind)
+        }
+    }
+
+    private func instructionRowSubtitle(_ instruction: Instruction) -> some View {
+        let subtitleStyle = instruction.state == .failed ? AnyShapeStyle(Color.red) : AnyShapeStyle(.tertiary)
+        return HStack(spacing: 5) {
+            Text(Self.relativeFormatter.localizedString(for: instruction.createdAt, relativeTo: Date()))
+            Text("·")
+            Text(statusLabel(for: instruction))
+        }
+        .typoCaption()
+        .foregroundStyle(subtitleStyle)
+    }
+
+    private func instructionRow(_ instruction: Instruction) -> some View {
+        let active = hoveredID == instruction.id || selectedID == instruction.id
+        let hasReply = instruction.resultingCardID != nil
+        let leadingIcon = Image(systemName: statusIcon(for: instruction))
+            .typoIcon(size: 12, .semibold)
+            .foregroundStyle(statusColor(for: instruction, active: active))
+            .frame(width: 18)
+        let trailingIcon: AnyView = hasReply
+            ? AnyView(
+                Image(systemName: "play.circle.fill").typoIcon(size: 16)
+                    .foregroundStyle(active ? model.theme.signatureColor : Color.secondary.opacity(0.6))
+              )
+            : AnyView(EmptyView())
+        let rowContent = HStack(spacing: 10) {
+            leadingIcon
+            VStack(alignment: .leading, spacing: 3) {
+                instructionRowTitle(instruction)
+                instructionRowSubtitle(instruction)
+            }
+            Spacer(minLength: 0)
+            trailingIcon
+        }
+        return rowContent
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(active ? model.theme.signatureColor.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                if hovering { hoveredID = instruction.id } else if hoveredID == instruction.id { hoveredID = nil }
+            }
+            .onTapGesture { openReply(instruction) }
+            .help(instruction.state == .failed ? (instruction.error ?? "") : "")
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(instruction.text), \(statusLabel(for: instruction))")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { openReply(instruction) }
+    }
+
+    private func statusIcon(for instruction: Instruction) -> String {
+        switch instruction.state {
+        case .pending, .confirmed: return "clock"
+        case .delivering: return "arrow.triangle.2.circlepath"
+        case .delivered: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.circle.fill"
+        case .canceled: return "xmark.circle"
+        }
+    }
+
+    private func statusLabel(for instruction: Instruction) -> String {
+        switch instruction.state {
+        case .pending: return "Pending"
+        case .confirmed: return "Confirmed"
+        case .delivering: return "Delivering…"
+        case .delivered: return "Delivered"
+        case .failed: return "Failed"
+        case .canceled: return "Canceled"
+        }
+    }
+
+    private func statusColor(for instruction: Instruction, active: Bool) -> Color {
+        switch instruction.state {
+        case .delivered: return .green
+        case .failed: return .red
+        default: return active ? model.theme.signatureColor : Color.secondary.opacity(0.7)
+        }
+    }
+
+    private func searchableText(for instruction: Instruction) -> String {
+        [
+            instruction.text,
+            instruction.sourceUtterance,
+            instruction.targetDisplayName,
+            instruction.deliveryReplyText
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
+    }
+
+    private func instructionGroupTitle(sessionID: String, instructions: [Instruction]) -> String {
+        if let session = model.sessionRecords.first(where: { $0.id == sessionID }) {
+            return model.displaySessionTitle(session)
+        }
+        return instructions.first?.targetDisplayName ?? "General"
+    }
+
+    private func mostRecentInstruction(_ instructions: [Instruction]) -> Date {
+        instructions.map(\.createdAt).max() ?? .distantPast
+    }
+
     /// Cards in display order, skipping collapsed groups, so arrow keys never
     /// select something that is not on screen.
     private var navigableCards: [VoicemailCard] {
         groups.filter { !collapsedGroups.contains($0.id) }.flatMap(\.cards)
     }
 
+    private var navigableInstructions: [Instruction] {
+        instructionGroups.filter { !collapsedGroups.contains($0.id) }.flatMap(\.instructions)
+    }
+
     private func moveSelection(_ delta: Int) {
+        if kindFilter == .sent {
+            let list = navigableInstructions
+            guard !list.isEmpty else { return }
+            guard let current = selectedID, let index = list.firstIndex(where: { $0.id == current }) else {
+                selectedID = delta >= 0 ? list.first?.id : list.last?.id
+                return
+            }
+            selectedID = list[min(max(index + delta, 0), list.count - 1)].id
+            return
+        }
         let list = navigableCards
         guard !list.isEmpty else { return }
         guard let current = selectedID, let index = list.firstIndex(where: { $0.id == current }) else {
@@ -280,6 +505,12 @@ struct HistoryOverlay: View {
     }
 
     private func playSelection() {
+        if kindFilter == .sent {
+            let list = navigableInstructions
+            guard let instruction = list.first(where: { $0.id == selectedID }) ?? list.first else { return }
+            openReply(instruction)
+            return
+        }
         let list = navigableCards
         guard let card = list.first(where: { $0.id == selectedID }) ?? list.first else { return }
         play(card)
@@ -288,6 +519,15 @@ struct HistoryOverlay: View {
     private func play(_ card: VoicemailCard) {
         model.playHistoryCard(card)
         isVisible = false
+    }
+
+    /// Sent rows have nothing to "play" directly; Enter/click only does
+    /// something once the agent has actually replied and correlation
+    /// (`TwoWayCoordinator.linkResponseCard`) has attached that reply's card.
+    private func openReply(_ instruction: Instruction) {
+        guard let cardID = instruction.resultingCardID,
+              let card = model.cards.first(where: { $0.id == cardID }) else { return }
+        play(card)
     }
 
     private func searchableText(for card: VoicemailCard) -> String {

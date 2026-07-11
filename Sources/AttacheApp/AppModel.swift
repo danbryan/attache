@@ -1564,6 +1564,29 @@ final class AppModel: ObservableObject {
         historyCards(for: scope).count
     }
 
+    /// Everything sent to an agent, newest first, for the History palette's
+    /// Sent tab. Backed by `TwoWayCoordinator.log`, which already mirrors
+    /// `InstructionReplyEngine`'s persisted audit log after every state
+    /// transition, so no separate storage or refresh path is needed here.
+    func sentInstructions(for scope: CompanionHistoryScope) -> [Instruction] {
+        let all = twoWay.log
+        switch scope {
+        case .focused:
+            guard let attachedCodexSessionID else { return [] }
+            return all.filter { $0.sessionID == attachedCodexSessionID }
+        case .watched:
+            let watchedIDs = Set(attachedTargets.keys)
+            guard !watchedIDs.isEmpty else { return [] }
+            return all.filter { watchedIDs.contains($0.sessionID) }
+        case .all:
+            return all
+        }
+    }
+
+    func sentInstructionsCount(for scope: CompanionHistoryScope) -> Int {
+        sentInstructions(for: scope).count
+    }
+
     /// Escape dismisses live playback immediately instead of waiting for the
     /// audio to finish (v0.1.2 behavior).
     func dismissCurrentPlayback() -> Bool {

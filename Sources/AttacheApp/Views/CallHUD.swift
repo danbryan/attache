@@ -223,7 +223,11 @@ extension CompanionRootView {
 
     // Whether the phase-driven status row (INF-244) should render at all.
     // `.idle` is the only phase with nothing to report; every other phase
-    // renders a distinct row via `CallStatusPresentation`.
+    // renders a distinct row via `CallStatusPresentation`, except
+    // `.sendDelivered` once its emphasis window passes with no reply yet
+    // (INF-264): the row itself returns nil then, and the `if let` above
+    // simply renders nothing, so the composer quietly loses that row's
+    // height rather than showing a stale status.
     var callProgressVisible: Bool {
         model.callPhase != .idle
     }

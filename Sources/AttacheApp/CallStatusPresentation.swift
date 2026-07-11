@@ -21,8 +21,10 @@ enum CallStatusPresentation {
     static let preparingAudioText = "Preparing audio…"
 
     /// How long a fresh `.sendDelivered` keeps its "just happened" emphasis
-    /// (checkmark, brighter styling) before quietly reverting to a neutral
-    /// look. The status text itself is never erased, only the emphasis.
+    /// (checkmark, brighter styling) before the row disappears entirely
+    /// (INF-264): it's a "just happened" nudge, not an ongoing status, so
+    /// once this window passes with no reply yet, `status(for:...)` returns
+    /// nil rather than leaving it lingering in the theme's accent color.
     static let deliveredEmphasisWindow: TimeInterval = 6
 
     enum Icon: Equatable {
@@ -36,6 +38,8 @@ enum CallStatusPresentation {
         let isError: Bool
         /// True only for a `.sendDelivered` still inside
         /// `deliveredEmphasisWindow` of the moment it was first observed.
+        /// Since `status(for:...)` returns nil once that window passes
+        /// (INF-264), any non-nil `.sendDelivered` status has this set.
         let isFreshDelivery: Bool
     }
 
@@ -84,12 +88,22 @@ enum CallStatusPresentation {
             return Status(text: withElapsed(base, since: since, now: now), icon: .spinner, isError: false, isFreshDelivery: false)
 
         case .sendDelivered(let target):
-            let isFresh = deliveredAt.map { now.timeIntervalSince($0) < deliveredEmphasisWindow } ?? false
+            // INF-264: the confirmation is a "just happened" nudge, not an
+            // ongoing status - once the emphasis window passes with no proof
+            // otherwise, the row disappears entirely rather than lingering in
+            // the theme's accent color. A nil `deliveredAt` (no timing info)
+            // is treated as recent rather than hidden, since real callers
+            // always supply it the instant the phase becomes `.sendDelivered`
+            // (see `CallHUD.swift`'s `callSendDeliveredAt` tracking); this
+            // guard only fires once we have positive proof the window passed.
+            if let deliveredAt, now.timeIntervalSince(deliveredAt) >= deliveredEmphasisWindow {
+                return nil
+            }
             return Status(
                 text: "Sent to \(target) · watching for the reply",
                 icon: .symbol("checkmark.circle.fill"),
                 isError: false,
-                isFreshDelivery: isFresh
+                isFreshDelivery: true
             )
 
         case .failed(let category, let message):

@@ -123,19 +123,26 @@ final class CallStatusPresentationTests: XCTestCase {
         XCTAssertTrue(status?.isFreshDelivery ?? false)
     }
 
-    func testSendDeliveredLosesEmphasisAfterTheWindowButKeepsItsText() {
+    // INF-264: the confirmation is a "just happened" nudge, not an ongoing
+    // status, so once the emphasis window passes with no reply yet, the row
+    // disappears entirely instead of lingering in the theme's accent color.
+    func testSendDeliveredDisappearsAfterTheEmphasisWindow() {
         let status = CallStatusPresentation.status(
             for: .sendDelivered(target: "Codex"),
             now: referenceDate.addingTimeInterval(7),
             deliveredAt: referenceDate
         )
-        XCTAssertFalse(status?.isFreshDelivery ?? true)
-        XCTAssertEqual(status?.text, "Sent to Codex · watching for the reply")
+        XCTAssertNil(status)
     }
 
-    func testSendDeliveredWithNoDeliveredAtIsNeverFresh() {
+    func testSendDeliveredWithNoDeliveredAtIsTreatedAsRecentNotHidden() {
+        // Real callers always supply deliveredAt the instant the phase becomes
+        // .sendDelivered (CallHUD.swift's callSendDeliveredAt tracking); a nil
+        // value only means "no timing proof yet", not "definitely stale", so
+        // this must still render rather than silently vanish.
         let status = CallStatusPresentation.status(for: .sendDelivered(target: "Codex"), now: referenceDate, deliveredAt: nil)
-        XCTAssertFalse(status?.isFreshDelivery ?? true)
+        XCTAssertNotNil(status)
+        XCTAssertTrue(status?.isFreshDelivery ?? false)
     }
 
     // MARK: - failed (category drives styling, never string matching)
