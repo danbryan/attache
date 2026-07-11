@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- relay, upright: the hub speaks above its head, agents at hand and foot -->
+  <path d="M92 62 A 40 40 0 0 1 148 62" stroke="#0A84FF" stroke-width="9" stroke-linecap="round"/>
+  <path d="M76 40 A 66 66 0 0 1 164 40" stroke="#0A84FF" stroke-width="9" stroke-linecap="round" opacity="0.62"/>
+  <path d="M62 19 A 90 90 0 0 1 178 19" stroke="#0A84FF" stroke-width="9" stroke-linecap="round" opacity="0.3"/>
+  <circle cx="120" cy="112" r="26" fill="#F2F2F5"/>
+  <path d="M104 132 C 88 146, 76 154, 64 166" stroke="#F2F2F5" stroke-width="7" stroke-linecap="round"/>
+  <path d="M120 138 L 120 182" stroke="#F2F2F5" stroke-width="7" stroke-linecap="round"/>
+  <path d="M136 132 C 152 146, 164 154, 176 166" stroke="#F2F2F5" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="56" cy="176" r="11" fill="#F2F2F5"/>
+  <circle cx="120" cy="196" r="11" fill="#F2F2F5"/>
+  <circle cx="184" cy="176" r="11" fill="#F2F2F5"/>
+</svg>
