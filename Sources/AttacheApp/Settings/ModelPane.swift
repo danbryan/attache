@@ -75,6 +75,9 @@ struct ModelPane: View {
             Label("Personality summaries can be turned on or off in Personalities. Add or change provider keys and endpoints in Integrations.", systemImage: "link")
                 .font(.caption).foregroundStyle(.secondary)
 
+            fallbackChainSection
+                .disabled(!model.presentationLLMEnabled)
+
             advancedPerRoleSection
                 .disabled(!model.presentationLLMEnabled)
         }
@@ -99,6 +102,84 @@ struct ModelPane: View {
                 }
             )
         }
+    }
+
+    // MARK: Opt-in auto-fallback chain (INF-258/D5), conversation role only
+    //
+    // Lives next to the main Provider/Model row above, since that row is what
+    // the conversation role actually uses when it has no per-role override
+    // (see the Advanced section's "Use main model" default). Adding a
+    // provider here does not itself need consent or credentials up front:
+    // each candidate is only checked for configuration and consent at the
+    // moment a fallback would actually trigger, and an unconfigured or
+    // unconsented entry is simply skipped in favor of the next one.
+
+    private var fallbackChainSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Automatically fall back when the model is unavailable", isOn: $model.conversationFallbackChainEnabled)
+                .toggleStyle(.switch)
+            Text("When the live call's model hits a usage limit, an outage, or becomes unavailable, Attaché tries the next provider below, in order, skipping any that aren't configured or consented. It announces the switch once and keeps using it for the rest of the call; the next call starts back on the main model above.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            if model.conversationFallbackChainEnabled {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(model.conversationFallbackChain.enumerated()), id: \.element) { index, provider in
+                        HStack(spacing: 8) {
+                            Text("\(index + 1). \(provider.title)")
+                                .typoBody()
+                            Spacer(minLength: 8)
+                            Button {
+                                model.moveConversationFallbackChainProvider(at: index, up: true)
+                            } label: {
+                                Image(systemName: "chevron.up")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(index == 0)
+                            .accessibilityLabel("Move \(provider.title) earlier in the fallback order")
+
+                            Button {
+                                model.moveConversationFallbackChainProvider(at: index, up: false)
+                            } label: {
+                                Image(systemName: "chevron.down")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(index == model.conversationFallbackChain.count - 1)
+                            .accessibilityLabel("Move \(provider.title) later in the fallback order")
+
+                            Button {
+                                model.removeConversationFallbackChainProvider(provider)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Remove \(provider.title) from the fallback order")
+                        }
+                    }
+                    if model.conversationFallbackChain.isEmpty {
+                        Text("No fallback providers yet. Add one below.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !fallbackChainAddableProviders.isEmpty {
+                        Menu {
+                            ForEach(fallbackChainAddableProviders) { provider in
+                                Button(provider.title) { model.addConversationFallbackChainProvider(provider) }
+                            }
+                        } label: {
+                            Label("Add fallback provider", systemImage: "plus.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .accessibilityLabel("Add fallback provider")
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private var fallbackChainAddableProviders: [CompanionPresentationProvider] {
+        CompanionPresentationProvider.allCases.filter { !model.conversationFallbackChain.contains($0) }
     }
 
     // MARK: Advanced: per-task models (INF-253/D3)

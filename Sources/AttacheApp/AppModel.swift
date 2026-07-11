@@ -200,6 +200,42 @@ final class AppModel: ObservableObject {
     /// bug-report UI to it is out of scope here.
     @Published private(set) var taggingFailureCount: Int = 0
 
+    // MARK: - Opt-in auto-fallback chain (INF-258/D5)
+    //
+    // Conversation role only (spec scope). Settings state below is persisted;
+    // `conversationFallbackState` is call-scoped and deliberately NOT
+    // persisted, reset at the start of every call (`startConversation()`) so
+    // the primary provider is retried automatically on the next call, never
+    // mid-call. See `ConversationFallbackChain.swift` for the pure
+    // advance/sticky rules this only ever calls into.
+    @Published var conversationFallbackChainEnabled: Bool = false {
+        didSet {
+            defaults.set(conversationFallbackChainEnabled, forKey: CompanionPreferenceKey.conversationFallbackChainEnabled)
+        }
+    }
+    @Published var conversationFallbackChain: [CompanionPresentationProvider] = [] {
+        didSet {
+            defaults.set(
+                conversationFallbackChain.map(\.rawValue),
+                forKey: CompanionPreferenceKey.conversationFallbackChainProviders
+            )
+        }
+    }
+    private var conversationFallbackState = ConversationFallbackState()
+    private var conversationFallbackRetryTimer: Timer?
+    /// Every fallback hop this launch, for a future diagnostics snapshot
+    /// (`DiagnosticSnapshot.conversationFallbackCount`); mirrors
+    /// `taggingFailureCount`'s in-memory-only counter above (spec item 6).
+    @Published private(set) var conversationFallbackHopCount: Int = 0
+    /// The live-call phase (`CallPhase.fallbackAnnounced`) needs its own
+    /// signal distinct from `conversationStatus`: `CallStatusPresentation`
+    /// derives on-call status text entirely from `callPhase`, which does not
+    /// read `conversationStatus` for most phases (`.thinking`/`.speaking` use
+    /// fixed text), so the announcement would otherwise never actually be
+    /// visible in the call composer. Set for the announcement's rough
+    /// duration, cleared the moment the delayed retry actually starts.
+    @Published private(set) var conversationFallbackAnnouncement: String?
+
     @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -1847,6 +1883,10 @@ final class AppModel: ObservableObject {
         if !wasActive {
             conversationDestination = .attache
             conversationTargetSnapshot = captureConversationTargetSnapshot()
+            // The auto-fallback chain is sticky for a call, never across
+            // calls (INF-258/D5 spec item 3): a fresh call always starts back
+            // on the primary/configured provider.
+            conversationFallbackState.reset()
         }
         conversationActive = true
         if conversationStatus.isEmpty {
@@ -1863,6 +1903,9 @@ final class AppModel: ObservableObject {
         conversationActive = false
         silenceTimer?.invalidate(); silenceTimer = nil
         endConversationWait()
+        conversationFallbackRetryTimer?.invalidate()
+        conversationFallbackRetryTimer = nil
+        conversationFallbackAnnouncement = nil
         micTranscript.stop(status: "")
         // Hanging up silences live narration immediately: stop what's speaking and
         // drop the queued backlog so it doesn't keep talking. The rest stays in the
@@ -1958,6 +2001,9 @@ final class AppModel: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAwaitingReply else { return }
 
+        conversationFallbackRetryTimer?.invalidate()
+        conversationFallbackRetryTimer = nil
+        conversationFallbackAnnouncement = nil
         removeFailedTurnsBeforeRetry()
         conversationRecovery = nil
         conversationRecoveryConfirmation = nil
@@ -1981,17 +2027,34 @@ final class AppModel: ObservableObject {
 
         isConversing = true
         beginConversationWait()
+        performConversationRequest(trimmed)
+    }
 
+    /// Sends `trimmed` to the personality and handles the result. Split out
+    /// of `sendConversationMessage` (INF-258/D5) so the opt-in auto-fallback
+    /// chain can transparently retry the identical prompt against the next
+    /// provider without re-appending a duplicate user turn to the transcript.
+    /// `sendConversationMessage` calls this once after appending the user's
+    /// turn; `announceConversationFallback` below calls it again, with the
+    /// same `trimmed` text, once a fallback provider has been chosen.
+    private func performConversationRequest(_ trimmed: String) {
         let context = conversationTargetSnapshot
         let messages = buildConversationMessages(context: context)
         let sessionID = context?.target.id
         let workingDirectory = context?.workingDirectory
         let agentTarget = context?.agentSendTarget
         let allowAgentInstructionTool = agentTarget != nil
+        // Sticky for the rest of the call (INF-258/D5): once a fallback is
+        // active, every subsequent turn in this call keeps using it, not just
+        // the one retry that triggered it.
+        let fallbackProvider = conversationFallbackState.activeProvider
+        let attemptedProvider = fallbackProvider ?? effectiveRecoveryProvider(for: .conversation)
+        let settingsOverride = fallbackProvider.map(conversationFallbackSettings(for:))
 
         presentationService.converse(
             messages: messages,
             allowAgentInstructionTool: allowAgentInstructionTool,
+            settingsOverride: settingsOverride,
             executeTool: { [weak self] name, arguments in
                 if name == "rename_session" {
                     return await self?.applyRenameTool(arguments: arguments, sessionID: sessionID)
@@ -2020,32 +2083,129 @@ final class AppModel: ObservableObject {
                 case .success(let reply):
                     self.surfaceConversationReply(reply.text, toolCallLost: reply.toolCallLost)
                 case .failure(let error):
-                    let errorMessage = error.localizedDescription
-                    let message = "I hit a problem: \(errorMessage)"
-                    let presentationError = error as? CompanionPresentationError
-                    let httpStatus = presentationError?.httpStatus
-                    let urlErrorCode = presentationError?.urlErrorCode ?? (error as? URLError)?.code
-                    let recovery = ConversationRecovery.classify(
-                        errorMessage: errorMessage,
-                        failedPrompt: trimmed,
-                        httpStatus: httpStatus,
-                        urlErrorCode: urlErrorCode,
-                        isCLIProvider: self.presentationProvider.isCLI
-                    )
-                    self.conversationRecovery = recovery
-                    self.conversationStatus = errorMessage
-                    self.appendConversationTurn(role: .assistant, text: message)
-                    if recovery.offersModelSwitch {
-                        // Preserve the user's exact words. Switching only changes
-                        // the selected brain; retry remains an explicit action.
-                        self.conversationDraft = trimmed
-                        self.loadPresentationModels(preserveCurrentSelection: true)
-                    } else {
-                        self.maybeResumeContinuousListening()
-                    }
+                    self.handleConversationFailure(error, failedPrompt: trimmed, attemptedProvider: attemptedProvider)
                 }
             }
         )
+    }
+
+    /// Classifies a failed conversation attempt and either (a) transparently
+    /// retries on the next configured-and-consented fallback provider
+    /// (INF-258/D5, only while the toggle is on and no fallback is active yet
+    /// this call), or (b) falls through to the existing manual Switch model /
+    /// Retry recovery, unchanged from before this feature existed.
+    private func handleConversationFailure(
+        _ error: Error,
+        failedPrompt: String,
+        attemptedProvider: CompanionPresentationProvider
+    ) {
+        let errorMessage = error.localizedDescription
+        let presentationError = error as? CompanionPresentationError
+        let httpStatus = presentationError?.httpStatus
+        let urlErrorCode = presentationError?.urlErrorCode ?? (error as? URLError)?.code
+        let recovery = ConversationRecovery.classify(
+            errorMessage: errorMessage,
+            failedPrompt: failedPrompt,
+            httpStatus: httpStatus,
+            urlErrorCode: urlErrorCode,
+            isCLIProvider: attemptedProvider.isCLI
+        )
+
+        if let fallback = conversationFallbackState.advance(
+            enabled: conversationFallbackChainEnabled,
+            category: recovery.category,
+            chain: conversationFallbackChain,
+            failedProvider: attemptedProvider,
+            isConfigured: { [weak self] provider in self?.connectedTextProviders.contains(provider) ?? false },
+            isConsented: { [weak self] provider in
+                guard let self else { return false }
+                return !self.presentationProviderSendsToCloud(provider) || self.cloudConsentAcknowledged(for: provider)
+            }
+        ) {
+            announceConversationFallback(
+                category: recovery.category,
+                from: attemptedProvider,
+                to: fallback,
+                retryPrompt: failedPrompt
+            )
+            return
+        }
+
+        let message = "I hit a problem: \(errorMessage)"
+        conversationRecovery = recovery
+        conversationStatus = errorMessage
+        appendConversationTurn(role: .assistant, text: message)
+        if recovery.offersModelSwitch {
+            // Preserve the user's exact words. Switching only changes
+            // the selected brain; retry remains an explicit action.
+            conversationDraft = failedPrompt
+            loadPresentationModels(preserveCurrentSelection: true)
+        } else {
+            maybeResumeContinuousListening()
+        }
+    }
+
+    /// Surfaces the fallback hop in the status line and as one spoken
+    /// sentence (spec item 3), then retries `retryPrompt` against `fallback`
+    /// once the announcement has had roughly enough time to play, so the
+    /// retry's own reply audio doesn't immediately cut it off.
+    private func announceConversationFallback(
+        category: ConversationFailureCategory,
+        from failedProvider: CompanionPresentationProvider,
+        to fallback: CompanionPresentationProvider,
+        retryPrompt: String
+    ) {
+        let announcement = ConversationFallbackChain.announcement(
+            category: category,
+            failedProviderTitle: failedProvider.title,
+            fallbackProviderTitle: fallback.title
+        )
+        conversationFallbackHopCount += 1
+        conversationStatus = announcement
+        conversationFallbackAnnouncement = announcement
+        playback.preview(announcement)
+
+        let delaySeconds = Double(CaptionAlignmentBuilder.estimatedDurationMs(for: announcement)) / 1000.0 + 0.2
+        conversationFallbackRetryTimer?.invalidate()
+        conversationFallbackRetryTimer = Timer.scheduledTimer(withTimeInterval: delaySeconds, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.conversationFallbackRetryTimer = nil
+            self.conversationFallbackAnnouncement = nil
+            self.isConversing = true
+            self.beginConversationWait()
+            self.performConversationRequest(retryPrompt)
+        }
+    }
+
+    /// Builds full call settings for `provider` directly (INF-258/D5),
+    /// bypassing every per-role persisted override: the auto-fallback chain
+    /// must not touch Settings, only this call. Reuses the exact helpers
+    /// Settings itself uses to resolve a provider's endpoint and credentials.
+    private func conversationFallbackSettings(for provider: CompanionPresentationProvider) -> CompanionPresentationSettings {
+        CompanionPresentationSettings.forFallback(
+            provider: provider,
+            baseURLText: endpointForIntegration(provider),
+            apiKey: readConfiguredSecret(account: provider.developmentSecretAccount) ?? "",
+            profilePrompt: defaults.string(forKey: CompanionPreferenceKey.personalityPrompt) ?? ""
+        )
+    }
+
+    // MARK: Fallback chain settings (Model pane, INF-258/D5)
+
+    func addConversationFallbackChainProvider(_ provider: CompanionPresentationProvider) {
+        guard !conversationFallbackChain.contains(provider) else { return }
+        conversationFallbackChain.append(provider)
+    }
+
+    func removeConversationFallbackChainProvider(_ provider: CompanionPresentationProvider) {
+        conversationFallbackChain.removeAll { $0 == provider }
+    }
+
+    func moveConversationFallbackChainProvider(at index: Int, up: Bool) {
+        let targetIndex = up ? index - 1 : index + 1
+        guard conversationFallbackChain.indices.contains(index),
+              conversationFallbackChain.indices.contains(targetIndex) else { return }
+        conversationFallbackChain.swapAt(index, targetIndex)
     }
 
     var conversationRecoveryProviders: [CompanionPresentationProvider] {
@@ -2073,6 +2233,11 @@ final class AppModel: ObservableObject {
     }
 
     func selectConversationRecoveryModel(_ option: CompanionPresentationModelOption) {
+        // An explicit manual choice always wins over the sticky auto-fallback
+        // (INF-258/D5): the user is picking a specific brain, so the rest of
+        // this call should use exactly that, not silently keep redirecting to
+        // whatever the chain had already switched to.
+        conversationFallbackState.reset()
         isApplyingConversationRecoveryOverride = true
         selectPresentationModel(option)
         isApplyingConversationRecoveryOverride = false
@@ -2083,6 +2248,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
+        conversationFallbackState.reset()
         isApplyingConversationRecoveryOverride = true
         selectPresentationProvider(provider)
         selectPresentationModelID(provider.defaultModel)
@@ -2962,6 +3128,7 @@ final class AppModel: ObservableObject {
             micTranscript.$isPreparing.map { _ in () }.eraseToAnyPublisher(),
             $isConversing.map { _ in () }.eraseToAnyPublisher(),
             $conversationRecovery.map { _ in () }.eraseToAnyPublisher(),
+            $conversationFallbackAnnouncement.map { _ in () }.eraseToAnyPublisher(),
             $pendingAssistantReply.map { _ in () }.eraseToAnyPublisher(),
             $expectingReplyAudio.map { _ in () }.eraseToAnyPublisher(),
             $voiceInputMode.map { _ in () }.eraseToAnyPublisher(),
@@ -3003,7 +3170,8 @@ final class AppModel: ObservableObject {
             expectingReplyAudio: expectingReplyAudio,
             pendingAssistantReply: pendingAssistantReply,
             pendingSend: pendingSend,
-            failure: failure
+            failure: failure,
+            fallbackAnnouncement: conversationFallbackAnnouncement
         )
     }
 
@@ -5083,6 +5251,11 @@ final class AppModel: ObservableObject {
         presentationAPIKeySecretRef = presentationSettings.apiKeySecretRef
         applyFallbackCapabilitiesForCurrentModel()
         loadRoleModelOverrides()
+        if defaults.object(forKey: CompanionPreferenceKey.conversationFallbackChainEnabled) != nil {
+            conversationFallbackChainEnabled = defaults.bool(forKey: CompanionPreferenceKey.conversationFallbackChainEnabled)
+        }
+        conversationFallbackChain = ((defaults.array(forKey: CompanionPreferenceKey.conversationFallbackChainProviders) as? [String]) ?? [])
+            .compactMap(CompanionPresentationProvider.init(rawValue:))
         // Needs presentationProvider loaded above (it credits whatever
         // provider was configured at migration time); pure defaults
         // read/write, so unlike migrateLegacyPresentationKeys it's safe

@@ -191,12 +191,44 @@ final class CompanionPresentationService {
     /// Multi-turn voice conversation with the personality. Sends the full message
     /// history plus the session-reading tools, runs the tool-call loop (executing
     /// each requested tool via `executeTool`), and returns the final spoken reply.
+    /// - Parameter settingsOverride: when non-nil, used verbatim instead of
+    ///   loading `.conversation` role settings from defaults (INF-258/D5):
+    ///   the opt-in auto-fallback chain hands this call a specific provider
+    ///   already resolved by `AppModel` (`CompanionPresentationSettings.forFallback`),
+    ///   for just this call, without touching any persisted per-role default.
+    ///   `nil` (the default) is byte-for-byte the original behavior.
     func converse(
         messages: [CompanionChatMessage],
         allowAgentInstructionTool: Bool = false,
+        settingsOverride: CompanionPresentationSettings? = nil,
         executeTool: @escaping (String, String) async -> String,
         completion: @escaping (Result<CompanionConversationReply, Error>) -> Void
     ) {
+        if let settingsOverride {
+            guard settingsOverride.llmEnabled, settingsOverride.hasProviderConfiguration else {
+                completion(.failure(CompanionPresentationError.notConfigured))
+                return
+            }
+            Task {
+                guard settingsOverride.isConfigured else {
+                    await MainActor.run { completion(.failure(CompanionPresentationError.notConfigured)) }
+                    return
+                }
+                do {
+                    let reply = try await Self.runConversation(
+                        messages: messages,
+                        allowAgentInstructionTool: allowAgentInstructionTool,
+                        settings: settingsOverride,
+                        executeTool: executeTool
+                    )
+                    await MainActor.run { completion(.success(reply)) }
+                } catch {
+                    await MainActor.run { completion(.failure(error)) }
+                }
+            }
+            return
+        }
+
         let unresolved = CompanionPresentationSettings.load(
             role: .conversation,
             defaults: defaults,
@@ -1138,6 +1170,36 @@ struct CompanionPresentationSettings: Equatable {
             serviceTier: serviceTier,
             profilePrompt: profilePrompt,
             apiKeyStoredInKeychain: secretAccountFlagged
+        )
+    }
+
+    /// Builds settings for `provider` directly, bypassing every per-role
+    /// persisted override (INF-258/D5): the opt-in auto-fallback chain hands
+    /// the live conversation call a specific provider for just the rest of
+    /// this call, never a Settings change, so it must not read or write any
+    /// `presentationLLM*` default. The caller (`AppModel`) already has
+    /// `baseURLText` (`endpointForIntegration(provider)`) and `apiKey`
+    /// (`readConfiguredSecret(account: provider.developmentSecretAccount)`)
+    /// on hand from the exact same helpers Settings itself uses.
+    static func forFallback(
+        provider: CompanionPresentationProvider,
+        baseURLText: String,
+        apiKey: String,
+        profilePrompt: String
+    ) -> CompanionPresentationSettings {
+        let baseURLText = firstNonEmpty(baseURLText, provider.defaultBaseURL)
+        let baseURL = URL(string: baseURLText) ?? URL(string: CompanionPresentationProvider.ollama.defaultBaseURL)!
+        return CompanionPresentationSettings(
+            llmEnabled: true,
+            provider: provider,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            apiKeySecretRef: "",
+            model: provider.defaultModel,
+            reasoningEffort: provider.supportsReasoningEffort ? provider.defaultReasoningEffort : "none",
+            serviceTier: provider.supportsServiceTier ? provider.defaultServiceTier : nil,
+            profilePrompt: profilePrompt,
+            apiKeyStoredInKeychain: !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
 

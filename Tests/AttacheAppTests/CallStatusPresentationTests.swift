@@ -227,6 +227,18 @@ final class CallStatusPresentationTests: XCTestCase {
         XCTAssertEqual(status?.text, "Thinking…")
     }
 
+    // MARK: - fallbackAnnounced (INF-258/D5)
+
+    func testFallbackAnnouncedShowsTheMessageWithNeutralStyling() {
+        let status = CallStatusPresentation.status(
+            for: .fallbackAnnounced(message: "xAI / Grok hit its usage limit; using Ollama for now."),
+            now: referenceDate
+        )
+        XCTAssertEqual(status?.text, "xAI / Grok hit its usage limit; using Ollama for now.")
+        XCTAssertFalse(status?.isError ?? true, "an auto-fallback hop is not an error the user must act on")
+        XCTAssertFalse(status?.isFreshDelivery ?? true)
+    }
+
     // MARK: - Every phase is visually distinct (success criterion)
 
     func testEveryNonIdlePhaseProducesADistinctStatus() {
@@ -238,7 +250,8 @@ final class CallStatusPresentationTests: XCTestCase {
             .paused,
             .sendQueued(target: "Codex", since: referenceDate, reason: nil),
             .sendDelivered(target: "Codex"),
-            .failed(.other, message: "boom")
+            .failed(.other, message: "boom"),
+            .fallbackAnnounced(message: "Grok hit its usage limit; using Ollama for now.")
         ]
         let rendered = phases.map { CallStatusPresentation.status(for: $0, now: referenceDate) }
         XCTAssertTrue(rendered.allSatisfy { $0 != nil })

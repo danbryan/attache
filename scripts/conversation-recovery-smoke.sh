@@ -10,6 +10,10 @@ BUNDLE_ID="com.bryanlabs.attache"
 TEMP_ROOT=""
 BACKUP_DIR=""
 SERVER_PID=""
+# A second concurrent mock provider, used only by the auto-fallback scenario
+# (INF-258/D5) below, which needs a primary AND a fallback server running at
+# the same time rather than one at a time like the f16/f17 scenarios above.
+SERVER_PID_B=""
 
 fail() {
   echo "error: $*" >&2
@@ -22,6 +26,11 @@ cleanup() {
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
     SERVER_PID=""
+  fi
+  if [[ -n "$SERVER_PID_B" ]]; then
+    kill "$SERVER_PID_B" 2>/dev/null || true
+    wait "$SERVER_PID_B" 2>/dev/null || true
+    SERVER_PID_B=""
   fi
   if [[ -n "$BACKUP_DIR" ]]; then
     scripts/simulate-fresh-user.sh restore "$BACKUP_DIR" >/dev/null || {
@@ -181,3 +190,108 @@ ATTACHE_RECAP_RECOVERY_MODEL="$RECAP_MODEL" \
   scripts/ui-smoke.sh
 
 echo "==> Recap recovery smoke passed"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+scripts/simulate-fresh-user.sh restore "$BACKUP_DIR" >/dev/null || {
+  echo "warning: state restore failed; restore manually with:" >&2
+  echo "  scripts/simulate-fresh-user.sh restore \"$BACKUP_DIR\"" >&2
+}
+BACKUP_DIR=""
+
+# INF-258 (D5): opt-in auto-fallback chain, conversation role only. Two
+# deterministic mock providers run at once (unlike the scenarios above, which
+# only ever need one): a primary that always returns HTTP 429 usage-limit
+# (the same ATTACHE_SMOKE_PROVIDER_ERROR=usage_limit mechanism f16 uses
+# above) and a fallback that always succeeds. With the toggle on and the
+# chain naming the fallback, the live call must transparently retry on it,
+# with no manual Switch model click, and announce the hop once.
+FALLBACK_NONCE="$(date +%Y%m%d%H%M%S)_$(uuidgen | tr '[:lower:]' '[:upper:]' | tr -d '-' | cut -c1-8)"
+FALLBACK_PRIMARY_MODEL="attache-fallback-primary-smoke"
+FALLBACK_MODEL="attache-fallback-smoke"
+FALLBACK_PRIMARY_PORT="$(free_port)"
+FALLBACK_PORT="$(free_port)"
+FALLBACK_PRIMARY_LOG="$TEMP_ROOT/fallback-primary-provider.jsonl"
+FALLBACK_LOG="$TEMP_ROOT/fallback-provider.jsonl"
+FALLBACK_PRIMARY_STDOUT="$TEMP_ROOT/fallback-primary.log"
+FALLBACK_STDOUT="$TEMP_ROOT/fallback.log"
+: > "$FALLBACK_PRIMARY_LOG"
+: > "$FALLBACK_LOG"
+chmod 600 "$FALLBACK_PRIMARY_LOG" "$FALLBACK_LOG"
+
+echo "==> Starting deterministic always-failing primary provider on 127.0.0.1:$FALLBACK_PRIMARY_PORT"
+ATTACHE_PERSONALITY_TWO_WAY_NONCE="${FALLBACK_NONCE}_primary" \
+ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="ATTACHE_UNUSED_${FALLBACK_NONCE}_primary" \
+ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$FALLBACK_PRIMARY_LOG" \
+ATTACHE_PERSONALITY_TWO_WAY_MODEL="$FALLBACK_PRIMARY_MODEL" \
+ATTACHE_PERSONALITY_TWO_WAY_PORT="$FALLBACK_PRIMARY_PORT" \
+ATTACHE_SMOKE_PROVIDER_ERROR=usage_limit \
+  python3 scripts/personality-two-way-smoke-server.py >"$FALLBACK_PRIMARY_STDOUT" 2>&1 &
+SERVER_PID=$!
+
+wait_for_ready "$FALLBACK_PRIMARY_LOG" "$SERVER_PID" "always-failing primary provider" || {
+  cat "$FALLBACK_PRIMARY_STDOUT" >&2 || true
+  fail "always-failing primary provider did not become ready"
+}
+
+echo "==> Starting deterministic always-succeeding fallback provider on 127.0.0.1:$FALLBACK_PORT"
+ATTACHE_PERSONALITY_TWO_WAY_NONCE="${FALLBACK_NONCE}_fallback" \
+ATTACHE_PERSONALITY_TWO_WAY_PONG_TOKEN="ATTACHE_UNUSED_${FALLBACK_NONCE}_fallback" \
+ATTACHE_PERSONALITY_TWO_WAY_PROVIDER_LOG="$FALLBACK_LOG" \
+ATTACHE_PERSONALITY_TWO_WAY_MODEL="$FALLBACK_MODEL" \
+ATTACHE_PERSONALITY_TWO_WAY_PORT="$FALLBACK_PORT" \
+  python3 scripts/personality-two-way-smoke-server.py >"$FALLBACK_STDOUT" 2>&1 &
+SERVER_PID_B=$!
+
+wait_for_ready "$FALLBACK_LOG" "$SERVER_PID_B" "always-succeeding fallback provider" || {
+  cat "$FALLBACK_STDOUT" >&2 || true
+  fail "always-succeeding fallback provider did not become ready"
+}
+
+echo "==> Switching Attaché to a fresh test profile for the auto-fallback scenario"
+FRESH_OUTPUT="$(scripts/simulate-fresh-user.sh fresh)"
+echo "$FRESH_OUTPUT"
+BACKUP_DIR="$(printf '%s\n' "$FRESH_OUTPUT" | sed -n 's/^Backup: //p' | tail -1)"
+[[ -n "$BACKUP_DIR" ]] || fail "could not determine Attaché backup dir"
+
+defaults write "$BUNDLE_ID" attache.onboardingCompleted -bool true
+defaults write "$BUNDLE_ID" attache.codexSourceEnabled -bool false
+defaults write "$BUNDLE_ID" attache.claudeCodeSourceEnabled -bool false
+defaults write "$BUNDLE_ID" attache.presentationLLMEnabled -bool true
+defaults write "$BUNDLE_ID" attache.voicemailMode -bool true
+defaults write "$BUNDLE_ID" attache.showActivityInsights -bool false
+defaults write "$BUNDLE_ID" attache.showTips -bool false
+# The auto-fallback chain itself (INF-258/D5): on, naming lmStudio as the one
+# fallback entry. Both ollama (primary) and lmStudio (fallback) are always
+# "configured" with no API key and never trip cloud consent (their endpoints
+# are loopback), so this scenario needs no Integrations key and no
+# consent-sheet setup, unlike a cloud provider chain would.
+defaults write "$BUNDLE_ID" attache.conversationFallbackChainEnabled -bool true
+defaults write "$BUNDLE_ID" attache.conversationFallbackChainProviders -array "lmStudio"
+defaults write "$BUNDLE_ID" attache.lmStudioBaseURL -string "http://127.0.0.1:${FALLBACK_PORT}/v1"
+
+echo "==> Running Attaché conversation auto-fallback UI smoke"
+SMOKE_ONLY=f21 \
+SMOKE_KEEP_STATE=1 \
+ATTACHE_DISABLE_TOPIC_TAGGING=1 \
+ATTACHE_LLM_PROVIDER=ollama \
+ATTACHE_LLM_BASE_URL="http://127.0.0.1:${FALLBACK_PRIMARY_PORT}/v1" \
+ATTACHE_CONVERSATION_FALLBACK_PROMPT="ATTACHE_CONVERSATION_FALLBACK $FALLBACK_NONCE" \
+ATTACHE_CONVERSATION_FALLBACK_PRIMARY_LOG="$FALLBACK_PRIMARY_LOG" \
+ATTACHE_CONVERSATION_FALLBACK_FALLBACK_LOG="$FALLBACK_LOG" \
+  scripts/ui-smoke.sh
+
+echo "==> Conversation auto-fallback smoke passed"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+kill "$SERVER_PID_B" 2>/dev/null || true
+wait "$SERVER_PID_B" 2>/dev/null || true
+SERVER_PID_B=""
+scripts/simulate-fresh-user.sh restore "$BACKUP_DIR" >/dev/null || {
+  echo "warning: state restore failed; restore manually with:" >&2
+  echo "  scripts/simulate-fresh-user.sh restore \"$BACKUP_DIR\"" >&2
+}
+BACKUP_DIR=""

@@ -35,6 +35,15 @@ public struct DiagnosticSnapshot {
     /// silent failure is still worth counting somewhere a bug report can see
     /// it (INF-254) rather than vanishing unobserved.
     public var taggingFailureCount: Int
+    /// Opt-in auto-fallback hops this launch (INF-258/D5): every time the
+    /// live conversation call transparently switched to the next configured
+    /// and consented provider in the chain after a usage-limit,
+    /// model-unavailable, or transient failure. Same "silent to the user by
+    /// design, but still worth counting" rationale as `taggingFailureCount`
+    /// (spec item 6: log every hop, category + provider pair, to
+    /// diagnostics), though the category/provider pairs themselves stay in
+    /// `AttacheLog`, not here - this is only the aggregate count.
+    public var conversationFallbackCount: Int
     public var logLines: [String]
 
     public init(
@@ -45,6 +54,7 @@ public struct DiagnosticSnapshot {
         cardCount: Int,
         instructionCount: Int,
         taggingFailureCount: Int = 0,
+        conversationFallbackCount: Int = 0,
         logLines: [String] = []
     ) {
         self.appVersion = appVersion
@@ -54,6 +64,7 @@ public struct DiagnosticSnapshot {
         self.cardCount = cardCount
         self.instructionCount = instructionCount
         self.taggingFailureCount = taggingFailureCount
+        self.conversationFallbackCount = conversationFallbackCount
         self.logLines = logLines
     }
 
@@ -67,7 +78,8 @@ public struct DiagnosticSnapshot {
             "voice_provider: \(voiceProviderKind)",
             "cards: \(cardCount)",
             "instructions: \(instructionCount)",
-            "tagging_failures: \(taggingFailureCount)"
+            "tagging_failures: \(taggingFailureCount)",
+            "conversation_fallbacks: \(conversationFallbackCount)"
         ]
         if !logLines.isEmpty {
             lines.append("recent_log:")
