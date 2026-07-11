@@ -2,22 +2,29 @@ import React from "react";
 import { AbsoluteFill, Audio, Sequence, interpolate, staticFile } from "remotion";
 import { T } from "../theme";
 import { Shell } from "./components2";
-import { SCENES2, sceneStarts, OVERLAP, f, hook, title, inbox, live, twoway, trust, outro } from "./timing2";
-import { Hook2, Title2, Inbox2, Live2 } from "./scenes2a";
-import { TwoWay2, Trust2, Outro2 } from "./scenes2b";
+import {
+  SCENES2, sceneStarts, OVERLAP, f,
+  hook, title, pin, inbox, ambient, live, twoway, personalities, brain, outro,
+} from "./timing2";
+import { Hook2, Title2, Pin2, Inbox2 } from "./scenes2a";
+import { Ambient2, Live2, TwoWay2 } from "./scenes2b";
+import { Personalities2, Brain2, Outro2 } from "./scenes2c";
 
 const COMPS: Record<string, React.FC> = {
-  hook: Hook2, title: Title2, inbox: Inbox2, live: Live2,
-  twoway: TwoWay2, trust: Trust2, outro: Outro2,
+  hook: Hook2, title: Title2, pin: Pin2, inbox: Inbox2, ambient: Ambient2,
+  live: Live2, twoway: TwoWay2, personalities: Personalities2, brain: Brain2, outro: Outro2,
 };
 
 // Narration clip per scene, at that scene's narrStart offset.
 const NARRATION: Record<string, { clip: string; at: number }> = {
   hook: { clip: "n_hook", at: f(hook.narrStart) },
   title: { clip: "n_title", at: f(title.narrStart) },
+  pin: { clip: "n_pin", at: f(pin.narrStart) },
   inbox: { clip: "n_inbox", at: f(inbox.narrStart) },
+  ambient: { clip: "n_ambient", at: f(ambient.narrStart) },
   live: { clip: "n_live", at: f(live.narrStart) },
-  trust: { clip: "n_trust", at: f(trust.narrStart) },
+  personalities: { clip: "n_personalities", at: f(personalities.narrStart) },
+  brain: { clip: "n_brain", at: f(brain.narrStart) },
   outro: { clip: "n_outro", at: f(outro.narrStart) },
 };
 
@@ -29,9 +36,12 @@ export const PROMO2_FRAMES = layout.total;
 export const Promo2: React.FC = () => {
   const { starts, frames } = layout;
   const startOf = (key: string) => starts[SCENES2.findIndex((s) => s.key === key)];
+  const pinStart = startOf("pin");
   const inboxStart = startOf("inbox");
   const liveStart = startOf("live");
   const twowayStart = startOf("twoway");
+  const persStart = startOf("personalities");
+  const brainStart = startOf("brain");
 
   return (
     <AbsoluteFill style={{ backgroundColor: T.bg }}>
@@ -75,6 +85,12 @@ export const Promo2: React.FC = () => {
       <Sequence from={twowayStart + f(twoway.replySpeakAt)}>
         <Audio src={a2("va_reply")} />
       </Sequence>
+      <Sequence from={persStart + f(personalities.editorSpeakAt)}>
+        <Audio src={a2("vs_editor")} />
+      </Sequence>
+      <Sequence from={persStart + f(personalities.hypeSpeakAt)}>
+        <Audio src={a2("vs_hype")} />
+      </Sequence>
 
       {/* ---- sound design ---- */}
       {starts.slice(1).map((from, i) => (
@@ -90,6 +106,9 @@ export const Promo2: React.FC = () => {
           <Audio src={a2("sfx_pop")} volume={0.5} />
         </Sequence>
       ))}
+      <Sequence from={pinStart + f(pin.pinAt)}>
+        <Audio src={a2("sfx_pop")} volume={0.5} />
+      </Sequence>
       <Sequence from={twowayStart + f(twoway.chipFlipAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
@@ -98,6 +117,12 @@ export const Promo2: React.FC = () => {
       </Sequence>
       <Sequence from={twowayStart + f(twoway.deliveredAt)}>
         <Audio src={a2("sfx_ding")} volume={0.6} />
+      </Sequence>
+      <Sequence from={brainStart + f(brain.toggleAt)}>
+        <Audio src={a2("sfx_pop")} volume={0.5} />
+      </Sequence>
+      <Sequence from={brainStart + f(brain.fallbackAt)}>
+        <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
 
       {/* ---- music bed ---- */}

@@ -6,6 +6,49 @@ import { T } from "../theme";
 /* Cinematic layers                                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Aurora: slow-drifting colored washes over the dark ground. Keeps the black
+ * base (text and UI chrome still pop) but kills the flat, vanilla look —
+ * every scene sits on moving color instead of plain near-black.
+ */
+export const Aurora: React.FC<{ accent?: "blue" | "violet" | "teal" | "ember"; strength?: number }> = ({ accent = "blue", strength = 1 }) => {
+  const frame = useCurrentFrame();
+  const drift = (speed: number, amp: number, phase: number) =>
+    Math.sin(frame / speed + phase) * amp;
+  const palettes: Record<string, [string, string, string]> = {
+    blue: ["10,132,255", "94,92,230", "0,199,190"],
+    violet: ["122,92,255", "10,132,255", "191,90,242"],
+    teal: ["0,199,190", "10,132,255", "48,209,88"],
+    ember: ["255,159,10", "255,69,58", "122,92,255"],
+  };
+  const [a, b, c] = palettes[accent];
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute", width: 1700, height: 1300, borderRadius: "50%",
+          left: -420 + drift(210, 90, 0), top: -560 + drift(260, 70, 1.3),
+          background: `radial-gradient(closest-side, rgba(${a},${0.17 * strength}), transparent 70%)`,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute", width: 1500, height: 1200, borderRadius: "50%",
+          right: -460 + drift(240, 100, 2.1), bottom: -520 + drift(200, 80, 0.6),
+          background: `radial-gradient(closest-side, rgba(${b},${0.13 * strength}), transparent 70%)`,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute", width: 1100, height: 900, borderRadius: "50%",
+          right: 60 + drift(190, 120, 4.0), top: -420 + drift(230, 60, 2.8),
+          background: `radial-gradient(closest-side, rgba(${c},${0.09 * strength}), transparent 70%)`,
+        }}
+      />
+    </AbsoluteFill>
+  );
+};
+
 /** Slow-drifting depth-sorted particle field. Deterministic via remotion random(). */
 export const Particles: React.FC<{ count?: number; tint?: string }> = ({ count = 46, tint = "10,132,255" }) => {
   const frame = useCurrentFrame();
@@ -431,3 +474,110 @@ export const IconCycle: React.FC<{ size?: number; color?: string }> = ({ size = 
     <path d="M17 2.6 L17.6 6.5 L13.7 7.1" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
   </svg>
 );
+
+/** Tiny session card for the wall-of-agents hook beat. */
+export const MiniSession: React.FC<{ title: string; line: string; delay: number; tint?: string }> = ({ title, line, delay, tint = "10,132,255" }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const p = spring({ frame: frame - delay, fps, config: { damping: 15, mass: 0.7 } });
+  const blink = Math.floor((frame - delay) / 16) % 2 === 0;
+  return (
+    <div
+      style={{
+        borderRadius: 11, overflow: "hidden", border: `1px solid rgba(255,255,255,0.09)`,
+        background: "linear-gradient(180deg, rgba(26,26,33,0.94), rgba(16,16,21,0.95))",
+        boxShadow: `0 18px 44px rgba(0,0,0,0.5), 0 0 24px rgba(${tint},0.05)`,
+        opacity: p, transform: `translateY(${(1 - p) * 40}px) scale(${0.92 + p * 0.08})`,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", background: "rgba(255,255,255,0.035)" }}>
+        {["#FF5F57", "#FEBC2E", "#28C840"].map((cc) => (
+          <div key={cc} style={{ width: 7, height: 7, borderRadius: 4, background: cc, opacity: 0.8 }} />
+        ))}
+        <span style={{ marginLeft: 4, color: T.faint, fontSize: 14.5, fontFamily: T.mono, whiteSpace: "nowrap", overflow: "hidden" }}>{title}</span>
+      </div>
+      <div style={{ padding: "9px 12px 11px", fontFamily: T.mono, fontSize: 14.5, color: T.dim, whiteSpace: "nowrap", overflow: "hidden" }}>
+        {line}
+        {blink ? " ▍" : ""}
+      </div>
+    </div>
+  );
+};
+
+/** Voicemail media controls: skip-back, play/pause, skip-forward, speed, replay. */
+export const MediaControls: React.FC<{ playing: boolean; speed: string; speedActive: boolean }> = ({ playing, speed, speedActive }) => {
+  const btn: React.CSSProperties = {
+    width: 46, height: 46, borderRadius: 999, display: "flex", alignItems: "center", justifyContent: "center",
+    background: "rgba(255,255,255,0.07)", border: `1px solid ${T.stroke}`, color: T.text, fontSize: 19, fontWeight: 700,
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={btn}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M11 5 L4 12 L11 19 M20 5 L13 12 L20 19" stroke={T.text} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </div>
+      <div style={{ ...btn, width: 56, height: 56, background: T.goldSoft, border: `1px solid ${T.gold}` }}>
+        {playing ? (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill={T.gold}><rect x="6" y="5" width="4.4" height="14" rx="1.4" /><rect x="13.6" y="5" width="4.4" height="14" rx="1.4" /></svg>
+        ) : (
+          <svg width="22" height="22" viewBox="0 0 24 24" fill={T.gold}><path d="M8 5 L19 12 L8 19 z" /></svg>
+        )}
+      </div>
+      <div style={btn}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M13 5 L20 12 L13 19 M4 5 L11 12 L4 19" stroke={T.text} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </div>
+      <div
+        style={{
+          marginLeft: 6, padding: "7px 16px", borderRadius: 999, fontSize: 19, fontWeight: 700, fontVariantNumeric: "tabular-nums",
+          background: speedActive ? T.goldSoft : "rgba(255,255,255,0.06)",
+          border: `1px solid ${speedActive ? T.gold : T.stroke}`,
+          color: speedActive ? T.gold : T.dim,
+        }}
+      >
+        {speed}
+      </div>
+      <div style={{ padding: "7px 16px", borderRadius: 999, fontSize: 19, fontWeight: 700, background: "rgba(255,255,255,0.06)", border: `1px solid ${T.stroke}`, color: T.dim }}>
+        ↺ Replay
+      </div>
+    </div>
+  );
+};
+
+/**
+ * The ambient activity heat map, as ActivityInsightHeatMap renders it in the
+ * real app: faint weight-scaled verbs from the focused session's tool
+ * activity, floating at fixed anchors around the idle mark.
+ */
+export const FloatingVerbs: React.FC<{ phrases: { text: string; weight: number; color: string }[] }> = ({ phrases }) => {
+  const frame = useCurrentFrame();
+  const anchors = [
+    { x: 0.5, y: 0.2 }, { x: 0.26, y: 0.32 }, { x: 0.74, y: 0.3 },
+    { x: 0.3, y: 0.66 }, { x: 0.7, y: 0.68 }, { x: 0.5, y: 0.79 },
+    { x: 0.15, y: 0.49 }, { x: 0.85, y: 0.5 },
+  ];
+  return (
+    <AbsoluteFill style={{ pointerEvents: "none" }}>
+      {phrases.slice(0, anchors.length).map((p, i) => {
+        const a = anchors[i];
+        const pulse = 0.75 + 0.25 * Math.sin(frame / 26 + i * 1.7);
+        const size = 17 + p.weight * 17;
+        const op = (0.16 + p.weight * 0.36) * pulse;
+        return (
+          <div
+            key={i}
+            style={{
+              position: "absolute", left: `${a.x * 100}%`, top: `${a.y * 100}%`,
+              transform: `translate(-50%, -50%) translateY(${Math.sin(frame / 34 + i * 2.2) * 6}px)`,
+              fontSize: size, fontWeight: p.weight > 0.72 ? 700 : 600,
+              fontFamily: "ui-rounded, " + T.font,
+              color: p.color, opacity: op,
+              textShadow: `0 0 ${14 + p.weight * 16}px ${p.color}`,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {p.text}
+          </div>
+        );
+      })}
+    </AbsoluteFill>
+  );
+};

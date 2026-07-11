@@ -1,56 +1,80 @@
 {
   "narration": {
     "n_hook": {
-      "seconds": 11.38,
-      "text": "Somewhere on your Mac, an agent just finished something big. It wrote one line to a terminal you stopped watching an hour ago. Your agents are talking. You're just not listening."
+      "seconds": 13.758,
+      "text": "Somewhere on your Mac, an agent just finished something big. And it's not the only one. Two agents. Ten. Twenty. Nobody watches twenty terminals. Your agents are talking. Attashay is listening."
     },
     "n_title": {
-      "seconds": 1.672,
-      "text": "Attach\u00e9 gives them a voice."
+      "seconds": 2.905,
+      "text": "This is Attashay. It gives your agents a voice."
+    },
+    "n_pin": {
+      "seconds": 7.725,
+      "text": "Press Command K, and pin the sessions you care about. Attashay only ever speaks about what you pin."
     },
     "n_inbox": {
-      "seconds": 11.81,
-      "text": "Every finished turn arrives spoken, captioned word for word, and filed like voicemail. Play it now, or catch the whole afternoon in one recap."
+      "seconds": 13.807,
+      "text": "Every finished turn lands like voicemail. Spoken out loud, captioned word for word. Pause it, scrub it, speed it up, replay it. Or hit Recap, and catch up in one pass."
+    },
+    "n_ambient": {
+      "seconds": 8.717,
+      "text": "Between updates, leave it in the corner. You can see what your agents are up to at a glance. And when something matters, it speaks up."
     },
     "n_live": {
-      "seconds": 10.979,
-      "text": "Go live, and it's a real conversation. You see every step: listening, thinking, preparing audio, speaking. No dead air. No wondering."
+      "seconds": 7.297,
+      "text": "Or go lyve and talk to it. It knows everything that's running, and you can see exactly what it's doing, in real time."
     },
     "n_two_a": {
-      "seconds": 4.923,
+      "seconds": 4.898,
       "text": "And here's the part nobody else does. Tell your agent its next move. Out loud."
     },
     "n_two_b": {
-      "seconds": 11.1,
-      "text": "Attach\u00e9 locks the target, delivers the moment the session goes quiet, and then it watches. When the answer lands, you hear it. Every step on screen. Nothing silent."
+      "seconds": 8.177,
+      "text": "Attashay locks the target, waits for the session to go quiet, delivers, and reads the answer back the moment it lands."
     },
-    "n_trust": {
-      "seconds": 9.724,
-      "text": "Confirmed targets. Deliveries that prove themselves. And if a model taps out mid call, a backup steps in and the conversation keeps moving."
+    "n_personalities": {
+      "seconds": 6.158,
+      "text": "You decide how it talks. Pick a preset, or write your own personality, and Attashay speaks your language."
+    },
+    "n_brain": {
+      "seconds": 14.828,
+      "text": "It watches Claude Code and Codex, but it thinks with its own model. Fully local on your Mac, or the frontier you already pay for. And if one model runs dry, the next one steps in, mid-conversation."
     },
     "n_outro": {
-      "seconds": 7.935,
-      "text": "Attach\u00e9. Fluent in agent. <break time=\"0.6s\" /> Speaks human. Free, open source, and waiting on your menu bar."
+      "seconds": 5.349,
+      "text": "Attashay. <break time=\"0.4s\" /> Give your agents a voice. Free, open source, and waiting on your menu bar."
     }
   },
   "samples": {
     "va_memo": {
-      "voice": "Hope",
-      "voice_id": "WAhoMTNdLdMoq1j3wf3I",
-      "seconds": 8.438,
-      "text": "Payments refactor is done. All tests pass. One thing needs your eyes: I widened the retry window on checkout."
+      "voice": "Titan",
+      "voice_id": "dtSEyYGNJqjrtBArPCVZ",
+      "seconds": 4.493,
+      "text": "Episode fourteen is cut into five clips. Captioned, and queued to post."
     },
     "va_live": {
       "voice": "Jessa",
       "voice_id": "yj30vwTGJxSHezdAGsv9",
-      "seconds": 5.094,
-      "text": "Two tests are still flaky: payment retry, and the S3 upload. Want me to rerun them?"
+      "seconds": 4.728,
+      "text": "Clip two tested strongest. Retention held all the way through. Want me to post it?"
     },
     "va_reply": {
       "voice": "Jessa",
       "voice_id": "yj30vwTGJxSHezdAGsv9",
-      "seconds": 5.669,
-      "text": "Codex replied: both tests rerun and green. The error rate is pinned to the dashboard."
+      "seconds": 5.695,
+      "text": "Codex replied: clip two is posted. The rest are scheduled, one a day at nine."
+    },
+    "vs_editor": {
+      "voice": "Jessa",
+      "voice_id": "yj30vwTGJxSHezdAGsv9",
+      "seconds": 5.016,
+      "text": "Five clips, captioned and queued. But clip two's hook is weak. Want me to recut it?"
+    },
+    "vs_hype": {
+      "voice": "Titan",
+      "voice_id": "dtSEyYGNJqjrtBArPCVZ",
+      "seconds": 4.127,
+      "text": "High five on those clips! That's a week of content before lunch. Let's go!"
     }
   },
   "sfx": {

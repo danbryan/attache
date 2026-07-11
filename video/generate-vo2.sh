@@ -12,6 +12,10 @@
 #
 # The music bed tries the Eleven Music API first and falls back to a looped
 # sound-generation ambient pad if the account has no music access.
+#
+# GEN limits which sections regenerate (comma-separated out of
+# narration,samples,sfx,music); default is all four. Example:
+#   GEN=narration,samples ./generate-vo2.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p public/audio2
@@ -71,18 +75,27 @@ def duration(path):
     return round(float([l for l in info.splitlines() if "estimated duration" in l][0].split()[-2]), 3)
 
 m = json.load(open(MANIFEST))
+gen = set((os.environ.get("GEN") or "narration,samples,sfx,music").split(","))
 
-for name, seg in m["narration"].items():
-    seg["seconds"] = save(name, tts(seg["text"], SEKOU), NARRATION_SPEED)
-    print(f"{name}: {seg['seconds']}s")
+if "narration" in gen:
+    for name, seg in m["narration"].items():
+        seg["seconds"] = save(name, tts(seg["text"], SEKOU), NARRATION_SPEED)
+        print(f"{name}: {seg['seconds']}s")
 
-for name, seg in m["samples"].items():
-    seg["seconds"] = save(name, tts(seg["text"], seg["voice_id"]))
-    print(f"{name} ({seg['voice']}): {seg['seconds']}s")
+if "samples" in gen:
+    for name, seg in m["samples"].items():
+        seg["seconds"] = save(name, tts(seg["text"], seg["voice_id"]))
+        print(f"{name} ({seg['voice']}): {seg['seconds']}s")
 
-for name, seg in m["sfx"].items():
-    seg["seconds"] = save(name, sound(seg["prompt"], seg["seconds"]), lufs=-20)
-    print(f"{name}: {seg['seconds']}s")
+if "sfx" in gen:
+    for name, seg in m["sfx"].items():
+        seg["seconds"] = save(name, sound(seg["prompt"], seg["seconds"]), lufs=-20)
+        print(f"{name}: {seg['seconds']}s")
+
+if "music" not in gen:
+    json.dump(m, open(MANIFEST, "w"), indent=2)
+    print("manifest updated")
+    sys.exit(0)
 
 # Music bed: Eleven Music, else a looped ambient pad.
 bed = m["music"]["bed"]

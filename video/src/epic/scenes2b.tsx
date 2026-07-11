@@ -1,19 +1,137 @@
 import React from "react";
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { T, FPS } from "../theme";
-import { Stage, BrandMark, Capsule } from "../components";
+import { Stage, BrandMark } from "../components";
 import {
-  Particles, LightSweep, Camera, Terminal, TermLine, AppWindow, StatusRow,
-  Composer, WordSweep, GlassChip, IconLock, IconCheck, IconCycle, WaveBars, typed as typeSlice,
+  Aurora, Particles, LightSweep, Camera, RingPulse, Terminal, TermLine, AppWindow,
+  StatusRow, Composer, WordSweep, WaveBars, FloatingVerbs, typed as typeSlice,
 } from "./components2";
-import { twoway, trust, outro, f, karaokeEnd, ssec, stext } from "./timing2";
+import { ambient, live, twoway, f, karaokeEnd, ssec, stext } from "./timing2";
 
 /* ------------------------------------------------------------------ */
-/* 5 — TWO-WAY: tell the agent its next move; every indicator is real. */
+/* 5 — AMBIENT: leave it in the corner; the activity heat map.         */
 /* ------------------------------------------------------------------ */
 
-const INSTRUCTION = "Rerun both flaky tests and pin the error rate to the dashboard.";
-const TARGET = "Codex · payments-refactor";
+// Verb sets rotate the way the real ActivityInsightHeatMap phrases shift
+// with the focused session's tool activity.
+const VERBS_EARLY = [
+  { text: "rendering clips", weight: 0.95, color: "#0A84FF" },
+  { text: "reading files", weight: 0.5, color: "#7A5CFF" },
+  { text: "writing captions", weight: 0.78, color: "#0A84FF" },
+  { text: "checking calendar", weight: 0.4, color: "#00C7BE" },
+  { text: "sorting inbox", weight: 0.58, color: "#7A5CFF" },
+  { text: "running tests", weight: 0.66, color: "#0A84FF" },
+  { text: "browsing sponsors", weight: 0.34, color: "#00C7BE" },
+  { text: "committing changes", weight: 0.45, color: "#7A5CFF" },
+];
+const VERBS_LATE = [
+  { text: "uploading renders", weight: 0.9, color: "#0A84FF" },
+  { text: "tagging b-roll", weight: 0.62, color: "#7A5CFF" },
+  { text: "scheduling posts", weight: 0.84, color: "#0A84FF" },
+  { text: "reconciling invoices", weight: 0.5, color: "#00C7BE" },
+  { text: "drafting replies", weight: 0.44, color: "#7A5CFF" },
+  { text: "summarizing filings", weight: 0.58, color: "#0A84FF" },
+  { text: "reading files", weight: 0.3, color: "#00C7BE" },
+  { text: "checking analytics", weight: 0.68, color: "#7A5CFF" },
+];
+
+export const Ambient2: React.FC = () => {
+  const frame = useCurrentFrame();
+  const swapF = f(ambient.len / 2);
+  const verbs = frame < swapF ? VERBS_EARLY : VERBS_LATE;
+  const breathe = 0.97 + 0.03 * Math.sin(frame / 22);
+  return (
+    <Stage>
+      <Aurora accent="blue" strength={0.8} />
+      <Particles count={24} />
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+        <AppWindow width={1240} style={{ height: 660 }}>
+          <div style={{ position: "relative", height: 610 }}>
+            {/* unread pill on the left edge, like the real idle window */}
+            <div style={{ position: "absolute", left: 26, top: "44%", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <div style={{ padding: "3px 11px", borderRadius: 999, border: `1.5px solid ${T.gold}`, color: T.gold, fontSize: 18, fontWeight: 700 }}>4</div>
+              <div style={{ width: 3, height: 52, borderRadius: 2, background: T.gold, opacity: 0.8 }} />
+            </div>
+            <FloatingVerbs phrases={verbs} />
+            <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+              <div style={{ transform: `scale(${breathe})` }}>
+                <BrandMark size={190} animate={false} />
+              </div>
+            </AbsoluteFill>
+          </div>
+        </AppWindow>
+      </AbsoluteFill>
+      <LightSweep start={12} dur={60} opacity={0.05} />
+    </Stage>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* 6 — LIVE: talk to it; the composer shows what it's doing, unnarrated. */
+/* ------------------------------------------------------------------ */
+
+export const Live2: React.FC = () => {
+  const frame = useCurrentFrame();
+  const composerF = f(live.composerAt);
+  const listenF = f(live.listenAt);
+  const thinkF = f(live.thinkAt);
+  const prepF = f(live.prepAt);
+  const speakF = f(live.speakAt);
+  const thinkSecs = Math.max(1, Math.floor((frame - thinkF) / FPS) + 1);
+  const windowIn = interpolate(frame, [0, 14], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+
+  let status: React.ReactNode = null;
+  if (frame >= speakF) status = <StatusRow icon="speaker" text="Speaking…" />;
+  else if (frame >= prepF) status = <StatusRow icon="waveform" text="Preparing audio…" />;
+  else if (frame >= thinkF) status = <StatusRow icon="spinner" text={`Thinking… ${thinkSecs}s`} />;
+  else if (frame >= listenF) status = <StatusRow icon="mic" text="Listening…" />;
+
+  const speaking = frame >= speakF;
+  return (
+    <Stage>
+      <Aurora accent="violet" strength={0.9} />
+      <Particles count={26} />
+      <RingPulse at={composerF} />
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", opacity: windowIn }}>
+        <AppWindow width={1180} live={frame >= composerF}>
+          <div style={{ padding: "30px 34px 30px", display: "flex", flexDirection: "column", gap: 26, minHeight: 430, justifyContent: "space-between" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24, paddingTop: 16 }}>
+              <BrandMark size={110} animate={speaking} barColor={speaking ? (i) => `rgba(10,132,255,${0.45 + 0.05 * i})` : undefined} />
+              {frame >= listenF && frame < thinkF && (
+                <>
+                  <WaveBars n={26} height={30} color="rgba(242,242,245,0.75)" />
+                  <div style={{ color: T.text, fontSize: 27, fontWeight: 600 }}>“Which clip performed best?”</div>
+                </>
+              )}
+              {speaking && (
+                <div style={{ width: 900 }}>
+                  <WordSweep
+                    text={stext("va_live")}
+                    startFrame={speakF + 2}
+                    endFrame={speakF + karaokeEnd(ssec("va_live"))}
+                    fontSize={30}
+                    align="center"
+                  />
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              {frame >= composerF && <Composer width={1050} destination="attache" status={status} />}
+            </div>
+          </div>
+        </AppWindow>
+      </AbsoluteFill>
+      <LightSweep start={composerF} dur={44} opacity={0.07} />
+    </Stage>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* 7 — TWO-WAY: tell the agent its next move; the indicators are real. */
+/* ------------------------------------------------------------------ */
+
+const INSTRUCTION = "Post clip two and schedule the rest, one a day at nine.";
+const TARGET = "Codex · episode 14 pipeline";
 
 export const TwoWay2: React.FC = () => {
   const frame = useCurrentFrame();
@@ -33,22 +151,20 @@ export const TwoWay2: React.FC = () => {
   const replyCardF = f(twoway.replyCardAt);
   const replySpeakF = f(twoway.replySpeakAt);
 
-  // The left terminal: busy, then quiet, then the instruction lands, then the reply.
   const termLines: TermLine[] = [
-    { at: 0, text: "▸ codex — payments-refactor" },
-    { at: 8, text: "▸ tidying retry helpers…" },
-    { at: Math.round(quietF * 0.55), text: "▸ formatting + lint pass…" },
+    { at: 0, text: "▸ codex — episode 14 pipeline" },
+    { at: 8, text: "▸ exporting caption files…" },
+    { at: Math.round(quietF * 0.55), text: "▸ uploading renders…" },
     { at: quietF, text: "✓ turn complete — session quiet", color: "#30D158" },
     { at: deliverTypeF, text: `> attaché: ${INSTRUCTION}`, color: "#FF9F0A", type: true },
-    { at: replyPrintF, text: "▸ rerunning payment_retry … PASS", color: T.dim },
-    { at: replyPrintF + 12, text: "▸ rerunning s3_upload … PASS", color: T.dim },
-    { at: replyPrintF + 24, text: "codex: Both green. Error rate pinned to the dashboard.", color: "#30D158" },
+    { at: replyPrintF, text: "▸ posting clip 2 … done", color: T.dim },
+    { at: replyPrintF + 12, text: "▸ scheduling 4 posts … done", color: T.dim },
+    { at: replyPrintF + 24, text: "codex: Clip two is posted. Four scheduled, daily at 9:00.", color: "#30D158" },
   ];
 
   const composerTyped = typeSlice(INSTRUCTION, frame, typedF, typedDurF);
   const agentMode = frame >= chipFlipF;
 
-  // Status row: the real CallPhase walk, including the counters.
   const queuedSecs = Math.max(1, Math.floor((frame - queuedF) / FPS) + 1);
   const waitingSecs = Math.max(1, Math.floor((frame - deliveredF) / FPS) + 1);
   let status: React.ReactNode = null;
@@ -69,19 +185,17 @@ export const TwoWay2: React.FC = () => {
 
   return (
     <Stage>
-      <Particles count={26} />
+      <Aurora accent="ember" strength={0.7} />
+      <Particles count={22} />
       <Camera from={1} to={1.035} over={f(twoway.len)}>
         <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
           <div style={{ display: "flex", gap: 46, alignItems: "stretch" }}>
-            {/* Left: the real session receiving the send */}
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <Terminal width={840} title="codex — payments-refactor" lines={termLines} tilt={4} minHeight={430} fontSize={21} />
+              <Terminal width={840} title="codex — episode 14 pipeline" lines={termLines} tilt={4} minHeight={430} fontSize={21} />
             </div>
 
-            {/* Right: Attaché mid-call */}
             <AppWindow width={880} live style={{ alignSelf: "center" }}>
               <div style={{ padding: "26px 28px 28px", display: "flex", flexDirection: "column", gap: 20, minHeight: 470, justifyContent: "flex-end" }}>
-                {/* Confirmation card */}
                 {frame >= confirmF && confirmGone > 0 && (
                   <div
                     style={{
@@ -92,7 +206,6 @@ export const TwoWay2: React.FC = () => {
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                      <IconLock size={20} color="#FF9F0A" />
                       <span style={{ color: "#FF9F0A", fontSize: 22, fontWeight: 700 }}>Send to {TARGET}?</span>
                     </div>
                     <div style={{ color: T.text, fontSize: 24, lineHeight: 1.45, marginBottom: 18 }}>“{INSTRUCTION}”</div>
@@ -112,7 +225,6 @@ export const TwoWay2: React.FC = () => {
                   </div>
                 )}
 
-                {/* Reply card */}
                 {frame >= replyCardF && (
                   <div
                     style={{
@@ -151,84 +263,6 @@ export const TwoWay2: React.FC = () => {
         </AbsoluteFill>
       </Camera>
       <LightSweep start={deliveredF} dur={36} opacity={0.08} />
-    </Stage>
-  );
-};
-
-/* ------------------------------------------------------------------ */
-/* 6 — TRUST: three glass chips, the reliability story.                */
-/* ------------------------------------------------------------------ */
-
-export const Trust2: React.FC = () => {
-  return (
-    <Stage>
-      <Particles count={40} />
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 54 }}>
-        <div style={{ fontSize: 60, fontWeight: 700, color: T.text, letterSpacing: "-0.02em" }}>
-          Built to be <span style={{ color: T.gold }}>trusted</span>
-        </div>
-        <div style={{ display: "flex", gap: 34 }}>
-          <GlassChip
-            delay={f(trust.chipsAt[0])}
-            icon={<IconLock size={40} color="#FF9F0A" />}
-            title="Locked targets"
-            sub="Every send is confirmed and frozen to one session. On any mismatch, it fails closed."
-          />
-          <GlassChip
-            delay={f(trust.chipsAt[1])}
-            icon={<IconCheck size={40} />}
-            title="Proven delivery"
-            sub="Delivery isn't assumed. It's parsed, verified, and visible at every step."
-          />
-          <GlassChip
-            delay={f(trust.chipsAt[2])}
-            icon={<IconCycle size={40} />}
-            title="Live fallback"
-            sub="A model taps out mid call? A backup steps in, and the conversation keeps moving."
-          />
-        </div>
-      </AbsoluteFill>
-      <LightSweep start={f(trust.chipsAt[2]) + 14} dur={46} opacity={0.07} />
-    </Stage>
-  );
-};
-
-/* ------------------------------------------------------------------ */
-/* 7 — OUTRO: rays, the mark, the tagline, where to get it.            */
-/* ------------------------------------------------------------------ */
-
-export const Outro2: React.FC = () => {
-  const frame = useCurrentFrame();
-  const breathe = 0.94 + 0.05 * Math.sin(frame / 20);
-  const raysIn = interpolate(frame, [0, 40], [0, 0.5], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  return (
-    <Stage>
-      {/* slow rotating rays */}
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", opacity: raysIn }}>
-        <div
-          style={{
-            width: 1700, height: 1700, borderRadius: 999,
-            background: `conic-gradient(from ${frame * 0.12}deg, transparent 0deg, rgba(10,132,255,0.05) 12deg, transparent 26deg, transparent 60deg, rgba(10,132,255,0.045) 74deg, transparent 90deg, transparent 130deg, rgba(10,132,255,0.05) 145deg, transparent 160deg, transparent 210deg, rgba(10,132,255,0.045) 226deg, transparent 245deg, transparent 300deg, rgba(10,132,255,0.05) 315deg, transparent 330deg)`,
-            maskImage: "radial-gradient(circle, black 0%, transparent 62%)",
-            WebkitMaskImage: "radial-gradient(circle, black 0%, transparent 62%)",
-          }}
-        />
-      </AbsoluteFill>
-      <Particles count={44} />
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 42 }}>
-        <div style={{ transform: `scale(${breathe})` }}>
-          <BrandMark size={250} animate barColor={(i) => `rgba(10,132,255,${0.4 + 0.05 * i})`} />
-        </div>
-        <div style={{ fontSize: 66, fontWeight: 700, color: T.text, letterSpacing: "-0.02em", textAlign: "center" }}>
-          Fluent in agent. <span style={{ color: T.gold }}>Speaks human.</span>
-        </div>
-        <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
-          <Capsule active fontSize={30}>attache.fm</Capsule>
-          <Capsule fontSize={30}>github.com/danbryan/attache</Capsule>
-        </div>
-        <div style={{ color: T.faint, fontSize: 24, fontFamily: T.mono }}>brew install danbryan/tap/attache</div>
-      </AbsoluteFill>
-      <LightSweep start={30} dur={60} opacity={0.06} />
     </Stage>
   );
 };
