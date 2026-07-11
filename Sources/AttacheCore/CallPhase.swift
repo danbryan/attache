@@ -44,6 +44,15 @@ public enum CallPhase: Equatable {
     case sendDelivered(target: String)
     /// A conversation call failed, or a Tell Agent delivery failed.
     case failed(ConversationFailureCategory, message: String)
+    /// The opt-in auto-fallback chain (INF-258/D5) just switched the live
+    /// call to a different provider after a recoverable failure; `message`
+    /// is the one-sentence announcement ("Grok hit its usage limit; using
+    /// Ollama for now."). Distinct from `.failed`: this is not something the
+    /// user needs to act on (no Switch model / Retry affordance applies), so
+    /// it renders with neutral, non-error styling. `AppModel` clears the
+    /// signal once the retry this triggers actually starts, so it is
+    /// transient by construction, not something a caller needs to time out.
+    case fallbackAnnounced(message: String)
 }
 
 /// A plain-value snapshot of the live-call signals AppModel already tracks,
@@ -99,6 +108,9 @@ public struct CallSignals: Equatable {
     public var pendingAssistantReply: String?
     public var pendingSend: Instruction?
     public var failure: Failure?
+    /// Set for as long as an auto-fallback hop's announcement should be
+    /// shown (INF-258/D5); `AppModel.conversationFallbackAnnouncement`.
+    public var fallbackAnnouncement: String?
 
     public init(
         isConversing: Bool = false,
@@ -112,7 +124,8 @@ public struct CallSignals: Equatable {
         expectingReplyAudio: Bool = false,
         pendingAssistantReply: String? = nil,
         pendingSend: Instruction? = nil,
-        failure: Failure? = nil
+        failure: Failure? = nil,
+        fallbackAnnouncement: String? = nil
     ) {
         self.isConversing = isConversing
         self.conversationWaitStartedAt = conversationWaitStartedAt
@@ -126,6 +139,7 @@ public struct CallSignals: Equatable {
         self.pendingAssistantReply = pendingAssistantReply
         self.pendingSend = pendingSend
         self.failure = failure
+        self.fallbackAnnouncement = fallbackAnnouncement
     }
 }
 
@@ -135,15 +149,21 @@ extension CallPhase {
     /// Precedence (highest first), chosen so the two things a user must not
     /// miss are never covered by anything else:
     ///
-    /// 1. `listening`      - the mic is live; nothing should cover it.
-    /// 2. `failed`         - a conversation or send failure needs attention.
-    /// 3. `thinking`
-    /// 4. `speaking`
-    /// 5. `paused`
-    /// 6. `preparingAudio`
-    /// 7. `sendDelivered`
-    /// 8. `sendQueued`
-    /// 9. `idle`           - fallback.
+    /// 1. `listening`         - the mic is live; nothing should cover it.
+    /// 2. `failed`            - a conversation or send failure needs attention.
+    /// 3. `fallbackAnnounced` - a fallback hop just happened (INF-258/D5);
+    ///    ranked with `failed` since both are "something just happened,
+    ///    worth interrupting `thinking`/`speaking` to say so" - a manual
+    ///    failure and an auto-fallback announcement are mutually exclusive
+    ///    in practice (the latter only exists when `failure` was cleared
+    ///    instead of surfaced), so this ordering is never actually contested.
+    /// 4. `thinking`
+    /// 5. `speaking`
+    /// 6. `paused`
+    /// 7. `preparingAudio`
+    /// 8. `sendDelivered`
+    /// 9. `sendQueued`
+    /// 10. `idle`              - fallback.
     ///
     /// Two consequences called out by the ticket follow directly from this
     /// order: `speaking` beats a lingering `sendDelivered` (4 before 7), and
@@ -172,6 +192,10 @@ extension CallPhase {
             let trimmed = send.error?.trimmingCharacters(in: .whitespacesAndNewlines)
             let message = (trimmed?.isEmpty == false) ? trimmed! : "Send failed."
             return .failed(.other, message: message)
+        }
+
+        if let announcement = signals.fallbackAnnouncement {
+            return .fallbackAnnounced(message: announcement)
         }
 
         if signals.isConversing {

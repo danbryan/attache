@@ -29,7 +29,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -2296,6 +2296,84 @@ if enabled("f21") {
         app.key(Key.escape)
         try? waitForElementGone("inbox search field", in: try mainWindow(),
                                 role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+    }
+}
+
+
+// MARK: Flow 22: opt-in auto-fallback chain transparently continues a live
+// call on the next configured/consented provider after a usage-limit failure
+// (INF-258/D5), with no manual Switch model click. Two deterministic mock
+// providers are used: the primary always returns HTTP 429 (the same
+// `ATTACHE_SMOKE_PROVIDER_ERROR=usage_limit` mechanism f16 uses), the
+// fallback always succeeds. `attache.conversationFallbackChainEnabled` and
+// `attache.conversationFallbackChainProviders` are seeded via `defaults
+// write` by the wrapper script (scripts/conversation-recovery-smoke.sh),
+// matching how every other seeded preference in these flows is set.
+
+if enabled("f22") {
+    let env = ProcessInfo.processInfo.environment
+    let prompt = env["ATTACHE_CONVERSATION_FALLBACK_PROMPT"] ?? "ATTACHE_CONVERSATION_FALLBACK"
+    let primaryLog = env["ATTACHE_CONVERSATION_FALLBACK_PRIMARY_LOG"] ?? ""
+    let fallbackLog = env["ATTACHE_CONVERSATION_FALLBACK_FALLBACK_LOG"] ?? ""
+
+    run.step("f22-conversation-fallback", "environment identifies the two deterministic providers") {
+        guard !prompt.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_FALLBACK_PROMPT is required") }
+        guard !primaryLog.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_FALLBACK_PRIMARY_LOG is required") }
+        guard FileManager.default.fileExists(atPath: primaryLog) else {
+            throw SmokeError(message: "primary provider log does not exist: \(primaryLog)")
+        }
+        guard !fallbackLog.isEmpty else { throw SmokeError(message: "ATTACHE_CONVERSATION_FALLBACK_FALLBACK_LOG is required") }
+        guard FileManager.default.fileExists(atPath: fallbackLog) else {
+            throw SmokeError(message: "fallback provider log does not exist: \(fallbackLog)")
+        }
+    }
+
+    run.step("f22-conversation-fallback", "a usage-limit failure is announced and transparently retried on the fallback") {
+        try dismissOnboardingIfPresent()
+        app.key(Key.l, command: true)
+        try selectConversationDestination("Ask Attaché")
+        let field = try waitForElement("call message field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, exactly: "Call message",
+                                       timeout: 20)
+        _ = field.setFocused()
+        if !field.setValue(prompt) { app.type(prompt) }
+        let send = try waitForElement("call send button", in: try mainWindow(),
+                                      role: kAXButtonRole as String, exactly: "Send call message",
+                                      timeout: 8)
+        guard send.press() else {
+            throw SmokeError(message: "AXPress failed on call send button: \(send.summary); actions: \(send.actionNames)")
+        }
+
+        // Spec item 3: announced in the status line, e.g. "... hit its usage
+        // limit; using ... for now." The same "Conversation status:" AX label
+        // f16/f18/f19 already read, so this is asserted with the identical
+        // mechanism, just a different substring.
+        _ = try waitForElement("fallback announcement status", in: try mainWindow(), timeout: 10) { element in
+            element.matches("Conversation status:") && element.matches("hit its usage limit; using")
+        }
+
+        // No manual recovery affordance should ever appear: the call
+        // continues transparently, with no Switch model click needed.
+        try waitForElementGone("model recovery menu", in: try mainWindow(),
+                               containing: "Switch conversation model", timeout: 3)
+
+        // The retry actually reached the fallback provider (not a second call
+        // to the still-failing primary, and not zero calls).
+        try waitForFile(fallbackLog, toContain: "a request reaching the fallback provider", timeout: 20, interval: 0.5) { text in
+            occurrenceCount(of: "\"event\": \"request\"", in: text) >= 1
+        }
+
+        let primaryText = (try? String(contentsOfFile: primaryLog, encoding: .utf8)) ?? ""
+        guard occurrenceCount(of: "\"event\": \"request\"", in: primaryText) == 1 else {
+            throw SmokeError(message: "expected exactly one request to the primary (failing) provider. Log:\n\(primaryText)")
+        }
+        let fallbackText = (try? String(contentsOfFile: fallbackLog, encoding: .utf8)) ?? ""
+        guard occurrenceCount(of: "\"event\": \"request\"", in: fallbackText) == 1 else {
+            throw SmokeError(message: "expected exactly one request to the fallback provider. Log:\n\(fallbackText)")
+        }
+        guard fallbackText.contains("\"last_user\": \"\(prompt)\"") else {
+            throw SmokeError(message: "fallback request did not carry the original prompt. Log:\n\(fallbackText)")
+        }
     }
 }
 

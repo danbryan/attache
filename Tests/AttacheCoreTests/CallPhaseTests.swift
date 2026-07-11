@@ -270,4 +270,49 @@ final class CallPhaseTests: XCTestCase {
         let signals = CallSignals(pendingSend: instruction(state: .confirmed))
         XCTAssertNotEqual(CallPhase.derive(from: signals), .idle)
     }
+
+    // MARK: fallbackAnnounced (INF-258/D5)
+
+    func testFallbackAnnouncedFromASignal() {
+        let signals = CallSignals(fallbackAnnouncement: "Grok hit its usage limit; using Ollama for now.")
+        XCTAssertEqual(
+            CallPhase.derive(from: signals),
+            .fallbackAnnounced(message: "Grok hit its usage limit; using Ollama for now.")
+        )
+    }
+
+    func testListeningWinsOverFallbackAnnounced() {
+        let signals = CallSignals(
+            micIsListening: true,
+            voiceInputMode: "pushToTalk",
+            fallbackAnnouncement: "Grok hit its usage limit; using Ollama for now."
+        )
+        XCTAssertEqual(CallPhase.derive(from: signals), .listening(mode: "pushToTalk"))
+    }
+
+    func testFallbackAnnouncedWinsOverThinkingSpeakingAndSendState() {
+        let signals = CallSignals(
+            isConversing: true,
+            conversationWaitStartedAt: referenceDate,
+            playbackIsPlaying: true,
+            pendingSend: instruction(state: .delivered),
+            fallbackAnnouncement: "Grok hit its usage limit; using Ollama for now."
+        )
+        XCTAssertEqual(
+            CallPhase.derive(from: signals),
+            .fallbackAnnounced(message: "Grok hit its usage limit; using Ollama for now.")
+        )
+    }
+
+    func testConversationFailureWinsOverFallbackAnnouncedWhenSomehowBothArePresent() {
+        // Not reachable in practice (AppModel never sets both at once: the
+        // auto-fallback path deliberately keeps `conversationRecovery` nil),
+        // but pins the reducer's own total order the same way the file's
+        // other "somehow both" tests do.
+        let signals = CallSignals(
+            failure: .init(category: .auth, message: "Credentials expired."),
+            fallbackAnnouncement: "Grok hit its usage limit; using Ollama for now."
+        )
+        XCTAssertEqual(CallPhase.derive(from: signals), .failed(.auth, message: "Credentials expired."))
+    }
 }

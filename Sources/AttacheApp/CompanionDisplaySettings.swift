@@ -417,6 +417,9 @@ enum CompanionPreferenceKey {
     static let ollamaBaseURL = "attache.ollamaBaseURL"
     static let lmStudioBaseURL = "attache.lmStudioBaseURL"
     static let customBaseURL = "attache.customBaseURL"
+    // Opt-in auto-fallback chain (INF-258/D5), conversation role only.
+    static let conversationFallbackChainEnabled = "attache.conversationFallbackChainEnabled"
+    static let conversationFallbackChainProviders = "attache.conversationFallbackChainProviders"
 
     /// The `presentationLLM*` fields that `CompanionPresentationSettings.load(role:)`
     /// can override per `ModelRole` (INF-247). `llmEnabled` and the persona

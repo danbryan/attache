@@ -30,6 +30,20 @@ final class DiagnosticSnapshotTests: XCTestCase {
         XCTAssertTrue(snapshot.rendered().contains("tagging_failures: 0"))
     }
 
+    func testConversationFallbackCountDefaultsToZeroAndRenders() {
+        let snapshot = DiagnosticSnapshot(
+            appVersion: "0.1.1", enabledSources: [], presentationProviderKind: "none",
+            voiceProviderKind: "system", cardCount: 0, instructionCount: 0)
+        XCTAssertEqual(snapshot.conversationFallbackCount, 0)
+        XCTAssertTrue(snapshot.rendered().contains("conversation_fallbacks: 0"))
+
+        let withFallbacks = DiagnosticSnapshot(
+            appVersion: "0.1.1", enabledSources: [], presentationProviderKind: "ollama",
+            voiceProviderKind: "system", cardCount: 0, instructionCount: 0,
+            conversationFallbackCount: 3)
+        XCTAssertTrue(withFallbacks.rendered().contains("conversation_fallbacks: 3"))
+    }
+
     func testEmptySourcesRenderNone() {
         let snapshot = DiagnosticSnapshot(
             appVersion: "0.1.1", enabledSources: [], presentationProviderKind: "none",

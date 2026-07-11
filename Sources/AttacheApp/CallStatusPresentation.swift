@@ -97,6 +97,13 @@ enum CallStatusPresentation {
                 return Status(text: confirmation, icon: .symbol("checkmark.circle.fill"), isError: false, isFreshDelivery: false)
             }
             return Status(text: message, icon: .symbol(icon(for: category)), isError: true, isFreshDelivery: false)
+
+        case .fallbackAnnounced(let message):
+            // Neutral styling (INF-258/D5): unlike `.failed`, this is not
+            // something the user needs to act on, so no error color and no
+            // Switch model / Retry affordance (that stays gated on
+            // `conversationRecovery`, which the auto-fallback path never sets).
+            return Status(text: message, icon: .symbol("arrow.triangle.2.circlepath"), isError: false, isFreshDelivery: false)
         }
     }
 

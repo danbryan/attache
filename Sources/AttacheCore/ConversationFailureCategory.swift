@@ -9,7 +9,11 @@ import Foundation
 /// `String`-backed so a category can be stored as stable card metadata (e.g.
 /// `companion_presentation_error_category`) and read back later without
 /// re-classifying the original error text.
-public enum ConversationFailureCategory: String, Equatable {
+/// `CaseIterable` (INF-258/D5) so `ConversationFallbackChain.shouldTrigger`
+/// can be proven correct against every case at once - in particular, that
+/// `.auth` is never one of the categories that triggers auto-fallback -
+/// instead of only against the cases a test happens to enumerate by hand.
+public enum ConversationFailureCategory: String, Equatable, CaseIterable {
     /// 429/402 usage or rate-limit responses, or (CLI providers only) text
     /// markers like "usage limit" / "quota".
     case usageOrRateLimit = "usage_or_rate_limit"
