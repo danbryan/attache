@@ -83,8 +83,7 @@ public enum CallPhase: Equatable {
 /// - `playbackIsPlaying`, `playbackIsPaused`, `playbackIsBusy` <-
 ///   `SpeechPlaybackController.isPlaying` / `.isPaused` / `.isBusy`, exposed
 ///   on AppModel as `playback.*`.
-/// - `expectingReplyAudio`, `pendingAssistantReply` <-
-///   `AppModel.expectingReplyAudio`, `AppModel.pendingAssistantReply`.
+/// - `pendingAssistantReply` <- `AppModel.pendingAssistantReply`.
 /// - `pendingSend` <- the most recent `Instruction` relevant to the current
 ///   call (e.g. from `TwoWayCoordinator.log`), reusing the existing
 ///   `Instruction`/`InstructionState` types rather than duplicating them.
@@ -115,7 +114,6 @@ public struct CallSignals: Equatable {
     public var playbackIsPlaying: Bool
     public var playbackIsPaused: Bool
     public var playbackIsBusy: Bool
-    public var expectingReplyAudio: Bool
     public var pendingAssistantReply: String?
     public var pendingSend: Instruction?
     public var failure: Failure?
@@ -132,7 +130,6 @@ public struct CallSignals: Equatable {
         playbackIsPlaying: Bool = false,
         playbackIsPaused: Bool = false,
         playbackIsBusy: Bool = false,
-        expectingReplyAudio: Bool = false,
         pendingAssistantReply: String? = nil,
         pendingSend: Instruction? = nil,
         failure: Failure? = nil,
@@ -146,7 +143,6 @@ public struct CallSignals: Equatable {
         self.playbackIsPlaying = playbackIsPlaying
         self.playbackIsPaused = playbackIsPaused
         self.playbackIsBusy = playbackIsBusy
-        self.expectingReplyAudio = expectingReplyAudio
         self.pendingAssistantReply = pendingAssistantReply
         self.pendingSend = pendingSend
         self.failure = failure
@@ -220,7 +216,17 @@ extension CallPhase {
             return .paused
         }
 
-        if (signals.expectingReplyAudio && signals.playbackIsBusy) || signals.pendingAssistantReply != nil {
+        // `playbackIsBusy` alone (no `expectingReplyAudio` gate, INF-264
+        // follow-up): synthesis for ANY card, including a watched session's
+        // narrated reply to a Tell Agent instruction, not just a live
+        // conversation turn's reply, must show "Preparing audio…" here. The
+        // removed top overlay's `topStatusText` checked `playback.isBusy`
+        // unconditionally for exactly this reason; gating on
+        // `expectingReplyAudio` (conversation-turn-only) left the Tell Agent
+        // reply's synthesis window with nothing to show once `.sendDelivered`
+        // itself expired past its emphasis window, a real dead-air regression
+        // caught in production.
+        if signals.playbackIsBusy || signals.pendingAssistantReply != nil {
             return .preparingAudio
         }
 

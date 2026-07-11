@@ -56,8 +56,10 @@ final class CallPhaseTests: XCTestCase {
         XCTAssertEqual(CallPhase.derive(from: signals), .thinking(since: .distantPast))
     }
 
-    func testPreparingAudioWhenExpectingReplyAudioAndPlaybackIsBusy() {
-        let signals = CallSignals(playbackIsBusy: true, expectingReplyAudio: true)
+    func testPreparingAudioWhenPlaybackIsBusy() {
+        // No `expectingReplyAudio` gate (INF-264 follow-up): synthesis for
+        // any card, not just a live conversation turn's reply, shows this.
+        let signals = CallSignals(playbackIsBusy: true)
         XCTAssertEqual(CallPhase.derive(from: signals), .preparingAudio)
     }
 
@@ -194,7 +196,6 @@ final class CallPhaseTests: XCTestCase {
             playbackIsPlaying: true,
             playbackIsPaused: true,
             playbackIsBusy: true,
-            expectingReplyAudio: true,
             pendingAssistantReply: "reply",
             pendingSend: instruction(state: .delivered),
             failure: .init(category: .transient, message: "timed out")
@@ -262,8 +263,7 @@ final class CallPhaseTests: XCTestCase {
     func testPausedWinsOverPreparingAudio() {
         let signals = CallSignals(
             playbackIsPaused: true,
-            playbackIsBusy: true,
-            expectingReplyAudio: true
+            playbackIsBusy: true
         )
         XCTAssertEqual(CallPhase.derive(from: signals), .paused)
     }
@@ -272,6 +272,23 @@ final class CallPhaseTests: XCTestCase {
         let signals = CallSignals(
             pendingAssistantReply: "reply text",
             pendingSend: instruction(state: .delivered)
+        )
+        XCTAssertEqual(CallPhase.derive(from: signals), .preparingAudio)
+    }
+
+    // Real production regression: Tell Agent's reply is narrated through the
+    // watched-session recap pipeline, not the live-conversation-turn one, so
+    // it never sets `pendingAssistantReply` or (the now-removed)
+    // `expectingReplyAudio` - only `playback.isBusy`, while its TTS
+    // synthesizes. Once `.sendDelivered` (INF-264) hides itself past its
+    // emphasis window, `playbackIsBusy` alone must still produce
+    // `.preparingAudio` here, or the composer goes fully blank for as long as
+    // that synthesis takes.
+    func testPreparingAudioForATellAgentReplyWithNoConversationSignalsAtAll() {
+        let deliveredAt = referenceDate.addingTimeInterval(-3600)
+        let signals = CallSignals(
+            playbackIsBusy: true,
+            pendingSend: instruction(state: .delivered, deliveredAt: deliveredAt)
         )
         XCTAssertEqual(CallPhase.derive(from: signals), .preparingAudio)
     }

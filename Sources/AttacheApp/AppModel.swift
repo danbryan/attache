@@ -3212,7 +3212,6 @@ final class AppModel: ObservableObject {
             playbackIsPlaying: playback.isPlaying,
             playbackIsPaused: playback.isPaused,
             playbackIsBusy: playback.isBusy,
-            expectingReplyAudio: expectingReplyAudio,
             pendingAssistantReply: pendingAssistantReply,
             pendingSend: pendingSend,
             failure: failure,
