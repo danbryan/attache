@@ -13,7 +13,7 @@ you in plain language.
 
 ## Tagline
 
-> **Fluent in agent. Speaks human.**
+> **Give your agents a voice.**
 
 Supporting lines:
 - Stop babysitting the terminal.
