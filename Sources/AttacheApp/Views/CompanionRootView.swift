@@ -60,11 +60,6 @@ struct CompanionRootView: View {
     @State var pendingRecoveryProviderSwitch: PendingRecoveryProviderSwitch?
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
-    // When `model.callPhase` last became `.sendDelivered` (INF-244): drives how
-    // long the call composer's status row keeps its "just delivered" emphasis.
-    // Tracked here (not in `CallStatusPresentation`, which stays pure) because
-    // `CallPhase` itself carries no timestamp for that case.
-    @State var callSendDeliveredAt: Date?
 
     init(model: AppModel) {
         self.model = model

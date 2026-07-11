@@ -77,7 +77,6 @@ extension CompanionRootView {
                     if let status = CallStatusPresentation.status(
                         for: model.callPhase,
                         now: context.date,
-                        deliveredAt: callSendDeliveredAt,
                         recoveryConfirmation: model.conversationRecoveryConfirmation
                     ) {
                         callStatusRow(status)
@@ -93,13 +92,6 @@ extension CompanionRootView {
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Live call composer")
-        .onChange(of: model.callPhase) { newPhase in
-            if case .sendDelivered = newPhase {
-                if callSendDeliveredAt == nil { callSendDeliveredAt = Date() }
-            } else {
-                callSendDeliveredAt = nil
-            }
-        }
     }
 
     // One status row for the whole call-phase surface (INF-244): icon (or

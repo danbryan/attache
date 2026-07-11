@@ -108,7 +108,7 @@ final class CallStatusPresentationTests: XCTestCase {
     // MARK: - sendDelivered (fresh-delivery emphasis window)
 
     func testSendDeliveredShowsConfirmationText() {
-        let status = CallStatusPresentation.status(for: .sendDelivered(target: "Codex"), now: referenceDate)
+        let status = CallStatusPresentation.status(for: .sendDelivered(target: "Codex", deliveredAt: referenceDate), now: referenceDate)
         XCTAssertEqual(status?.text, "Sent to Codex · watching for the reply")
         XCTAssertEqual(status?.icon, .symbol("checkmark.circle.fill"))
         XCTAssertFalse(status?.isError ?? true)
@@ -116,9 +116,8 @@ final class CallStatusPresentationTests: XCTestCase {
 
     func testSendDeliveredIsFreshWithinTheEmphasisWindow() {
         let status = CallStatusPresentation.status(
-            for: .sendDelivered(target: "Codex"),
-            now: referenceDate.addingTimeInterval(5),
-            deliveredAt: referenceDate
+            for: .sendDelivered(target: "Codex", deliveredAt: referenceDate),
+            now: referenceDate.addingTimeInterval(5)
         )
         XCTAssertTrue(status?.isFreshDelivery ?? false)
     }
@@ -128,21 +127,26 @@ final class CallStatusPresentationTests: XCTestCase {
     // disappears entirely instead of lingering in the theme's accent color.
     func testSendDeliveredDisappearsAfterTheEmphasisWindow() {
         let status = CallStatusPresentation.status(
-            for: .sendDelivered(target: "Codex"),
-            now: referenceDate.addingTimeInterval(7),
-            deliveredAt: referenceDate
+            for: .sendDelivered(target: "Codex", deliveredAt: referenceDate),
+            now: referenceDate.addingTimeInterval(7)
         )
         XCTAssertNil(status)
     }
 
-    func testSendDeliveredWithNoDeliveredAtIsTreatedAsRecentNotHidden() {
-        // Real callers always supply deliveredAt the instant the phase becomes
-        // .sendDelivered (CallHUD.swift's callSendDeliveredAt tracking); a nil
-        // value only means "no timing proof yet", not "definitely stale", so
-        // this must still render rather than silently vanish.
-        let status = CallStatusPresentation.status(for: .sendDelivered(target: "Codex"), now: referenceDate, deliveredAt: nil)
-        XCTAssertNotNil(status)
-        XCTAssertTrue(status?.isFreshDelivery ?? false)
+    // INF-264 follow-up: a real regression this covers directly. `deliveredAt`
+    // now lives on the phase itself (the instruction's persisted delivery
+    // time), not a UI-side "first observed" clock, so a phase that already
+    // carries an old `deliveredAt` the very first time it is evaluated (e.g.
+    // an app relaunch re-attaching to a session whose most recent instruction
+    // was delivered hours ago with no reply yet) is hidden immediately,
+    // rather than depending on a `.onChange` transition that would never fire
+    // for a view's initial value.
+    func testSendDeliveredAlreadyStaleOnFirstObservationIsHiddenImmediately() {
+        let status = CallStatusPresentation.status(
+            for: .sendDelivered(target: "Codex", deliveredAt: referenceDate.addingTimeInterval(-3600)),
+            now: referenceDate
+        )
+        XCTAssertNil(status)
     }
 
     // MARK: - failed (category drives styling, never string matching)
@@ -256,7 +260,7 @@ final class CallStatusPresentationTests: XCTestCase {
             .speaking,
             .paused,
             .sendQueued(target: "Codex", since: referenceDate, reason: nil),
-            .sendDelivered(target: "Codex"),
+            .sendDelivered(target: "Codex", deliveredAt: referenceDate),
             .failed(.other, message: "boom"),
             .fallbackAnnounced(message: "Grok hit its usage limit; using Ollama for now.")
         ]

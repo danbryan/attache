@@ -37,17 +37,20 @@ enum CallStatusPresentation {
         let icon: Icon
         let isError: Bool
         /// True only for a `.sendDelivered` still inside
-        /// `deliveredEmphasisWindow` of the moment it was first observed.
-        /// Since `status(for:...)` returns nil once that window passes
-        /// (INF-264), any non-nil `.sendDelivered` status has this set.
+        /// `deliveredEmphasisWindow` of its own `deliveredAt`. Since
+        /// `status(for:...)` returns nil once that window passes (INF-264),
+        /// any non-nil `.sendDelivered` status has this set.
         let isFreshDelivery: Bool
     }
 
-    /// `now` (and `deliveredAt`) are supplied by the caller, never sampled
-    /// here, so this stays a pure function of its arguments. `deliveredAt` is
-    /// when the phase was first observed as `.sendDelivered` (the caller's
-    /// job to track, since `CallPhase` itself carries no timestamp for that
-    /// case); pass `nil` if unknown or not applicable.
+    /// `now` is supplied by the caller, never sampled here, so this stays a
+    /// pure function of its arguments. `.sendDelivered`'s own `deliveredAt`
+    /// (the instruction's real, persisted delivery timestamp, INF-264) is
+    /// what freshness is measured against, not a timestamp reconstructed from
+    /// UI view lifecycle events: a `.onChange`-based "first observed" clock
+    /// breaks the instant the phase already IS `.sendDelivered` when a view
+    /// first appears (e.g. app launch, session re-attach), since `.onChange`
+    /// never fires for a view's initial value.
     ///
     /// `recoveryConfirmation`, when non-nil, is shown in place of a
     /// `.failed` phase's message: picking a new model/provider from the
@@ -58,7 +61,7 @@ enum CallStatusPresentation {
     /// moment a new attempt starts.
     ///
     /// Returns `nil` for `.idle`: no status region renders.
-    static func status(for phase: CallPhase, now: Date, deliveredAt: Date? = nil, recoveryConfirmation: String? = nil) -> Status? {
+    static func status(for phase: CallPhase, now: Date, recoveryConfirmation: String? = nil) -> Status? {
         switch phase {
         case .idle:
             return nil
@@ -87,16 +90,16 @@ enum CallStatusPresentation {
             let base = reason ?? "Sending to \(target) when the session is quiet"
             return Status(text: withElapsed(base, since: since, now: now), icon: .spinner, isError: false, isFreshDelivery: false)
 
-        case .sendDelivered(let target):
+        case .sendDelivered(let target, let deliveredAt):
             // INF-264: the confirmation is a "just happened" nudge, not an
-            // ongoing status - once the emphasis window passes with no proof
-            // otherwise, the row disappears entirely rather than lingering in
-            // the theme's accent color. A nil `deliveredAt` (no timing info)
-            // is treated as recent rather than hidden, since real callers
-            // always supply it the instant the phase becomes `.sendDelivered`
-            // (see `CallHUD.swift`'s `callSendDeliveredAt` tracking); this
-            // guard only fires once we have positive proof the window passed.
-            if let deliveredAt, now.timeIntervalSince(deliveredAt) >= deliveredEmphasisWindow {
+            // ongoing status - once the emphasis window passes with no reply
+            // yet, the row disappears entirely rather than lingering in the
+            // theme's accent color. Measured against the phase's own
+            // `deliveredAt`, so an instruction that was already old the
+            // moment this phase was first derived (e.g. a stale delivered
+            // instruction still attached at app launch) is correctly hidden
+            // immediately rather than reading as fresh forever.
+            if now.timeIntervalSince(deliveredAt) >= deliveredEmphasisWindow {
                 return nil
             }
             return Status(

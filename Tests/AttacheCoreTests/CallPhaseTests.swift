@@ -9,6 +9,7 @@ final class CallPhaseTests: XCTestCase {
         target: String? = "Weekly Codex Improvement Review",
         createdAt: Date? = nil,
         confirmedAt: Date? = nil,
+        deliveredAt: Date? = nil,
         error: String? = nil
     ) -> Instruction {
         Instruction(
@@ -19,6 +20,7 @@ final class CallPhaseTests: XCTestCase {
             state: state,
             createdAt: createdAt ?? referenceDate,
             confirmedAt: confirmedAt,
+            deliveredAt: deliveredAt,
             error: error,
             origin: .tellAgent,
             targetDisplayName: target
@@ -119,13 +121,32 @@ final class CallPhaseTests: XCTestCase {
     }
 
     func testSendDeliveredForADeliveredInstruction() {
-        let signals = CallSignals(pendingSend: instruction(state: .delivered))
-        XCTAssertEqual(CallPhase.derive(from: signals), .sendDelivered(target: "Weekly Codex Improvement Review"))
+        let deliveredAt = referenceDate.addingTimeInterval(30)
+        let signals = CallSignals(pendingSend: instruction(state: .delivered, deliveredAt: deliveredAt))
+        XCTAssertEqual(
+            CallPhase.derive(from: signals),
+            .sendDelivered(target: "Weekly Codex Improvement Review", deliveredAt: deliveredAt)
+        )
     }
 
     func testSendDeliveredFallsBackToGenericTargetWhenNameIsMissing() {
-        let signals = CallSignals(pendingSend: instruction(state: .delivered, target: nil))
-        XCTAssertEqual(CallPhase.derive(from: signals), .sendDelivered(target: "the agent"))
+        let deliveredAt = referenceDate.addingTimeInterval(30)
+        let signals = CallSignals(pendingSend: instruction(state: .delivered, target: nil, deliveredAt: deliveredAt))
+        XCTAssertEqual(CallPhase.derive(from: signals), .sendDelivered(target: "the agent", deliveredAt: deliveredAt))
+    }
+
+    func testSendDeliveredFallsBackToDistantPastWhenTheInstructionHasNoDeliveredAt() {
+        // Defensive-only path: `InstructionReplyEngine` always sets
+        // `deliveredAt` when it moves an instruction to `.delivered`, so this
+        // covers the otherwise-impossible case where it's missing anyway. It
+        // must fall back to something already stale (`.distantPast`), not
+        // `now`, so a phase with genuinely unknown delivery time never reads
+        // as freshly delivered.
+        let signals = CallSignals(pendingSend: instruction(state: .delivered, deliveredAt: nil))
+        XCTAssertEqual(
+            CallPhase.derive(from: signals),
+            .sendDelivered(target: "Weekly Codex Improvement Review", deliveredAt: .distantPast)
+        )
     }
 
     func testCanceledSendIsTreatedAsIdle() {
@@ -259,10 +280,11 @@ final class CallPhaseTests: XCTestCase {
         // Not reachable through the current single-`pendingSend` signal (only
         // one Instruction, so only one state at a time), but pin the
         // reducer's own precedence for delivered vs. the queued sub-states.
-        let delivered = instruction(state: .delivered)
+        let deliveredAt = referenceDate.addingTimeInterval(30)
+        let delivered = instruction(state: .delivered, deliveredAt: deliveredAt)
         XCTAssertEqual(
             CallPhase.derive(from: CallSignals(pendingSend: delivered)),
-            .sendDelivered(target: "Weekly Codex Improvement Review")
+            .sendDelivered(target: "Weekly Codex Improvement Review", deliveredAt: deliveredAt)
         )
     }
 

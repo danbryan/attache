@@ -41,7 +41,18 @@ public enum CallPhase: Equatable {
     /// (e.g. why delivery is waiting) when one is available, nil otherwise.
     case sendQueued(target: String, since: Date, reason: String?)
     /// The instruction was delivered to the agent; waiting on its reply.
-    case sendDelivered(target: String)
+    /// `deliveredAt` is the instruction's own persisted delivery timestamp
+    /// (`Instruction.deliveredAt`), not a UI-side "when we first noticed"
+    /// clock (INF-264 follow-up): this phase is re-derived from scratch every
+    /// time `CallSignals.pendingSend` is recomputed, including the very first
+    /// evaluation after an app launch or a session re-attach, so relying on a
+    /// SwiftUI `.onChange` to capture "the moment the phase became this"
+    /// breaks whenever the phase already IS this on the view's first
+    /// appearance (`.onChange` never fires for a view's initial value). An
+    /// old, still-unreplied delivered instruction would then show its "just
+    /// delivered" emphasis forever. Carrying the real timestamp here instead
+    /// makes staleness a pure function of the phase's own data.
+    case sendDelivered(target: String, deliveredAt: Date)
     /// A conversation call failed, or a Tell Agent delivery failed.
     case failed(ConversationFailureCategory, message: String)
     /// The opt-in auto-fallback chain (INF-258/D5) just switched the live
@@ -217,7 +228,13 @@ extension CallPhase {
             let target = send.targetDisplayName ?? "the agent"
             switch send.state {
             case .delivered:
-                return .sendDelivered(target: target)
+                // `deliveredAt` should always be set once an instruction
+                // reaches `.delivered` (`InstructionReplyEngine` sets it at
+                // the same transition); `.distantPast` is a defensive
+                // fallback for that otherwise-impossible case, chosen so an
+                // instruction with no known delivery time reads as
+                // immediately stale rather than staying "fresh" forever.
+                return .sendDelivered(target: target, deliveredAt: send.deliveredAt ?? .distantPast)
             case .pending:
                 // Not confirmed yet: the wait is on the user, not the session.
                 return .sendQueued(
