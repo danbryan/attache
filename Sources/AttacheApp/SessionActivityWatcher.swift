@@ -134,7 +134,7 @@ final class SessionActivityWatcher {
         }
         fileOffsets[session.id] = size
 
-        let sourceKind: SourceKind = fileURL.path.contains("/.claude/") ? .claudeCode : .codex
+        let sourceKind = sourceKind(for: fileURL)
         let recentCutoff = firstRead ? now.addingTimeInterval(-firstReadWindow) : nil
         for signal in activitySignals(inText: text, sourceKind: sourceKind, recentCutoff: recentCutoff) {
             record(signal)
@@ -463,6 +463,16 @@ final class SessionActivityWatcher {
             matches.append((fileURL, modified))
         }
         return matches.sorted { $0.modified > $1.modified }.first?.url
+    }
+
+    /// See `CodexSessionWatcher.sourceKind(for:)`: classify by the actually
+    /// resolved `claudeProjectsDirectory` (which already honors a
+    /// `CLAUDE_CONFIG_DIR` override) rather than a literal `/.claude/`
+    /// substring, which misclassifies any override whose path does not
+    /// itself contain that substring.
+    func sourceKind(for fileURL: URL) -> SourceKind {
+        fileURL.resolvingSymlinksInPath().path.hasPrefix(claudeProjectsDirectory.resolvingSymlinksInPath().path)
+            ? .claudeCode : .codex
     }
 
     private func fileSize(_ fileURL: URL) -> UInt64? {

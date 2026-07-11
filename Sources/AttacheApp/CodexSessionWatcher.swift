@@ -32,6 +32,7 @@ final class CodexSessionWatcher {
     init(
         sessionsDirectory: URL? = nil,
         archivedSessionsDirectory: URL? = nil,
+        claudeProjectsDirectory: URL? = nil,
         defaults: UserDefaults = .standard
     ) {
         let codexHome = CodexPaths.home()
@@ -39,7 +40,7 @@ final class CodexSessionWatcher {
             .appendingPathComponent("sessions", isDirectory: true)
         self.archivedSessionsDirectory = archivedSessionsDirectory ?? codexHome
             .appendingPathComponent("archived_sessions", isDirectory: true)
-        self.claudeProjectsDirectory = ClaudePaths.projectsDirectory()
+        self.claudeProjectsDirectory = claudeProjectsDirectory ?? ClaudePaths.projectsDirectory()
         self.defaults = defaults
     }
 
@@ -112,7 +113,7 @@ final class CodexSessionWatcher {
             return
         }
 
-        let sourceKind: SourceKind = fileURL.path.contains("/.claude/") ? .claudeCode : .codex
+        let sourceKind = sourceKind(for: fileURL)
         let format: TranscriptFormat = sourceKind == .claudeCode ? .claude : .codex
 
         classifyAttention(session: session, fileURL: fileURL, format: format)
@@ -175,7 +176,7 @@ final class CodexSessionWatcher {
     private func drainIdle(session: CodexSessionTarget) {
         guard let existing = coalescers[session.id], existing.hasBufferedProse else { return }
         guard let fileURL = locatedFileURLs[session.id] ?? locateSessionFile(id: session.id) else { return }
-        let sourceKind: SourceKind = fileURL.path.contains("/.claude/") ? .claudeCode : .codex
+        let sourceKind = sourceKind(for: fileURL)
         for turn in existing.poll([]) {
             emit(turn, session: session, fileURL: fileURL, sourceKind: sourceKind)
         }
@@ -298,6 +299,30 @@ final class CodexSessionWatcher {
             AttacheLog.watcher.error("tail read failed for session \(sessionID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return ""
         }
+    }
+
+    /// A session file is Claude Code's iff it resolved under
+    /// `claudeProjectsDirectory`, which itself already honors a
+    /// `CLAUDE_CONFIG_DIR` override (`ClaudePaths.projectsDirectory()`). This
+    /// used to be a literal `path.contains("/.claude/")` check, which broke
+    /// for any override that does not itself contain that substring, e.g. a
+    /// disposable test home (`/tmp/.../claude-home/projects/...`, INF-257/E2)
+    /// or a real user's own `CLAUDE_CONFIG_DIR`: the file was still located
+    /// correctly (`locateSessionFile` searches `claudeProjectsDirectory`), but
+    /// got misclassified as Codex and parsed with the wrong transcript
+    /// format, so its completed turns were silently dropped instead of
+    /// becoming cards.
+    ///
+    /// Both sides are resolved with `resolvingSymlinksInPath()` before the
+    /// prefix check: `FileManager`'s enumerator (used by `findSessionFile`)
+    /// returns canonicalized paths, so a `claudeProjectsDirectory` built from
+    /// a `/tmp/...` override (a symlink to `/private/tmp/...` on macOS) would
+    /// otherwise never match the `/private/tmp/...` path the enumerator
+    /// actually handed back, silently falling through to `.codex` even though
+    /// the file was found under the right directory (INF-261).
+    func sourceKind(for fileURL: URL) -> SourceKind {
+        fileURL.resolvingSymlinksInPath().path.hasPrefix(claudeProjectsDirectory.resolvingSymlinksInPath().path)
+            ? .claudeCode : .codex
     }
 
     private func fileSize(_ fileURL: URL) -> UInt64? {
