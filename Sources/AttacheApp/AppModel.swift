@@ -2161,6 +2161,13 @@ final class AppModel: ObservableObject {
             fallbackProviderTitle: fallback.title
         )
         conversationFallbackHopCount += 1
+        // Spec item 6: log every hop with the category + provider pair, not
+        // just the aggregate count above. Never logs prompt/reply content
+        // (AttacheLog's own rule), only provider identifiers and the
+        // structural category.
+        AttacheLog.presentation.info(
+            "conversation auto-fallback hop category=\(category.rawValue, privacy: .public) from=\(failedProvider.rawValue, privacy: .public) to=\(fallback.rawValue, privacy: .public)"
+        )
         conversationStatus = announcement
         conversationFallbackAnnouncement = announcement
         playback.preview(announcement)
