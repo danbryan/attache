@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- three agents feeding one hub, which speaks -->
+  <circle cx="42" cy="66" r="11" fill="#F2F2F5"/>
+  <circle cx="34" cy="120" r="11" fill="#F2F2F5"/>
+  <circle cx="42" cy="174" r="11" fill="#F2F2F5"/>
+  <path d="M53 70 C 84 82, 92 96, 104 108" stroke="#F2F2F5" stroke-width="7" stroke-linecap="round"/>
+  <path d="M45 120 L 96 120" stroke="#F2F2F5" stroke-width="7" stroke-linecap="round"/>
+  <path d="M53 170 C 84 158, 92 144, 104 132" stroke="#F2F2F5" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="126" cy="120" r="26" fill="#F2F2F5"/>
+  <path d="M170 96 A 34 34 0 0 1 170 144" stroke="#0A84FF" stroke-width="9" stroke-linecap="round"/>
+  <path d="M190 78 A 60 60 0 0 1 190 162" stroke="#0A84FF" stroke-width="9" stroke-linecap="round" opacity="0.62"/>
+  <path d="M209 62 A 84 84 0 0 1 209 178" stroke="#0A84FF" stroke-width="9" stroke-linecap="round" opacity="0.3"/>
+</svg>

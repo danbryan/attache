@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="d1-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4169C8"/>
+      <stop offset="1" stop-color="#1B2960"/>
+    </linearGradient>
+    <linearGradient id="d1-sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <path id="d1-spark" d="M0 -34 C4 -12 12 -4 34 0 C12 4 4 12 0 34 C-4 12 -12 4 -34 0 C-12 -4 -4 -12 0 -34 Z"/>
+    <clipPath id="d1-jacket">
+      <rect x="292" y="660" width="440" height="200" rx="64"/>
+    </clipPath>
+    <filter id="d1-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.38"/>
+    </filter>
+  </defs>
+  <g filter="url(#d1-shadow)">
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#d1-bg)"/>
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#d1-sheen)"/>
+    <use href="#d1-spark" transform="translate(784 262) scale(0.8)" fill="#FFFFFF" opacity="0.9"/>
+    <use href="#d1-spark" transform="translate(236 318) scale(0.55)" fill="#FFFFFF" opacity="0.75"/>
+    <use href="#d1-spark" transform="translate(826 342) scale(0.4)" fill="#FFFFFF" opacity="0.6"/>
+    <g transform="rotate(-3 512 540)">
+      <line x1="512" y1="340" x2="512" y2="296" stroke="#FFF3DF" stroke-width="20" stroke-linecap="round"/>
+      <circle cx="512" cy="262" r="36" fill="#F5C863" opacity="0.3"/>
+      <use href="#d1-spark" transform="translate(512 262) scale(0.75)" fill="#F5C863"/>
+      <rect x="478" y="630" width="68" height="36" fill="#FFF3DF"/>
+      <rect x="332" y="340" width="360" height="310" rx="120" fill="#FFF3DF"/>
+      <circle cx="428" cy="478" r="32" fill="#10243E"/>
+      <circle cx="596" cy="478" r="32" fill="#10243E"/>
+      <circle cx="416" cy="466" r="10" fill="#FFFFFF"/>
+      <circle cx="584" cy="466" r="10" fill="#FFFFFF"/>
+      <circle cx="382" cy="548" r="24" fill="#FF9DA1" opacity="0.62"/>
+      <circle cx="642" cy="548" r="24" fill="#FF9DA1" opacity="0.62"/>
+      <path d="M472 556 Q512 584 552 558" fill="none" stroke="#10243E" stroke-width="17" stroke-linecap="round"/>
+      <rect x="292" y="660" width="440" height="200" rx="64" fill="#1E2A4A"/>
+      <path d="M462 660 L562 660 L512 740 Z" fill="#FFF3DF"/>
+      <path d="M512 668 L536 700 L512 764 L488 700 Z" fill="#D64545"/>
+      <path d="M412 660 L512 660 L452 760 Z" fill="#16203A"/>
+      <path d="M612 660 L512 660 L572 760 Z" fill="#16203A"/>
+      <g clip-path="url(#d1-jacket)">
+        <path d="M366 660 L446 660 L640 862 L560 862 Z" fill="#C9364C"/>
+        <line x1="366" y1="660" x2="560" y2="862" stroke="#F5C863" stroke-width="9"/>
+        <line x1="446" y1="660" x2="640" y2="862" stroke="#F5C863" stroke-width="9"/>
+      </g>
+      <use href="#d1-spark" transform="translate(503 761) scale(0.8)" fill="#F5C863"/>
+      <circle cx="503" cy="761" r="24" fill="#F5C863"/>
+      <circle cx="503" cy="761" r="11" fill="#C9364C"/>
+      <path d="M636 700 L666 700 L650 726 Z" fill="#FFF3DF" opacity="0.95"/>
+    </g>
+  </g>
+</svg>

@@ -129,8 +129,12 @@ export const brain = (() => {
   const narrStart = 0.35;
   const watchAt = 0.6;
   const brainAt = narrStart + 3.2;   // "…thinks with its own model"
-  const toggleAt = narrStart + 5.2;  // local -> frontier slide
-  const fallbackAt = narrStart + nsec("n_brain") - 4.2; // "…runs dry" banner
+  // The toggle must flip AS the narration says "frontier", not sentences
+  // earlier. "frontier" is word 25 of 37 in n_brain, so anchor the flip to
+  // that fraction of the measured clip (slightly early so the highlight
+  // lands mid-word).
+  const toggleAt = narrStart + nsec("n_brain") * 0.64;
+  const fallbackAt = narrStart + nsec("n_brain") * 0.80; // "…runs dry" banner
   const len = narrStart + nsec("n_brain") + 1.7;
   return { narrStart, watchAt, brainAt, toggleAt, fallbackAt, len };
 })();

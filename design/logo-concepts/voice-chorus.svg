@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- three agents, one shared equalizer voice -->
+  <circle cx="44" cy="60" r="11" fill="#0A84FF"/>
+  <circle cx="36" cy="120" r="11" fill="#0A84FF"/>
+  <circle cx="44" cy="180" r="11" fill="#0A84FF"/>
+  <path d="M55 64 C 78 76, 84 92, 96 104" stroke="#0A84FF" stroke-width="6" stroke-linecap="round" opacity="0.7"/>
+  <path d="M47 120 L 94 120" stroke="#0A84FF" stroke-width="6" stroke-linecap="round" opacity="0.7"/>
+  <path d="M55 176 C 78 164, 84 148, 96 136" stroke="#0A84FF" stroke-width="6" stroke-linecap="round" opacity="0.7"/>
+  <rect x="106" y="96" width="13" height="48" rx="6.5" fill="#F2F2F5"/>
+  <rect x="130" y="66" width="13" height="108" rx="6.5" fill="#F2F2F5"/>
+  <rect x="154" y="84" width="13" height="72" rx="6.5" fill="#F2F2F5"/>
+  <rect x="178" y="58" width="13" height="124" rx="6.5" fill="#F2F2F5"/>
+  <rect x="202" y="98" width="13" height="44" rx="6.5" fill="#F2F2F5"/>
+</svg>

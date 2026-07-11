@@ -1,0 +1,65 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Attaché — voice logo concepts</title>
+<style>
+  body { background: #0C0D12; color: #F2F2F5; font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 48px 56px 80px; }
+  h1 { font-size: 34px; margin: 0 0 6px; }
+  .sub { color: #9A9AA3; font-size: 17px; margin-bottom: 40px; }
+  h2 { font-size: 22px; margin: 56px 0 20px; color: #9A9AA3; font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+  .tile { background: linear-gradient(170deg, #16171E, #101116); border: 1px solid rgba(255,255,255,0.10); border-radius: 20px; padding: 26px 26px 22px; }
+  .tile .big { display: flex; align-items: center; justify-content: center; height: 240px; }
+  .tile .big img { width: 216px; height: 216px; }
+  .sizes { display: flex; align-items: center; gap: 26px; margin: 18px 0 16px; padding: 14px 18px; background: rgba(255,255,255,0.04); border-radius: 12px; }
+  .sizes img { display: block; }
+  .sizes .cap { color: #55555E; font-size: 12px; text-align: center; margin-top: 6px; }
+  .name { font-size: 20px; font-weight: 700; }
+  .why { color: #9A9AA3; font-size: 15px; line-height: 1.5; margin-top: 6px; }
+  .old { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; }
+  .old .tile { padding: 18px; }
+  .old img { width: 100%; height: 120px; }
+  .old .name { font-size: 14px; font-weight: 600; color: #9A9AA3; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>Attaché — voice logo concepts</h1>
+<div class="sub">Theme: one voice for many agents. Three agent nodes, a hub, and something vocalizing. Each shown at wordmark, dock, and menu-bar size.</div>
+
+<div class="grid" id="new"></div>
+
+<h2>Earlier explorations, for comparison</h2>
+<div class="old" id="old"></div>
+
+<script>
+const CONCEPTS = [
+  ["voice-relay.svg", "Relay", "Three agents feed one hub; the hub speaks. The most literal read of what Attaché does, still abstract enough to wear."],
+  ["voice-one-voice.svg", "One Voice", "Three streams braid into a single spoken waveform. Many agents in, one voice out."],
+  ["voice-chorus.svg", "Chorus", "Agents connect straight into the equalizer itself. Keeps the current logo's waveform DNA, adds the agents."],
+  ["voice-speech-hub.svg", "Speech Hub", "One speech bubble doing the talking for three agents below. The most direct, reads instantly at any size."],
+  ["voice-beacon.svg", "Beacon", "Three agents in orbit around a speaking core. Calm, geometric, feels like a status item."],
+  ["voice-triband.svg", "Triband Mic", "A microphone carrying the waveform, cradled by two arcs with three agents at the base. Voice-first read."],
+];
+const OLD = [
+  "attache-logo-case.svg","attache-logo-bubble.svg","attache-logo-megaphone.svg","attache-logo-mixtape.svg","attache-logo-bot.svg",
+  "attache-diplomat-ambassador.svg","attache-diplomat-envoy.svg","attache-diplomat-courier.svg","attache-diplomat-interpreter.svg","attache-diplomat-military.svg",
+  "little-agent-hello.svg","little-agent-peek.svg","little-agent-wisp.svg","little-agent-headset.svg","little-agent-incognito.svg",
+];
+document.getElementById("new").innerHTML = CONCEPTS.map(([f, name, why]) => `
+  <div class="tile">
+    <div class="big"><img src="${f}"></div>
+    <div class="sizes">
+      <div><img src="${f}" width="64" height="64"><div class="cap">64</div></div>
+      <div><img src="${f}" width="32" height="32"><div class="cap">32</div></div>
+      <div><img src="${f}" width="18" height="18"><div class="cap">18</div></div>
+      <div style="background:#E8E8ED;border-radius:8px;padding:8px 10px 2px;"><img src="${f}" width="18" height="18"><div class="cap" style="color:#666">light</div></div>
+    </div>
+    <div class="name">${name}</div>
+    <div class="why">${why}</div>
+  </div>`).join("");
+document.getElementById("old").innerHTML = OLD.map((f) => `
+  <div class="tile"><img src="${f}"><div class="name">${f.replace(".svg","").replace(/attache-|logo-|diplomat-|little-agent-/g,"")}</div></div>`).join("");
+</script>
+</body>
+</html>

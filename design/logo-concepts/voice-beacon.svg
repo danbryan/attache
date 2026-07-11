@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- three agents in orbit around one speaking beacon -->
+  <circle cx="120" cy="128" r="74" stroke="#F2F2F5" stroke-width="5" opacity="0.35"/>
+  <circle cx="120" cy="54" r="12" fill="#F2F2F5"/>
+  <circle cx="56" cy="165" r="12" fill="#F2F2F5"/>
+  <circle cx="184" cy="165" r="12" fill="#F2F2F5"/>
+  <circle cx="120" cy="128" r="24" fill="#0A84FF"/>
+  <path d="M104 118 C 110 124, 110 132, 104 138 M136 118 C 130 124, 130 132, 136 138" stroke="#0A0A0D" stroke-width="0" fill="none"/>
+  <rect x="108" y="118" width="5" height="20" rx="2.5" fill="#0A0A0D"/>
+  <rect x="118" y="112" width="5" height="32" rx="2.5" fill="#0A0A0D"/>
+  <rect x="128" y="120" width="5" height="16" rx="2.5" fill="#0A0A0D"/>
+</svg>

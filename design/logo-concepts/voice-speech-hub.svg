@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- one speech bubble speaking for three connected agents -->
+  <rect x="62" y="40" width="150" height="108" rx="30" fill="#F2F2F5"/>
+  <path d="M96 148 L 84 180 L 126 148 Z" fill="#F2F2F5"/>
+  <rect x="92" y="76" width="9" height="36" rx="4.5" fill="#0A0A0D"/>
+  <rect x="110" y="64" width="9" height="60" rx="4.5" fill="#0A0A0D"/>
+  <rect x="128" y="84" width="9" height="20" rx="4.5" fill="#0A0A0D"/>
+  <rect x="146" y="58" width="9" height="72" rx="4.5" fill="#0A0A0D"/>
+  <rect x="164" y="78" width="9" height="32" rx="4.5" fill="#0A0A0D"/>
+  <circle cx="36" cy="186" r="10" fill="#0A84FF"/>
+  <circle cx="120" cy="214" r="10" fill="#0A84FF"/>
+  <circle cx="204" cy="186" r="10" fill="#0A84FF"/>
+  <path d="M46 182 C 62 176, 68 170, 80 164" stroke="#0A84FF" stroke-width="7" stroke-linecap="round"/>
+  <path d="M120 202 L 120 182" stroke="#0A84FF" stroke-width="7" stroke-linecap="round"/>
+  <path d="M194 182 C 178 176, 172 172, 158 166" stroke="#0A84FF" stroke-width="7" stroke-linecap="round"/>
+</svg>

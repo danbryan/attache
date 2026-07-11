@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- three agent streams braid into a single spoken waveform -->
+  <circle cx="30" cy="72" r="10" fill="#F2F2F5"/>
+  <circle cx="30" cy="120" r="10" fill="#F2F2F5"/>
+  <circle cx="30" cy="168" r="10" fill="#F2F2F5"/>
+  <path d="M40 72 C 74 72, 84 112, 112 118" stroke="#F2F2F5" stroke-width="8" stroke-linecap="round"/>
+  <path d="M40 120 L 110 120" stroke="#F2F2F5" stroke-width="8" stroke-linecap="round"/>
+  <path d="M40 168 C 74 168, 84 128, 112 122" stroke="#F2F2F5" stroke-width="8" stroke-linecap="round"/>
+  <path d="M112 120 C 126 120, 128 96, 140 96 C 154 96, 152 148, 166 148 C 178 148, 176 104, 188 104 C 198 104, 198 132, 208 132 C 214 132, 214 120, 220 120"
+        stroke="#0A84FF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

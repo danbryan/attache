@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none">
+  <!-- the A kept, rebuilt: agents feed its legs, the apex speaks -->
+  <path d="M70 196 L 120 64 L 170 196" stroke="#F2F2F5" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M92 148 C 102 140, 108 156, 118 148 C 128 140, 134 156, 148 148" stroke="#F2F2F5" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="52" cy="208" r="10" fill="#F2F2F5"/>
+  <circle cx="188" cy="208" r="10" fill="#F2F2F5"/>
+  <circle cx="120" cy="222" r="10" fill="#F2F2F5"/>
+  <path d="M143 46 A 34 34 0 0 1 157 78" stroke="#0A84FF" stroke-width="8" stroke-linecap="round"/>
+  <path d="M158 30 A 56 56 0 0 1 180 84" stroke="#0A84FF" stroke-width="8" stroke-linecap="round" opacity="0.55"/>
+</svg>
