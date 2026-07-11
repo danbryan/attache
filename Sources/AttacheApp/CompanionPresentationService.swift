@@ -492,9 +492,7 @@ final class CompanionPresentationService {
             payload["tools"] = tools
         }
         if settings.provider.supportsReasoningEffort,
-           let reasoningEffort = settings.reasoningEffort,
-           !reasoningEffort.isEmpty,
-           reasoningEffort.lowercased() != "default" {
+           let reasoningEffort = normalizedReasoningEffort(settings.reasoningEffort) {
             payload["reasoning_effort"] = reasoningEffort
         }
         if settings.provider.supportsServiceTier,
@@ -815,9 +813,7 @@ final class CompanionPresentationService {
             }
         ]
         if settings.provider.supportsReasoningEffort,
-           let reasoningEffort = settings.reasoningEffort,
-           !reasoningEffort.isEmpty,
-           reasoningEffort.lowercased() != "default" {
+           let reasoningEffort = normalizedReasoningEffort(settings.reasoningEffort) {
             payload["reasoning_effort"] = reasoningEffort
         }
         if settings.provider.supportsServiceTier,
@@ -990,6 +986,24 @@ final class CompanionPresentationService {
         guard !trimmed.isEmpty else { return nil }
         switch trimmed.lowercased() {
         case "default", "standard":
+            return nil
+        default:
+            return trimmed
+        }
+    }
+
+    /// `"default"` (use the API's own default) and `"none"` (the user
+    /// explicitly turned reasoning effort off) both mean "omit the field",
+    /// not "send this literal string". Sending `"none"` as a real
+    /// `reasoning_effort` value caused a 400 from any model that rejects the
+    /// field outright rather than accepting an off-like value. Internal
+    /// (not private) so `Tests/AttacheAppTests/CompanionPresentationServiceTests.swift`
+    /// can pin this directly without standing up a real HTTP round trip.
+    static func normalizedReasoningEffort(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        switch trimmed.lowercased() {
+        case "default", "none":
             return nil
         default:
             return trimmed
