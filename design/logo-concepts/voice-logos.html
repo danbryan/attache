@@ -29,6 +29,9 @@
 
 <div class="grid" id="new"></div>
 
+<h2 id="faces-h">Relay, Upright — with a face</h2>
+<div class="grid" id="faces"></div>
+
 <h2>Earlier explorations, for comparison</h2>
 <div class="old" id="old"></div>
 
@@ -49,6 +52,26 @@ const OLD = [
   "little-agent-hello.svg","little-agent-peek.svg","little-agent-wisp.svg","little-agent-headset.svg","little-agent-incognito.svg",
 ];
 document.getElementById("new").innerHTML = CONCEPTS.map(([f, name, why]) => `
+  <div class="tile">
+    <div class="big"><img src="${f}"></div>
+    <div class="sizes">
+      <div><img src="${f}" width="64" height="64"><div class="cap">64</div></div>
+      <div><img src="${f}" width="32" height="32"><div class="cap">32</div></div>
+      <div><img src="${f}" width="18" height="18"><div class="cap">18</div></div>
+      <div style="background:#E8E8ED;border-radius:8px;padding:8px 10px 2px;"><img src="${f}" width="18" height="18"><div class="cap" style="color:#666">light</div></div>
+    </div>
+    <div class="name">${name}</div>
+    <div class="why">${why}</div>
+  </div>`).join("");
+const FACES = [
+  ["relay-face-joy.svg", "Joy", "The headset face's energy: shut-happy eyes, rosy cheeks, open mouth mid-sentence."],
+  ["relay-face-cheer.svg", "Cheer", "Full laugh, mouth wide open. Loudest of the set."],
+  ["relay-face-grin.svg", "Grin", "Open dot eyes and a simple smile. The calm default."],
+  ["relay-face-wow.svg", "Wow", "Round eyes, little o mouth. Something just finished."],
+  ["relay-face-wink.svg", "Wink", "One eye shut, smirk. For the playful moments."],
+  ["relay-face-zen.svg", "Zen", "Soft closed lids, tiny smile. Idle and content."],
+];
+document.getElementById("faces").innerHTML = FACES.map(([f, name, why]) => `
   <div class="tile">
     <div class="big"><img src="${f}"></div>
     <div class="sizes">
