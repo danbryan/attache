@@ -299,6 +299,17 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 8, "the hard timeout should cut the subprocess off well before it exits on its own")
     }
 
+    func testDefaultSpawnTimeoutSurvivesAProcessThatIgnoresSigterm() async {
+        // Regression for the 2026-07-11 crash: the timeout path used to read
+        // `terminationStatus` right after `terminate()`, and Foundation throws
+        // a fatal NSException if the child has not actually exited yet. A
+        // child that ignores SIGTERM makes that race deterministic; without
+        // the fix this test dies with SIGABRT instead of failing politely.
+        let result = await AgentResumeDeliveryAdapter.defaultSpawn(
+            "/bin/sh", ["-c", "trap '' TERM; sleep 10"], timeout: 1)
+        XCTAssertTrue(result.timedOut)
+    }
+
     private nonisolated static func claudeSuccessJSON(result: String, sessionID: String = "692006d2-abf1-4780-99b2-eb0ce808ba05") -> String {
         let payload: [String: Any] = [
             "type": "result",

@@ -9,6 +9,7 @@ final class CallPhaseTests: XCTestCase {
         target: String? = "Weekly Codex Improvement Review",
         createdAt: Date? = nil,
         confirmedAt: Date? = nil,
+        deliveringAt: Date? = nil,
         deliveredAt: Date? = nil,
         resultingCardID: String? = nil,
         error: String? = nil
@@ -22,6 +23,7 @@ final class CallPhaseTests: XCTestCase {
             createdAt: createdAt ?? referenceDate,
             confirmedAt: confirmedAt,
             deliveredAt: deliveredAt,
+            deliveringAt: deliveringAt,
             error: error,
             resultingCardID: resultingCardID,
             origin: .tellAgent,
@@ -112,16 +114,30 @@ final class CallPhaseTests: XCTestCase {
         )
     }
 
+    /// Once the resume is actually running, "when the session is quiet" is no
+    /// longer the truth (the wait already ended); a long working turn made
+    /// that read as a stuck queue (2026-07-11). `.delivering` names the real
+    /// phase and counts from when the spawn started.
     func testSendQueuedForADeliveringInstruction() {
-        let signals = CallSignals(pendingSend: instruction(state: .delivering, createdAt: referenceDate))
+        let deliveringAt = referenceDate.addingTimeInterval(9)
+        let signals = CallSignals(pendingSend: instruction(state: .delivering, createdAt: referenceDate, deliveringAt: deliveringAt))
         XCTAssertEqual(
             CallPhase.derive(from: signals),
             .sendQueued(
                 target: "Weekly Codex Improvement Review",
-                since: referenceDate,
-                reason: "Sending to Weekly Codex Improvement Review when the session is quiet"
+                since: deliveringAt,
+                reason: "Delivering to Weekly Codex Improvement Review, it may keep working before it answers"
             )
         )
+    }
+
+    func testDeliveringWithoutATimestampFallsBackToConfirmedAt() {
+        let confirmedAt = referenceDate.addingTimeInterval(4)
+        let signals = CallSignals(pendingSend: instruction(state: .delivering, createdAt: referenceDate, confirmedAt: confirmedAt))
+        guard case .sendQueued(_, let since, _) = CallPhase.derive(from: signals) else {
+            return XCTFail("expected sendQueued")
+        }
+        XCTAssertEqual(since, confirmedAt)
     }
 
     func testSendDeliveredForADeliveredInstruction() {

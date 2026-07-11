@@ -275,7 +275,7 @@ extension CallPhase {
                     since: send.createdAt,
                     reason: "Waiting for you to confirm the send to \(target)"
                 )
-            case .confirmed, .delivering:
+            case .confirmed:
                 // Confirmed: the only thing left to wait on is the target
                 // session going idle (docs/two-way.md Idle detection), so name
                 // that explicitly instead of leaving the UI to guess (INF-248/B3).
@@ -287,6 +287,17 @@ extension CallPhase {
                     target: target,
                     since: send.confirmedAt ?? send.createdAt,
                     reason: "Sending to \(target) when the session is quiet"
+                )
+            case .delivering:
+                // The resume is actually running now, and a working turn can
+                // legitimately take minutes. Saying "when the session is
+                // quiet" here read as a stuck queue during a real 5-minute
+                // delivery (2026-07-11); name the phase that is actually
+                // happening, counted from when the spawn started.
+                return .sendQueued(
+                    target: target,
+                    since: send.deliveringAt ?? send.confirmedAt ?? send.createdAt,
+                    reason: "Delivering to \(target), it may keep working before it answers"
                 )
             case .failed, .canceled:
                 break

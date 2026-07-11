@@ -277,8 +277,17 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
                 finishLock.lock()
                 timedOutFlag = true
                 finishLock.unlock()
+                // Never read terminationStatus here: terminate() only sends
+                // SIGTERM and returns immediately, and Foundation throws an
+                // (uncatchable-from-Swift) NSException if terminationStatus is
+                // read while the process is still running. That exact race
+                // crashed the app when a long resume turn hit the timeout
+                // (2026-07-11 crash report). Report a synthetic exit code;
+                // deliver() only looks at timedOut for this branch, and the
+                // terminationHandler that fires after the kill completes is a
+                // no-op because finish() already ran.
                 if process.isRunning { process.terminate() }
-                finish(exitCode: process.terminationStatus)
+                finish(exitCode: -1)
             }
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
 

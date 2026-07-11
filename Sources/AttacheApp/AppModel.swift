@@ -491,7 +491,11 @@ final class AppModel: ObservableObject {
         let index = presets.firstIndex(where: { abs($0 - playbackSpeed) < 0.05 }) ?? 0
         playbackSpeed = presets[(index + 1) % presets.count]
     }
-    @Published var showActivityInsights: Bool = false {
+    // Default ON (was off through 0.1.3): the ambient verbs are the "glance
+    // at the corner and see what your agents are up to" experience, and users
+    // expected them without knowing there was a toggle. A stored preference
+    // still wins on load, so anyone who turned them off stays off.
+    @Published var showActivityInsights: Bool = true {
         didSet {
             defaults.set(showActivityInsights, forKey: CompanionPreferenceKey.showActivityInsights)
             updateCodexWatcher()
