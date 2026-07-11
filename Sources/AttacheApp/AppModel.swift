@@ -856,6 +856,13 @@ final class AppModel: ObservableObject {
         }
         setupMediaRemote()
         setupConversationObservers()
+        // Screenshot-matrix pose support (INF-244): inert unless
+        // ATTACHE_UI_TEST_FORCE_LISTENING=1 rides alongside ATTACHE_UI_TEST=1
+        // (see MicTranscriptController.shouldForceListeningForPose). Applied
+        // right after setupConversationObservers() subscribes to
+        // micTranscript.$isListening so the pose still reaches the first
+        // callPhase refresh.
+        micTranscript.applyForcedListeningPoseIfRequested(environment: environment)
         rebuildSessionIndexer()
         sessionRecords = filteredEnabledRecords(sessionIndexer.allRecords)
         refreshSessionIndex()

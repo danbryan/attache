@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CoreGraphics
 
 // AttacheUISmoke: accessibility-driven UI smoke harness (INF-156).
 //
@@ -275,10 +276,105 @@ func enterLiveInstruction(_ instruction: String, mustContain token: String? = ni
     }
 }
 
+/// Types `text` into the on-call "Call message" field and presses Send.
+/// Shared by the `call-*` pose states below (INF-244's screenshot matrix);
+/// mirrors the proven inline pattern flows f15/f16 already use, but factored
+/// out since every `call-*` pose case needs the identical steps. Assumes a
+/// call is already open (Command-L) and, when relevant, the right
+/// destination is already selected.
+func sendCallMessagePose(_ text: String) throws {
+    let field = try waitForElement("call message field", in: try mainWindow(),
+                                   role: kAXTextFieldRole as String, exactly: "Call message",
+                                   timeout: 20)
+    _ = field.setFocused()
+    if !field.setValue(text) { app.type(text) }
+    try waitUntil("call text to land", timeout: 8, interval: 0.5) {
+        if field.stringValue.contains(text) { return true }
+        _ = field.setFocused()
+        if !field.setValue(text) { app.type(text) }
+        return field.stringValue.contains(text)
+    }
+    let send = try waitForElement("call send button", in: try mainWindow(),
+                                  role: kAXButtonRole as String, exactly: "Send call message",
+                                  timeout: 8)
+    guard send.press() else {
+        throw SmokeError(message: "AXPress failed on call send button: \(send.summary); actions: \(send.actionNames)")
+    }
+}
+
+/// Waits for the on-call composer's phase-driven status row
+/// (`CallHUD.swift`'s `callStatusRow`, AX label "Conversation status: <text>")
+/// to contain every token in `tokens`. This is the row `CallStatusPresentation`
+/// drives from `CallPhase` alone (INF-244), so matching it is the direct
+/// proof a given phase is on screen, not just an incidental caption elsewhere.
+@discardableResult
+func waitForConversationStatus(containingAll tokens: [String], timeout: TimeInterval) throws -> AXElement {
+    try waitForElement("conversation status containing \(tokens)", in: try mainWindow(), timeout: timeout) { element in
+        element.matches("Conversation status:") && tokens.allSatisfy { element.matches($0) }
+    }
+}
+
+/// The app's frontmost normal-layer (kCGWindowLayer == 0) window id, picking
+/// the largest by area if there is more than one (the main content window
+/// over any small utility panel).
+func frontmostWindowID(forPID pid: pid_t) -> CGWindowID? {
+    guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: AnyObject]] else {
+        return nil
+    }
+    func area(of info: [String: AnyObject]) -> CGFloat {
+        guard let bounds = info[kCGWindowBounds as String] as? [String: CGFloat] else { return 0 }
+        return (bounds["Width"] ?? 0) * (bounds["Height"] ?? 0)
+    }
+    let candidates = infoList.filter { info in
+        (info[kCGWindowOwnerPID as String] as? pid_t) == pid
+            && (info[kCGWindowLayer as String] as? Int) == 0
+    }
+    return candidates.max(by: { area(of: $0) < area(of: $1) })?[kCGWindowNumber as String] as? CGWindowID
+}
+
+/// Screenshots the app's own window by CGWindowID via `screencapture -l`,
+/// never the whole screen. This is INF-244's fix for the screenshot matrix:
+/// a full-screen `screencapture -x` captures whatever macOS Space is
+/// currently visible to a human at the physical display, which on a machine
+/// in active concurrent use is frequently NOT the Space the harness's
+/// packaged app launched into (AXUIElement actions work across Spaces; the
+/// screen the human sees does not follow them). Window-id capture pulls
+/// directly from the window server's buffer for that specific window,
+/// independent of which Space is frontmost, so the screenshot is guaranteed
+/// to show Attaché rather than whatever else happened to be on screen.
+func captureAppWindowScreenshot(to path: String) {
+    guard let windowID = frontmostWindowID(forPID: app.pid) else {
+        print("screenshot: could not resolve a window id for pid \(app.pid); skipping capture to \(path)")
+        return
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    // -x: no sound. -o: no window shadow (keeps the crop to just the window's
+    // own content). -l<id>: capture exactly this window, any Space.
+    process.arguments = ["-x", "-o", "-l\(windowID)", path]
+    do {
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            print("screenshot: screencapture exited \(process.terminationStatus) for window \(windowID)")
+        }
+    } catch {
+        print("screenshot: failed to launch screencapture: \(error)")
+    }
+}
+
 // Pose mode: launch the app, arrange a named state, and hold it on screen so a
 // human or screenshot tool can capture it. SMOKE_POSE=inbox|settings|live
 // (comma-separated applies in order), SMOKE_TEXTSCALE=1.3 to set text size,
 // SMOKE_POSE_SECONDS to change the hold time.
+//
+// The call-* states below pose each CallPhase the on-call composer can show
+// (INF-244's screenshot-matrix success criterion), driven only through
+// deterministic local fixtures (a mock OpenAI-compatible personality
+// provider, a fake `codex` CLI shadow, or a test-only mic override) so this
+// never depends on real network access or paid provider credentials. See
+// scripts/call-phase-screenshot-matrix.sh for how each state's fixture is
+// wired up before launch.
 if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
     let holdSeconds = Double(ProcessInfo.processInfo.environment["SMOKE_POSE_SECONDS"] ?? "30") ?? 30
     do {
@@ -329,9 +425,123 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 let pause = try waitForElement("Pause control", in: try mainWindow(),
                                                role: kAXButtonRole as String, containing: "Pause")
                 _ = pause.press()
+
+            // The seven call-* states below pose CallPhase.thinking,
+            // .preparingAudio, .speaking, .sendQueued, .sendDelivered,
+            // .failed, and .listening (INF-244's screenshot matrix). Each
+            // drives the on-call composer to the matching real phase, then
+            // waits for CallStatusPresentation's own status text via AX
+            // before falling through to the shared hold-sleep below, so the
+            // screenshot proves the real phase rendered, not a mockup.
+            case "call-thinking":
+                let prompt = ProcessInfo.processInfo.environment["ATTACHE_POSE_PROMPT"] ?? "Attache pose thinking check"
+                try dismissOnboardingIfPresent()
+                app.key(Key.l, command: true)
+                try selectConversationDestination("Ask Attaché")
+                try sendCallMessagePose(prompt)
+                try waitForConversationStatus(containingAll: ["Thinking"], timeout: 20)
+
+            case "call-preparingaudio":
+                let prompt = ProcessInfo.processInfo.environment["ATTACHE_POSE_PROMPT"] ?? "Attache pose preparing audio check"
+                try dismissOnboardingIfPresent()
+                app.key(Key.l, command: true)
+                try selectConversationDestination("Ask Attaché")
+                try sendCallMessagePose(prompt)
+                try waitForConversationStatus(containingAll: ["Preparing audio"], timeout: 30)
+
+            case "call-speaking":
+                let prompt = ProcessInfo.processInfo.environment["ATTACHE_POSE_PROMPT"] ?? "Attache pose speaking check"
+                try dismissOnboardingIfPresent()
+                app.key(Key.l, command: true)
+                try selectConversationDestination("Ask Attaché")
+                try sendCallMessagePose(prompt)
+                try waitForConversationStatus(containingAll: ["Speaking"], timeout: 30)
+                // Best-effort freeze: a conversation reply plays through the
+                // same live preview transport the off-call "play" case above
+                // pauses (livePreviewTransportBar in CompanionRootView.swift),
+                // reachable on-call because this is a preview, not a saved
+                // card. If it is not found quickly, fall through and hold
+                // whatever is on screen instead of failing the whole pose.
+                if let pause = try? waitForElement("live preview pause control", in: try mainWindow(),
+                                                   role: kAXButtonRole as String, containing: "Pause",
+                                                   timeout: 4) {
+                    _ = pause.press()
+                }
+
+            case "call-failed":
+                let prompt = ProcessInfo.processInfo.environment["ATTACHE_POSE_PROMPT"] ?? "Attache pose failure check"
+                try dismissOnboardingIfPresent()
+                app.key(Key.l, command: true)
+                try selectConversationDestination("Ask Attaché")
+                try sendCallMessagePose(prompt)
+                try waitForConversationStatus(containingAll: ["usage limit"], timeout: 20)
+
+            case "call-sendqueued", "call-senddelivered":
+                let env = ProcessInfo.processInfo.environment
+                guard let nonce = env["ATTACHE_POSE_AGENT_NONCE"], !nonce.isEmpty,
+                      let sessionID = env["ATTACHE_POSE_AGENT_SESSION_ID"], !sessionID.isEmpty,
+                      let token = env["ATTACHE_POSE_AGENT_TOKEN"], !token.isEmpty else {
+                    throw SmokeError(message: "\(state) pose requires ATTACHE_POSE_AGENT_NONCE/_SESSION_ID/_TOKEN")
+                }
+                let prompt = "reply exactly \(token) and do not use tools"
+                try dismissOnboardingIfPresent()
+                try focusSessionInCommandK(query: nonce, sessionID: sessionID)
+                app.key(Key.l, command: true)
+                try selectConversationDestination("Tell Agent")
+                _ = try waitForElement("frozen Tell Agent target", in: try mainWindow(), timeout: 8) { element in
+                    element.matches("Tell Codex") && element.matches(nonce)
+                }
+                try sendCallMessagePose(prompt)
+                let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                                timeout: 15)
+                guard enable.press() else {
+                    throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+                }
+                _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                                       containing: token, timeout: 12)
+                let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                                 role: kAXButtonRole as String, exactly: "Send to agent",
+                                                 timeout: 12)
+                guard confirm.press() else {
+                    throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+                }
+                try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+                if state == "call-sendqueued" {
+                    // The wrapper script keeps the target session's transcript
+                    // growing every second (never idle), so the confirmed
+                    // instruction can never dispatch and stays queued for the
+                    // whole hold, matching the two-way expiry gate's own
+                    // non-idle mechanism (scripts/two-way-negative-path-smoke.sh).
+                    try waitForConversationStatus(containingAll: ["when the session is quiet"], timeout: 30)
+                } else {
+                    // No keepalive here: the fake codex CLI resolves quickly,
+                    // so this state is caught right as it appears rather than
+                    // waited out, keeping the screenshot inside
+                    // CallStatusPresentation.deliveredEmphasisWindow.
+                    try waitForConversationStatus(containingAll: ["watching for the reply"], timeout: 60)
+                }
+
+            case "call-listening":
+                // Real mic/speech activation is unnecessary risk here (a real
+                // permission prompt could stall unattended automation); the
+                // wrapper instead sets ATTACHE_UI_TEST_FORCE_LISTENING=1,
+                // honored only alongside ATTACHE_UI_TEST=1 (see
+                // MicTranscriptController.shouldForceListeningForPose), which
+                // flips the same published flag CallPhase.derive reads.
+                try dismissOnboardingIfPresent()
+                app.key(Key.l, command: true)
+                try waitForConversationStatus(containingAll: ["Release the mic"], timeout: 20)
+
             default:
                 print("unknown pose state: \(state)")
             }
+        }
+        // Screenshot the app's own window (by CGWindowID, never the whole
+        // screen) the instant the requested state is confirmed on screen,
+        // before the hold-sleep even starts, if the wrapper asked for one.
+        if let screenshotPath = ProcessInfo.processInfo.environment["ATTACHE_POSE_SCREENSHOT_PATH"] {
+            captureAppWindowScreenshot(to: screenshotPath)
         }
         print("posing \(pose) for \(Int(holdSeconds))s")
         Thread.sleep(forTimeInterval: holdSeconds)

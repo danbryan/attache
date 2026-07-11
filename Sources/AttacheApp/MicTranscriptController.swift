@@ -367,6 +367,43 @@ final class MicTranscriptController: NSObject, ObservableObject {
     }
 }
 
+extension MicTranscriptController {
+    /// Test-only pose override (INF-244's screenshot-matrix success criterion):
+    /// lets the UI smoke harness put the call composer into the mic-`.listening`
+    /// visual state (`CallPhase.derive`, `CallStatusPresentation`'s
+    /// `listeningText`, and `CallHUD.swift`'s `callMicStatusText`) without ever
+    /// opening `AVCaptureSession` or asking `SFSpeechRecognizer` for
+    /// authorization. Real mic/speech permission prompts would interrupt
+    /// unattended automation, and there is no reason to touch real audio
+    /// hardware just to prove a status string renders.
+    ///
+    /// Safety-critical: inert unless `ATTACHE_UI_TEST=1` is ALSO present,
+    /// mirroring `InstructionReplyEngine.expiryWindow(fromEnvironment:)` and
+    /// `SpeechPlaybackController.shouldMuteAudioOutput`, so a real user could
+    /// never trigger this in production. See
+    /// `MicTranscriptControllerForceListeningTests` for the explicit
+    /// non-bypass proof (the flag set WITHOUT `ATTACHE_UI_TEST=1` has no
+    /// effect).
+    static func shouldForceListeningForPose(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment["ATTACHE_UI_TEST"] == "1" && environment["ATTACHE_UI_TEST_FORCE_LISTENING"] == "1"
+    }
+
+    /// Applies the pose override if the environment requests it. Never starts
+    /// `AVCaptureSession` or `SFSpeechRecognizer`; only flips the same
+    /// published flag `CallPhase.derive` and `CallHUD.swift` already read, so
+    /// real capture code paths (`start()`, `stop()`, `startMicTest()`) are
+    /// untouched.
+    func applyForcedListeningPoseIfRequested(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        guard Self.shouldForceListeningForPose(environment: environment) else { return }
+        isListening = true
+        status = "Listening (posed for a screenshot)."
+    }
+}
+
 extension MicTranscriptController: AVCaptureAudioDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard CMSampleBufferDataIsReady(sampleBuffer) else {
