@@ -293,6 +293,20 @@ final class CallPhaseTests: XCTestCase {
         XCTAssertEqual(CallPhase.derive(from: signals), .preparingAudio)
     }
 
+    // The other half of the same gap: the LLM call that writes a Tell Agent
+    // reply's recap runs BEFORE playback.isBusy ever goes true (TTS only
+    // starts once that text exists), so isComposingNarration alone - with
+    // playbackIsBusy false - must also produce preparingAudio, or the
+    // composer goes blank for however long that call takes.
+    func testPreparingAudioWhileComposingNarrationEvenBeforePlaybackGoesBusy() {
+        let deliveredAt = referenceDate.addingTimeInterval(-3600)
+        let signals = CallSignals(
+            isComposingNarration: true,
+            pendingSend: instruction(state: .delivered, deliveredAt: deliveredAt)
+        )
+        XCTAssertEqual(CallPhase.derive(from: signals), .preparingAudio)
+    }
+
     func testSendDeliveredWinsOverSendQueuedWhenSomehowBothWouldApply() {
         // Not reachable through the current single-`pendingSend` signal (only
         // one Instruction, so only one state at a time), but pin the

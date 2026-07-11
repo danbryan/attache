@@ -719,6 +719,16 @@ final class AppModel: ObservableObject {
     // including the ones driven from playback callbacks in init rather than
     // from a mutating method here.
     @Published private var expectingReplyAudio = false
+    /// Tokens for in-flight narration composition (INF-264 follow-up): the
+    /// LLM call that writes a watched session's spoken recap
+    /// (`prepareAndPersist`, `CompanionPresentationService.prepare`) runs
+    /// entirely before `playback.isBusy` ever goes true, so without a signal
+    /// of its own, a Tell Agent reply's recap-composing window had nothing
+    /// to show once `.sendDelivered` moved past its own emphasis window. A
+    /// `Set` of tokens rather than a plain counter or a single session ID so
+    /// overlapping compositions across different watched sessions can't
+    /// clobber each other's start/end bookkeeping.
+    @Published private var composingNarrationTokens: Set<UUID> = []
     private static let sessionIndexURL = CompanionAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
     private var sessionIndexer = SessionIndexer(cacheURL: AppModel.sessionIndexURL, scanners: [])
     private let sessionIndexQueue = DispatchQueue(label: "com.bryanlabs.attache.sessionindex")
@@ -1440,6 +1450,13 @@ final class AppModel: ObservableObject {
     }
 
     private func prepareAndPersist(_ event: NormalizedEvent, personality: Personality?) async {
+        // Marks this composition in flight for the whole LLM call below, so
+        // the live call composer has something to show (INF-264 follow-up:
+        // `CallSignals.isComposingNarration`) instead of going blank while a
+        // Tell Agent reply's recap is being written. Same main-actor-hop
+        // reasoning as `persist` below applies to every mutation here.
+        let token = UUID()
+        await MainActor.run { composingNarrationTokens.insert(token) }
         let presented: NormalizedEvent = await withCheckedContinuation { continuation in
             presentationService.prepare(event, personality: personality) { presentedEvent in
                 continuation.resume(returning: presentedEvent)
@@ -1449,7 +1466,10 @@ final class AppModel: ObservableObject {
         // queue, intake status). It runs from a background Task here, so it must
         // hop to the main actor: mutating @Published off-main makes SwiftUI flush
         // a transaction synchronously and re-enter body, overflowing the stack.
-        await MainActor.run { persist(presented) }
+        await MainActor.run {
+            composingNarrationTokens.remove(token)
+            persist(presented)
+        }
     }
 
     private func persist(_ event: NormalizedEvent) {
@@ -3176,6 +3196,7 @@ final class AppModel: ObservableObject {
             $conversationFallbackAnnouncement.map { _ in () }.eraseToAnyPublisher(),
             $pendingAssistantReply.map { _ in () }.eraseToAnyPublisher(),
             $expectingReplyAudio.map { _ in () }.eraseToAnyPublisher(),
+            $composingNarrationTokens.map { _ in () }.eraseToAnyPublisher(),
             $voiceInputMode.map { _ in () }.eraseToAnyPublisher(),
             twoWay.$log.map { _ in () }.eraseToAnyPublisher()
         )
@@ -3212,6 +3233,7 @@ final class AppModel: ObservableObject {
             playbackIsPlaying: playback.isPlaying,
             playbackIsPaused: playback.isPaused,
             playbackIsBusy: playback.isBusy,
+            isComposingNarration: !composingNarrationTokens.isEmpty,
             pendingAssistantReply: pendingAssistantReply,
             pendingSend: pendingSend,
             failure: failure,

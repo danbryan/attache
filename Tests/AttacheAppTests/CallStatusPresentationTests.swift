@@ -122,31 +122,41 @@ final class CallStatusPresentationTests: XCTestCase {
         XCTAssertTrue(status?.isFreshDelivery ?? false)
     }
 
-    // INF-264: the confirmation is a "just happened" nudge, not an ongoing
-    // status, so once the emphasis window passes with no reply yet, the row
-    // disappears entirely instead of lingering in the theme's accent color.
-    func testSendDeliveredDisappearsAfterTheEmphasisWindow() {
+    // INF-264 follow-up: the fresh green confirmation is a "just happened"
+    // nudge, not the whole story. Making it disappear entirely past the
+    // emphasis window (the original INF-264 fix) traded a stale-looking
+    // static string for total silence during what can be a long wait on the
+    // agent's reply, which read as "is this even working?" in real usage.
+    // It now settles into an ongoing, counting "Waiting for X to reply…"
+    // status instead, with the green/checkmark styling gone.
+    func testSendDeliveredSettlesIntoAnOngoingCounterAfterTheEmphasisWindow() {
         let status = CallStatusPresentation.status(
             for: .sendDelivered(target: "Codex", deliveredAt: referenceDate),
             now: referenceDate.addingTimeInterval(7)
         )
-        XCTAssertNil(status)
+        XCTAssertEqual(status?.text, "Waiting for Codex to reply… 7s")
+        XCTAssertEqual(status?.icon, .spinner)
+        XCTAssertFalse(status?.isFreshDelivery ?? true)
     }
 
-    // INF-264 follow-up: a real regression this covers directly. `deliveredAt`
-    // now lives on the phase itself (the instruction's persisted delivery
-    // time), not a UI-side "first observed" clock, so a phase that already
-    // carries an old `deliveredAt` the very first time it is evaluated (e.g.
-    // an app relaunch re-attaching to a session whose most recent instruction
-    // was delivered hours ago with no reply yet) is hidden immediately,
-    // rather than depending on a `.onChange` transition that would never fire
-    // for a view's initial value.
-    func testSendDeliveredAlreadyStaleOnFirstObservationIsHiddenImmediately() {
+    // A real regression this covers directly. `deliveredAt` lives on the
+    // phase itself (the instruction's persisted delivery time), not a
+    // UI-side "first observed" clock, so a phase that already carries an old
+    // `deliveredAt` the very first time it is evaluated (e.g. an app
+    // relaunch re-attaching to a session whose most recent instruction was
+    // delivered hours ago with no reply yet) skips straight to the ongoing
+    // counter rather than flashing a stale "just happened" confirmation, and
+    // rather than depending on a `.onChange` transition that would never
+    // fire for a view's initial value.
+    func testSendDeliveredAlreadyStaleOnFirstObservationSkipsStraightToTheCounter() {
         let status = CallStatusPresentation.status(
             for: .sendDelivered(target: "Codex", deliveredAt: referenceDate.addingTimeInterval(-3600)),
             now: referenceDate
         )
-        XCTAssertNil(status)
+        // elapsedLabel has no hour digit; an hour renders as "60:00", not
+        // "1:00:00" (matches Thinking's own minute:second formatting).
+        XCTAssertEqual(status?.text, "Waiting for Codex to reply… 60:00")
+        XCTAssertFalse(status?.isFreshDelivery ?? true)
     }
 
     // MARK: - failed (category drives styling, never string matching)

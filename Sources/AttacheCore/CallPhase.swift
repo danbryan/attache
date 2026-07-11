@@ -83,6 +83,13 @@ public enum CallPhase: Equatable {
 /// - `playbackIsPlaying`, `playbackIsPaused`, `playbackIsBusy` <-
 ///   `SpeechPlaybackController.isPlaying` / `.isPaused` / `.isBusy`, exposed
 ///   on AppModel as `playback.*`.
+/// - `isComposingNarration` <- `AppModel`'s in-flight narration-compose
+///   tokens being non-empty: true for the LLM call
+///   (`CompanionPresentationService.prepare`) that writes a watched
+///   session's spoken recap, which runs BEFORE `playbackIsBusy` ever goes
+///   true (that only covers the TTS synthesis after the text exists).
+///   Without this, a Tell Agent reply's recap composition had no signal at
+///   all once `.sendDelivered` moved past its own emphasis window.
 /// - `pendingAssistantReply` <- `AppModel.pendingAssistantReply`.
 /// - `pendingSend` <- the most recent `Instruction` relevant to the current
 ///   call (e.g. from `TwoWayCoordinator.log`), reusing the existing
@@ -114,6 +121,7 @@ public struct CallSignals: Equatable {
     public var playbackIsPlaying: Bool
     public var playbackIsPaused: Bool
     public var playbackIsBusy: Bool
+    public var isComposingNarration: Bool
     public var pendingAssistantReply: String?
     public var pendingSend: Instruction?
     public var failure: Failure?
@@ -130,6 +138,7 @@ public struct CallSignals: Equatable {
         playbackIsPlaying: Bool = false,
         playbackIsPaused: Bool = false,
         playbackIsBusy: Bool = false,
+        isComposingNarration: Bool = false,
         pendingAssistantReply: String? = nil,
         pendingSend: Instruction? = nil,
         failure: Failure? = nil,
@@ -143,6 +152,7 @@ public struct CallSignals: Equatable {
         self.playbackIsPlaying = playbackIsPlaying
         self.playbackIsPaused = playbackIsPaused
         self.playbackIsBusy = playbackIsBusy
+        self.isComposingNarration = isComposingNarration
         self.pendingAssistantReply = pendingAssistantReply
         self.pendingSend = pendingSend
         self.failure = failure
@@ -226,7 +236,13 @@ extension CallPhase {
         // reply's synthesis window with nothing to show once `.sendDelivered`
         // itself expired past its emphasis window, a real dead-air regression
         // caught in production.
-        if signals.playbackIsBusy || signals.pendingAssistantReply != nil {
+        //
+        // `isComposingNarration` covers the earlier half of that same window
+        // this alone missed: the LLM call that writes the reply's recap runs
+        // BEFORE `playbackIsBusy` ever goes true (TTS only starts once that
+        // text exists), so without it the composer went blank again for
+        // however long that call took.
+        if signals.playbackIsBusy || signals.isComposingNarration || signals.pendingAssistantReply != nil {
             return .preparingAudio
         }
 
