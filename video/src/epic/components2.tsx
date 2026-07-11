@@ -457,6 +457,74 @@ export const typed = (text: string, frame: number, startFrame: number, durFrames
 };
 
 /**
+ * The official Attaché mark (the "Bubbles" relay, locked 2026-07-11,
+ * design/attache-logo.svg): a joyful hub speaking above its head, three
+ * typing agents at hand and foot. Frame-driven where the SVG is static:
+ * the bubbles' dots cycle like live typing indicators, and the voice arcs
+ * pulse while `talking`. With `buildFrom`, the whole mark assembles as a
+ * reveal: head, then limbs, then bubbles, then the voice.
+ */
+export const Mark2: React.FC<{
+  size?: number;
+  talking?: boolean;
+  buildFrom?: number | null;
+}> = ({ size = 240, talking = false, buildFrom = null }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const pop = (delay: number) =>
+    buildFrom === null ? 1 : spring({ frame: frame - buildFrom - delay, fps, config: { damping: 13, mass: 0.7 } });
+  const headP = pop(0);
+  const limbP = pop(7);
+  const bubbleP = [pop(14), pop(18), pop(22)];
+  const arcP = [pop(30), pop(34), pop(38)];
+  const arcBase = [1, 0.62, 0.3];
+  const arcPulse = (i: number) =>
+    talking ? 0.55 + 0.45 * Math.sin(frame / 5 - i * 1.2) : 1;
+  const dotOn = (bubble: number, dot: number) =>
+    0.3 + 0.7 * Math.max(0, Math.sin((frame - bubble * 5) / 7 - dot * 1.05));
+  const BUBBLES: { x: number; y: number; tail: string; color: string }[] = [
+    { x: 36, y: 168, tail: "M62 168 L 68 160 L 54 168 Z", color: "#D97757" },
+    { x: 100, y: 182, tail: "M120 182 L 120 173 L 111 182 Z", color: "#0A84FF" },
+    { x: 164, y: 168, tail: "M178 168 L 172 160 L 186 168 Z", color: "#10A37F" },
+  ];
+  return (
+    <svg width={size} height={size} viewBox="0 0 240 240" fill="none" style={{ display: "block" }}>
+      {[
+        "M92 62 A 40 40 0 0 1 148 62",
+        "M76 40 A 66 66 0 0 1 164 40",
+        "M62 19 A 90 90 0 0 1 178 19",
+      ].map((d, i) => (
+        <path key={i} d={d} stroke="#0A84FF" strokeWidth={9} strokeLinecap="round"
+          opacity={arcBase[i] * arcPulse(i) * arcP[i]} />
+      ))}
+      <g opacity={headP} transform={`scale(${0.7 + 0.3 * headP})`} transform-origin="120 112">
+        <circle cx="120" cy="112" r="33" fill="#FFF6E4" />
+        <path d="M97 107 Q105 97 113 107" stroke="#10243E" strokeWidth={5} strokeLinecap="round" />
+        <path d="M127 107 Q135 97 143 107" stroke="#10243E" strokeWidth={5} strokeLinecap="round" />
+        <circle cx="95" cy="119" r="6" fill="#FF9DA1" opacity={0.6} />
+        <circle cx="145" cy="119" r="6" fill="#FF9DA1" opacity={0.6} />
+        <path d="M108 119 C 111 134, 129 134, 132 119 Z" fill="#10243E" />
+      </g>
+      <g opacity={limbP}>
+        <path d="M102 140 C 90 150, 80 155, 70 160" stroke="#F2F2F5" strokeWidth={7} strokeLinecap="round" />
+        <path d="M120 145 L 120 170" stroke="#F2F2F5" strokeWidth={7} strokeLinecap="round" />
+        <path d="M138 140 C 150 150, 160 155, 170 160" stroke="#F2F2F5" strokeWidth={7} strokeLinecap="round" />
+      </g>
+      {BUBBLES.map((b, i) => (
+        <g key={i} opacity={bubbleP[i]} transform={`scale(${0.6 + 0.4 * bubbleP[i]})`}
+          transform-origin={`${b.x + 20} ${b.y + 13}`}>
+          <rect x={b.x} y={b.y} width="40" height="27" rx="12" fill={b.color} />
+          <path d={b.tail} fill={b.color} />
+          {[0, 1, 2].map((d) => (
+            <circle key={d} cx={b.x + 12 + d * 9} cy={b.y + 13.5} r="3" fill="#FFF6E4" opacity={dotOn(i, d)} />
+          ))}
+        </g>
+      ))}
+    </svg>
+  );
+};
+
+/**
  * Inline karaoke: words light up over [startFrame, endFrame], no pill chrome,
  * so it can sit inside a card the way captions sit inside the real app.
  */

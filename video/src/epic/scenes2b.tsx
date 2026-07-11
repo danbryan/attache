@@ -1,10 +1,10 @@
 import React from "react";
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { T, FPS } from "../theme";
-import { Stage, BrandMark } from "../components";
+import { Stage } from "../components";
 import {
   Aurora, Particles, LightSweep, Camera, RingPulse, Terminal, TermLine, AppWindow,
-  StatusRow, Composer, WordSweep, WaveBars, FloatingVerbs, typed as typeSlice,
+  StatusRow, Composer, WordSweep, WaveBars, FloatingVerbs, Mark2, typed as typeSlice,
 } from "./components2";
 import { ambient, live, twoway, f, karaokeEnd, ssec, stext } from "./timing2";
 
@@ -55,7 +55,7 @@ export const Ambient2: React.FC = () => {
             <FloatingVerbs phrases={verbs} />
             <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
               <div style={{ transform: `scale(${breathe})` }}>
-                <BrandMark size={190} animate={false} />
+                <Mark2 size={250} />
               </div>
             </AbsoluteFill>
           </div>
@@ -96,7 +96,7 @@ export const Live2: React.FC = () => {
         <AppWindow width={1180} live={frame >= composerF}>
           <div style={{ padding: "30px 34px 30px", display: "flex", flexDirection: "column", gap: 26, minHeight: 430, justifyContent: "space-between" }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24, paddingTop: 16 }}>
-              <BrandMark size={110} animate={speaking} barColor={speaking ? (i) => `rgba(10,132,255,${0.45 + 0.05 * i})` : undefined} />
+              <Mark2 size={150} talking={speaking} />
               {frame >= listenF && frame < thinkF && (
                 <>
                   <WaveBars n={26} height={30} color="rgba(242,242,245,0.75)" />

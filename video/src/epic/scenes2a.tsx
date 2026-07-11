@@ -4,7 +4,7 @@ import { T } from "../theme";
 import { Stage, KeyCap } from "../components";
 import {
   Aurora, Particles, LightSweep, Camera, Terminal, TermLine, MiniSession,
-  AppWindow, SourceChip, WaveBars, MediaControls, WordSweep,
+  AppWindow, SourceChip, WaveBars, MediaControls, WordSweep, Mark2,
 } from "./components2";
 import { hook, title, pin, inbox, f, karaokeEnd, ssec, stext } from "./timing2";
 
@@ -103,28 +103,13 @@ export const Title2: React.FC = () => {
   const nameP = spring({ frame: frame - nameF, fps, config: { damping: 15, mass: 1.1 } });
   const tagIn = interpolate(frame, [tagF, tagF + 16], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const glow = interpolate(frame, [nameF, nameF + 24, nameF + 70], [0, 1, 0.55], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const barHs = [0.36, 0.58, 0.78, 0.5, 0.95, 0.68, 1.0, 0.62, 0.85, 0.48, 0.34];
   return (
     <Stage>
       <Aurora accent="violet" />
       <Particles count={52} />
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 40 }}>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 13, height: 200 }}>
-          {barHs.map((h, i) => {
-            const p = spring({ frame: frame - barsF - i * 2, fps, config: { damping: 12, mass: 0.7 } });
-            const wave = 0.72 + 0.28 * Math.sin(frame / 5 + i * 1.1);
-            return (
-              <div
-                key={i}
-                style={{
-                  width: 22, borderRadius: 12,
-                  height: Math.max(10, 200 * h * p * wave),
-                  background: `linear-gradient(180deg, rgba(10,132,255,${0.55 + 0.04 * i}), rgba(122,92,255,0.2))`,
-                  boxShadow: `0 0 ${26 * p}px rgba(10,132,255,0.4)`,
-                }}
-              />
-            );
-          })}
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 26 }}>
+        <div style={{ filter: `drop-shadow(0 0 ${34 * glow}px rgba(10,132,255,0.45))` }}>
+          <Mark2 size={330} buildFrom={barsF} talking />
         </div>
         <div
           style={{

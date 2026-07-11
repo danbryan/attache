@@ -1,9 +1,9 @@
 import React from "react";
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { T } from "../theme";
-import { Stage, BrandMark, Capsule, Logo } from "../components";
+import { Stage, Capsule, Logo } from "../components";
 import {
-  Aurora, Particles, LightSweep, WaveBars, WordSweep, SourceChip, typed as typeSlice,
+  Aurora, Particles, LightSweep, WaveBars, WordSweep, Mark2, typed as typeSlice,
 } from "./components2";
 import { personalities, brain, outro, f, karaokeEnd, ssec, stext } from "./timing2";
 
@@ -202,7 +202,7 @@ export const Outro2: React.FC = () => {
       <Particles count={44} />
       <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 42 }}>
         <div style={{ transform: `scale(${breathe})` }}>
-          <BrandMark size={250} animate barColor={(i) => `rgba(10,132,255,${0.4 + 0.05 * i})`} />
+          <Mark2 size={290} talking />
         </div>
         <div style={{ fontSize: 70, fontWeight: 700, color: T.text, letterSpacing: "-0.02em", textAlign: "center" }}>
           Give your agents <span style={{ color: T.gold }}>a voice.</span>
