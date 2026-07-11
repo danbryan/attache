@@ -53,6 +53,13 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
     public var deliveryCheckpoint: Int64?    // transcript byte offset before headless resume
     public var deliveryReplyText: String?    // assistant reply text parsed from the resume output (INF-238)
     public var deliveryReplyTurnID: String?  // turn/session identifier parsed from the resume output, if present
+    /// The session's working directory at staging time, frozen alongside
+    /// `targetDisplayName` (INF-260). `claude -p --resume` only finds a
+    /// session from the same cwd it was created in (unlike Codex's
+    /// `--skip-git-repo-check`, which is cwd-independent), so the Claude
+    /// delivery adapter spawns with this set rather than Attaché's own
+    /// process cwd, which has no relationship to any particular session.
+    public var workingDirectory: String?
 
     public init(
         id: String,
@@ -72,7 +79,8 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         targetDisplayName: String? = nil,
         deliveryCheckpoint: Int64? = nil,
         deliveryReplyText: String? = nil,
-        deliveryReplyTurnID: String? = nil
+        deliveryReplyTurnID: String? = nil,
+        workingDirectory: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -92,6 +100,7 @@ public struct Instruction: Identifiable, Codable, Equatable, Sendable {
         self.deliveryCheckpoint = deliveryCheckpoint
         self.deliveryReplyText = deliveryReplyText
         self.deliveryReplyTurnID = deliveryReplyTurnID
+        self.workingDirectory = workingDirectory
     }
 
     public var isTerminal: Bool {

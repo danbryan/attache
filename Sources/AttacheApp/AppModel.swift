@@ -2600,7 +2600,8 @@ final class AppModel: ObservableObject {
                 sourceKind: pending.target.sourceKind,
                 origin: pending.origin,
                 sourceUtterance: pending.sourceUtterance,
-                targetDisplayName: pending.target.displayTitle
+                targetDisplayName: pending.target.displayTitle,
+                workingDirectory: pending.target.workingDirectory
             )
             pendingInstruction = instruction
             return nil

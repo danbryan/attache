@@ -53,8 +53,11 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
     /// Hard timeout for the resume subprocess. Overridable for tests.
     let processTimeout: TimeInterval
     /// Spawns the resume and returns its captured output. Injected so tests
-    /// don't shell out.
-    let spawn: @Sendable (_ executable: String, _ arguments: [String], _ timeout: TimeInterval) async -> ProcessRunResult
+    /// don't shell out. `workingDirectory`, when non-nil, is set as the
+    /// subprocess's cwd (INF-260): `claude -p --resume` only finds a session
+    /// from the same cwd it was created in, unlike Codex's
+    /// `--skip-git-repo-check`, which is cwd-independent.
+    let spawn: @Sendable (_ executable: String, _ arguments: [String], _ timeout: TimeInterval, _ workingDirectory: String?) async -> ProcessRunResult
 
     var sourceKind: String { vendor.sourceKind }
 
@@ -63,13 +66,13 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
         locateSessionFile: @escaping @Sendable (String) -> URL?,
         locateExecutable: @escaping @Sendable (String) -> String? = { CLILanguageModel.locate($0) },
         processTimeout: TimeInterval = AgentResumeDeliveryAdapter.defaultProcessTimeout,
-        spawn: (@Sendable (_ executable: String, _ arguments: [String], _ timeout: TimeInterval) async -> ProcessRunResult)? = nil
+        spawn: (@Sendable (_ executable: String, _ arguments: [String], _ timeout: TimeInterval, _ workingDirectory: String?) async -> ProcessRunResult)? = nil
     ) {
         self.vendor = vendor
         self.locateSessionFile = locateSessionFile
         self.locateExecutable = locateExecutable
         self.processTimeout = processTimeout
-        self.spawn = spawn ?? { await AgentResumeDeliveryAdapter.defaultSpawn($0, $1, timeout: $2) }
+        self.spawn = spawn ?? { await AgentResumeDeliveryAdapter.defaultSpawn($0, $1, timeout: $2, workingDirectory: $3) }
     }
 
     func capability(forSessionID sessionID: String) -> DeliveryCapability {
@@ -92,7 +95,11 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
         }
         let checkpoint = Self.fileSize(sessionFile)
         let arguments = Self.resumeArguments(vendor: vendor, sessionID: instruction.sessionID, instruction: instruction.text)
-        let result = await spawn(executable, arguments, processTimeout)
+        // Only Claude needs the session's original working directory set
+        // (INF-260); Codex's --skip-git-repo-check is already cwd-independent
+        // by design, so its spawn behavior is unchanged.
+        let workingDirectory = vendor == .claude ? instruction.workingDirectory : nil
+        let result = await spawn(executable, arguments, processTimeout, workingDirectory)
 
         if result.timedOut {
             return .failure(.deliveryFailed("\(vendor.displayName) did not respond within \(Int(processTimeout))s; delivery timed out."))
@@ -206,12 +213,18 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
 
     /// Internal (not private) so tests can exercise the real subprocess timeout
     /// path directly, without routing test-only executables through
-    /// `resumeArguments`.
-    static func defaultSpawn(_ executable: String, _ arguments: [String], timeout: TimeInterval) async -> ProcessRunResult {
+    /// `resumeArguments`. `workingDirectory`, when non-nil, becomes the
+    /// subprocess's cwd (INF-260); a nonexistent or invalid path is skipped
+    /// rather than failing the whole delivery, since Attaché's own process
+    /// cwd (Process's default) is still a reasonable fallback.
+    static func defaultSpawn(_ executable: String, _ arguments: [String], timeout: TimeInterval, workingDirectory: String? = nil) async -> ProcessRunResult {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            if let workingDirectory, FileManager.default.fileExists(atPath: workingDirectory) {
+                process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory, isDirectory: true)
+            }
             var env = ProcessInfo.processInfo.environment
             let home = FileManager.default.homeDirectoryForCurrentUser.path
             env["HOME"] = home

@@ -152,7 +152,8 @@ public final class InstructionReplyEngine: @unchecked Sendable {
         now: Date,
         origin: InstructionOrigin = .legacy,
         sourceUtterance: String? = nil,
-        targetDisplayName: String? = nil
+        targetDisplayName: String? = nil,
+        workingDirectory: String? = nil
     ) throws -> Instruction {
         guard isTwoWayEnabled(forSessionID: sessionID) else { throw InstructionError.twoWayDisabled }
         if let reason = InstructionSafetyFilter.rejectionReason(for: text) {
@@ -167,7 +168,8 @@ public final class InstructionReplyEngine: @unchecked Sendable {
             createdAt: now,
             origin: origin,
             sourceUtterance: sourceUtterance,
-            targetDisplayName: targetDisplayName
+            targetDisplayName: targetDisplayName,
+            workingDirectory: workingDirectory
         )
         try store.upsertInstruction(instruction)
         submittedSnapshots[instruction.id] = instruction

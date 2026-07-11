@@ -67,7 +67,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .claude,
             locateSessionFile: { _ in sessionFile },
             locateExecutable: { _ in "/usr/local/bin/claude" },
-            spawn: { _, _, _ in ProcessRunResult(exitCode: 0, stdout: Self.claudeSuccessJSON(result: "DONE"), stderr: "", timedOut: false) }
+            spawn: { _, _, _, _ in ProcessRunResult(exitCode: 0, stdout: Self.claudeSuccessJSON(result: "DONE"), stderr: "", timedOut: false) }
         )
         let instruction = Instruction(id: "i1", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
@@ -80,6 +80,59 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         }
     }
 
+    // MARK: - INF-260: Claude resume spawns with the session's working directory
+
+    func testClaudeDeliverySpawnsWithInstructionWorkingDirectory() async {
+        actor SpawnRecorder {
+            private(set) var workingDirectory: String??
+            func record(_ value: String?) { workingDirectory = value }
+        }
+        let recorder = SpawnRecorder()
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .claude,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/claude" },
+            spawn: { _, _, _, workingDirectory in
+                await recorder.record(workingDirectory)
+                return ProcessRunResult(exitCode: 0, stdout: Self.claudeSuccessJSON(result: "DONE"), stderr: "", timedOut: false)
+            }
+        )
+        let instruction = Instruction(
+            id: "i1", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now,
+            workingDirectory: "/Users/tester/code/project"
+        )
+        _ = await adapter.deliver(instruction)
+        let captured = await recorder.workingDirectory
+        XCTAssertEqual(captured, "/Users/tester/code/project")
+    }
+
+    func testCodexDeliveryNeverSpawnsWithAWorkingDirectory() async {
+        actor SpawnRecorder {
+            private(set) var workingDirectory: String??
+            func record(_ value: String?) { workingDirectory = value }
+        }
+        let recorder = SpawnRecorder()
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .codex,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
+            locateExecutable: { _ in "/usr/local/bin/codex" },
+            spawn: { _, _, _, workingDirectory in
+                await recorder.record(workingDirectory)
+                return ProcessRunResult(exitCode: 0, stdout: #"{"type":"item.completed","item":{"type":"agent_message","text":"done"}}"#, stderr: "", timedOut: false)
+            }
+        )
+        // Even though the instruction carries a working directory, Codex's
+        // --skip-git-repo-check is already cwd-independent, so its spawn
+        // behavior must stay exactly as it was before INF-260.
+        let instruction = Instruction(
+            id: "i2", sessionID: "s2", sourceKind: "codex", text: "go", createdAt: now,
+            workingDirectory: "/Users/tester/code/project"
+        )
+        _ = await adapter.deliver(instruction)
+        let captured = await recorder.workingDirectory
+        XCTAssertEqual(captured, .some(nil))
+    }
+
     // MARK: - INF-238: delivery evidence, both vendors
 
     func testDeliverSuccessWithEvidenceClaude() async {
@@ -87,7 +140,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .claude,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/claude" },
-            spawn: { _, _, _ in
+            spawn: { _, _, _, _ in
                 ProcessRunResult(
                     exitCode: 0,
                     stdout: Self.claudeSuccessJSON(result: "Tests pass.", sessionID: "692006d2-abf1-4780-99b2-eb0ce808ba05"),
@@ -110,7 +163,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .codex,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/codex" },
-            spawn: { _, _, _ in
+            spawn: { _, _, _, _ in
                 ProcessRunResult(exitCode: 0, stdout: Self.codexSuccessJSONL(text: "PONG", threadID: "019f4d3d-aca0-74d3-a693-e2089d62ca7d"), stderr: "", timedOut: false)
             }
         )
@@ -130,7 +183,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .claude,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/claude" },
-            spawn: { _, _, _ in ProcessRunResult(exitCode: 0, stdout: "", stderr: "", timedOut: false) }
+            spawn: { _, _, _, _ in ProcessRunResult(exitCode: 0, stdout: "", stderr: "", timedOut: false) }
         )
         let instruction = Instruction(id: "i-claude-noev", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
@@ -147,7 +200,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             locateExecutable: { _ in "/usr/local/bin/codex" },
             // Realistic partial stream: the thread started but never produced a
             // completed agent_message (e.g. it only ran a tool call).
-            spawn: { _, _, _ in
+            spawn: { _, _, _, _ in
                 ProcessRunResult(
                     exitCode: 0,
                     stdout: #"{"type":"thread.started","thread_id":"t1"}"# + "\n" + #"{"type":"turn.started"}"#,
@@ -169,7 +222,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .codex,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/codex" },
-            spawn: { _, _, _ in ProcessRunResult(exitCode: 1, stdout: "", stderr: "session is busy", timedOut: false) }
+            spawn: { _, _, _, _ in ProcessRunResult(exitCode: 1, stdout: "", stderr: "session is busy", timedOut: false) }
         )
         let instruction = Instruction(id: "i2", sessionID: "s1", sourceKind: "codex", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
@@ -187,7 +240,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .claude,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/claude" },
-            spawn: { _, _, _ in
+            spawn: { _, _, _, _ in
                 ProcessRunResult(
                     exitCode: 1,
                     stdout: "",
@@ -210,7 +263,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/claude" },
             processTimeout: 5,
-            spawn: { _, _, _ in ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: true) }
+            spawn: { _, _, _, _ in ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: true) }
         )
         let instruction = Instruction(id: "i-claude-timeout", sessionID: "s1", sourceKind: "claude_code", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
@@ -226,7 +279,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/codex" },
             processTimeout: 5,
-            spawn: { _, _, _ in ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: true) }
+            spawn: { _, _, _, _ in ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: true) }
         )
         let instruction = Instruction(id: "i-codex-timeout", sessionID: "s1", sourceKind: "codex", text: "go", createdAt: now)
         let result = await adapter.deliver(instruction)
@@ -315,7 +368,7 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
             vendor: .claude,
             locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x.jsonl") },
             locateExecutable: { _ in "/usr/local/bin/claude" },
-            spawn: { _, _, _ in
+            spawn: { _, _, _, _ in
                 spawnCount += 1
                 return ProcessRunResult(exitCode: 0, stdout: Self.claudeSuccessJSON(result: "done"), stderr: "", timedOut: false)
             }

@@ -204,13 +204,13 @@ public final class CardStore: @unchecked Sendable {
     // MARK: - Instructions (two-way)
 
     private static let instructionColumns =
-        "id, session_id, source_kind, text, state, created_at, confirmed_at, delivered_at, delivery_mechanism, error, resulting_card_id, origin, source_utterance, target_display_name, delivery_checkpoint, delivery_reply_text, delivery_reply_turn_id, delivering_at"
+        "id, session_id, source_kind, text, state, created_at, confirmed_at, delivered_at, delivery_mechanism, error, resulting_card_id, origin, source_utterance, target_display_name, delivery_checkpoint, delivery_reply_text, delivery_reply_turn_id, delivering_at, working_directory"
 
     public func upsertInstruction(_ instruction: Instruction) throws {
         try execute(
             """
             INSERT INTO instructions (\(Self.instructionColumns))
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 session_id = excluded.session_id,
                 source_kind = excluded.source_kind,
@@ -228,7 +228,8 @@ public final class CardStore: @unchecked Sendable {
                 delivery_checkpoint = excluded.delivery_checkpoint,
                 delivery_reply_text = excluded.delivery_reply_text,
                 delivery_reply_turn_id = excluded.delivery_reply_turn_id,
-                delivering_at = excluded.delivering_at
+                delivering_at = excluded.delivering_at,
+                working_directory = excluded.working_directory
             """,
             [
                 .text(instruction.id),
@@ -248,7 +249,8 @@ public final class CardStore: @unchecked Sendable {
                 instruction.deliveryCheckpoint.map(SQLiteBinding.int64) ?? .null,
                 .optionalText(instruction.deliveryReplyText),
                 .optionalText(instruction.deliveryReplyTurnID),
-                .optionalText(instruction.deliveringAt.map(formatDate))
+                .optionalText(instruction.deliveringAt.map(formatDate)),
+                .optionalText(instruction.workingDirectory)
             ]
         )
     }
@@ -307,7 +309,8 @@ public final class CardStore: @unchecked Sendable {
             targetDisplayName: columnText(stmt, 13),
             deliveryCheckpoint: columnInt64(stmt, 14),
             deliveryReplyText: columnText(stmt, 15),
-            deliveryReplyTurnID: columnText(stmt, 16)
+            deliveryReplyTurnID: columnText(stmt, 16),
+            workingDirectory: columnText(stmt, 18)
         )
     }
 
@@ -511,7 +514,8 @@ public final class CardStore: @unchecked Sendable {
                 delivery_checkpoint INTEGER,
                 delivery_reply_text TEXT,
                 delivery_reply_turn_id TEXT,
-                delivering_at TEXT
+                delivering_at TEXT,
+                working_directory TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_instructions_session
@@ -531,6 +535,7 @@ public final class CardStore: @unchecked Sendable {
         try addColumnIfMissing(table: "instructions", column: "delivery_reply_text", definition: "TEXT")
         try addColumnIfMissing(table: "instructions", column: "delivery_reply_turn_id", definition: "TEXT")
         try addColumnIfMissing(table: "instructions", column: "delivering_at", definition: "TEXT")
+        try addColumnIfMissing(table: "instructions", column: "working_directory", definition: "TEXT")
     }
 
     private func addColumnIfMissing(table: String, column: String, definition: String) throws {

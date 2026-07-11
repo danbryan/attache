@@ -82,6 +82,7 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
         origin: InstructionOrigin = .legacy,
         sourceUtterance: String? = nil,
         targetDisplayName: String? = nil,
+        workingDirectory: String? = nil,
         now: Date = Date()
     ) throws -> Instruction {
         let instruction = try engine.submit(
@@ -91,7 +92,8 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
             now: now,
             origin: origin,
             sourceUtterance: sourceUtterance,
-            targetDisplayName: targetDisplayName
+            targetDisplayName: targetDisplayName,
+            workingDirectory: workingDirectory
         )
         primeObservation(sessionID: sessionID, now: now)
         refreshLog()
