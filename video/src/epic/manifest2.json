@@ -1,0 +1,80 @@
+{
+  "narration": {
+    "n_hook": {
+      "seconds": 11.38,
+      "text": "Somewhere on your Mac, an agent just finished something big. It wrote one line to a terminal you stopped watching an hour ago. Your agents are talking. You're just not listening."
+    },
+    "n_title": {
+      "seconds": 1.672,
+      "text": "Attach\u00e9 gives them a voice."
+    },
+    "n_inbox": {
+      "seconds": 11.81,
+      "text": "Every finished turn arrives spoken, captioned word for word, and filed like voicemail. Play it now, or catch the whole afternoon in one recap."
+    },
+    "n_live": {
+      "seconds": 10.979,
+      "text": "Go live, and it's a real conversation. You see every step: listening, thinking, preparing audio, speaking. No dead air. No wondering."
+    },
+    "n_two_a": {
+      "seconds": 4.923,
+      "text": "And here's the part nobody else does. Tell your agent its next move. Out loud."
+    },
+    "n_two_b": {
+      "seconds": 11.1,
+      "text": "Attach\u00e9 locks the target, delivers the moment the session goes quiet, and then it watches. When the answer lands, you hear it. Every step on screen. Nothing silent."
+    },
+    "n_trust": {
+      "seconds": 9.724,
+      "text": "Confirmed targets. Deliveries that prove themselves. And if a model taps out mid call, a backup steps in and the conversation keeps moving."
+    },
+    "n_outro": {
+      "seconds": 7.935,
+      "text": "Attach\u00e9. Fluent in agent. <break time=\"0.6s\" /> Speaks human. Free, open source, and waiting on your menu bar."
+    }
+  },
+  "samples": {
+    "va_memo": {
+      "voice": "Hope",
+      "voice_id": "WAhoMTNdLdMoq1j3wf3I",
+      "seconds": 8.438,
+      "text": "Payments refactor is done. All tests pass. One thing needs your eyes: I widened the retry window on checkout."
+    },
+    "va_live": {
+      "voice": "Jessa",
+      "voice_id": "yj30vwTGJxSHezdAGsv9",
+      "seconds": 5.094,
+      "text": "Two tests are still flaky: payment retry, and the S3 upload. Want me to rerun them?"
+    },
+    "va_reply": {
+      "voice": "Jessa",
+      "voice_id": "yj30vwTGJxSHezdAGsv9",
+      "seconds": 5.669,
+      "text": "Codex replied: both tests rerun and green. The error rate is pinned to the dashboard."
+    }
+  },
+  "sfx": {
+    "sfx_whoosh": {
+      "seconds": 1.2,
+      "prompt": "smooth airy cinematic whoosh transition, soft and clean, short, no music"
+    },
+    "sfx_hit": {
+      "seconds": 1.76,
+      "prompt": "deep cinematic bass hit with a soft sub drop, clean, single impact, short"
+    },
+    "sfx_pop": {
+      "seconds": 0.48,
+      "prompt": "soft subtle UI pop, gentle click, pleasant, very short, single"
+    },
+    "sfx_ding": {
+      "seconds": 1.0,
+      "prompt": "gentle two-note success chime, soft, warm, short, single"
+    }
+  },
+  "music": {
+    "bed": {
+      "seconds": 120.033,
+      "prompt": "Minimal ambient electronic underscore for a modern tech product film. Warm evolving synth pads, subtle slow pulse, understated and confident, gently building, instrumental, no melody hooks, no vocals."
+    }
+  }
+}

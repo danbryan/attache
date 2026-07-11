@@ -7,6 +7,7 @@ import { Intro, Install, Onboard, Pin } from "./scenes/part1";
 import { Update, NeedsYou, Outro } from "./scenes/part2";
 import { LocalFrontier, Personalities, Live } from "./scenes/part3";
 import { ColdOpen, ColdCard, COLD_OPEN_FRAMES, COLD_CARD_FRAMES } from "./scenes/coldopen";
+import { Promo2, PROMO2_FRAMES } from "./epic/Promo2";
 
 type SceneDef = {
   key: string;
@@ -64,5 +65,6 @@ export const RemotionRoot: React.FC = () => (
   <>
     <Composition id="Tutorial" component={Tutorial} durationInFrames={TOTAL} fps={FPS} width={1920} height={1080} />
     <Composition id="ColdOpen" component={ColdOpen} durationInFrames={COLD_OPEN_FRAMES} fps={FPS} width={1920} height={1080} />
+    <Composition id="Promo2" component={Promo2} durationInFrames={PROMO2_FRAMES} fps={FPS} width={1920} height={1080} />
   </>
 );

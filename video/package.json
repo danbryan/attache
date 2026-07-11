@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "studio": "remotion studio",
-    "render": "remotion render Tutorial ../dist/attache-tutorial.mp4"
+    "render": "remotion render Tutorial ../dist/attache-tutorial.mp4",
+    "render2": "remotion render Promo2 ../dist/attache-promo-v2.mp4"
   },
   "dependencies": {
     "@remotion/cli": "4.0.246",
