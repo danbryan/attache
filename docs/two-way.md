@@ -143,6 +143,17 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
   stored on every instruction and retained in an in-memory delivery snapshot. A
   focus change cannot retarget the tool call, and a persisted payload or target
   mismatch fails closed before the adapter runs.
+- **Wrong-agent guard, fail closed, never reroute.** When the personality names
+  a specific agent in its `stage_agent_instruction` call (`intended_agent`,
+  INF-246/C2), Attaché compares that declared value against the frozen target's
+  source before staging anything: `AgentInstructionMismatch.evaluate` in
+  `AttacheCore` is a pure comparison of two already-known values, never a
+  parse of the user's own words. A mismatch blocks staging entirely, with a
+  distinct reason for each case (the named agent has no watched session at
+  all; it does have one but it isn't focused; or the value didn't decode to a
+  recognized agent) — the app never redirects the instruction to the agent
+  the model actually named. Omitting `intended_agent` skips this check
+  entirely, so staging proceeds exactly as it did before this guard existed.
 - **Tell Agent is one-shot.** The raw turn is captured, staged or sent, and the
   destination resets to Ask Attaché before voice listening can accept another
   utterance.
@@ -187,7 +198,7 @@ constraints, enforced in `InstructionReplyEngine` and `InstructionSafetyFilter`:
 
 ## Smoke and canary coverage
 
-Two-way has four intentionally separate verification layers:
+Two-way has five intentionally separate verification layers:
 
 1. **Default UI smoke:** `scripts/ui-smoke.sh` is free/local and excludes paid
    or network-dependent flows. It should stay green before every release.
@@ -219,6 +230,22 @@ Two-way has four intentionally separate verification layers:
    `stage_agent_instruction` with the requested report context. This closes the
    intent-classification gap that the deterministic personality provider cannot
    exercise. It runs as part of the opt-in Codex release-readiness extras.
+5. **Direct Claude Code round trip:** `scripts/claude-two-way-smoke.sh`
+   (INF-257/E2) is the Claude analog of layer 2. It copies only the
+   `claudeAiOauth` portion of the real Claude credentials (Keychain item
+   "Claude Code-credentials", or `~/.claude/.credentials.json`) into a
+   disposable `CLAUDE_CONFIG_DIR`, spawns a fresh session via `claude -p`, runs
+   the same off-call watch/enable/confirm sequence through a real
+   `claude -p --resume`, and checks the reply is filed as a watched-session
+   card. Unlike layer 2, presentation is left at its default (not forced to
+   plain readback) since reply correlation is positional (INF-245/B2): this
+   gate is the proof that a presentation paraphrase of a real Claude Code
+   reply does not break card linking. Every place Attaché locates Claude
+   session state resolves through `ClaudePaths`, which honors a
+   `CLAUDE_CONFIG_DIR` override exactly like this gate's disposable one, so
+   session discovery, the live watcher, and delivery all agree on where to
+   look (a real defect here, INF-261, went undetected until this gate first
+   exercised a real successful delivery).
 
 Attaché intentionally does **not** use a host-side natural-language intent
 router to decide whether a live message should go to the personality or the
@@ -328,10 +355,18 @@ Instruction {
   createdAt: Date
   confirmedAt: Date?
   deliveredAt: Date?
+  deliveringAt: Date?            // most recent entry into .delivering, for stuck-delivery
+                                  // strand recovery (INF-249/B6); distinct from confirmedAt,
+                                  // which predates the idle wait, not the delivery attempt
   deliveryMechanism: String?     // e.g. "headless-resume"
   deliveryCheckpoint: Int64?     // transcript byte offset immediately before resume
   deliveryReplyText: String?     // assistant reply parsed from the resume output as delivery evidence
   deliveryReplyTurnID: String?   // turn/session identifier parsed from the resume output, if present
+  workingDirectory: String?      // session's cwd, frozen at staging time (INF-260); claude -p
+                                  // --resume only finds a session from its original cwd, so the
+                                  // Claude delivery adapter spawns with this instead of Attaché's
+                                  // own process cwd (Codex's --skip-git-repo-check is cwd-independent,
+                                  // so this is unused on that path)
   error: String?                 // failure reason / stderr tail on failure
   resultingCardID: String?       // the narration card the agent's reply produced
 }

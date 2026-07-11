@@ -205,6 +205,40 @@ changes cannot retarget a staged instruction. The structured instruction payload
 is frozen separately and compared with persisted state immediately before
 delivery; any mismatch fails closed.
 
+## Live call UI: the composer and `CallPhase`
+
+The on-call composer is `onCallHUD` (`Sources/AttacheApp/Views/CallHUD.swift`,
+an extension on `CompanionRootView`): the destination picker (Ask Attaché /
+Tell Agent), one input row (AX label "Call message", the smoke harness's
+target), and a single status region. It is the one status home while on a
+call: nothing else duplicates it, other than the mic transcript overlay, which
+has nowhere else to render while a turn is actively being captured (INF-251/A3).
+
+What that status region shows is driven entirely by `CallPhase`
+(`Sources/AttacheCore/CallPhase.swift`), a pure enum with no UI or AppModel
+dependency: `.idle`, `.listening(mode:)`, `.thinking(since:)`,
+`.preparingAudio`, `.speaking`, `.paused`, `.sendQueued(target:since:reason:)`,
+`.sendDelivered(target:)`, `.failed(category:message:)`, and
+`.fallbackAnnounced(message:)` (INF-258/D5, the opt-in auto-fallback chain's
+neutral "just switched provider" notice, distinct from `.failed`). A pure
+reducer, `CallPhase.derive(from: CallSignals)`, maps a snapshot of the live
+call's raw signals (mic state, conversation wait, playback state, pending
+send, failure) to exactly one phase, in a fixed precedence order (an active
+mic and a failure always win over everything else; `.speaking` beats a
+lingering `.sendDelivered`). `CallStatusPresentation`
+(`Sources/AttacheApp/CallStatusPresentation.swift`) then maps a `CallPhase` to
+display text, an icon, and error styling, so styling comes only from the
+phase and its `ConversationFailureCategory`, never from scanning status text
+for marker words (INF-244/A2). Both are unit-tested as pure functions
+(`Tests/AttacheCoreTests/CallPhaseTests.swift`,
+`Tests/AttacheAppTests/CallStatusPresentationTests.swift`) without a view host.
+
+`Sources/AttacheApp/Views/ConversationView.swift` is a second, older composer
+(AX label "Conversation message") that predates the `CallPhase` rework above.
+It is not instantiated anywhere in the current view hierarchy; the UI smoke
+harness's generic `sendConversationPrompt` helper still matches either label
+defensively, but only "Call message" is reachable in the shipped app today.
+
 ## Security
 
 Local-first, hardened by default.
