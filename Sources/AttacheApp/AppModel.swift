@@ -737,6 +737,12 @@ final class AppModel: ObservableObject {
     private let defaults = UserDefaults.standard
     private let codexSessionCatalog = CodexSessionCatalog()
     private var isRefreshingCatalog = false   // guards the off-main catalog load against overlap
+    /// The in-flight model-discovery task, owned so a superseding call or a
+    /// deallocated model cancels it. Unowned discovery tasks used to keep
+    /// running after the unit test that spawned them finished, mutating
+    /// shared UserDefaults state under later tests (the full-suite
+    /// flakiness diagnosed on the INF-236 umbrella).
+    private var modelDiscoveryTask: Task<Void, Never>?
     /// Two-way (send-to-agent) coordinator; set up in init once the store exists.
     private(set) var twoWay: TwoWayCoordinator!
     /// The instruction the user is currently confirming before it sends, if any.
@@ -917,6 +923,7 @@ final class AppModel: ObservableObject {
     deinit {
         codexSessionRefreshTimer?.invalidate()
         sessionActivityWatcher.stop()
+        modelDiscoveryTask?.cancel()
     }
 
     var unreadCount: Int {
@@ -3622,7 +3629,8 @@ final class AppModel: ObservableObject {
         }
 
         presentationModelDiscoveryStatus = "Loading \(provider.title) models..."
-        Task {
+        modelDiscoveryTask?.cancel()
+        modelDiscoveryTask = Task {
             do {
                 let key: String
                 if !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -3646,6 +3654,13 @@ final class AppModel: ObservableObject {
                     baseURLText: baseURL,
                     apiKey: key
                 )
+                guard !Task.isCancelled else {
+                    // Superseded or owner deallocated: fire the completion so
+                    // callers waiting on it (recovery switches) still unwind,
+                    // but never touch model state from a stale discovery.
+                    await MainActor.run { completion?() }
+                    return
+                }
                 await MainActor.run {
                     defer { completion?() }
                     guard self.presentationProvider == provider,
@@ -3662,6 +3677,10 @@ final class AppModel: ObservableObject {
                     self.refreshPresentationStatus()
                 }
             } catch {
+                guard !Task.isCancelled else {
+                    await MainActor.run { completion?() }
+                    return
+                }
                 await MainActor.run {
                     defer { completion?() }
                     guard self.presentationProvider == provider,

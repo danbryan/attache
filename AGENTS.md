@@ -136,6 +136,16 @@ swift test
 - Do not put API keys or tokens in the repo.
 - Do not weaken the local event server hardening (per-launch token, connection
   caps, request size limits) or on-disk file permissions to make testing easier.
+- Screen capture in any automation must be window-scoped: resolve the app's
+  CGWindowID and pass it to `screencapture -l`, as
+  `scripts/call-phase-screenshot-matrix.sh` does. Never full-screen or
+  display-level capture; it can grab unrelated windows containing personal
+  data (2026-07-10 incident).
+- Never point automation at the real user profile except through
+  `scripts/simulate-fresh-user.sh`'s fresh/restore backup pairing, and any
+  script that does must hard-fail if the expected backup is missing
+  (2026-07-10 incident: a stray kill mid-capture left the live profile
+  cleared until the backup was recovered).
 
 ## Git And Commits
 
