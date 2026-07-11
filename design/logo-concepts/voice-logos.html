@@ -29,6 +29,9 @@
 
 <div class="grid" id="new"></div>
 
+<h2 id="joy-h">Joy, no tongue — five takes on the agent feet</h2>
+<div class="grid" id="joy"></div>
+
 <h2 id="faces-h">Relay, Upright — with a face</h2>
 <div class="grid" id="faces"></div>
 
@@ -52,6 +55,25 @@ const OLD = [
   "little-agent-hello.svg","little-agent-peek.svg","little-agent-wisp.svg","little-agent-headset.svg","little-agent-incognito.svg",
 ];
 document.getElementById("new").innerHTML = CONCEPTS.map(([f, name, why]) => `
+  <div class="tile">
+    <div class="big"><img src="${f}"></div>
+    <div class="sizes">
+      <div><img src="${f}" width="64" height="64"><div class="cap">64</div></div>
+      <div><img src="${f}" width="32" height="32"><div class="cap">32</div></div>
+      <div><img src="${f}" width="18" height="18"><div class="cap">18</div></div>
+      <div style="background:#E8E8ED;border-radius:8px;padding:8px 10px 2px;"><img src="${f}" width="18" height="18"><div class="cap" style="color:#666">light</div></div>
+    </div>
+    <div class="name">${name}</div>
+    <div class="why">${why}</div>
+  </div>`).join("");
+const JOY = [
+  ["relay-joy-badges.svg", "Badges", "Agent-logo evocations: a Claude-ish starburst, a knot-ish blossom, a terminal chip. The trademark-risk one, shown so you can judge it."],
+  ["relay-joy-colors.svg", "Brand Dots", "Just the colors: Claude orange, OpenAI green, Attaché blue, each with its own halo ring. Safe, and still says three different agents."],
+  ["relay-joy-terminals.svg", "Terminals", "The agents are what they actually are: three tiny session windows, each mid-task in its own accent color."],
+  ["relay-joy-shapes.svg", "Shapes", "Different geometry per agent: circle, square, triangle. Fully abstract, no IP anywhere near it."],
+  ["relay-joy-bubbles.svg", "Bubbles", "The agents are typing below; Attaché speaks above. Text in, voice out, the whole product in one picture."],
+];
+document.getElementById("joy").innerHTML = JOY.map(([f, name, why]) => `
   <div class="tile">
     <div class="big"><img src="${f}"></div>
     <div class="sizes">
