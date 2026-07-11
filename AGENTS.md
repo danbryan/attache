@@ -12,7 +12,7 @@ repositories. It has shipped publicly; see Status.
 
 ## Status
 
-Attaché has shipped publicly. The current release is `v0.1.3`.
+Attaché has shipped publicly. The current release is `v0.1.4`.
 
 - `origin` is the public repo `github.com/danbryan/attache`; releases and the
   Homebrew cask (`danbryan/tap`) live there. `archive`
