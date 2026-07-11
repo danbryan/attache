@@ -9,6 +9,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case model
     case integrations
     case memory
+    case about
 
     var id: String { rawValue }
 
@@ -20,6 +21,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .model: return "Model"
         case .integrations: return "Integrations"
         case .memory: return "Memory"
+        case .about: return "About"
         }
     }
 
@@ -31,6 +33,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .model: return "cpu.fill"
         case .integrations: return "puzzlepiece.extension.fill"
         case .memory: return "tray.full.fill"
+        case .about: return "info.circle.fill"
         }
     }
 }
@@ -89,6 +92,7 @@ struct SettingsView: View {
         case .model: ModelPane(model: model)
         case .integrations: IntegrationsPane(model: model)
         case .memory: memoryPane
+        case .about: AboutPane()
         }
     }
 

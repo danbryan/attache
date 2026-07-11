@@ -36,7 +36,7 @@ final class LocalizationTests: XCTestCase {
             ("es", "Playback speed", "reproducción"),
             ("pl", "Keyboard Shortcuts", "Skróty"),
             ("de", "Settings…", "Einstellungen"),
-            ("nb", "Watching", "Følger"),
+            ("nb", "History", "Historikk"),
             ("th", "Voice & Captions", "เสียง")
         ]
         for expectation in expectations {

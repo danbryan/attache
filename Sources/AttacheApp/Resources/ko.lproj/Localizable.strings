@@ -111,7 +111,6 @@
 "History" = "기록";
 "History scope" = "기록 범위";
 "Hold to talk. Right-click for mic mode." = "누르고 말하세요. 마이크 모드는 오른쪽 클릭.";
-"Hover the left edge or press ⌘K to pick a session. ⌘, for settings." = "왼쪽 가장자리에 마우스를 올리거나 ⌘K로 세션을 고르세요. 설정은 ⌘, 입니다.";
 "How should updates sound? Tone, attitude, level of detail." = "업데이트가 어떻게 들려야 할까요? 톤, 태도, 상세 수준.";
 "Idle screen" = "대기 화면";
 "Idle screen custom text" = "대기 화면 사용자 문구";
@@ -122,7 +121,6 @@
 "It's in your Inbox too; replay it anytime." = "받은함에도 있으니 언제든 다시 들을 수 있습니다.";
 "Keep text plates fully opaque regardless of surface opacity." = "표면 불투명도와 무관하게 텍스트 배경판을 완전 불투명하게 유지합니다.";
 "Keyboard Shortcuts" = "키보드 단축키";
-"Live interaction" = "실시간 상호작용";
 "Load" = "불러오기";
 "Local agent sources" = "로컬 에이전트 소스";
 "Local provider: nothing leaves this Mac." = "로컬 제공자: 이 Mac 밖으로 아무것도 나가지 않습니다.";
@@ -255,7 +253,6 @@
 "Voice engine" = "음성 엔진";
 "Voice input" = "음성 입력";
 "Watched" = "관찰";
-"Watching" = "관찰 중";
 "Wave Ribbon" = "웨이브 리본";
 "Welcome" = "웰컴";
 "Welcome to Attaché" = "Attaché에 오신 것을 환영합니다";

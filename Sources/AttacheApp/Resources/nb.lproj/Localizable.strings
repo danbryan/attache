@@ -111,7 +111,6 @@
 "History" = "Historikk";
 "History scope" = "Historikkomfang";
 "Hold to talk. Right-click for mic mode." = "Hold for å snakke. Høyreklikk for mikrofonmodus.";
-"Hover the left edge or press ⌘K to pick a session. ⌘, for settings." = "Hold over venstre kant eller trykk ⌘K for å velge økt. ⌘, for innstillinger.";
 "How should updates sound? Tone, attitude, level of detail." = "Hvordan skal oppdateringer høres ut? Tone, holdning, detaljnivå.";
 "Idle screen" = "Hvileskjerm";
 "Idle screen custom text" = "Egen tekst for hvileskjerm";
@@ -122,7 +121,6 @@
 "It's in your Inbox too; replay it anytime." = "Ligger også i innboksen; spill når som helst.";
 "Keep text plates fully opaque regardless of surface opacity." = "Holder tekstplater helt dekkende uansett flatedekkevne.";
 "Keyboard Shortcuts" = "Tastatursnarveier";
-"Live interaction" = "Direkte samhandling";
 "Load" = "Last inn";
 "Local agent sources" = "Lokale agentkilder";
 "Local provider: nothing leaves this Mac." = "Lokal leverandør: ingenting forlater denne Macen.";
@@ -255,7 +253,6 @@
 "Voice engine" = "Stemmemotor";
 "Voice input" = "Stemmeinngang";
 "Watched" = "Fulgt";
-"Watching" = "Følger med";
 "Wave Ribbon" = "Bølgebånd";
 "Welcome" = "Velkomst";
 "Welcome to Attaché" = "Velkommen til Attaché";

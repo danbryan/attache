@@ -111,7 +111,6 @@
 "History" = "Verlauf";
 "History scope" = "Verlaufsbereich";
 "Hold to talk. Right-click for mic mode." = "Zum Sprechen halten. Rechtsklick für den Mikrofonmodus.";
-"Hover the left edge or press ⌘K to pick a session. ⌘, for settings." = "Fahre an den linken Rand oder drücke ⌘K für eine Sitzung. ⌘, für Einstellungen.";
 "How should updates sound? Tone, attitude, level of detail." = "Wie sollen Updates klingen? Ton, Haltung, Detailgrad.";
 "Idle screen" = "Ruhebildschirm";
 "Idle screen custom text" = "Eigener Text für den Ruhebildschirm";
@@ -122,7 +121,6 @@
 "It's in your Inbox too; replay it anytime." = "Liegt auch im Posteingang; jederzeit erneut abspielbar.";
 "Keep text plates fully opaque regardless of surface opacity." = "Hält Textflächen immer voll deckend, unabhängig von der Flächendeckkraft.";
 "Keyboard Shortcuts" = "Tastaturkurzbefehle";
-"Live interaction" = "Live-Interaktion";
 "Load" = "Laden";
 "Local agent sources" = "Lokale Agentenquellen";
 "Local provider: nothing leaves this Mac." = "Lokaler Anbieter: Nichts verlässt diesen Mac.";
@@ -255,7 +253,6 @@
 "Voice engine" = "Sprach-Engine";
 "Voice input" = "Spracheingabe";
 "Watched" = "Beobachtet";
-"Watching" = "Beobachtet";
 "Wave Ribbon" = "Wellenband";
 "Welcome" = "Willkommen";
 "Welcome to Attaché" = "Willkommen bei Attaché";

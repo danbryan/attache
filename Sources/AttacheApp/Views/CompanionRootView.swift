@@ -58,7 +58,6 @@ struct CompanionRootView: View {
     // and sheet per surface, since the consent moment is identical everywhere
     // except which underlying `select...RecoveryProvider` runs on Enable.
     @State var pendingRecoveryProviderSwitch: PendingRecoveryProviderSwitch?
-    @State private var railExpanded = false
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
     // When `model.callPhase` last became `.sendDelivered` (INF-244): drives how
@@ -181,15 +180,6 @@ struct CompanionRootView: View {
             }
 
             if surfaceMode == .live {
-                if !paletteVisible && !model.conversationActive {
-                    SessionHoverRail(
-                        model: model,
-                        expanded: $railExpanded,
-                        scrubberHoverExclusionEnabled: liveTransportVisible
-                    )
-                        .transition(.opacity)
-                }
-
                 LyricsSidePanel(
                     model: model,
                     playback: playback,
@@ -521,28 +511,15 @@ struct CompanionRootView: View {
         if topOverlayVisible {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    if micTranscript.isPreparing || micTranscript.isListening || !micTranscript.transcript.isEmpty {
-                        Text(transcriptOverlayText)
-                            .typoSection()
-                            .foregroundStyle(.primary.opacity(0.92))
-                            .lineLimit(3)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(voiceInputContext)
-                            .typoCaption(.medium, design: .monospaced)
-                            .foregroundStyle(.primary.opacity(0.52))
-                            .lineLimit(1)
-                    } else {
-                        Text(topStatusText)
-                            .typoBody(.semibold)
-                            .foregroundStyle(.primary.opacity(0.88))
-                    }
-                    if !(micTranscript.isPreparing || micTranscript.isListening || !micTranscript.transcript.isEmpty),
-                       let card = model.selectedCard {
-                        Text(cardContext(card))
-                            .typoCaption(.medium, design: .monospaced)
-                            .foregroundStyle(.primary.opacity(0.52))
-                            .lineLimit(1)
-                    }
+                    Text(transcriptOverlayText)
+                        .typoSection()
+                        .foregroundStyle(.primary.opacity(0.92))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(voiceInputContext)
+                        .typoCaption(.medium, design: .monospaced)
+                        .foregroundStyle(.primary.opacity(0.52))
+                        .lineLimit(1)
                 }
                 Spacer()
             }
@@ -636,13 +613,6 @@ struct CompanionRootView: View {
 
     private var liveModeOverlay: some View {
         VStack(spacing: 0) {
-            if controlsVisible {
-                topLiveOverlayRow
-                    .padding(.horizontal, 24)
-                    .padding(.top, 34)
-                    .transition(.opacity)
-            }
-
             Spacer()
 
             if let talkSession = model.talkContextSession, liveComposerShouldShow {
@@ -697,39 +667,6 @@ struct CompanionRootView: View {
             }
         }
         .frame(maxWidth: .infinity)
-    }
-
-    // Focus status lives in the bottom dock (focus button + status card), so
-    // the top edge stays clear apart from the first-run hint.
-    private var topLiveOverlayRow: some View {
-        HStack {
-            if !topOverlayVisible, controlsVisible, !railExpanded, model.attachedCodexSessionID == nil {
-                liveHintPill
-            }
-            Spacer()
-        }
-    }
-
-    private var liveHintPill: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Live interaction")
-                .typoLabel(.semibold)
-                .foregroundStyle(.primary.opacity(0.88))
-                .lineLimit(1)
-            Text("Hover the left edge or press ⌘K to pick a session. ⌘, for settings.")
-                .typoCaption(.medium, design: .monospaced)
-                .foregroundStyle(.primary.opacity(0.55))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 9)
-        .frame(maxWidth: 430, alignment: .leading)
-        .background(.ultraThinMaterial.opacity(0.50), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.10))
-        )
-        .help("Press ⌘K to find a session. Press ⌘/ to see keyboard shortcuts.")
     }
 
     // True whenever a recap is actively playing or paused in live mode, so the
@@ -949,44 +886,13 @@ struct CompanionRootView: View {
             || model.isGeneratingLiveFollowUpAnswer
     }
 
-    // INF-251 (A3): on-call, the composer (`onCallHUD`/`CallStatusPresentation`)
-    // is the single status home, so the top bar would only duplicate it
-    // ("Assistant speaking" vs the composer's "Speaking…"). The one exception
-    // is the live mic transcript: it has nowhere else to render eyes-up while
-    // a turn is being captured, so it stays up exactly while the mic is
-    // active (mirrors the condition `topTranscriptOverlay` already uses to
-    // decide transcript-vs-status content, left untouched below). Off-call,
-    // this function is byte-for-byte what it was before this ticket.
+    // INF-263: the top box is now exclusively the "eyes-up" surface for your
+    // own live dictation (nowhere else to render it while a turn is being
+    // captured). It never shows agent/call/playback status, on-call or off
+    // -call: that all lives in the bottom composer (on-call) or the bottom
+    // caption/transport surface (off-call, `bottomResponseOverlay`).
     private var topOverlayVisible: Bool {
-        if model.onCall {
-            return micTranscript.isPreparing || micTranscript.isListening || !micTranscript.transcript.isEmpty
-        }
-        return playback.isPlaying
-            || playback.isPaused
-            || playback.isBusy
-            || micTranscript.isPreparing
-            || micTranscript.isListening
-            || !micTranscript.transcript.isEmpty
-            || callPhaseIsThinking
-    }
-
-    // INF-244: the top bar must not go silent while the call is thinking.
-    // Only reachable off-call now (see `topOverlayVisible` above): on-call,
-    // the composer already shows "Thinking… Xs" via `CallStatusPresentation`.
-    private var callPhaseIsThinking: Bool {
-        switch model.callPhase {
-        case .thinking: return true
-        default: return false
-        }
-    }
-
-    private var topStatusText: String {
-        if playback.isPlaying && !playback.isPaused { return "Assistant speaking" }
-        if playback.isPaused { return "Playback paused" }
-        if playback.isBusy { return CallStatusPresentation.preparingAudioText }
-        if callPhaseIsThinking { return "Thinking…" }
-        if model.unreadCount > 0 { return "\(model.unreadCount) unread update\(model.unreadCount == 1 ? "" : "s")" }
-        return "Listening for agent updates"
+        micTranscript.isPreparing || micTranscript.isListening || !micTranscript.transcript.isEmpty
     }
 
     private var voiceInputContext: String {

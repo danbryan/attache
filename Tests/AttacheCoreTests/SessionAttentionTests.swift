@@ -152,13 +152,4 @@ final class SessionAttentionTests: XCTestCase {
         XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: [], format: .claude, now: now),
                        .quiet)
     }
-
-    func testShortLabelsMatchTheRailVocabulary() {
-        XCTAssertEqual(SessionAttentionState.active.shortLabel, "running")
-        XCTAssertEqual(SessionAttentionState.awaitingAnswer.shortLabel, "waiting on you")
-        XCTAssertEqual(SessionAttentionState.possiblyWaiting(quietSeconds: 200).shortLabel, "maybe waiting")
-        XCTAssertEqual(SessionAttentionState.erroredRecently.shortLabel, "error")
-        XCTAssertEqual(SessionAttentionState.turnComplete.shortLabel, "done")
-        XCTAssertNil(SessionAttentionState.quiet.shortLabel)
-    }
 }

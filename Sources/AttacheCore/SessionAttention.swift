@@ -33,18 +33,6 @@ public enum SessionAttentionState: Equatable {
         }
     }
 
-    /// The short status word surfaces like the watching rail show, or nil for
-    /// states not worth a label.
-    public var shortLabel: String? {
-        switch self {
-        case .active: return "running"
-        case .awaitingAnswer: return "waiting on you"
-        case .possiblyWaiting: return "maybe waiting"
-        case .erroredRecently: return "error"
-        case .turnComplete: return "done"
-        case .quiet: return nil
-        }
-    }
 }
 
 public enum SessionAttentionClassifier {
