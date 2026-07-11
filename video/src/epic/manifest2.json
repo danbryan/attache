@@ -1,12 +1,12 @@
 {
   "narration": {
     "n_hook": {
-      "seconds": 13.758,
-      "text": "Somewhere on your Mac, an agent just finished something big. And it's not the only one. Two agents. Ten. Twenty. Nobody watches twenty terminals. Your agents are talking. Attashay is listening."
+      "seconds": 18.745,
+      "text": "Somewhere on your Mac, an agent just finished something big. And it's not the only one. Two agents. Ten. Twenty. The more you run, the harder it is to know what they're doing, and to keep them all on track. Your agents are talking. <break time=\"1.2s\" /> Attashay is listening."
     },
     "n_title": {
-      "seconds": 2.905,
-      "text": "This is Attashay. It gives your agents a voice."
+      "seconds": 2.976,
+      "text": "This is atta-shay. It gives your agents a voice."
     },
     "n_pin": {
       "seconds": 7.725,
@@ -33,12 +33,12 @@
       "text": "Attashay locks the target, waits for the session to go quiet, delivers, and reads the answer back the moment it lands."
     },
     "n_personalities": {
-      "seconds": 6.158,
-      "text": "You decide how it talks. Pick a preset, or write your own personality, and Attashay speaks your language."
+      "seconds": 8.435,
+      "text": "You decide how it talks. Pick a preset, write your own, or just have fun with it. Updates from your agents don't have to be boring."
     },
     "n_brain": {
-      "seconds": 14.828,
-      "text": "It watches Claude Code and Codex, but it thinks with its own model. Fully local on your Mac, or the frontier you already pay for. And if one model runs dry, the next one steps in, mid-conversation."
+      "seconds": 14.992,
+      "text": "It watches Claude Code and Codex, but it thinks with its own model. Run it fully local on your Mac, or reach for the frontier. And if one model runs dry, the next one steps in, mid-conversation."
     },
     "n_outro": {
       "seconds": 5.349,
@@ -70,11 +70,11 @@
       "seconds": 5.016,
       "text": "Five clips, captioned and queued. But clip two's hook is weak. Want me to recut it?"
     },
-    "vs_hype": {
-      "voice": "Titan",
-      "voice_id": "dtSEyYGNJqjrtBArPCVZ",
-      "seconds": 4.127,
-      "text": "High five on those clips! That's a week of content before lunch. Let's go!"
+    "vs_cowboy": {
+      "voice": "Grandpa Spuds Oxley",
+      "voice_id": "NOpBlnGInO9m6vDvFkFC",
+      "seconds": 7.419,
+      "text": "Well howdy, partner. Them five little clips is all branded up and corralled, ready to ride out at first light."
     }
   },
   "sfx": {

@@ -14,8 +14,9 @@
 # sound-generation ambient pad if the account has no music access.
 #
 # GEN limits which sections regenerate (comma-separated out of
-# narration,samples,sfx,music); default is all four. Example:
-#   GEN=narration,samples ./generate-vo2.sh
+# narration,samples,sfx,music); default is all four. ONLY further limits to
+# specific clip names, so an unchanged clip keeps its known-good take:
+#   GEN=narration,samples ONLY=n_hook,vs_cowboy ./generate-vo2.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p public/audio2
@@ -76,19 +77,28 @@ def duration(path):
 
 m = json.load(open(MANIFEST))
 gen = set((os.environ.get("GEN") or "narration,samples,sfx,music").split(","))
+only = set(filter(None, (os.environ.get("ONLY") or "").split(",")))
+def wanted(name):
+    return not only or name in only
 
 if "narration" in gen:
     for name, seg in m["narration"].items():
+        if not wanted(name):
+            continue
         seg["seconds"] = save(name, tts(seg["text"], SEKOU), NARRATION_SPEED)
         print(f"{name}: {seg['seconds']}s")
 
 if "samples" in gen:
     for name, seg in m["samples"].items():
+        if not wanted(name):
+            continue
         seg["seconds"] = save(name, tts(seg["text"], seg["voice_id"]))
         print(f"{name} ({seg['voice']}): {seg['seconds']}s")
 
 if "sfx" in gen:
     for name, seg in m["sfx"].items():
+        if not wanted(name):
+            continue
         seg["seconds"] = save(name, sound(seg["prompt"], seg["seconds"]), lufs=-20)
         print(f"{name}: {seg['seconds']}s")
 

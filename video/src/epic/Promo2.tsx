@@ -88,8 +88,8 @@ export const Promo2: React.FC = () => {
       <Sequence from={persStart + f(personalities.editorSpeakAt)}>
         <Audio src={a2("vs_editor")} />
       </Sequence>
-      <Sequence from={persStart + f(personalities.hypeSpeakAt)}>
-        <Audio src={a2("vs_hype")} />
+      <Sequence from={persStart + f(personalities.cowboySpeakAt)}>
+        <Audio src={a2("vs_cowboy")} />
       </Sequence>
 
       {/* ---- sound design ---- */}

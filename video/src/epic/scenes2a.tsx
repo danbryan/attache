@@ -38,10 +38,14 @@ export const Hook2: React.FC = () => {
   const frame = useCurrentFrame();
   const wallF = f(hook.wallAt);
   const lineF = f(hook.lineAt);
+  const line2F = f(hook.line2At);
   const collapseF = f(hook.collapseAt);
   const collapse = interpolate(frame, [collapseF, collapseF + 30], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const dim = interpolate(frame, [lineF, lineF + 20], [1, 0.26], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const lineIn = interpolate(frame, [lineF + 6, lineF + 24], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  // The payoff line — Attaché's first mention — holds back through the
+  // narration's dramatic pause, then lands on its own beat.
+  const line2In = interpolate(frame, [line2F, line2F + 14], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   // The wall floods in: the hero terminal shrinks toward the top-left as the
   // grid fills the frame — "and it's not the only one."
   const shrink = interpolate(frame, [wallF, wallF + 26], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -73,11 +77,12 @@ export const Hook2: React.FC = () => {
             </div>
           </AbsoluteFill>
         </AbsoluteFill>
-        <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", opacity: lineIn * (1 - collapse) }}>
+        <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", opacity: 1 - collapse }}>
           <div style={{ fontSize: 66, fontWeight: 700, color: T.text, textAlign: "center", letterSpacing: "-0.02em", lineHeight: 1.25, textShadow: "0 8px 60px rgba(0,0,0,0.9)" }}>
-            Your agents are talking.
-            <br />
-            <span style={{ color: T.gold }}>Attaché is listening.</span>
+            <div style={{ opacity: lineIn }}>Your agents are talking.</div>
+            <div style={{ opacity: line2In, transform: `scale(${0.94 + line2In * 0.06})`, color: T.gold, fontSize: 76, marginTop: 14, textShadow: `0 0 ${50 * line2In}px rgba(10,132,255,0.5), 0 8px 60px rgba(0,0,0,0.9)` }}>
+              Attaché is listening.
+            </div>
           </div>
         </AbsoluteFill>
       </Camera>

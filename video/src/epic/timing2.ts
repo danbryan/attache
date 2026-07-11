@@ -20,11 +20,15 @@ export const hook = (() => {
   const narrStart = 0.5;
   // "And it's not the only one" — the wall of mini sessions floods in.
   const wallAt = narrStart + 3.6;
-  // "Your agents are talking…" — dim the wall, land the line.
-  const lineAt = narrStart + nsec("n_hook") - 4.4;
-  const collapseAt = narrStart + nsec("n_hook") + 0.3;
+  const narrEnd = narrStart + nsec("n_hook");
+  // Two-stage reveal around the scripted dramatic pause: "Your agents are
+  // talking." lands first, then after the 1.2s break the payoff line —
+  // Attaché's first mention — lands on its own beat.
+  const lineAt = narrEnd - 4.9;
+  const line2At = narrEnd - 1.85;
+  const collapseAt = narrEnd + 0.4;
   const len = collapseAt + 1.2;
-  return { narrStart, wallAt, lineAt, collapseAt, len };
+  return { narrStart, wallAt, lineAt, line2At, collapseAt, len };
 })();
 
 // ---- 2: title -----------------------------------------------------------
@@ -51,13 +55,13 @@ export const pin = (() => {
 export const inbox = (() => {
   const narrStart = 0.35;
   const cardsAt = [0.9, 1.35, 1.8];
-  // Playback starts early so the controls have something real to act on.
-  const memoStart = 4.6;
-  const speedAt = memoStart + 2.2;   // 1.0x -> 1.5x capsule flips
-  const scrubAt = memoStart + 3.6;   // progress jumps forward
   const narrEnd = narrStart + nsec("n_inbox");
+  // One voice at a time: the memo only plays after the narration finishes.
+  const memoStart = narrEnd + 0.45;
+  const speedAt = memoStart + 1.6;   // 1.0x -> 1.5x capsule flips
+  const scrubAt = memoStart + 3.0;   // progress jumps forward
   const recapAt = narrEnd - 1.8;     // "…hit Recap" — the button glows
-  const len = Math.max(narrEnd, memoStart + ssec("va_memo")) + 1.2;
+  const len = memoStart + ssec("va_memo") + 1.2;
   return { narrStart, cardsAt, memoStart, speedAt, scrubAt, recapAt, len };
 })();
 
@@ -107,17 +111,17 @@ export const twoway = (() => {
   };
 })();
 
-// ---- 8: personalities — presets, then write your own ----------------------
+// ---- 8: personalities — presets, write your own, or have fun -------------
 export const personalities = (() => {
   const narrStart = 0.3;
   const presetsAt = 0.8;
   const editorTypeAt = narrStart + nsec("n_personalities") - 3.0;
   const typeDur = 1.4;
   const editorSpeakAt = Math.max(editorTypeAt + typeDur + 0.4, narrStart + nsec("n_personalities") + 0.3);
-  const hypeTypeAt = editorSpeakAt + ssec("vs_editor") + 0.6;
-  const hypeSpeakAt = hypeTypeAt + typeDur + 0.4;
-  const len = hypeSpeakAt + ssec("vs_hype") + 1.0;
-  return { narrStart, presetsAt, editorTypeAt, typeDur, editorSpeakAt, hypeTypeAt, hypeSpeakAt, len };
+  const cowboyTypeAt = editorSpeakAt + ssec("vs_editor") + 0.6;
+  const cowboySpeakAt = cowboyTypeAt + typeDur + 0.4;
+  const len = cowboySpeakAt + ssec("vs_cowboy") + 1.0;
+  return { narrStart, presetsAt, editorTypeAt, typeDur, editorSpeakAt, cowboyTypeAt, cowboySpeakAt, len };
 })();
 
 // ---- 9: its own brain — local or frontier, with fallback -------------------

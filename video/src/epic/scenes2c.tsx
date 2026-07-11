@@ -14,7 +14,7 @@ import { personalities, brain, outro, f, karaokeEnd, ssec, stext } from "./timin
 const PRESETS = ["Explainer", "Big Picture", "Inquisitive"] as const;
 const CUSTOMS = [
   { key: "editor", prompt: "a sharp editor with strong opinions", emoji: "🎬", voice: "Jessa", sample: "vs_editor" as const, tint: "#0A84FF" },
-  { key: "hype", prompt: "an over-caffeinated hype coach", emoji: "🔥", voice: "Titan", sample: "vs_hype" as const, tint: "#FF9F0A" },
+  { key: "cowboy", prompt: "an old-timey cowboy who's never seen a computer", emoji: "🤠", voice: "Grandpa Spuds", sample: "vs_cowboy" as const, tint: "#FF9F0A" },
 ];
 
 export const Personalities2: React.FC = () => {
@@ -22,7 +22,7 @@ export const Personalities2: React.FC = () => {
   const typeDurF = f(personalities.typeDur);
   const beats = [
     { ...CUSTOMS[0], typeF: f(personalities.editorTypeAt), speakF: f(personalities.editorSpeakAt) },
-    { ...CUSTOMS[1], typeF: f(personalities.hypeTypeAt), speakF: f(personalities.hypeSpeakAt) },
+    { ...CUSTOMS[1], typeF: f(personalities.cowboyTypeAt), speakF: f(personalities.cowboySpeakAt) },
   ];
   const active = frame >= beats[1].typeF ? beats[1] : beats[0];
   const typedPrompt = frame >= active.typeF ? typeSlice(active.prompt, frame, active.typeF, typeDurF) : "";
@@ -148,7 +148,7 @@ export const Brain2: React.FC = () => {
                   </div>
                 ))}
               </div>
-              <div style={{ color: frontier ? T.gold : T.dim, fontSize: 21, fontWeight: 600 }}>Or the subscriptions you already pay for</div>
+              <div style={{ color: frontier ? T.gold : T.dim, fontSize: 21, fontWeight: 600 }}>Frontier quality, on tap</div>
             </div>
           </div>
         </div>

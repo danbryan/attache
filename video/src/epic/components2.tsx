@@ -15,34 +15,49 @@ export const Aurora: React.FC<{ accent?: "blue" | "violet" | "teal" | "ember"; s
   const frame = useCurrentFrame();
   const drift = (speed: number, amp: number, phase: number) =>
     Math.sin(frame / speed + phase) * amp;
-  const palettes: Record<string, [string, string, string]> = {
-    blue: ["10,132,255", "94,92,230", "0,199,190"],
-    violet: ["122,92,255", "10,132,255", "191,90,242"],
-    teal: ["0,199,190", "10,132,255", "48,209,88"],
-    ember: ["255,159,10", "255,69,58", "122,92,255"],
+  // Each palette mixes a cool anchor with a WARM counter-color so the ground
+  // reads colorful, not just black-blue-purple.
+  const palettes: Record<string, [string, string, string, string]> = {
+    blue: ["10,132,255", "0,199,190", "255,159,10", "94,92,230"],
+    violet: ["122,92,255", "255,55,95", "10,132,255", "255,159,10"],
+    teal: ["0,199,190", "48,209,88", "10,132,255", "255,214,10"],
+    ember: ["255,159,10", "255,69,58", "191,90,242", "10,132,255"],
   };
-  const [a, b, c] = palettes[accent];
+  const [a, b, c, d] = palettes[accent];
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
+      {/* base sky lift — takes the ground off pure black */}
+      <AbsoluteFill
+        style={{
+          background: `linear-gradient(178deg, rgba(${a},${0.13 * strength}) 0%, transparent 46%, rgba(${c},${0.10 * strength}) 100%)`,
+        }}
+      />
       <div
         style={{
           position: "absolute", width: 1700, height: 1300, borderRadius: "50%",
           left: -420 + drift(210, 90, 0), top: -560 + drift(260, 70, 1.3),
-          background: `radial-gradient(closest-side, rgba(${a},${0.17 * strength}), transparent 70%)`,
+          background: `radial-gradient(closest-side, rgba(${a},${0.30 * strength}), transparent 70%)`,
         }}
       />
       <div
         style={{
           position: "absolute", width: 1500, height: 1200, borderRadius: "50%",
           right: -460 + drift(240, 100, 2.1), bottom: -520 + drift(200, 80, 0.6),
-          background: `radial-gradient(closest-side, rgba(${b},${0.13 * strength}), transparent 70%)`,
+          background: `radial-gradient(closest-side, rgba(${b},${0.24 * strength}), transparent 70%)`,
         }}
       />
       <div
         style={{
-          position: "absolute", width: 1100, height: 900, borderRadius: "50%",
-          right: 60 + drift(190, 120, 4.0), top: -420 + drift(230, 60, 2.8),
-          background: `radial-gradient(closest-side, rgba(${c},${0.09 * strength}), transparent 70%)`,
+          position: "absolute", width: 1150, height: 950, borderRadius: "50%",
+          right: 40 + drift(190, 120, 4.0), top: -430 + drift(230, 60, 2.8),
+          background: `radial-gradient(closest-side, rgba(${c},${0.20 * strength}), transparent 70%)`,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute", width: 1000, height: 850, borderRadius: "50%",
+          left: -260 + drift(230, 110, 5.2), bottom: -380 + drift(210, 90, 3.4),
+          background: `radial-gradient(closest-side, rgba(${d},${0.18 * strength}), transparent 70%)`,
         }}
       />
     </AbsoluteFill>
