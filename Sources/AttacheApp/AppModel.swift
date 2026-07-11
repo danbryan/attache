@@ -733,6 +733,11 @@ final class AppModel: ObservableObject {
     /// overlapping compositions across different watched sessions can't
     /// clobber each other's start/end bookkeeping.
     @Published private var composingNarrationTokens: Set<UUID> = []
+    /// Failed instructions the user has moved past (snapshotted at call
+    /// start): they stay in the Sent log but stop surfacing as a red error
+    /// in the call composer. Memory-only on purpose; a relaunch re-surfaces
+    /// an unresolved failure once, which is the right amount of nagging.
+    private var acknowledgedFailedSendIDs: Set<String> = []
     private static let sessionIndexURL = CompanionAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
     private var sessionIndexer = SessionIndexer(cacheURL: AppModel.sessionIndexURL, scanners: [])
     private let sessionIndexQueue = DispatchQueue(label: "com.bryanlabs.attache.sessionindex")
@@ -3224,10 +3229,15 @@ final class AppModel: ObservableObject {
         }
         // The instruction most relevant to the live call composer: the newest
         // one addressed to whatever session Tell Agent would target right
-        // now. `twoWay.log` is already newest-first.
-        let pendingSend = twoWayTarget.flatMap { target in
+        // now. `twoWay.log` is already newest-first. A failed instruction the
+        // user has already moved past (acknowledged at call start) is treated
+        // as no instruction at all, not skipped in favor of an older one.
+        let newestSend = twoWayTarget.flatMap { target in
             twoWay.log.first { $0.sessionID == target.sessionID }
         }
+        let pendingSend = (newestSend.map { $0.state == .failed && acknowledgedFailedSendIDs.contains($0.id) } == true)
+            ? nil
+            : newestSend
         return CallSignals(
             isConversing: isConversing,
             conversationWaitStartedAt: conversationWaitStartedAt,
@@ -5554,6 +5564,13 @@ final class AppModel: ObservableObject {
     /// Start a call with the focused session (or the best talk target): live narration
     /// plus two-way conversation.
     func startCall() {
+        // A new call is a clean slate for two-way status: any instruction
+        // that already failed before this call (e.g. the fail-closed marker
+        // written after a crash or restart) stays in the Sent log, but must
+        // not greet the user as a red error in the fresh call's composer.
+        // Failures that happen DURING this call still surface.
+        acknowledgedFailedSendIDs.formUnion(twoWay.log.filter { $0.state == .failed }.map(\.id))
+        refreshCallPhase()
         startConversation()
         if let session = conversationTargetSnapshot?.target {
             intakeStatus = "On a call with \(session.displayTitle)."
@@ -5580,10 +5597,12 @@ final class AppModel: ObservableObject {
                     || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled))
         }
         codexSessionWatcher.watch(enabledTargets)
-        if showActivityInsights,
-           let focusedID = attachedCodexSession?.id,
-           let focusedTarget = enabledTargets.first(where: { $0.id == focusedID }) {
-            sessionActivityWatcher.watch([focusedTarget])
+        // Ambient verbs cover every watched session, not just the focused
+        // one: the corner-glance experience ("oh, it's committing something")
+        // has to work while a background worker is the only thing running,
+        // which is exactly when nothing is focused.
+        if showActivityInsights, !enabledTargets.isEmpty {
+            sessionActivityWatcher.watch(enabledTargets)
         } else {
             sessionActivityWatcher.stop()
         }

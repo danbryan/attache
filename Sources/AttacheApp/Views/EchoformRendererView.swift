@@ -131,21 +131,15 @@ struct EchoformRendererView: View {
             // lockup is the default, not a requirement.
             VStack(spacing: 16) {
                 if idleBrand == .mark || idleBrand == .monogram {
-                    // The default monogram stays monochrome; the full mark
-                    // keeps the theme-tinted treatment for those who pick it.
-                    AttacheBrandMark(
-                        letterColor: idleBrand == .monogram
-                            ? Color.primary.opacity(0.82)
-                            : brandLetterColor,
-                        barColor: { index in
-                            idleBrand == .monogram
-                                ? Color.primary.opacity(0.35 + 0.4 * (Double(index) / 10.0))
-                                : energyColor(0.42 + 0.58 * (Double(index) / 10.0), opacity: 0.96)
-                        },
+                    // The Bubbles mascot (design/attache-logo.svg): full color
+                    // by default, a single-color silhouette for the monogram.
+                    AttacheMascotMark(
+                        arcColor: energyColor(1.0, opacity: 0.96),
+                        monochrome: idleBrand == .monogram ? Color.primary.opacity(0.7) : nil,
                         glow: idleBrand == .monogram ? Color.primary.opacity(0.25) : ambientColor,
                         glowStrength: breathing ? 1 : 0.45
                     )
-                    .frame(width: 150, height: 158)
+                    .frame(width: 190, height: 190)
                     .opacity(breathing ? 0.98 : 0.84)
                 }
                 if idleBrand == .mark {

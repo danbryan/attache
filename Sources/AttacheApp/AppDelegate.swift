@@ -235,8 +235,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let cachedBrandTemplate { return cachedBrandTemplate }
         let rendered = MainActor.assumeIsolated { () -> NSImage? in
             let renderer = ImageRenderer(content:
-                AttacheBrandMark(letterColor: .black, barColor: { _ in .black }, glow: .clear, glowStrength: 0)
-                    .frame(width: 17, height: 18)
+                AttacheMascotMark(monochrome: .black)
+                    .frame(width: 18, height: 18)
             )
             renderer.scale = 2
             return renderer.nsImage
