@@ -10,6 +10,7 @@ final class CallPhaseTests: XCTestCase {
         createdAt: Date? = nil,
         confirmedAt: Date? = nil,
         deliveredAt: Date? = nil,
+        resultingCardID: String? = nil,
         error: String? = nil
     ) -> Instruction {
         Instruction(
@@ -22,6 +23,7 @@ final class CallPhaseTests: XCTestCase {
             confirmedAt: confirmedAt,
             deliveredAt: deliveredAt,
             error: error,
+            resultingCardID: resultingCardID,
             origin: .tellAgent,
             targetDisplayName: target
         )
@@ -129,6 +131,24 @@ final class CallPhaseTests: XCTestCase {
             CallPhase.derive(from: signals),
             .sendDelivered(target: "Weekly Codex Improvement Review", deliveredAt: deliveredAt)
         )
+    }
+
+    // A real regression this guards against directly: `state` never moves
+    // off `.delivered` once a round trip actually completes (there is no
+    // separate "replied" state), and `resultingCardID` is the only signal
+    // that the reply already arrived and got linked
+    // (`TwoWayCoordinator.linkResponseCard`). Without checking it, the
+    // composer kept counting up "Waiting for X to reply… Ns" forever for an
+    // instruction that had already been fully answered, possibly many turns
+    // and many minutes ago, reported live as "why is this old message still
+    // showing?" with a 20+ minute counter on an instruction whose reply had
+    // long since been heard.
+    func testDeliveredWithAResultingCardIsNotTreatedAsStillAwaitingAReply() {
+        let deliveredAt = referenceDate.addingTimeInterval(-3600)
+        let signals = CallSignals(
+            pendingSend: instruction(state: .delivered, deliveredAt: deliveredAt, resultingCardID: "card-1")
+        )
+        XCTAssertEqual(CallPhase.derive(from: signals), .idle)
     }
 
     func testSendDeliveredFallsBackToGenericTargetWhenNameIsMissing() {

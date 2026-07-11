@@ -249,7 +249,7 @@ extension CallPhase {
         if let send = signals.pendingSend {
             let target = send.targetDisplayName ?? "the agent"
             switch send.state {
-            case .delivered:
+            case .delivered where send.resultingCardID == nil:
                 // `deliveredAt` should always be set once an instruction
                 // reaches `.delivered` (`InstructionReplyEngine` sets it at
                 // the same transition); `.distantPast` is a defensive
@@ -257,6 +257,17 @@ extension CallPhase {
                 // instruction with no known delivery time reads as
                 // immediately stale rather than staying "fresh" forever.
                 return .sendDelivered(target: target, deliveredAt: send.deliveredAt ?? .distantPast)
+            case .delivered:
+                // A real regression this guards against directly: the reply
+                // already arrived and got linked (`resultingCardID` set by
+                // `TwoWayCoordinator.linkResponseCard`) - `state` itself never
+                // moves off `.delivered` for a completed round trip (there is
+                // no separate "replied" state), so without this check the
+                // composer kept counting up a "Waiting for X to reply…" timer
+                // forever for an instruction that had already been answered,
+                // possibly many turns ago. Nothing left to show for it here;
+                // fall through toward `.idle` the same as `.failed`/`.canceled`.
+                break
             case .pending:
                 // Not confirmed yet: the wait is on the user, not the session.
                 return .sendQueued(
