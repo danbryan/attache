@@ -1,0 +1,276 @@
+import Foundation
+
+/// The one semantic activity phase every companion renderer draws from
+/// (INF-268). Echoform bars, the Bubbles pet, and any future avatar are all
+/// views over this same signal; none of them talk to watchers, playback, or
+/// input monitors directly.
+public enum CompanionActivityPhase: String, CaseIterable, Codable, Sendable {
+    /// No pinned sessions and nothing else happening: the companion can rest.
+    case sleeping
+    /// Sessions are pinned but everything is quiet.
+    case idle
+    /// An agent is working with no visible tool activity, or the personality
+    /// is composing a live answer.
+    case agentThinking
+    /// A finished turn is arriving: its recap is being composed or its speech
+    /// synthesized, the beat between the agent finishing and Attaché speaking.
+    case agentResponding
+    /// An agent is visibly running tools right now; `toolKind` says what flavor.
+    case toolRunning
+    /// Attaché is speaking out loud.
+    case speaking
+    /// Playback is paused mid-recap.
+    case paused
+    /// A watched session is waiting on the user's answer.
+    case blockedOnUser
+    /// A watched session errored recently, or a live call failed.
+    case error
+}
+
+/// Which agent the current phase belongs to, driving which speech bubble
+/// lights up in agent-aware renderers.
+public enum CompanionAgentIdentity: String, CaseIterable, Codable, Sendable {
+    case none
+    case codex
+    case claude
+
+    /// Maps a `SourceKind` raw value (the string stored on cards, sessions,
+    /// and events) to a bubble identity. Non-agent sources read as `.none`.
+    public init(sourceKindRawValue: String?) {
+        switch sourceKindRawValue {
+        case SourceKind.codex.rawValue: self = .codex
+        case SourceKind.claudeCode.rawValue: self = .claude
+        default: self = .none
+        }
+    }
+}
+
+/// The flavor of tool an agent is running, for renderers that vary the
+/// animation per kind (shell shakes, edit scribbles, web orbits).
+public enum CompanionToolKind: String, CaseIterable, Codable, Sendable {
+    case edit
+    case read
+    case shell
+    case web
+    case other
+
+    /// Classify a live activity phrase from `SessionActivityWatcher`'s fixed
+    /// vocabulary. `sourceHint` is the phrase's source raw value
+    /// ("toolIntent", "toolResult", "editEvent", "externalTool"); the phrase
+    /// text refines within a hint. Keyword matching keeps this stable if the
+    /// watcher's vocabulary grows: unknown phrases degrade to `.other`, never
+    /// to a wrong strong flavor. Order matters: edit before read before shell
+    /// so "editing files" never reads as a file read and "checking git" stays
+    /// a read, not a shell run.
+    public static func classify(phrase: String, sourceHint: String) -> CompanionToolKind {
+        if sourceHint == "editEvent" { return .edit }
+        if sourceHint == "externalTool" {
+            return phrase.lowercased() == "finding tools" ? .other : .web
+        }
+        let lower = phrase.lowercased()
+        if lower.contains("edit") { return .edit }
+        if lower.contains("read") || lower.contains("scan") || lower.contains("search")
+            || lower.contains("parsing") || lower.contains("diff") || lower.contains("git")
+            || lower.contains("viewing") {
+            return .read
+        }
+        if lower.contains("running") || lower.contains("build") || lower.contains("packag")
+            || lower.contains("command") || lower.contains("test") || lower.contains("verif")
+            || lower.contains("launch") || lower.contains("checking") {
+            return .shell
+        }
+        if lower.contains("endpoint") || lower.contains("web") { return .web }
+        return .other
+    }
+}
+
+/// The consolidated state a companion renderer consumes. Semantic fields
+/// change at semantic rate (attention transitions, playback flips, phrase
+/// decay); `audio` is the existing 20 Hz `VisualizerRenderState` passed
+/// through so a speaking mouth can track level without a second audio path.
+/// The publisher deliberately refreshes on semantic changes only; views that
+/// need live audio compose it per frame via `with(audio:)` from the
+/// `PlaybackTimeline` they already observe, keeping the whole-window
+/// invalidation rate unchanged.
+public struct CompanionActivityState: Equatable, Sendable {
+    public var phase: CompanionActivityPhase
+    public var activeAgent: CompanionAgentIdentity
+    /// Set only while `phase == .toolRunning`.
+    public var toolKind: CompanionToolKind?
+    public var audio: VisualizerRenderState
+    /// The user is actively typing in the app (event occurrence only; no
+    /// content, no keycodes; see `TypingActivityMonitor`).
+    public var userTyping: Bool
+    public var unreadCount: Int
+    public var hasCards: Bool
+
+    public init(
+        phase: CompanionActivityPhase = .sleeping,
+        activeAgent: CompanionAgentIdentity = .none,
+        toolKind: CompanionToolKind? = nil,
+        audio: VisualizerRenderState = VisualizerRenderState(),
+        userTyping: Bool = false,
+        unreadCount: Int = 0,
+        hasCards: Bool = false
+    ) {
+        self.phase = phase
+        self.activeAgent = activeAgent
+        self.toolKind = toolKind
+        self.audio = audio
+        self.userTyping = userTyping
+        self.unreadCount = unreadCount
+        self.hasCards = hasCards
+    }
+
+    public static let initial = CompanionActivityState()
+
+    /// The same semantic state with a fresh audio frame, for per-frame
+    /// composition inside a renderer.
+    public func with(audio: VisualizerRenderState) -> CompanionActivityState {
+        var next = self
+        next.audio = audio
+        return next
+    }
+}
+
+/// A plain-value snapshot of the signals `CompanionActivityState.derive(from:)`
+/// reduces, mirroring the `CallSignals` pattern: the app layer maps its own
+/// types (attention states, watcher phrases, playback flags) into these
+/// fields at one choke point, and the reducer stays pure and unit-testable.
+///
+/// Per-phase agent attribution comes pre-resolved (`blockedAgent`,
+/// `speakingAgent`, ...) because the mapping from a session or card to its
+/// `SourceKind` lives in the app layer; the reducer only picks whose moment
+/// wins.
+public struct CompanionActivitySignals: Equatable, Sendable {
+    /// Any session is currently attached (pinned) for watching.
+    public var hasPinnedSessions: Bool
+    /// A watched session needs the user (awaiting answer / possibly waiting).
+    public var blockedAgent: CompanionAgentIdentity?
+    /// A watched session's tail shows a recent error.
+    public var erroredAgent: CompanionAgentIdentity?
+    /// A watched session is actively working (records landing).
+    public var workingAgent: CompanionAgentIdentity?
+    /// A finished turn's recap is being composed or synthesized right now.
+    public var respondingAgent: CompanionAgentIdentity?
+    /// A fresh tool signal was observed (within the app layer's dwell window).
+    public var toolAgent: CompanionAgentIdentity?
+    /// The flavor of that fresh tool signal.
+    public var toolKind: CompanionToolKind?
+    public var playbackIsPlaying: Bool
+    public var playbackIsPaused: Bool
+    /// Whose card is loaded in playback, for bubble identity while speaking.
+    public var speakingAgent: CompanionAgentIdentity?
+    /// A live conversation turn is waiting on the personality.
+    public var isConversing: Bool
+    /// The live call surface is showing a failure.
+    public var hasConversationFailure: Bool
+    public var userTyping: Bool
+    public var unreadCount: Int
+    public var hasCards: Bool
+
+    public init(
+        hasPinnedSessions: Bool = false,
+        blockedAgent: CompanionAgentIdentity? = nil,
+        erroredAgent: CompanionAgentIdentity? = nil,
+        workingAgent: CompanionAgentIdentity? = nil,
+        respondingAgent: CompanionAgentIdentity? = nil,
+        toolAgent: CompanionAgentIdentity? = nil,
+        toolKind: CompanionToolKind? = nil,
+        playbackIsPlaying: Bool = false,
+        playbackIsPaused: Bool = false,
+        speakingAgent: CompanionAgentIdentity? = nil,
+        isConversing: Bool = false,
+        hasConversationFailure: Bool = false,
+        userTyping: Bool = false,
+        unreadCount: Int = 0,
+        hasCards: Bool = false
+    ) {
+        self.hasPinnedSessions = hasPinnedSessions
+        self.blockedAgent = blockedAgent
+        self.erroredAgent = erroredAgent
+        self.workingAgent = workingAgent
+        self.respondingAgent = respondingAgent
+        self.toolAgent = toolAgent
+        self.toolKind = toolKind
+        self.playbackIsPlaying = playbackIsPlaying
+        self.playbackIsPaused = playbackIsPaused
+        self.speakingAgent = speakingAgent
+        self.isConversing = isConversing
+        self.hasConversationFailure = hasConversationFailure
+        self.userTyping = userTyping
+        self.unreadCount = unreadCount
+        self.hasCards = hasCards
+    }
+}
+
+extension CompanionActivityState {
+    /// Pure reducer from a signal snapshot to the state renderers show.
+    ///
+    /// Precedence (highest first):
+    ///
+    /// 1. `blockedOnUser` - an agent waiting on the user must never be
+    ///    covered by anything, including speech.
+    /// 2. `speaking` - active narration is the app's core act; the mouth
+    ///    moving to it beats ambient agent activity.
+    /// 3. `paused` - a held recap still owns the stage.
+    /// 4. `error` - a session error or failed call interrupts ambience but
+    ///    never live speech (the speech is often the error being narrated).
+    /// 5. `agentResponding` - a turn just finished; its recap is on the way.
+    /// 6. `toolRunning` - visible tool activity, with `toolKind` flavor.
+    /// 7. `agentThinking` - an agent (or the live personality) is working
+    ///    with nothing more specific to show.
+    /// 8. `idle` - sessions pinned, everything quiet.
+    /// 9. `sleeping` - nothing pinned at all.
+    ///
+    /// `toolKind` is populated only for `toolRunning`; every other phase
+    /// clears it so a renderer never shows a stale flavor.
+    public static func derive(
+        from signals: CompanionActivitySignals,
+        audio: VisualizerRenderState = VisualizerRenderState()
+    ) -> CompanionActivityState {
+        let ambient = { (phase: CompanionActivityPhase, agent: CompanionAgentIdentity) in
+            CompanionActivityState(
+                phase: phase,
+                activeAgent: agent,
+                toolKind: phase == .toolRunning ? signals.toolKind : nil,
+                audio: audio,
+                userTyping: signals.userTyping,
+                unreadCount: signals.unreadCount,
+                hasCards: signals.hasCards
+            )
+        }
+
+        if let blocked = signals.blockedAgent {
+            return ambient(.blockedOnUser, blocked)
+        }
+        if signals.playbackIsPlaying, !signals.playbackIsPaused {
+            return ambient(.speaking, signals.speakingAgent ?? .none)
+        }
+        if signals.playbackIsPaused {
+            return ambient(.paused, signals.speakingAgent ?? .none)
+        }
+        if let errored = signals.erroredAgent {
+            return ambient(.error, errored)
+        }
+        if signals.hasConversationFailure {
+            return ambient(.error, .none)
+        }
+        if let responding = signals.respondingAgent {
+            return ambient(.agentResponding, responding)
+        }
+        if signals.toolAgent != nil || signals.toolKind != nil {
+            return ambient(.toolRunning, signals.toolAgent ?? .none)
+        }
+        if let working = signals.workingAgent {
+            return ambient(.agentThinking, working)
+        }
+        if signals.isConversing {
+            return ambient(.agentThinking, .none)
+        }
+        if signals.hasPinnedSessions {
+            return ambient(.idle, .none)
+        }
+        return ambient(.sleeping, .none)
+    }
+}

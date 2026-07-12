@@ -198,6 +198,63 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
     }
 }
 
+/// Tracks whether the user is actively typing in the app, feeding
+/// `CompanionActivityState.userTyping`. Privacy contract: only the fact that
+/// a key went down is recorded, never keycodes or characters, and the local
+/// monitor observes events without consuming them. Local-only by design (no
+/// Input Monitoring permission, no new data collection): it fires while an
+/// Attaché window is receiving keys and stays false otherwise.
+final class TypingActivityMonitor {
+    var onChange: ((Bool) -> Void)?
+    private(set) var isTyping = false
+    private var monitor: Any?
+    private var decayTimer: Timer?
+    private let quietInterval: TimeInterval
+
+    init(quietInterval: TimeInterval = 2.0) {
+        self.quietInterval = quietInterval
+    }
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            self?.registerKeystroke()
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        monitor = nil
+        decayTimer?.invalidate()
+        decayTimer = nil
+        setTyping(false)
+    }
+
+    private func registerKeystroke() {
+        decayTimer?.invalidate()
+        decayTimer = Timer.scheduledTimer(withTimeInterval: quietInterval, repeats: false) { [weak self] _ in
+            self?.setTyping(false)
+        }
+        setTyping(true)
+    }
+
+    private func setTyping(_ value: Bool) {
+        guard isTyping != value else { return }
+        isTyping = value
+        onChange?(value)
+    }
+
+    deinit {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        decayTimer?.invalidate()
+    }
+}
+
 // Scroll over the caption (mouse wheel / two-finger) to grow or shrink it.
 struct CaptionScrollMonitor: NSViewRepresentable {
     var enabled: Bool

@@ -728,16 +728,45 @@ final class AppModel: ObservableObject {
     /// (`prepareAndPersist`, `CompanionPresentationService.prepare`) runs
     /// entirely before `playback.isBusy` ever goes true, so without a signal
     /// of its own, a Tell Agent reply's recap-composing window had nothing
-    /// to show once `.sendDelivered` moved past its own emphasis window. A
-    /// `Set` of tokens rather than a plain counter or a single session ID so
+    /// to show once `.sendDelivered` moved past its own emphasis window.
+    /// Keyed tokens rather than a plain counter or a single session ID so
     /// overlapping compositions across different watched sessions can't
-    /// clobber each other's start/end bookkeeping.
-    @Published private var composingNarrationTokens: Set<UUID> = []
+    /// clobber each other's start/end bookkeeping; the value is the event's
+    /// source raw value so `companionActivity` can attribute the responding
+    /// agent (INF-268).
+    @Published private var composingNarrationTokens: [UUID: String] = [:]
     /// Failed instructions the user has moved past (snapshotted at call
     /// start): they stay in the Sent log but stop surfacing as a red error
     /// in the call composer. Memory-only on purpose; a relaunch re-surfaces
     /// an unresolved failure once, which is the right amount of nagging.
     private var acknowledgedFailedSendIDs: Set<String> = []
+    /// The one semantic state every companion renderer consumes (INF-268).
+    /// Refreshed at semantic rate through `refreshCompanionActivity()`'s
+    /// choke point; renderers compose live audio per frame via
+    /// `with(audio:)` from the `PlaybackTimeline` they already observe.
+    @Published private(set) var companionActivity: CompanionActivityState = .initial
+    /// Debug override driven by the activity simulator panel
+    /// (`ATTACHE_ACTIVITY_SIMULATOR=1`); nil means live derivation.
+    @Published var simulatedActivity: CompanionActivityState? {
+        didSet { refreshCompanionActivity() }
+    }
+    /// The user is typing in the app right now (occurrence only, no content;
+    /// see `TypingActivityMonitor`).
+    @Published private(set) var userTyping = false
+    private let typingMonitor = TypingActivityMonitor()
+    /// How long a watcher phrase stays "fresh" enough to read as live tool
+    /// activity. Tighter than the phrase's own 36s display lifetime so the
+    /// pet stops miming tools soon after the burst ends; INF-271 tunes this.
+    private static let toolActivityDwell: TimeInterval = 10
+    var activitySimulatorEnabled: Bool {
+        ["1", "cycle"].contains(ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"])
+    }
+    /// `ATTACHE_ACTIVITY_SIMULATOR=cycle` starts the phase cycler on launch,
+    /// so an unattended posed screenshot proves the override pipe without a
+    /// human clicking the panel.
+    var activitySimulatorAutoCycles: Bool {
+        ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"] == "cycle"
+    }
     private static let sessionIndexURL = CompanionAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
     private var sessionIndexer = SessionIndexer(cacheURL: AppModel.sessionIndexURL, scanners: [])
     private let sessionIndexQueue = DispatchQueue(label: "com.bryanlabs.attache.sessionindex")
@@ -881,6 +910,7 @@ final class AppModel: ObservableObject {
         }
         setupMediaRemote()
         setupConversationObservers()
+        setupCompanionActivityObservers()
         // Screenshot-matrix pose support (INF-244): inert unless
         // ATTACHE_UI_TEST_FORCE_LISTENING=1 rides alongside ATTACHE_UI_TEST=1
         // (see MicTranscriptController.shouldForceListeningForPose). Applied
@@ -942,6 +972,7 @@ final class AppModel: ObservableObject {
     deinit {
         codexSessionRefreshTimer?.invalidate()
         sessionActivityWatcher.stop()
+        typingMonitor.stop()
         modelDiscoveryTask?.cancel()
     }
 
@@ -1465,7 +1496,7 @@ final class AppModel: ObservableObject {
         // Tell Agent reply's recap is being written. Same main-actor-hop
         // reasoning as `persist` below applies to every mutation here.
         let token = UUID()
-        await MainActor.run { composingNarrationTokens.insert(token) }
+        await MainActor.run { composingNarrationTokens[token] = event.source }
         let presented: NormalizedEvent = await withCheckedContinuation { continuation in
             presentationService.prepare(event, personality: personality) { presentedEvent in
                 continuation.resume(returning: presentedEvent)
@@ -1476,7 +1507,7 @@ final class AppModel: ObservableObject {
         // hop to the main actor: mutating @Published off-main makes SwiftUI flush
         // a transaction synchronously and re-enter body, overflowing the stack.
         await MainActor.run {
-            composingNarrationTokens.remove(token)
+            composingNarrationTokens.removeValue(forKey: token)
             persist(presented)
         }
     }
@@ -3221,6 +3252,112 @@ final class AppModel: ObservableObject {
     /// the views to this).
     private func refreshCallPhase() {
         callPhase = CallPhase.derive(from: currentCallSignals())
+    }
+
+    /// Same choke-point pattern as `refreshCallPhase()` for the companion
+    /// contract (INF-268): everything `CompanionActivitySignals` reads funnels
+    /// through one subscription, so `companionActivity` stays current without
+    /// refresh calls scattered across mutation sites. Attention transitions
+    /// and watcher phrases arrive on their own poll cadence (2s / 1.5s), which
+    /// also ages fresh tool signals out of `toolRunning` without a timer.
+    private func setupCompanionActivityObservers() {
+        typingMonitor.onChange = { [weak self] typing in
+            DispatchQueue.main.async { self?.userTyping = typing }
+        }
+        typingMonitor.start()
+        Publishers.MergeMany(
+            playback.$isPlaying.map { _ in () }.eraseToAnyPublisher(),
+            playback.$isPaused.map { _ in () }.eraseToAnyPublisher(),
+            playback.$isBusy.map { _ in () }.eraseToAnyPublisher(),
+            playback.$currentCardID.map { _ in () }.eraseToAnyPublisher(),
+            $isConversing.map { _ in () }.eraseToAnyPublisher(),
+            $conversationRecovery.map { _ in () }.eraseToAnyPublisher(),
+            $composingNarrationTokens.map { _ in () }.eraseToAnyPublisher(),
+            $sessionAttention.map { _ in () }.eraseToAnyPublisher(),
+            $activityPhrases.map { _ in () }.eraseToAnyPublisher(),
+            $attachedTargets.map { _ in () }.eraseToAnyPublisher(),
+            $cards.map { _ in () }.eraseToAnyPublisher(),
+            $userTyping.map { _ in () }.eraseToAnyPublisher()
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] in self?.refreshCompanionActivity() }
+        .store(in: &cancellables)
+    }
+
+    private func refreshCompanionActivity() {
+        let next = simulatedActivity
+            ?? CompanionActivityState.derive(
+                from: currentActivitySignals(),
+                audio: playback.clock.renderState
+            )
+        if next != companionActivity {
+            companionActivity = next
+        }
+    }
+
+    /// Maps a watched session to the bubble identity its events light up.
+    private func agentIdentity(forSessionID sessionID: String) -> CompanionAgentIdentity {
+        if let target = attachedTargets[sessionID] {
+            return CompanionAgentIdentity(sourceKindRawValue: target.sourceKind.rawValue)
+        }
+        if let record = sessionRecords.first(where: { $0.id == sessionID }) {
+            return CompanionAgentIdentity(sourceKindRawValue: record.sourceKind.rawValue)
+        }
+        return .none
+    }
+
+    private func currentActivitySignals() -> CompanionActivitySignals {
+        var blockedAgent: CompanionAgentIdentity?
+        var erroredAgent: CompanionAgentIdentity?
+        var workingAgent: CompanionAgentIdentity?
+        for (sessionID, state) in sessionAttention {
+            switch state {
+            case .awaitingAnswer:
+                blockedAgent = agentIdentity(forSessionID: sessionID)
+            case .possiblyWaiting:
+                if blockedAgent == nil { blockedAgent = agentIdentity(forSessionID: sessionID) }
+            case .erroredRecently:
+                erroredAgent = agentIdentity(forSessionID: sessionID)
+            case .active:
+                workingAgent = agentIdentity(forSessionID: sessionID)
+            case .turnComplete, .quiet:
+                break
+            }
+        }
+
+        let freshTool = activityPhrases
+            .filter { Date().timeIntervalSince($0.lastSeen) <= Self.toolActivityDwell }
+            .max { $0.lastSeen < $1.lastSeen }
+
+        let speakingAgent: CompanionAgentIdentity? = playback.currentCardID.flatMap { id in
+            cards.first { $0.id == id }.map { CompanionAgentIdentity(sourceKindRawValue: $0.sourceKind) }
+        }
+
+        let respondingAgent: CompanionAgentIdentity? = {
+            if let source = composingNarrationTokens.values.first {
+                return CompanionAgentIdentity(sourceKindRawValue: source)
+            }
+            if playback.isBusy { return speakingAgent ?? .none }
+            return nil
+        }()
+
+        return CompanionActivitySignals(
+            hasPinnedSessions: !attachedTargets.isEmpty,
+            blockedAgent: blockedAgent,
+            erroredAgent: erroredAgent,
+            workingAgent: workingAgent,
+            respondingAgent: respondingAgent,
+            toolAgent: freshTool.map { CompanionAgentIdentity(sourceKindRawValue: $0.agentKind.rawValue) },
+            toolKind: freshTool?.toolKind,
+            playbackIsPlaying: playback.isPlaying,
+            playbackIsPaused: playback.isPaused,
+            speakingAgent: speakingAgent,
+            isConversing: isConversing,
+            hasConversationFailure: conversationRecovery != nil,
+            userTyping: userTyping,
+            unreadCount: unreadCount,
+            hasCards: !cards.isEmpty
+        )
     }
 
     private func currentCallSignals() -> CallSignals {

@@ -4,8 +4,9 @@ import SwiftUI
 struct EchoformRendererView: View {
     @ObservedObject var playback: SpeechPlaybackController
     @ObservedObject var timeline: PlaybackTimeline
-    var unreadCount: Int
-    var hasCards: Bool
+    /// The companion contract (INF-268). This view reads its semantic fields
+    /// (`unreadCount`) and keeps drawing audio from `timeline` at 20 Hz.
+    var activity: CompanionActivityState
     var visualMode: CompanionVisualMode
     var visualSymmetry: CompanionVisualSymmetry = .mirrored
     var idleBrand: CompanionIdleBrand = .mark
@@ -186,7 +187,7 @@ struct EchoformRendererView: View {
         .onAppear {
             breathing = false
             sonar = false
-            withAnimation(.easeInOut(duration: unreadCount > 0 ? 3.4 : 5.0).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: activity.unreadCount > 0 ? 3.4 : 5.0).repeatForever(autoreverses: true)) {
                 breathing = true
             }
             sonar = true
@@ -199,7 +200,7 @@ struct EchoformRendererView: View {
 
     // Theme-tinted, a touch more present when there are unread updates.
     private var ambientColor: Color {
-        energyColor(unreadCount > 0 ? 0.52 : 0.36)
+        energyColor(activity.unreadCount > 0 ? 0.52 : 0.36)
     }
 
     // The brand "A" takes the theme's brightest color so the whole mark follows

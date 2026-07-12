@@ -124,8 +124,7 @@ struct CompanionRootView: View {
             EchoformRendererView(
                 playback: playback,
                 timeline: playback.clock,
-                unreadCount: model.unreadCount,
-                hasCards: !model.cards.isEmpty,
+                activity: model.companionActivity,
                 visualMode: model.visualMode,
                 visualSymmetry: model.visualSymmetry,
                 idleBrand: model.idleBrand,
@@ -217,6 +216,13 @@ struct CompanionRootView: View {
                 KeyboardShortcutsOverlay(isVisible: $shortcutsVisible, accent: accent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+
+            if model.activitySimulatorEnabled {
+                ActivitySimulatorPanel(model: model)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(.top, 18)
+                    .padding(.trailing, 18)
             }
 
         }

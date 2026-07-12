@@ -14,6 +14,14 @@ struct AgentActivityPhrase: Identifiable, Equatable {
     var weight: Double
     var source: Source
     var lastSeen: Date
+    /// Whose transcript produced the phrase, for bubble identity in
+    /// agent-aware renderers.
+    var agentKind: SourceKind = .codex
+
+    /// The companion-contract flavor of this phrase (edit, read, shell, web).
+    var toolKind: CompanionToolKind {
+        CompanionToolKind.classify(phrase: text, sourceHint: source.rawValue)
+    }
 }
 
 final class SessionActivityWatcher {
@@ -24,6 +32,7 @@ final class SessionActivityWatcher {
         var source: AgentActivityPhrase.Source
         var weight: Double
         var timestamp: Date
+        var agentKind: SourceKind = .codex
     }
 
     private struct AccumulatedSignal {
@@ -31,6 +40,7 @@ final class SessionActivityWatcher {
         var source: AgentActivityPhrase.Source
         var score: Double
         var lastSeen: Date
+        var agentKind: SourceKind = .codex
     }
 
     private let sessionsDirectory: URL
@@ -157,7 +167,13 @@ final class SessionActivityWatcher {
                 signals.append(contentsOf: codexSignals(from: object, timestamp: timestamp))
             }
         }
-        return signals
+        // Attribution follows the session file the lines came from, so the
+        // renderer lights the right agent's bubble.
+        return signals.map { signal in
+            var attributed = signal
+            attributed.agentKind = sourceKind
+            return attributed
+        }
     }
 
     private func codexSignals(from object: [String: Any], timestamp: Date) -> [Signal] {
@@ -363,6 +379,7 @@ final class SessionActivityWatcher {
         current.source = signal.source
         current.score = min(6, current.score + signal.weight)
         current.lastSeen = max(current.lastSeen, signal.timestamp)
+        current.agentKind = signal.agentKind
         signalsByText[text] = current
     }
 
@@ -381,7 +398,8 @@ final class SessionActivityWatcher {
                 text: signal.text,
                 weight: min(1.0, max(0.25, (signal.score / 4.0) * decay)),
                 source: signal.source,
-                lastSeen: signal.lastSeen
+                lastSeen: signal.lastSeen,
+                agentKind: signal.agentKind
             )
         }
         return ranked.sorted {
