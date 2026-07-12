@@ -146,12 +146,124 @@ extension BubblesPose {
     ]
 }
 
+/// The marketing pose set (INF-274): expressive Bubbles moments for the
+/// site, README hero, and promo, rendered from the same rig so they can
+/// never drift from the canonical geometry. Hero is deliberately the exact
+/// neutral mark: the logo does not change, it just comes alive around it.
+extension BubblesPose {
+    static let brandCatalog: [(name: String, pose: BubblesPose)] = [
+        ("hero", .neutral),
+        ("celebrate", {
+            var pose = BubblesPose()
+            pose.hop = 16
+            pose.squash = -0.5
+            pose.cheekGlow = 0.95
+            pose.arcRipple = 1
+            pose.arcPhase = 1.6
+            pose.bubbles = [
+                BubblesBubblePose(brightness: 1, pop: 0.55),
+                BubblesBubblePose(lift: 2, brightness: 0.8),
+                BubblesBubblePose(lift: 1, brightness: 0.8),
+            ]
+            return pose
+        }()),
+        ("sleeping", {
+            var pose = BubblesPose()
+            pose.eyeOpenness = 0
+            pose.smile = 0.6
+            pose.cheekGlow = 0.45
+            pose.arcGlow = 0.25
+            pose.breathe = 0.7
+            pose.bubbles = [
+                BubblesBubblePose(brightness: 0.55),
+                BubblesBubblePose(brightness: 0.55),
+                BubblesBubblePose(brightness: 0.55),
+            ]
+            return pose
+        }()),
+        ("thinking", {
+            var pose = BubblesPose()
+            pose.headTilt = -6
+            pose.gaze = CGSize(width: -2, height: -1)
+            pose.smile = 0.45
+            pose.arcGlow = 0.8
+            pose.bubbles = [
+                BubblesBubblePose(lift: 8, tilt: -4, brightness: 1, dotPhase: 0.35),
+                BubblesBubblePose(brightness: 0.45),
+                BubblesBubblePose(brightness: 0.45),
+            ]
+            return pose
+        }()),
+        ("waving-bubble", {
+            var pose = BubblesPose()
+            pose.headTilt = 4
+            pose.gaze = CGSize(width: 2, height: -1)
+            pose.cheekGlow = 0.75
+            pose.bubbles = [
+                BubblesBubblePose(brightness: 0.8),
+                BubblesBubblePose(brightness: 0.8),
+                BubblesBubblePose(lift: 16, tilt: 12, brightness: 1),
+            ]
+            return pose
+        }()),
+    ]
+}
+
 /// Renders the spec pose catalog to PNGs (`Attache --render-poses [dir]`):
 /// one 480 px render per pose, a 32 px legibility strip, and a
 /// pixel-identity check proving the figure's neutral pose still IS the
 /// locked mark (`AttacheMascotMark`), so the pet can never drift from the
 /// brand geometry.
 enum PetPoseRenderer {
+    /// Brand exports (INF-274): the five marketing poses at 2048 px into
+    /// `design/poses/`, plus a seamless 6.4 s idle hero loop (192 frames,
+    /// two full breathing periods with one scripted blink) written as
+    /// numbered frames for ffmpeg assembly. Runs the same neutral-vs-mark
+    /// pixel check first; the hero still IS the logo.
+    @MainActor
+    static func renderBrand(to directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try verifyNeutralMatchesMark(reportTo: directory)
+
+        for entry in BubblesPose.brandCatalog {
+            let figure = BubblesPetFigure(pose: entry.pose, headroom: 28)
+                .frame(width: 1024, height: 1139)
+            try write(view: figure, scale: 2, to: directory.appendingPathComponent("\(entry.name).png"))
+        }
+
+        let framesDirectory = directory.appendingPathComponent("hero-loop-frames", isDirectory: true)
+        try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
+        let frameCount = 192
+        for frame in 0..<frameCount {
+            let t = Double(frame) / 30.0
+            var pose = BubblesPose.neutral
+            pose.breathe = 0.5 + 0.5 * sin(t * 2 * .pi / 3.2 - .pi / 2)
+            pose.arcGlow = 0.92 + 0.08 * sin(t * 2 * .pi / 3.2)
+            pose.eyeOpenness = blinkOpenness(at: t, blinkStart: 2.5)
+            for index in 0..<3 {
+                pose.bubbles[index].lift = CGFloat(1.5 * sin(t * 2 * .pi / 3.2 + Double(index) * 0.9))
+            }
+            let figure = BubblesPetFigure(pose: pose, headroom: 28)
+                .frame(width: 480, height: 534)
+            try write(
+                view: figure,
+                scale: 2,
+                to: framesDirectory.appendingPathComponent(String(format: "frame-%03d.png", frame)),
+                quiet: true
+            )
+        }
+        print("wrote \(frameCount) hero loop frames to \(framesDirectory.path)")
+    }
+
+    /// The spec blink (120 ms close, 90 ms hold, 140 ms open) at a fixed
+    /// time, so the loop is deterministic and seam-free.
+    private static func blinkOpenness(at t: Double, blinkStart: Double) -> Double {
+        let phase = t - blinkStart
+        if phase < 0 || phase >= 0.35 { return 1 }
+        if phase < 0.12 { return 1 - phase / 0.12 }
+        if phase < 0.21 { return 0 }
+        return (phase - 0.21) / 0.14
+    }
     @MainActor
     static func renderAll(to directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -202,7 +314,7 @@ enum PetPoseRenderer {
     }
 
     @MainActor
-    private static func write(view: some View, scale: CGFloat, to url: URL) throws {
+    private static func write(view: some View, scale: CGFloat, to url: URL, quiet: Bool = false) throws {
         guard let image = cgImage(for: view, scale: scale) else {
             throw PoseRenderError.renderFailed(url.lastPathComponent)
         }
@@ -211,7 +323,9 @@ enum PetPoseRenderer {
             throw PoseRenderError.renderFailed(url.lastPathComponent)
         }
         try png.write(to: url)
-        print("wrote \(url.path)")
+        if !quiet {
+            print("wrote \(url.path)")
+        }
     }
 
     @MainActor

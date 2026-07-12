@@ -29,6 +29,24 @@ if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-poses") {
     RunLoop.main.run()
 }
 
+// Brand pose exports (INF-274): the marketing pose set at 2048 px plus the
+// idle hero loop frames, same geometry lock.
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-brand-poses") {
+    let outputPath = CommandLine.arguments.indices.contains(flagIndex + 1)
+        ? CommandLine.arguments[flagIndex + 1]
+        : "design/poses"
+    Task { @MainActor in
+        do {
+            try PetPoseRenderer.renderBrand(to: URL(fileURLWithPath: outputPath))
+            exit(0)
+        } catch {
+            fputs("brand pose render failed: \(error)\n", stderr)
+            exit(1)
+        }
+    }
+    RunLoop.main.run()
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
