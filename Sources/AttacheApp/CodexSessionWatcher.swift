@@ -149,7 +149,15 @@ final class CodexSessionWatcher {
 
     /// Classify the session's attention state from the transcript tail and
     /// report transitions. Reads at most the last 64 KB per poll.
+    ///
+    /// Nothing is recorded until `onAttention` exists: the first `watch()` can
+    /// run during AppModel's init, before the handler is assigned, and a
+    /// transition recorded-but-undelivered there is silently lost. A watched
+    /// session that was mid-turn at launch then never reports its
+    /// `.active -> .turnComplete` edge, which is exactly the edge the pet's
+    /// celebration hangs off (INF-271).
     private func classifyAttention(session: CodexSessionTarget, fileURL: URL, format: TranscriptFormat) {
+        guard onAttention != nil else { return }
         guard let lines = tailLines(of: fileURL, maxBytes: 65_536) else { return }
         let state = SessionAttentionClassifier.classify(tailLines: lines, format: format)
         guard attentionStates[session.id] != state else { return }

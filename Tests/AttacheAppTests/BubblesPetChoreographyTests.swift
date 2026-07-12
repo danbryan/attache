@@ -159,4 +159,106 @@ final class BubblesPetChoreographyTests: XCTestCase {
     func testSanitizedLeavesNeutralUntouched() {
         XCTAssertEqual(BubblesPose.neutral.sanitized(), BubblesPose.neutral)
     }
+
+    // MARK: One-shot moments (INF-271)
+
+    private func moment(
+        _ kind: CompanionActivityMoment.Kind,
+        agent: CompanionAgentIdentity = .codex,
+        at: Date
+    ) -> CompanionActivityMoment {
+        CompanionActivityMoment(kind: kind, agent: agent, at: at)
+    }
+
+    func testCelebrateMomentHopsAndPopsTheAgentBubble() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 4000)
+        _ = motor.pose(at: start, activity: state(.idle), reduceMotion: false)
+        var maxHop: CGFloat = 0
+        var maxPop: Double = 0
+        for tick in 1..<30 {
+            let at = start.addingTimeInterval(Double(tick) * 0.05)
+            let pose = motor.pose(
+                at: at,
+                activity: state(.idle),
+                moment: moment(.celebrate, agent: .codex, at: start),
+                reduceMotion: false
+            )
+            maxHop = max(maxHop, pose.hop)
+            maxPop = max(maxPop, pose.bubbles[2].pop)
+        }
+        XCTAssertGreaterThan(maxHop, 8, "celebrate must visibly hop")
+        XCTAssertGreaterThan(maxPop, 0.4, "celebrate must pop the agent's bubble")
+    }
+
+    func testMomentQueuesBehindSpeakingAndPlaysAfter() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 5000)
+        let celebration = moment(.celebrate, agent: .claude, at: start)
+        var maxHopWhileSpeaking: CGFloat = 0
+        for tick in 0..<20 {
+            let pose = motor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: state(.speaking, agent: .claude),
+                moment: celebration,
+                reduceMotion: false
+            )
+            maxHopWhileSpeaking = max(maxHopWhileSpeaking, pose.hop)
+        }
+        XCTAssertEqual(maxHopWhileSpeaking, 0, "moments must never fire over speech")
+
+        var maxHopAfter: CGFloat = 0
+        for tick in 0..<30 {
+            let pose = motor.pose(
+                at: start.addingTimeInterval(1.0 + Double(tick) * 0.05),
+                activity: state(.idle),
+                moment: celebration,
+                reduceMotion: false
+            )
+            maxHopAfter = max(maxHopAfter, pose.hop)
+        }
+        XCTAssertGreaterThan(maxHopAfter, 8, "a queued moment must play once the stage frees up")
+    }
+
+    func testStaleMomentIsDroppedInsteadOfPlayed() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 6000)
+        let stale = moment(.celebrate, at: start.addingTimeInterval(-20))
+        var maxHop: CGFloat = 0
+        for tick in 0..<30 {
+            let pose = motor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: state(.idle),
+                moment: stale,
+                reduceMotion: false
+            )
+            maxHop = max(maxHop, pose.hop)
+        }
+        XCTAssertEqual(maxHop, 0, "a moment past its shelf life must be dropped")
+    }
+
+    func testMomentPlaysOnlyOncePerID() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 7000)
+        let once = moment(.cardArrived, agent: .claude, at: start)
+        for tick in 0..<40 {
+            _ = motor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: state(.idle),
+                moment: once,
+                reduceMotion: false
+            )
+        }
+        var maxLiftLater: CGFloat = 0
+        for tick in 0..<20 {
+            let pose = motor.pose(
+                at: start.addingTimeInterval(3.0 + Double(tick) * 0.05),
+                activity: state(.idle),
+                moment: once,
+                reduceMotion: false
+            )
+            maxLiftLater = max(maxLiftLater, pose.bubbles[0].lift)
+        }
+        XCTAssertLessThan(maxLiftLater, 3, "the same moment id must not replay")
+    }
 }

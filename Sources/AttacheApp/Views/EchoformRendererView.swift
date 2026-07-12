@@ -7,6 +7,8 @@ struct EchoformRendererView: View {
     /// The companion contract (INF-268). This view reads its semantic fields
     /// (`unreadCount`) and keeps drawing audio from `timeline` at 20 Hz.
     var activity: CompanionActivityState
+    /// The latest one-shot beat for the pet renderer (INF-271).
+    var activityMoment: CompanionActivityMoment?
     var visualMode: CompanionVisualMode
     var visualSymmetry: CompanionVisualSymmetry = .mirrored
     var idleBrand: CompanionIdleBrand = .mark
@@ -30,6 +32,7 @@ struct EchoformRendererView: View {
                 // mouth can track the level.
                 BubblesPetView(
                     activity: activity.with(audio: state),
+                    moment: activityMoment,
                     theme: theme,
                     brightnessLevel: brightnessLevel
                 )

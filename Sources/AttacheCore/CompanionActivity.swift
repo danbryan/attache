@@ -204,6 +204,116 @@ public struct CompanionActivitySignals: Equatable, Sendable {
     }
 }
 
+/// A one-shot beat played over the continuous phase (INF-271): a hop when a
+/// watched turn completes, a bubble pop when a voicemail lands unplayed, a
+/// yawn when a pinned session goes stale. Moments never replace the phase;
+/// renderers queue them, play them when no signal phase (blocked, speaking,
+/// paused) owns the stage, and drop them once stale.
+public struct CompanionActivityMoment: Equatable, Identifiable, Sendable {
+    public enum Kind: String, CaseIterable, Codable, Sendable {
+        /// A watched session's turn finished (attention active -> turnComplete).
+        case celebrate
+        /// A new voicemail card was filed without playing live.
+        case cardArrived
+        /// A pinned session went stale (attention -> quiet).
+        case drowsy
+    }
+
+    public var id: UUID
+    public var kind: Kind
+    public var agent: CompanionAgentIdentity
+    public var at: Date
+
+    public init(id: UUID = UUID(), kind: Kind, agent: CompanionAgentIdentity, at: Date) {
+        self.id = id
+        self.kind = kind
+        self.agent = agent
+        self.at = at
+    }
+
+    /// Moments older than this are dropped instead of played; a celebration
+    /// for something the user no longer remembers reads as a glitch.
+    public static let shelfLife: TimeInterval = 8
+}
+
+/// Dwell rules between the raw derived state and what renderers see
+/// (INF-271): rapid tool-call bursts and thinking/tool flapping must read as
+/// sustained activity, not strobing.
+///
+/// The rules, in order:
+/// 1. Signal phases (blockedOnUser, speaking, paused, error) switch
+///    immediately, in both directions; the user must never wait out a dwell
+///    to see that an agent needs them.
+/// 2. An ambient phase (sleeping, idle, agentThinking, agentResponding,
+///    toolRunning) holds for at least `ambientDwell` before yielding to a
+///    DIFFERENT ambient phase. Pass-through fields (audio, typing, unread)
+///    always update.
+/// 3. Within toolRunning, the tool kind holds for at least `toolKindDwell`
+///    so a shell/read/edit storm reads as one sustained gesture.
+/// 4. The active agent may change with the phase; while a phase is held, its
+///    original agent is held with it (bubble identity always matches what is
+///    being shown, not what is coming next).
+public final class CompanionActivityDamper {
+    private let ambientDwell: TimeInterval
+    private let toolKindDwell: TimeInterval
+    private var current: CompanionActivityState?
+    private var phaseChangedAt: Date?
+    private var toolKindChangedAt: Date?
+
+    private static let signalPhases: Set<CompanionActivityPhase> = [
+        .blockedOnUser, .speaking, .paused, .error,
+    ]
+
+    public init(ambientDwell: TimeInterval = 1.2, toolKindDwell: TimeInterval = 2.0) {
+        self.ambientDwell = ambientDwell
+        self.toolKindDwell = toolKindDwell
+    }
+
+    public func damp(_ proposed: CompanionActivityState, now: Date) -> CompanionActivityState {
+        guard var held = current, let changedAt = phaseChangedAt else {
+            current = proposed
+            phaseChangedAt = now
+            toolKindChangedAt = now
+            return proposed
+        }
+
+        if proposed.phase == held.phase {
+            if held.phase == .toolRunning,
+               proposed.toolKind != held.toolKind,
+               let kindChangedAt = toolKindChangedAt,
+               now.timeIntervalSince(kindChangedAt) < toolKindDwell {
+                held.audio = proposed.audio
+                held.userTyping = proposed.userTyping
+                held.unreadCount = proposed.unreadCount
+                held.hasCards = proposed.hasCards
+                current = held
+                return held
+            }
+            if proposed.toolKind != held.toolKind {
+                toolKindChangedAt = now
+            }
+            current = proposed
+            return proposed
+        }
+
+        let switchingIsInstant = Self.signalPhases.contains(proposed.phase)
+            || Self.signalPhases.contains(held.phase)
+        if switchingIsInstant || now.timeIntervalSince(changedAt) >= ambientDwell {
+            current = proposed
+            phaseChangedAt = now
+            toolKindChangedAt = now
+            return proposed
+        }
+
+        held.audio = proposed.audio
+        held.userTyping = proposed.userTyping
+        held.unreadCount = proposed.unreadCount
+        held.hasCards = proposed.hasCards
+        current = held
+        return held
+    }
+}
+
 extension CompanionActivityState {
     /// Pure reducer from a signal snapshot to the state renderers show.
     ///

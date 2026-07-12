@@ -125,6 +125,7 @@ struct CompanionRootView: View {
                 playback: playback,
                 timeline: playback.clock,
                 activity: model.companionActivity,
+                activityMoment: model.companionMoment,
                 visualMode: model.visualMode,
                 visualSymmetry: model.visualSymmetry,
                 idleBrand: model.idleBrand,

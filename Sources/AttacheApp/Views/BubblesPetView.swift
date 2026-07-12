@@ -6,6 +6,39 @@ import SwiftUI
 /// half of the pet renderer (unit-tested), consumed by `BubblesPetMotor`
 /// which layers time on top. Values come from the state table in
 /// `design/pet-animation-spec.md`; retune there first, then here.
+///
+/// The full choreography map (INF-271), everything retunable in one place:
+///
+/// Continuous phases (this file, `targets(for:)`):
+///   sleeping        eyes closed, arcs 0.25, breathe 4.5 s, no blink
+///   idle            the logo at rest, blink loop, breathe 3.2 s
+///   agentThinking   head tilts toward the agent's bubble, bubble lifts 8,
+///                   dots cycle, others dim 0.45
+///   toolRunning     focused eyes, bubble lifts 4 and vibrates per toolKind
+///                   (shell 9 Hz shake, edit scribble, read slow scan,
+///                   web dot orbit, other wobble)
+///   agentResponding bubble springs 12 toward the head, arcs ripple inward
+///   speaking        mouth on audio.level, sway, arcs ripple outward,
+///                   speaker's bubble lit, others 0.4
+///   paused          held small mouth, arcs 0.5
+///   blockedOnUser   worry brows, pale cheeks, arcs stopped at 0.15, bubble
+///                   jumps 14 every 1.6 s
+///   error           dizzy X eyes, arcs flicker, bubble droops
+///
+/// One-shot moments (`BubblesPetMotor.applyMoment`):
+///   celebrate    1.2 s hop with squash, confetti pop from the agent bubble
+///   cardArrived  0.8 s bubble bounce and wiggle, brightness to full
+///   drowsy       2.5 s eye droop and head nod
+///   Moments queue while blocked/speaking/paused own the stage and drop
+///   after `CompanionActivityMoment.shelfLife` (8 s).
+///
+/// Upstream rules the pet relies on:
+///   dwell        `CompanionActivityDamper` in AttacheCore: ambient phases
+///                hold 1.2 s, tool kinds hold 2 s, signal phases instant
+///   priority     `AppModel.currentActivitySignals`: exact asks beat soft
+///                waits, most recent transition wins within a tier, and the
+///                bubble always shows whose event won
+///   bubble map   claude = left rust, none = center blue, codex = right green
 enum BubblesPetChoreography {
     struct Targets: Equatable {
         var pose = BubblesPose()
@@ -179,11 +212,24 @@ final class BubblesPetMotor: ObservableObject {
     private var nextBlinkAt: TimeInterval = 3
     private var blinkStartedAt: TimeInterval?
     private var doubleBlinkQueued = false
+    private var seenMomentIDs: Set<UUID> = []
+    private var queuedMoments: [CompanionActivityMoment] = []
+    private var activeMoment: (moment: CompanionActivityMoment, startedAt: TimeInterval)?
 
-    func pose(at date: Date, activity: CompanionActivityState, reduceMotion: Bool) -> BubblesPose {
+    func pose(
+        at date: Date,
+        activity: CompanionActivityState,
+        moment: CompanionActivityMoment? = nil,
+        reduceMotion: Bool
+    ) -> BubblesPose {
         let now = date.timeIntervalSinceReferenceDate
         let dt = min(1.0 / 15.0, max(0, now - (lastTick ?? now)))
         lastTick = now
+
+        if let moment, !seenMomentIDs.contains(moment.id) {
+            seenMomentIDs.insert(moment.id)
+            queuedMoments.append(moment)
+        }
 
         let targets = BubblesPetChoreography.targets(for: activity)
         var pose = targets.pose
@@ -226,7 +272,72 @@ final class BubblesPetMotor: ObservableObject {
         }
 
         applyLoops(to: &pose, targets: targets, now: now, reduceMotion: reduceMotion)
+        advanceMoment(now: now, date: date, phase: activity.phase)
+        if let active = activeMoment {
+            applyMoment(active.moment, startedAt: active.startedAt, to: &pose, now: now, reduceMotion: reduceMotion)
+        }
         return pose
+    }
+
+    /// One-shot scheduling (INF-271): moments queue while a signal phase
+    /// (blocked, speaking, paused) owns the stage, play one at a time
+    /// otherwise, and drop once past their shelf life so a stale celebration
+    /// never fires minutes late.
+    private func advanceMoment(now: TimeInterval, date: Date, phase: CompanionActivityPhase) {
+        if let active = activeMoment, now - active.startedAt >= Self.momentDuration(active.moment.kind) {
+            activeMoment = nil
+        }
+        guard activeMoment == nil else { return }
+        queuedMoments.removeAll { date.timeIntervalSince($0.at) > CompanionActivityMoment.shelfLife }
+        let stageIsOwned = phase == .blockedOnUser || phase == .speaking || phase == .paused
+        guard !stageIsOwned, !queuedMoments.isEmpty else { return }
+        let next = queuedMoments.removeFirst()
+        activeMoment = (next, now)
+    }
+
+    private static func momentDuration(_ kind: CompanionActivityMoment.Kind) -> TimeInterval {
+        switch kind {
+        case .celebrate: return 1.2
+        case .cardArrived: return 0.8
+        case .drowsy: return 2.5
+        }
+    }
+
+    private func applyMoment(
+        _ moment: CompanionActivityMoment,
+        startedAt: TimeInterval,
+        to pose: inout BubblesPose,
+        now: TimeInterval,
+        reduceMotion: Bool
+    ) {
+        let duration = Self.momentDuration(moment.kind)
+        let progress = min(1, max(0, (now - startedAt) / duration))
+        let bubble = BubblesPetChoreography.bubbleIndex(for: moment.agent)
+        switch moment.kind {
+        case .celebrate:
+            pose.cheekGlow = max(pose.cheekGlow, 0.95 * sin(progress * .pi) + 0.6 * (1 - sin(progress * .pi)))
+            pose.smile = 1
+            pose.bubbles[bubble].pop = progress
+            pose.bubbles[bubble].brightness = 1
+            if !reduceMotion {
+                pose.hop = CGFloat(16 * sin(min(1, progress / 0.7) * .pi))
+                pose.squash = -0.4 * sin(min(1, progress / 0.7) * .pi)
+                pose.arcRipple = 1
+                pose.arcPhase = now * 2.6
+            }
+        case .cardArrived:
+            pose.bubbles[bubble].brightness = 1
+            pose.bubbles[bubble].dotPhase = nil
+            if !reduceMotion {
+                pose.bubbles[bubble].lift += CGFloat(8 * sin(progress * .pi))
+                pose.bubbles[bubble].tilt += 6 * sin(progress * .pi * 2)
+            }
+        case .drowsy:
+            pose.eyeOpenness *= 1 - 0.65 * sin(progress * .pi)
+            if !reduceMotion {
+                pose.headTilt += 4 * sin(progress * .pi)
+            }
+        }
     }
 
     private func applyLoops(to pose: inout BubblesPose, targets: BubblesPetChoreography.Targets, now: TimeInterval, reduceMotion: Bool) {
@@ -315,6 +426,7 @@ final class BubblesPetMotor: ObservableObject {
 /// under the 2 percent CPU budget.
 struct BubblesPetView: View {
     var activity: CompanionActivityState
+    var moment: CompanionActivityMoment?
     var theme: CompanionTheme
     var brightnessLevel: Int
 
@@ -326,7 +438,7 @@ struct BubblesPetView: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: frameInterval, paused: !windowVisible)) { context in
             BubblesPetFigure(
-                pose: motor.pose(at: context.date, activity: activity, reduceMotion: reduceMotion),
+                pose: motor.pose(at: context.date, activity: activity, moment: moment, reduceMotion: reduceMotion),
                 arcColor: theme.energyColor(1.0, opacity: 0.96, brightnessLevel: brightnessLevel, darkScheme: colorScheme == .dark),
                 headroom: 28
             )

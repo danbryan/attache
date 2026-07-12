@@ -754,6 +754,19 @@ final class AppModel: ObservableObject {
     /// see `TypingActivityMonitor`).
     @Published private(set) var userTyping = false
     private let typingMonitor = TypingActivityMonitor()
+    /// Dwell rules between raw derivation and what renderers see (INF-271):
+    /// tool-call storms read as sustained activity instead of strobing. A
+    /// held phase flips once its dwell elapses on the next refresh; the
+    /// choke point's sources tick at least every 2 s, so the flip lands
+    /// promptly without a dedicated timer.
+    private let activityDamper = CompanionActivityDamper()
+    /// When each watched session's attention last changed, so multi-session
+    /// priority can prefer the most recent activity (INF-271).
+    private var attentionChangedAt: [String: Date] = [:]
+    /// The latest one-shot beat for renderers (celebrate, card pop, drowsy).
+    /// Renderers queue and play these; publishing the next one never cancels
+    /// an animation already running.
+    @Published private(set) var companionMoment: CompanionActivityMoment?
     /// How long a watcher phrase stays "fresh" enough to read as live tool
     /// activity. Tighter than the phrase's own 36s display lifetime so the
     /// pet stops miming tools soon after the burst ends; INF-271 tunes this.
@@ -1378,6 +1391,8 @@ final class AppModel: ObservableObject {
     /// the inbox never claims an agent is waiting after it moved on.
     func handleAttentionChange(sessionID: String, state: SessionAttentionState) {
         let previous = sessionAttention[sessionID]
+        attentionChangedAt[sessionID] = Date()
+        AttacheLog.watcher.info("attention \(String(sessionID.prefix(8)), privacy: .public): \(String(describing: previous), privacy: .public) -> \(String(describing: state), privacy: .public)")
         if state == .quiet {
             sessionAttention.removeValue(forKey: sessionID)
         } else {
@@ -1388,6 +1403,21 @@ final class AppModel: ObservableObject {
             fileNeedsYouNotice(sessionID: sessionID, state: state)
         } else if !state.needsUser, wasNeeding {
             resolveNeedsYouNotices(sessionID: sessionID)
+        }
+        // One-shot beats for the pet (INF-271): a finished turn celebrates,
+        // a still-pinned session going stale yawns. Transitions only, so a
+        // first classification after attach never fires a stale celebration.
+        if previous == .active, state == .turnComplete {
+            companionMoment = CompanionActivityMoment(
+                kind: .celebrate, agent: agentIdentity(forSessionID: sessionID), at: Date()
+            )
+        } else if state == .quiet, previous != nil, attachedTargets[sessionID] != nil {
+            companionMoment = CompanionActivityMoment(
+                kind: .drowsy, agent: agentIdentity(forSessionID: sessionID), at: Date()
+            )
+        }
+        if let moment = companionMoment, moment.at.timeIntervalSinceNow > -1 {
+            AttacheLog.watcher.info("companion moment \(moment.kind.rawValue, privacy: .public) for \(moment.agent.rawValue, privacy: .public) (attention \(String(describing: previous), privacy: .public) -> \(String(describing: state), privacy: .public))")
         }
     }
 
@@ -1554,6 +1584,11 @@ final class AppModel: ObservableObject {
                     reloadCards()
                 }
                 intakeStatus = "Queued \(card.sourceDisplayName) update in voicemail for \(card.projectPath ?? "unknown project")."
+                companionMoment = CompanionActivityMoment(
+                    kind: .cardArrived,
+                    agent: CompanionAgentIdentity(sourceKindRawValue: card.sourceKind),
+                    at: Date()
+                )
                 if voicemailMode, notifyScope.allowsRecaps {
                     CompanionNotifier.shared.post(card: card, kind: .recap)
                 }
@@ -3285,14 +3320,25 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshCompanionActivity() {
-        let next = simulatedActivity
-            ?? CompanionActivityState.derive(
+        let next: CompanionActivityState
+        if let simulatedActivity {
+            next = simulatedActivity
+        } else {
+            let derived = CompanionActivityState.derive(
                 from: currentActivitySignals(),
                 audio: playback.clock.renderState
             )
+            next = activityDamper.damp(derived, now: Date())
+        }
         if next != companionActivity {
             companionActivity = next
         }
+    }
+
+    /// Debug hook for the activity simulator panel: fires a one-shot moment
+    /// through the same publisher real transitions use.
+    func triggerMoment(_ kind: CompanionActivityMoment.Kind, agent: CompanionAgentIdentity) {
+        companionMoment = CompanionActivityMoment(kind: kind, agent: agent, at: Date())
     }
 
     /// Maps a watched session to the bubble identity its events light up.
@@ -3307,23 +3353,39 @@ final class AppModel: ObservableObject {
     }
 
     private func currentActivitySignals() -> CompanionActivitySignals {
-        var blockedAgent: CompanionAgentIdentity?
-        var erroredAgent: CompanionAgentIdentity?
-        var workingAgent: CompanionAgentIdentity?
+        // Multi-session priority (INF-271): an exact ask beats a soft
+        // possibly-waiting, and within a tier the most recent transition
+        // wins, so the bubble always shows whose event the pet is reacting to.
+        var blockedCandidates: [(exact: Bool, when: Date, agent: CompanionAgentIdentity)] = []
+        var errored: (when: Date, agent: CompanionAgentIdentity)?
+        var working: (when: Date, agent: CompanionAgentIdentity)?
         for (sessionID, state) in sessionAttention {
+            let when = attentionChangedAt[sessionID] ?? .distantPast
             switch state {
             case .awaitingAnswer:
-                blockedAgent = agentIdentity(forSessionID: sessionID)
+                blockedCandidates.append((true, when, agentIdentity(forSessionID: sessionID)))
             case .possiblyWaiting:
-                if blockedAgent == nil { blockedAgent = agentIdentity(forSessionID: sessionID) }
+                blockedCandidates.append((false, when, agentIdentity(forSessionID: sessionID)))
             case .erroredRecently:
-                erroredAgent = agentIdentity(forSessionID: sessionID)
+                if (errored?.when ?? .distantPast) < when {
+                    errored = (when, agentIdentity(forSessionID: sessionID))
+                }
             case .active:
-                workingAgent = agentIdentity(forSessionID: sessionID)
+                if (working?.when ?? .distantPast) < when {
+                    working = (when, agentIdentity(forSessionID: sessionID))
+                }
             case .turnComplete, .quiet:
                 break
             }
         }
+        let blockedAgent = blockedCandidates
+            .sorted { lhs, rhs in
+                if lhs.exact != rhs.exact { return lhs.exact }
+                return lhs.when > rhs.when
+            }
+            .first?.agent
+        let erroredAgent = errored?.agent
+        let workingAgent = working?.agent
 
         let freshTool = activityPhrases
             .filter { Date().timeIntervalSince($0.lastSeen) <= Self.toolActivityDwell }

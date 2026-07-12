@@ -440,6 +440,28 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 _ = try waitForElement("speaking indicator", in: try mainWindow(),
                                        containing: "Assistant speaking", timeout: 15)
 
+            case "press-celebrate":
+                // Moment-plumbing probe (INF-271): fires a celebrate through
+                // the simulator panel's button so a recording can verify the
+                // one-shot path end to end without waiting on a real turn.
+                Thread.sleep(forTimeInterval: 2)
+                let celebrate = try waitForElement("celebrate moment button", in: try mainWindow(),
+                                                   role: kAXButtonRole as String, containing: "Celebrate")
+                _ = celebrate.press()
+
+            case "play-selected-when-ready":
+                // Choreography demo support (INF-271): the first card of a
+                // fresh profile selects itself on arrival, so pressing Space
+                // starts its narration with no overlay covering the pet.
+                // Space is a no-op until a card exists, making this safe to
+                // poll while a real agent turn is still composing.
+                try waitUntil("selected card starts speaking", timeout: 240, interval: 4) {
+                    app.key(Key.space)
+                    Thread.sleep(forTimeInterval: 0.6)
+                    return (try? mainWindow())?
+                        .firstDescendant(containing: "Assistant speaking") != nil
+                }
+
             // The seven call-* states below pose CallPhase.thinking,
             // .preparingAudio, .speaking, .sendQueued, .sendDelivered,
             // .failed, and .listening (INF-244's screenshot matrix). Each

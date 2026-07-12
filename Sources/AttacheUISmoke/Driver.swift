@@ -108,6 +108,7 @@ enum Key {
     static let y: CGKeyCode = 16
     static let comma: CGKeyCode = 43
     static let escape: CGKeyCode = 53
+    static let space: CGKeyCode = 49
 }
 
 // MARK: Waiting

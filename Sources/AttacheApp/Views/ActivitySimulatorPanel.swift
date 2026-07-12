@@ -65,6 +65,16 @@ struct ActivitySimulatorPanel: View {
             }
             .typoCaption(.medium)
 
+            HStack(spacing: 6) {
+                Button("Celebrate") { model.triggerMoment(.celebrate, agent: agent) }
+                    .accessibilityLabel("Celebrate moment")
+                Button("Pop") { model.triggerMoment(.cardArrived, agent: agent) }
+                    .accessibilityLabel("Pop moment")
+                Button("Drowsy") { model.triggerMoment(.drowsy, agent: agent) }
+                    .accessibilityLabel("Drowsy moment")
+            }
+            .typoCaption(.medium)
+
             Text(stateReadout)
                 .typoCaption(.medium, design: .monospaced)
                 .foregroundStyle(.secondary)
