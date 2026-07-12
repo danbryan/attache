@@ -1955,6 +1955,32 @@ if enabled("f6") {
     }
 }
 
+// MARK: Flow 10: mini companion window (INF-272)
+
+if enabled("mini") {
+    run.step("mini-window", "mini companion toggle opens the floating window") {
+        app.activate()
+        app.key(Key.comma, command: true)
+        try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+        let toggle = try waitForElement("mini companion toggle", in: try settingsWindow(),
+                                        role: kAXCheckBoxRole as String, containing: "Mini companion")
+        guard toggle.press() else { throw SmokeError(message: "AXPress failed on \(toggle.summary)") }
+        try waitUntil("mini companion window to appear", timeout: 10) {
+            app.axApp.windows.contains { $0.title.contains("Mini Companion") }
+        }
+    }
+    run.step("mini-window", "mini companion toggle closes it again") {
+        let toggle = try waitForElement("mini companion toggle", in: try settingsWindow(),
+                                        role: kAXCheckBoxRole as String, containing: "Mini companion")
+        guard toggle.press() else { throw SmokeError(message: "AXPress failed on \(toggle.summary)") }
+        try waitUntil("mini companion window to close", timeout: 10) {
+            !app.axApp.windows.contains { $0.title.contains("Mini Companion") }
+        }
+        app.key(Key.escape)
+        try waitUntil("settings window closes", timeout: 10) { (try? settingsWindow()) == nil }
+    }
+}
+
 // MARK: Flow 5: settings changes persist across relaunch
 
 var chosenTheme = "Cyberpunk"

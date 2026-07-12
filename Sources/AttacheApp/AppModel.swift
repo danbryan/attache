@@ -282,6 +282,13 @@ final class AppModel: ObservableObject {
     @Published var visualMode: CompanionVisualMode = .combined {
         didSet { defaults.set(visualMode.rawValue, forKey: CompanionPreferenceKey.visualMode) }
     }
+    /// The desktop mini companion window (INF-272).
+    @Published var miniCompanionEnabled: Bool = false {
+        didSet { defaults.set(miniCompanionEnabled, forKey: CompanionPreferenceKey.miniCompanion) }
+    }
+    @Published var miniCompanionClickThrough: Bool = false {
+        didSet { defaults.set(miniCompanionClickThrough, forKey: CompanionPreferenceKey.miniCompanionClickThrough) }
+    }
     @Published var visualSymmetry: CompanionVisualSymmetry = .mirrored {
         didSet { defaults.set(visualSymmetry.rawValue, forKey: CompanionPreferenceKey.visualSymmetry) }
     }
@@ -1601,6 +1608,13 @@ final class AppModel: ObservableObject {
         } catch {
             intakeStatus = "Card creation failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Right-click affordance on the mini companion (INF-272): replay the
+    /// newest update without opening the main window.
+    func replayLastUpdate() {
+        guard let card = cards.max(by: { $0.createdAt < $1.createdAt }) else { return }
+        playInboxCard(card)
     }
 
     func playSelected() {
@@ -5371,6 +5385,8 @@ final class AppModel: ObservableObject {
            let mode = CompanionVisualMode(rawValue: value) {
             visualMode = mode
         }
+        miniCompanionEnabled = defaults.bool(forKey: CompanionPreferenceKey.miniCompanion)
+        miniCompanionClickThrough = defaults.bool(forKey: CompanionPreferenceKey.miniCompanionClickThrough)
         if let value = defaults.string(forKey: CompanionPreferenceKey.visualSymmetry),
            let symmetry = CompanionVisualSymmetry(rawValue: value) {
             visualSymmetry = symmetry

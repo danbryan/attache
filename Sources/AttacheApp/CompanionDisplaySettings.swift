@@ -346,6 +346,9 @@ struct CompanionCaptionLanguage: Identifiable, Hashable {
 
 enum CompanionPreferenceKey {
     static let visualMode = "attache.visualMode"
+    static let miniCompanion = "attache.miniCompanion"
+    static let miniCompanionClickThrough = "attache.miniCompanionClickThrough"
+    static let miniCompanionFrames = "attache.miniCompanionFrames"
     static let visualSymmetry = "attache.visualSymmetry"
     static let idleBrand = "attache.idleBrand"
     static let idleCustomText = "attache.idleCustomText"

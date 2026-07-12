@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = AppModel()
     private var statusItem: NSStatusItem?
     private var windowController: CompanionWindowController?
+    private var miniWindowController: MiniCompanionWindowController?
     private var settingsWindowController: SettingsWindowController?
     private var cancellables: Set<AnyCancellable> = []
     // Sparkle keeps the app current without pestering: a quiet background check
@@ -57,6 +58,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.windowController?.showCompanion()
             self?.model.startOnboarding()
         }
+        NotificationCenter.default.addObserver(forName: .attacheShowMainWindow, object: nil, queue: .main) { [weak self] _ in
+            self?.windowController?.showCompanion()
+        }
+        model.$miniCompanionEnabled
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled in
+                self?.applyMiniCompanion(enabled)
+            }
+            .store(in: &cancellables)
         DistributedNotificationCenter.default.addObserver(
             self,
             selector: #selector(systemAppearanceChanged),
@@ -104,6 +114,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupWindow() {
         windowController = CompanionWindowController(model: model)
+    }
+
+    private func applyMiniCompanion(_ enabled: Bool) {
+        if enabled {
+            if miniWindowController == nil {
+                miniWindowController = MiniCompanionWindowController(model: model)
+            }
+            miniWindowController?.show()
+        } else {
+            miniWindowController?.hide()
+        }
+        rebuildMenu()
+    }
+
+    @objc private func toggleMiniCompanion() {
+        model.miniCompanionEnabled.toggle()
+    }
+
+    @objc private func toggleMiniClickThrough() {
+        model.miniCompanionClickThrough.toggle()
     }
 
     private func setupMainMenu() {
@@ -222,6 +252,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] visible in
                 self?.applyMenuBarVisibility(visible)
+            }
+            .store(in: &cancellables)
+
+        model.$miniCompanionClickThrough
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.rebuildMenu()
             }
             .store(in: &cancellables)
     }
@@ -356,6 +393,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let modeTitle = model.voicemailMode ? "Go Live (narrate updates aloud)" : "Go Quiet (send updates to Inbox)"
         let modeItem = NSMenuItem(title: modeTitle, action: #selector(toggleVoicemailMode), keyEquivalent: "")
         menu.addItem(modeItem)
+        menu.addItem(.separator())
+        // The mini companion's guaranteed control path: with click-through on,
+        // the floating window ignores every event, so the menu bar is how you
+        // get it back (INF-272).
+        let miniItem = NSMenuItem(
+            title: NSLocalizedString(model.miniCompanionEnabled ? "Hide Mini Companion" : "Show Mini Companion", comment: ""),
+            action: #selector(toggleMiniCompanion),
+            keyEquivalent: ""
+        )
+        menu.addItem(miniItem)
+        if model.miniCompanionEnabled {
+            let clickThroughItem = NSMenuItem(
+                title: NSLocalizedString("Mini Companion Click-Through", comment: ""),
+                action: #selector(toggleMiniClickThrough),
+                keyEquivalent: ""
+            )
+            clickThroughItem.state = model.miniCompanionClickThrough ? .on : .off
+            menu.addItem(clickThroughItem)
+        }
         menu.addItem(.separator())
         let checkUpdatesItem = NSMenuItem(title: NSLocalizedString("Check for Updates…", comment: ""), action: #selector(showUpdates), keyEquivalent: "")
         menu.addItem(checkUpdatesItem)

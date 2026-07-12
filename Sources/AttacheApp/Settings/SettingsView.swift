@@ -151,6 +151,20 @@ struct SettingsView: View {
                     }
                 }
             }
+            settingRow("Mini companion") {
+                Toggle("", isOn: $model.miniCompanionEnabled).labelsHidden()
+                    .accessibilityLabel("Mini companion")
+                Text("A small always-on-top window with just the pet or bars, living on the desktop.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if model.miniCompanionEnabled {
+                settingRow("Click-through") {
+                    Toggle("", isOn: $model.miniCompanionClickThrough).labelsHidden()
+                        .accessibilityLabel("Mini companion click-through")
+                    Text("Clicks pass through the mini window; use the menu bar to reach its controls.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             settingRow("Symmetry") {
                 Picker("", selection: $model.visualSymmetry) {
                     ForEach(CompanionVisualSymmetry.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }

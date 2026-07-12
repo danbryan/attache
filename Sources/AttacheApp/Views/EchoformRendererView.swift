@@ -17,6 +17,9 @@ struct EchoformRendererView: View {
     var theme: CompanionTheme
     var brightnessLevel: Int
     var intensity: Double
+    /// The mini companion window (INF-272) renders the same hierarchy with no
+    /// background plate, so the renderer floats directly on the desktop.
+    var transparentBackground = false
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -24,7 +27,9 @@ struct EchoformRendererView: View {
 
     var body: some View {
         ZStack {
-            rendererBackground
+            if !transparentBackground {
+                rendererBackground
+            }
             if visualMode == .pet {
                 // The pet owns the whole surface in every phase: it IS the
                 // idle screen, the playback visual, and the status display.
