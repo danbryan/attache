@@ -449,6 +449,15 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                                                    role: kAXButtonRole as String, containing: "Celebrate")
                 _ = celebrate.press()
 
+            case "type-along":
+                // Delight reel support (INF-273): type like a user so the
+                // pet's types-along taps are on screen while a recording
+                // runs, then leave the hold open for the rare-idle window.
+                Thread.sleep(forTimeInterval: 6)
+                app.type("pair programming with bubbles ")
+                Thread.sleep(forTimeInterval: 3)
+                app.type("the pet types along while the agents rest ")
+
             case "play-selected-when-ready":
                 // Choreography demo support (INF-271): the first card of a
                 // fresh profile selects itself on arrival, so pressing Space

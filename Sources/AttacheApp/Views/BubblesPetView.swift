@@ -159,6 +159,17 @@ enum BubblesPetChoreography {
     }
 }
 
+/// Which delights are enabled (INF-273). Delights only ever play over the
+/// calm phases (idle, sleeping); speaking, blocked, paused, and error always
+/// own the stage untouched.
+struct PetDelights: Equatable {
+    var typesAlong = true
+    var rareIdles = false
+    var hoverReacts = false
+
+    static let none = PetDelights(typesAlong: false, rareIdles: false, hoverReacts: false)
+}
+
 /// Integrates spring motion, blinking, and the procedural loops between the
 /// choreography's pose targets and the drawn frame. Plain fields only (no
 /// published state): the surrounding `TimelineView` already redraws every
@@ -215,11 +226,32 @@ final class BubblesPetMotor: ObservableObject {
     private var seenMomentIDs: Set<UUID> = []
     private var queuedMoments: [CompanionActivityMoment] = []
     private var activeMoment: (moment: CompanionActivityMoment, startedAt: TimeInterval)?
+    private var nextRareIdleAt: TimeInterval?
+    private var activeRareIdle: (juggles: Bool, startedAt: TimeInterval)?
+    private var clickBouncedAt: TimeInterval?
+    /// Rare-idle cadence in seconds; `ATTACHE_PET_RARE_IDLE_SECONDS` shrinks
+    /// it so the reel and QA runs never wait minutes for a moment whose whole
+    /// point is rarity.
+    private let rareIdleInterval: ClosedRange<Double> = {
+        if let raw = ProcessInfo.processInfo.environment["ATTACHE_PET_RARE_IDLE_SECONDS"],
+           let seconds = Double(raw), seconds > 0 {
+            return seconds...(seconds * 1.5)
+        }
+        return 180...420
+    }()
+
+    /// The hover-reaction click: a quick happy bounce, played over the calm
+    /// phases only.
+    func noteClick(at date: Date) {
+        clickBouncedAt = date.timeIntervalSinceReferenceDate
+    }
 
     func pose(
         at date: Date,
         activity: CompanionActivityState,
         moment: CompanionActivityMoment? = nil,
+        delights: PetDelights = .none,
+        hoverGaze: CGSize? = nil,
         reduceMotion: Bool
     ) -> BubblesPose {
         let now = date.timeIntervalSinceReferenceDate
@@ -272,11 +304,99 @@ final class BubblesPetMotor: ObservableObject {
         }
 
         applyLoops(to: &pose, targets: targets, now: now, reduceMotion: reduceMotion)
+        applyDelights(
+            to: &pose,
+            phase: activity.phase,
+            userTyping: activity.userTyping,
+            delights: delights,
+            hoverGaze: hoverGaze,
+            now: now,
+            reduceMotion: reduceMotion
+        )
         advanceMoment(now: now, date: date, phase: activity.phase)
         if let active = activeMoment {
             applyMoment(active.moment, startedAt: active.startedAt, to: &pose, now: now, reduceMotion: reduceMotion)
         }
         return pose
+    }
+
+    /// The delight layer (INF-273), strictly over the calm phases: signal
+    /// phases (speaking, blocked, paused, error) and the working phases skip
+    /// it entirely, so delights can never mask what an agent is doing.
+    private func applyDelights(
+        to pose: inout BubblesPose,
+        phase: CompanionActivityPhase,
+        userTyping: Bool,
+        delights: PetDelights,
+        hoverGaze: CGSize?,
+        now: TimeInterval,
+        reduceMotion: Bool
+    ) {
+        guard phase == .idle || phase == .sleeping else {
+            activeRareIdle = nil
+            return
+        }
+
+        if delights.typesAlong, userTyping, !reduceMotion {
+            for index in 0..<3 {
+                let tap = max(0, sin(now * 2 * .pi * 2.6 + Double(index) * 2.1))
+                pose.bubbles[index].lift += CGFloat(7 * tap)
+                pose.bubbles[index].tilt += 5 * tap * (index == 1 ? -1 : 1)
+                pose.bubbles[index].dotPhase = (now / 0.9 + Double(index) * 0.33).truncatingRemainder(dividingBy: 1)
+            }
+            if phase == .sleeping {
+                pose.eyeOpenness = max(pose.eyeOpenness, 0.55)
+            }
+        }
+
+        if delights.rareIdles, !reduceMotion {
+            if nextRareIdleAt == nil {
+                nextRareIdleAt = now + Double.random(in: rareIdleInterval)
+            }
+            if activeRareIdle == nil, let next = nextRareIdleAt, now >= next {
+                activeRareIdle = (juggles: Bool.random(), startedAt: now)
+                nextRareIdleAt = now + Double.random(in: rareIdleInterval)
+            }
+            if let idle = activeRareIdle {
+                let t = now - idle.startedAt
+                if t >= 3 {
+                    activeRareIdle = nil
+                } else if idle.juggles {
+                    for index in 0..<3 {
+                        let wave = max(0, sin(2 * .pi * (t * 1.1) - Double(index) * 0.9))
+                        pose.bubbles[index].lift += CGFloat(6 * wave)
+                    }
+                    pose.hop += CGFloat(2 * max(0, sin(2 * .pi * t * 1.1)))
+                } else {
+                    pose.gaze.width += CGFloat(3 * sin(t / 3 * 2 * .pi))
+                    pose.headTilt += 5 * sin(t / 3 * 2 * .pi)
+                }
+            }
+        } else {
+            activeRareIdle = nil
+        }
+
+        if delights.hoverReacts {
+            if let hoverGaze {
+                pose.gaze.width += hoverGaze.width
+                pose.gaze.height += hoverGaze.height
+                if phase == .sleeping {
+                    pose.eyeOpenness = max(pose.eyeOpenness, 0.3)
+                }
+            }
+            if let bouncedAt = clickBouncedAt {
+                let t = now - bouncedAt
+                if t < 0.8 {
+                    pose.smile = 1
+                    pose.cheekGlow = max(pose.cheekGlow, 0.8)
+                    if !reduceMotion {
+                        pose.hop += CGFloat(8 * sin(min(1, t / 0.8) * .pi))
+                    }
+                } else {
+                    clickBouncedAt = nil
+                }
+            }
+        }
     }
 
     /// One-shot scheduling (INF-271): moments queue while a signal phase
@@ -429,26 +549,67 @@ struct BubblesPetView: View {
     var moment: CompanionActivityMoment?
     var theme: CompanionTheme
     var brightnessLevel: Int
+    var delights: PetDelights = .none
+    /// The shiny easter egg: golden arcs on the 1-in-20 profiles (INF-273).
+    var shiny = false
+    /// Clicking the pet speaks the status line; injected so the view stays
+    /// model-free.
+    var onPetClick: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var motor = BubblesPetMotor()
     @State private var windowVisible = true
+    @State private var hoverGaze: CGSize?
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: frameInterval, paused: !windowVisible)) { context in
-            BubblesPetFigure(
-                pose: motor.pose(at: context.date, activity: activity, moment: moment, reduceMotion: reduceMotion),
-                arcColor: theme.energyColor(1.0, opacity: 0.96, brightnessLevel: brightnessLevel, darkScheme: colorScheme == .dark),
-                headroom: 28
-            )
+        GeometryReader { proxy in
+            TimelineView(.animation(minimumInterval: frameInterval, paused: !windowVisible)) { context in
+                BubblesPetFigure(
+                    pose: motor.pose(
+                        at: context.date,
+                        activity: activity,
+                        moment: moment,
+                        delights: delights,
+                        hoverGaze: hoverGaze,
+                        reduceMotion: reduceMotion
+                    ),
+                    arcColor: arcColor,
+                    headroom: 28
+                )
+            }
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                guard delights.hoverReacts else { return }
+                switch phase {
+                case .active(let location):
+                    hoverGaze = CGSize(
+                        width: (location.x / max(1, proxy.size.width) - 0.5) * 6,
+                        height: (location.y / max(1, proxy.size.height) - 0.5) * 6
+                    )
+                case .ended:
+                    hoverGaze = nil
+                }
+            }
+            .onTapGesture {
+                guard delights.hoverReacts,
+                      activity.phase == .idle || activity.phase == .sleeping else { return }
+                motor.noteClick(at: Date())
+                onPetClick?()
+            }
         }
         .padding(36)
         .frame(maxWidth: 620, maxHeight: 660)
         .background(HostWindowVisibilityObserver { visible in
             if windowVisible != visible { windowVisible = visible }
         })
-        .allowsHitTesting(false)
+        .allowsHitTesting(delights.hoverReacts)
+    }
+
+    private var arcColor: Color {
+        let base = theme.energyColor(1.0, opacity: 0.96, brightnessLevel: brightnessLevel, darkScheme: colorScheme == .dark)
+        guard shiny else { return base }
+        return base.blended(with: Color(red: 1.0, green: 0.78, blue: 0.35), fraction: 0.55)
     }
 
     private var frameInterval: Double {
@@ -456,6 +617,22 @@ struct BubblesPetView: View {
         case .sleeping, .idle, .paused: return 1.0 / 12.0
         default: return 1.0 / 40.0
         }
+    }
+}
+
+private extension Color {
+    /// Component-wise blend in sRGB, enough for the shiny tint.
+    func blended(with other: Color, fraction: Double) -> Color {
+        let lhs = NSColor(self).usingColorSpace(.sRGB) ?? .white
+        let rhs = NSColor(other).usingColorSpace(.sRGB) ?? .white
+        let t = min(1, max(0, fraction))
+        return Color(
+            .sRGB,
+            red: Double(lhs.redComponent) * (1 - t) + Double(rhs.redComponent) * t,
+            green: Double(lhs.greenComponent) * (1 - t) + Double(rhs.greenComponent) * t,
+            blue: Double(lhs.blueComponent) * (1 - t) + Double(rhs.blueComponent) * t,
+            opacity: 0.96
+        )
     }
 }
 

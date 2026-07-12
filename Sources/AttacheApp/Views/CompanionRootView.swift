@@ -133,7 +133,14 @@ struct CompanionRootView: View {
                 idleImage: model.idleImage,
                 theme: model.theme,
                 brightnessLevel: model.brightnessLevel,
-                intensity: model.visualIntensity
+                intensity: model.visualIntensity,
+                petDelights: PetDelights(
+                    typesAlong: model.petTypesAlong,
+                    rareIdles: model.petRareIdles,
+                    hoverReacts: model.petHoverReaction
+                ),
+                petShiny: model.petShiny,
+                onPetClick: { model.speakStatusLine() }
             )
             .opacity(model.surfaceOpacity)
             .ignoresSafeArea()

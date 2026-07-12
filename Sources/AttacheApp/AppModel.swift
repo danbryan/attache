@@ -289,6 +289,25 @@ final class AppModel: ObservableObject {
     @Published var miniCompanionClickThrough: Bool = false {
         didSet { defaults.set(miniCompanionClickThrough, forKey: CompanionPreferenceKey.miniCompanionClickThrough) }
     }
+    /// Pet delights (INF-273): types-along ships on, the rest are opt-in.
+    @Published var petTypesAlong: Bool = true {
+        didSet { defaults.set(petTypesAlong, forKey: CompanionPreferenceKey.petTypesAlong) }
+    }
+    @Published var petRareIdles: Bool = false {
+        didSet { defaults.set(petRareIdles, forKey: CompanionPreferenceKey.petRareIdles) }
+    }
+    @Published var petHoverReaction: Bool = false {
+        didSet { defaults.set(petHoverReaction, forKey: CompanionPreferenceKey.petHoverReaction) }
+    }
+    /// The shiny easter egg (INF-273): a one-time random roll persisted per
+    /// profile, so roughly 1 in 20 installs gets a golden-arc Bubbles. Zero
+    /// configuration on purpose; discovery is the point.
+    lazy var petShiny: Bool = {
+        if defaults.object(forKey: CompanionPreferenceKey.petShinySeed) == nil {
+            defaults.set(Int.random(in: 0..<20), forKey: CompanionPreferenceKey.petShinySeed)
+        }
+        return defaults.integer(forKey: CompanionPreferenceKey.petShinySeed) == 0
+    }()
     @Published var visualSymmetry: CompanionVisualSymmetry = .mirrored {
         didSet { defaults.set(visualSymmetry.rawValue, forKey: CompanionPreferenceKey.visualSymmetry) }
     }
@@ -1615,6 +1634,15 @@ final class AppModel: ObservableObject {
     func replayLastUpdate() {
         guard let card = cards.max(by: { $0.createdAt < $1.createdAt }) else { return }
         playInboxCard(card)
+    }
+
+    /// Clicking the pet (the hover-reaction delight, INF-273) speaks the
+    /// current status line, never interrupting real narration.
+    func speakStatusLine() {
+        guard !playback.isPlaying, !playback.isBusy else { return }
+        let line = intakeStatus.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty else { return }
+        playback.preview(line)
     }
 
     func playSelected() {
@@ -5387,6 +5415,11 @@ final class AppModel: ObservableObject {
         }
         miniCompanionEnabled = defaults.bool(forKey: CompanionPreferenceKey.miniCompanion)
         miniCompanionClickThrough = defaults.bool(forKey: CompanionPreferenceKey.miniCompanionClickThrough)
+        if defaults.object(forKey: CompanionPreferenceKey.petTypesAlong) != nil {
+            petTypesAlong = defaults.bool(forKey: CompanionPreferenceKey.petTypesAlong)
+        }
+        petRareIdles = defaults.bool(forKey: CompanionPreferenceKey.petRareIdles)
+        petHoverReaction = defaults.bool(forKey: CompanionPreferenceKey.petHoverReaction)
         if let value = defaults.string(forKey: CompanionPreferenceKey.visualSymmetry),
            let symmetry = CompanionVisualSymmetry(rawValue: value) {
             visualSymmetry = symmetry

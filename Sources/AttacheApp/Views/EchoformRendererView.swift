@@ -20,6 +20,10 @@ struct EchoformRendererView: View {
     /// The mini companion window (INF-272) renders the same hierarchy with no
     /// background plate, so the renderer floats directly on the desktop.
     var transparentBackground = false
+    /// Pet delights and the shiny easter egg (INF-273), pet mode only.
+    var petDelights: PetDelights = .none
+    var petShiny = false
+    var onPetClick: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -39,7 +43,10 @@ struct EchoformRendererView: View {
                     activity: activity.with(audio: state),
                     moment: activityMoment,
                     theme: theme,
-                    brightnessLevel: brightnessLevel
+                    brightnessLevel: brightnessLevel,
+                    delights: petDelights,
+                    shiny: petShiny,
+                    onPetClick: onPetClick
                 )
                 .contextMenu {
                     Button("Change visual mode…") {

@@ -114,7 +114,11 @@ swift test
 - `Attache --render-poses [dir]` exports the Bubbles pet pose catalog
   (`design/pet-animation-spec.md`) as PNGs and fails if the rig's neutral
   pose deviates by even one pixel channel from `AttacheMascotMark` (the
-  geometry lock, INF-269).
+  geometry lock, INF-269). `--render-brand-poses [dir]` is the marketing
+  variant (2048 px set plus the idle hero loop frames, INF-274).
+- `ATTACHE_PET_RARE_IDLE_SECONDS=<n>` shrinks the pet's rare-idle cadence
+  (INF-273, normally minutes) so reels and QA runs can catch one quickly.
+  `attache.petShinySeed` set to 0 via defaults forces the shiny variant.
 - `ATTACHE_TWO_WAY_EXPIRY_SECONDS=<n>` overrides the two-way instruction expiry
   window (docs/two-way.md's 30-minute default) to `<n>` seconds, so
   `scripts/two-way-negative-path-smoke.sh` can drive a real expiry against the

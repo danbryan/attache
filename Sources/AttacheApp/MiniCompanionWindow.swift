@@ -182,7 +182,14 @@ struct MiniCompanionView: View {
             theme: model.theme,
             brightnessLevel: model.brightnessLevel,
             intensity: model.visualIntensity,
-            transparentBackground: true
+            transparentBackground: true,
+            petDelights: PetDelights(
+                typesAlong: model.petTypesAlong,
+                rareIdles: model.petRareIdles,
+                hoverReacts: model.petHoverReaction
+            ),
+            petShiny: model.petShiny,
+            onPetClick: { model.speakStatusLine() }
         )
         .contentShape(Rectangle())
         .contextMenu {

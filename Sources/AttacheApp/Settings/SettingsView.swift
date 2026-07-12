@@ -151,6 +151,20 @@ struct SettingsView: View {
                     }
                 }
             }
+            if model.visualMode == .pet {
+                settingRow("Pet delights") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Types along with you", isOn: $model.petTypesAlong)
+                            .accessibilityLabel("Pet types along with you")
+                        Toggle("Rare idle animations", isOn: $model.petRareIdles)
+                            .accessibilityLabel("Pet rare idle animations")
+                        Toggle("Hover and click reactions", isOn: $model.petHoverReaction)
+                            .accessibilityLabel("Pet hover and click reactions")
+                        Text("Small touches over the calm states only; they never cover real agent activity.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
             settingRow("Mini companion") {
                 Toggle("", isOn: $model.miniCompanionEnabled).labelsHidden()
                     .accessibilityLabel("Mini companion")

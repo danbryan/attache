@@ -237,6 +237,74 @@ final class BubblesPetChoreographyTests: XCTestCase {
         XCTAssertEqual(maxHop, 0, "a moment past its shelf life must be dropped")
     }
 
+    // MARK: Delights (INF-273)
+
+    func testTypesAlongTapsBubblesOnlyWhenCalm() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 8000)
+        let delights = PetDelights(typesAlong: true, rareIdles: false, hoverReacts: false)
+        var typingState = state(.idle)
+        typingState.userTyping = true
+        var maxLift: CGFloat = 0
+        for tick in 0..<30 {
+            let pose = motor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: typingState,
+                delights: delights,
+                reduceMotion: false
+            )
+            maxLift = max(maxLift, pose.bubbles.map(\.lift).max() ?? 0)
+        }
+        XCTAssertGreaterThan(maxLift, 1.5, "typing must tap the bubbles at idle")
+
+        var speakingState = state(.speaking, agent: .codex)
+        speakingState.userTyping = true
+        var speakingLift: CGFloat = 0
+        let speakingMotor = BubblesPetMotor()
+        for tick in 0..<30 {
+            let pose = speakingMotor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: speakingState,
+                delights: delights,
+                reduceMotion: false
+            )
+            speakingLift = max(speakingLift, pose.bubbles[0].lift)
+        }
+        XCTAssertLessThan(speakingLift, 0.5, "delights must never fire over speech")
+    }
+
+    func testClickBounceIgnoredWhileBlocked() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 9000)
+        let delights = PetDelights(typesAlong: false, rareIdles: false, hoverReacts: true)
+        motor.noteClick(at: start)
+        var maxHop: CGFloat = 0
+        for tick in 0..<20 {
+            let pose = motor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: state(.blockedOnUser, agent: .claude),
+                delights: delights,
+                reduceMotion: false
+            )
+            maxHop = max(maxHop, pose.hop)
+        }
+        XCTAssertEqual(maxHop, 0, "a click bounce must not play over blockedOnUser")
+    }
+
+    func testHoverGazeShiftsEyesAtIdle() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 10000)
+        let delights = PetDelights(typesAlong: false, rareIdles: false, hoverReacts: true)
+        let pose = motor.pose(
+            at: start,
+            activity: state(.idle),
+            delights: delights,
+            hoverGaze: CGSize(width: 2.5, height: -1),
+            reduceMotion: false
+        )
+        XCTAssertGreaterThan(pose.gaze.width, 1.5)
+    }
+
     func testMomentPlaysOnlyOncePerID() {
         let motor = BubblesPetMotor()
         let start = Date(timeIntervalSinceReferenceDate: 7000)
