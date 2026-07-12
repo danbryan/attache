@@ -189,7 +189,6 @@ struct MiniCompanionView: View {
                 hoverReacts: model.petHoverReaction
             ),
             petShiny: model.petShiny,
-            onPetClick: { model.speakStatusLine() },
             onFleetFocus: { [weak model] id in
                 model?.focusCodexSession(id)
             },

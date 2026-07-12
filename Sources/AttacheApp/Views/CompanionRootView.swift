@@ -34,6 +34,27 @@ extension View {
 
 enum DockItem { case unread, focus, mode, talk, send, personality, settings }
 
+/// How much of the window bottom the floating interaction stack occupies.
+/// Each bottom-anchored overlay reports its band (content height plus its
+/// bottom clearance); the tallest wins so the pet renderer can reserve it.
+private struct BottomOverlayHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private extension View {
+    func reportsBottomOverlayBand(clearance: CGFloat) -> some View {
+        background(GeometryReader { proxy in
+            Color.clear.preference(
+                key: BottomOverlayHeightKey.self,
+                value: proxy.size.height + clearance
+            )
+        })
+    }
+}
+
 struct CompanionRootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var playback: SpeechPlaybackController
@@ -60,6 +81,10 @@ struct CompanionRootView: View {
     @State var pendingRecoveryProviderSwitch: PendingRecoveryProviderSwitch?
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
+    /// Tallest bottom-anchored overlay band (composer, captions, transport,
+    /// dock) this frame. The pet renderer is inset by it so the character is
+    /// never covered; the full-bleed visualizer modes ignore it by design.
+    @State private var bottomOverlayHeight: CGFloat = 0
 
     init(model: AppModel) {
         self.model = model
@@ -140,7 +165,6 @@ struct CompanionRootView: View {
                     hoverReacts: model.petHoverReaction
                 ),
                 petShiny: model.petShiny,
-                onPetClick: { model.speakStatusLine() },
                 onFleetFocus: { model.focusCodexSession($0) },
                 onFleetSwitch: {
                     NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
@@ -148,6 +172,8 @@ struct CompanionRootView: View {
             )
             .opacity(model.surfaceOpacity)
             .ignoresSafeArea()
+            .padding(.bottom, model.visualMode == .pet ? bottomOverlayHeight : 0)
+            .animation(.easeInOut(duration: 0.22), value: bottomOverlayHeight)
 
             if surfaceMode == .live,
                model.showActivityInsights,
@@ -174,6 +200,7 @@ struct CompanionRootView: View {
 
                 if controlsVisible {
                     slimDock
+                        .reportsBottomOverlayBand(clearance: 18)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         .padding(.bottom, 18)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -240,6 +267,7 @@ struct CompanionRootView: View {
         }
         .contentShape(Rectangle())
         .attacheTextScale(model.uiTextScale)
+        .onPreferenceChange(BottomOverlayHeightKey.self) { bottomOverlayHeight = $0 }
         .animation(.easeInOut(duration: 0.18), value: inboxVisible)
         .animation(.easeInOut(duration: 0.18), value: shortcutsVisible)
         .background(
@@ -631,6 +659,7 @@ struct CompanionRootView: View {
             if let talkSession = model.talkContextSession, liveComposerShouldShow {
                 liveSessionComposer(for: talkSession)
                     .padding(.horizontal, 34)
+                    .reportsBottomOverlayBand(clearance: liveComposerBottomPadding)
                     .padding(.bottom, liveComposerBottomPadding)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
@@ -660,6 +689,7 @@ struct CompanionRootView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 24)
+            .reportsBottomOverlayBand(clearance: 80)
             .padding(.bottom, 80)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }

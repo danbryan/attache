@@ -23,7 +23,6 @@ struct EchoformRendererView: View {
     /// Pet delights and the shiny easter egg (INF-273), pet mode only.
     var petDelights: PetDelights = .none
     var petShiny = false
-    var onPetClick: (() -> Void)?
     /// Fleet interactivity (INF-275), pet mode only.
     var onFleetFocus: ((String) -> Void)?
     var onFleetSwitch: (() -> Void)?
@@ -49,7 +48,6 @@ struct EchoformRendererView: View {
                     brightnessLevel: brightnessLevel,
                     delights: petDelights,
                     shiny: petShiny,
-                    onPetClick: onPetClick,
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch
                 )

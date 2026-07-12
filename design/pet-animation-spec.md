@@ -133,6 +133,14 @@ States, per session:
   scales with the square root of the count (floor 0.45 s) so 2 and 20
   sub-agents read differently. At most 2 ripplers stay individual per agent.
 
+Anchoring and depth:
+
+- Orbit centers, the parking shelf, and the blocked spot ride the bubble's
+  live pose offsets (lift and jitter), so motes stay pinned to a hopping or
+  shaking bubble instead of its resting spot.
+- Motes on the upper half of the orbit draw behind the bubble; the path
+  reads as a ring around it, not a dot crossing its face.
+
 Crowds:
 
 - Up to 4 motes per agent orbit individually. More plain working sessions
@@ -149,6 +157,13 @@ Interaction:
 - Click focuses that session (same as picking it in ⌘K); clicking a badge
   opens the session switcher. The mini companion window does the same and
   raises the main window for the switcher.
+- Clicking the pet body is a silent visual reaction (the click squash).
+  Audio only ever starts from explicit play controls; the INF-273 status
+  line speech on click was removed (2026-07-12 feedback).
+- In the main window the pet is inset above the bottom interaction stack
+  (composer, captions, transport, dock) and scales down instead of being
+  covered. Full-bleed visualizer modes keep drawing under the controls by
+  design.
 
 Data:
 

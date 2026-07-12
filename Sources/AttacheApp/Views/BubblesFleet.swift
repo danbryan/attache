@@ -102,4 +102,7 @@ struct BubblesFleetMote: Equatable {
     var sessionID: String?
     /// Hover affordance text (session title, or a badge summary).
     var title = ""
+    /// True on the far half of the orbit: the figure draws these before the
+    /// bubbles so the orbit reads as a ring passing behind them.
+    var behind = false
 }

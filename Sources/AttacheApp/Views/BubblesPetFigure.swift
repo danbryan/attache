@@ -153,8 +153,9 @@ struct BubblesPetFigure: View {
             drawArcs(in: figure, pose: pose, p: p, s: s)
             drawLimbs(in: figure, pose: pose, p: p, s: s)
             drawHead(in: figure, pose: pose, p: p, s: s)
+            drawFleet(in: figure, p: p, s: s, behindBubbles: true)
             drawBubbles(in: figure, pose: pose, p: p, s: s)
-            drawFleet(in: figure, p: p, s: s)
+            drawFleet(in: figure, p: p, s: s, behindBubbles: false)
         }
     }
 
@@ -169,8 +170,8 @@ struct BubblesPetFigure: View {
         }
     }
 
-    private func drawFleet(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
-        for mote in fleetMotes {
+    private func drawFleet(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat, behindBubbles: Bool) {
+        for mote in fleetMotes where mote.behind == behindBubbles {
             let center = p(mote.position.x, mote.position.y)
             let color = moteColor(mote.fill)
             for ripple in mote.ripples {

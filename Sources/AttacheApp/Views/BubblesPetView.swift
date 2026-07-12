@@ -334,6 +334,12 @@ final class BubblesPetMotor: ObservableObject {
         if let active = activeMoment {
             applyMoment(active.moment, startedAt: active.startedAt, to: &pose, now: now, reduceMotion: reduceMotion)
         }
+        for index in 0..<3 {
+            lastBubbleOffsets[index] = CGSize(
+                width: pose.bubbles[index].jitter,
+                height: -pose.bubbles[index].lift
+            )
+        }
         return pose
     }
 
@@ -542,6 +548,10 @@ final class BubblesPetMotor: ObservableObject {
     /// hit-testing in the view.
     private(set) var lastFleetMotes: [BubblesFleetMote] = []
     private var lastFleetTick: TimeInterval?
+    /// The pose's live bubble displacements (jitter, -lift), captured each
+    /// `pose(at:)` so fleet anchors ride the animated bubbles instead of
+    /// their neutral resting spots.
+    private(set) var lastBubbleOffsets = [CGSize](repeating: .zero, count: 3)
 
     /// A stable starting angle per session so mote layouts never shuffle.
     private static func seedPhase(_ id: String) -> Double {
@@ -587,14 +597,21 @@ final class BubblesPetMotor: ObservableObject {
         for agent in CompanionAgentIdentity.allCases {
             guard let group = layout.groups[agent] else { continue }
             let bubble = BubblesPetChoreography.bubbleIndex(for: agent)
+            let offset = lastBubbleOffsets[bubble]
             let center = BubblesPetChoreography.bubbleCenters[bubble]
+                .applying(CGAffineTransform(translationX: offset.width, y: offset.height))
+
+            func orbitTarget(_ phase: Double) -> CGPoint {
+                let point = BubblesPetChoreography.orbitPoint(bubbleIndex: bubble, phase: phase)
+                return CGPoint(x: point.x + offset.width, y: point.y + offset.height)
+            }
 
             var badgeCenter: CGPoint?
             if group.orbitingBadgeCount > 0 {
                 var phase = badgePhases[agent] ?? Self.seedPhase(agent.rawValue)
                 if !reduceMotion { phase += dt * 0.5 }
                 badgePhases[agent] = phase
-                badgeCenter = BubblesPetChoreography.orbitPoint(bubbleIndex: bubble, phase: phase)
+                badgeCenter = orbitTarget(phase)
                 badgeCenters[agent] = badgeCenter
             }
 
@@ -603,7 +620,7 @@ final class BubblesPetMotor: ObservableObject {
                 var phase = fleetOrbitPhases[session.id] ?? Self.seedPhase(session.id)
                 if !reduceMotion { phase += dt * 0.55 }
                 fleetOrbitPhases[session.id] = phase
-                let target = BubblesPetChoreography.orbitPoint(bubbleIndex: bubble, phase: phase)
+                let target = orbitTarget(phase)
                 let position = ease(session.id, toward: target, spawnAt: badgeCenter ?? target)
                 motes.append(BubblesFleetMote(
                     position: position,
@@ -612,11 +629,12 @@ final class BubblesPetMotor: ObservableObject {
                     ring: session.isFocused,
                     ripples: ripples(for: session),
                     sessionID: session.id,
-                    title: session.title
+                    title: session.title,
+                    behind: position.y < center.y - 0.5
                 ))
             }
 
-            let shelfY = BubblesPetChoreography.bubbleBottoms[bubble] + 14
+            let shelfY = BubblesPetChoreography.bubbleBottoms[bubble] + 14 + offset.height
             let parkedSlots = group.parked.count + (group.parkedBadgeCount > 0 ? 1 : 0)
             for (index, session) in group.parked.enumerated() {
                 shownIDs.insert(session.id)
@@ -649,7 +667,7 @@ final class BubblesPetMotor: ObservableObject {
                 shownIDs.insert(session.id)
                 let base = CGPoint(
                     x: center.x + 30 + CGFloat(index) * 12,
-                    y: BubblesPetChoreography.bubbleTops[bubble] - 8
+                    y: BubblesPetChoreography.bubbleTops[bubble] - 8 + offset.height
                 )
                 var position = ease(session.id, toward: base, spawnAt: base)
                 if !reduceMotion {
@@ -673,7 +691,8 @@ final class BubblesPetMotor: ObservableObject {
                     fill: .agent(agent),
                     count: group.orbitingBadgeCount,
                     ripples: [],
-                    title: "\(group.orbitingBadgeCount) working"
+                    title: "\(group.orbitingBadgeCount) working",
+                    behind: badgeCenter.y < center.y - 0.5
                 ))
             }
         }
@@ -765,9 +784,6 @@ struct BubblesPetView: View {
     var delights: PetDelights = .none
     /// The shiny easter egg: golden arcs on the 1-in-20 profiles (INF-273).
     var shiny = false
-    /// Clicking the pet speaks the status line; injected so the view stays
-    /// model-free.
-    var onPetClick: (() -> Void)?
     /// Fleet interactivity (INF-275): click a mote to focus its session,
     /// click a badge to open the session switcher.
     var onFleetFocus: ((String) -> Void)?
@@ -829,7 +845,6 @@ struct BubblesPetView: View {
                 guard delights.hoverReacts,
                       activity.phase == .idle || activity.phase == .sleeping else { return }
                 motor.noteClick(at: Date())
-                onPetClick?()
             })
             .overlay(alignment: .topLeading) {
                 if let hoveredMote, !hoveredMote.title.isEmpty {

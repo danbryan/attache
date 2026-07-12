@@ -128,6 +128,44 @@ final class BubblesFleetTests: XCTestCase {
         XCTAssertTrue(motes.contains { !$0.ripples.isEmpty })
     }
 
+    func testOrbitRidesTheLiftedBubble() {
+        func meanOrbitY(phase: CompanionActivityPhase) -> CGFloat {
+            let motor = BubblesPetMotor()
+            let fleet = [session("c0")]
+            let start = Date(timeIntervalSinceReferenceDate: 50_000)
+            var ys: [CGFloat] = []
+            for tick in 0..<80 {
+                let state = CompanionActivityState(phase: phase, activeAgent: .claude, fleet: fleet)
+                _ = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
+                               activity: state, reduceMotion: false)
+                let motes = motor.fleet(activity: state, reduceMotion: false)
+                if tick > 40, let mote = motes.first { ys.append(mote.position.y) }
+            }
+            return ys.reduce(0, +) / CGFloat(ys.count)
+        }
+        let idleY = meanOrbitY(phase: .idle)
+        let respondingY = meanOrbitY(phase: .agentResponding)
+        XCTAssertLessThan(respondingY, idleY - 1,
+                          "a lifted bubble carries its orbit up with it")
+    }
+
+    func testOrbitSplitsAcrossTheBubbleDepth() {
+        let motor = BubblesPetMotor()
+        let fleet = [session("c0")]
+        let start = Date(timeIntervalSinceReferenceDate: 50_000)
+        var sawBehind = false, sawFront = false
+        for tick in 0..<160 {
+            let state = CompanionActivityState(phase: .idle, fleet: fleet)
+            _ = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
+                           activity: state, reduceMotion: false)
+            for mote in motor.fleet(activity: state, reduceMotion: false) {
+                if mote.behind { sawBehind = true } else { sawFront = true }
+            }
+        }
+        XCTAssertTrue(sawBehind, "the orbit's far half passes behind the bubble")
+        XCTAssertTrue(sawFront, "the orbit's near half passes in front")
+    }
+
     func testMotorSpawnsLeaversAtTheBadge() {
         let motor = BubblesPetMotor()
         var fleet = (0..<10).map { session("c\($0)") }

@@ -1648,15 +1648,6 @@ final class AppModel: ObservableObject {
         playInboxCard(card)
     }
 
-    /// Clicking the pet (the hover-reaction delight, INF-273) speaks the
-    /// current status line, never interrupting real narration.
-    func speakStatusLine() {
-        guard !playback.isPlaying, !playback.isBusy else { return }
-        let line = intakeStatus.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !line.isEmpty else { return }
-        playback.preview(line)
-    }
-
     func playSelected() {
         guard let card = selectedCard else { return }
         let startProgress = selectedStartProgress
