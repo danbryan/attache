@@ -206,7 +206,8 @@ struct ActivitySimulatorPanel: View {
     }
 
     /// A scripted 40 second fleet story for recordings: grow to a badge,
-    /// ripple sub-agents, block one, park half, then surge back.
+    /// ripple sub-agents, block one, park half, then surge to a
+    /// 30-session fleet.
     private func startFleetDemo() {
         demoElapsed = 0
         overriding = true
@@ -234,7 +235,7 @@ struct ActivitySimulatorPanel: View {
         case ..<20:     subAgents = 8
         case ..<26:     oneBlocked = true
         case ..<32:     workShare = 1
-        default:        workShare = 2; oneBlocked = false
+        default:        claudeCount = 24; codexCount = 6; workShare = 2; oneBlocked = false
         }
         apply()
     }

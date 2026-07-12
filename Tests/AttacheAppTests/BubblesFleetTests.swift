@@ -55,6 +55,19 @@ final class BubblesFleetTests: XCTestCase {
         XCTAssertEqual(group?.orbitingBadgeCount, 18)
     }
 
+    func testFocusFlipMovesTheRingNotTheMotes() {
+        var fleet = [session("a", state: .quiet), session("b", state: .quiet)]
+        fleet[0].isFocused = true
+        let before = BubblesFleetLayout.compute(fleet: fleet)
+        fleet[0].isFocused = false
+        fleet[1].isFocused = true
+        let after = BubblesFleetLayout.compute(fleet: fleet)
+        XCTAssertEqual(before.groups[.claude]?.parked.map(\.id), ["a", "b"])
+        XCTAssertEqual(after.groups[.claude]?.parked.map(\.id), ["a", "b"],
+                       "shelf slots are stable across a focus change")
+        XCTAssertEqual(after.groups[.claude]?.parked.map(\.isFocused), [false, true])
+    }
+
     func testQuietFleetCollapsesIntoParkedBadge() {
         let fleet = (0..<9).map { session("c\($0)", state: .quiet) }
         let layout = BubblesFleetLayout.compute(fleet: fleet)

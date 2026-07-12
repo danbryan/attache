@@ -61,15 +61,15 @@ struct BubblesFleetLayout: Equatable {
             group.orbiting = orbiting
 
             let quiet = members.filter { $0.state == .quiet }
-            let focusedQuiet = quiet.filter(\.isFocused)
             let plainQuiet = quiet.filter { !$0.isFocused }
-            var parked = focusedQuiet
             if plainQuiet.count <= individualCap {
-                parked += plainQuiet
+                // Fleet order, not focused-first: a focus change must move
+                // the ring, never shuffle motes between shelf slots.
+                group.parked = quiet
             } else {
+                group.parked = quiet.filter(\.isFocused)
                 group.parkedBadgeCount = plainQuiet.count
             }
-            group.parked = parked
 
             if !group.isEmpty {
                 layout.groups[agent] = group
