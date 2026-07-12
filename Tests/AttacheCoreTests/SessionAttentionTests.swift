@@ -152,4 +152,43 @@ final class SessionAttentionTests: XCTestCase {
         XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: [], format: .claude, now: now),
                        .quiet)
     }
+
+    // MARK: Sub-agent assessment (INF-275)
+
+    private func subAgentLines(pending: Int, resolved: Int, secondsAgo: TimeInterval) -> [String] {
+        var lines: [String] = []
+        var identifier = 0
+        for _ in 0..<(pending + resolved) {
+            identifier += 1
+            lines.append("""
+            {"type":"assistant","timestamp":"\(stamp(secondsAgo))","message":{"content":[{"type":"tool_use","name":"Task","id":"task-\(identifier)"}]}}
+            """)
+        }
+        for index in 0..<resolved {
+            lines.append("""
+            {"type":"user","timestamp":"\(stamp(secondsAgo - 2))","message":{"content":[{"type":"tool_result","tool_use_id":"task-\(index + 1)"}]}}
+            """)
+        }
+        return lines
+    }
+
+    func testAssessCountsPendingSubAgentTools() {
+        let lines = subAgentLines(pending: 3, resolved: 2, secondsAgo: 20)
+        let assessment = SessionAttentionClassifier.assess(tailLines: lines, format: .claude, now: now)
+        XCTAssertEqual(assessment.activeSubAgents, 3)
+        XCTAssertEqual(assessment.state, .active)
+    }
+
+    func testAssessReportsZeroSubAgentsWhenAllResolved() {
+        let lines = subAgentLines(pending: 0, resolved: 4, secondsAgo: 20)
+        let assessment = SessionAttentionClassifier.assess(tailLines: lines, format: .claude, now: now)
+        XCTAssertEqual(assessment.activeSubAgents, 0)
+    }
+
+    func testAssessReportsZeroSubAgentsOnceStale() {
+        let lines = subAgentLines(pending: 5, resolved: 0, secondsAgo: 40 * 60)
+        let assessment = SessionAttentionClassifier.assess(tailLines: lines, format: .claude, now: now)
+        XCTAssertEqual(assessment.state, .quiet)
+        XCTAssertEqual(assessment.activeSubAgents, 0, "a stale dangling delegation is history, not activity")
+    }
 }

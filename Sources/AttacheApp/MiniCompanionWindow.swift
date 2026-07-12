@@ -189,7 +189,14 @@ struct MiniCompanionView: View {
                 hoverReacts: model.petHoverReaction
             ),
             petShiny: model.petShiny,
-            onPetClick: { model.speakStatusLine() }
+            onPetClick: { model.speakStatusLine() },
+            onFleetFocus: { [weak model] id in
+                model?.focusCodexSession(id)
+            },
+            onFleetSwitch: {
+                NotificationCenter.default.post(name: .attacheShowMainWindow, object: nil)
+                NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
+            }
         )
         .contentShape(Rectangle())
         .contextMenu {

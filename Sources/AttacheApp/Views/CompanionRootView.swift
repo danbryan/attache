@@ -140,7 +140,11 @@ struct CompanionRootView: View {
                     hoverReacts: model.petHoverReaction
                 ),
                 petShiny: model.petShiny,
-                onPetClick: { model.speakStatusLine() }
+                onPetClick: { model.speakStatusLine() },
+                onFleetFocus: { model.focusCodexSession($0) },
+                onFleetSwitch: {
+                    NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
+                }
             )
             .opacity(model.surfaceOpacity)
             .ignoresSafeArea()

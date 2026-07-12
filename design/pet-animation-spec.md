@@ -109,6 +109,56 @@ Renderer hygiene:
   blink scheduler must not keep a timer hot between blinks (CPU target: under
   2 percent on Apple Silicon at idle).
 
+## Fleet motes (INF-275)
+
+One mote per watched session, grouped around the typing bubble of its agent
+(Claude left, Codex right). The fleet answers "one session or thirty?" at a
+glance without the pet itself changing.
+
+States, per session:
+
+- **Working** orbits its bubble on a 36 x 23 ellipse (design units), phase
+  advancing 0.55 rad/s with a per-session seed so layouts never shuffle.
+- **Quiet** stops orbiting and eases down to a parking shelf 14 units under
+  the bubble, dimmed to 0.4 opacity. Parked motes are still, never frozen
+  mid-orbit.
+- **Blocked** turns amber (the blockedOnUser hue, `#FFB020`) and hops in
+  place beside the bubble's top corner on the same 1.4 s cycle as the pet's
+  blocked jump. Blocked never merges into a badge.
+- **Focused** (the live/Tell Agent session) fills with the theme's signature
+  color, gains a white ring and a slightly larger radius, and never merges.
+  Complement colors were rejected: orange collides with the amber blocked
+  hue, and accent is already the app's selection grammar.
+- **Sub-agents** emit expanding ripple rings from the mote; ripple cadence
+  scales with the square root of the count (floor 0.45 s) so 2 and 20
+  sub-agents read differently. At most 2 ripplers stay individual per agent.
+
+Crowds:
+
+- Up to 4 motes per agent orbit individually. More plain working sessions
+  merge into one orbiting count badge (numeral capped at 999); more than 4
+  quiet sessions merge into a dim parked badge on the shelf.
+- Membership changes animate: a session leaving the badge spawns at the
+  badge and decelerates to its own spot; a session merging in flies from its
+  last spot into the badge as a short transient (killed at arrival or 1.2 s).
+
+Interaction:
+
+- Hover shows the session title in a capsule tooltip; hit target is at least
+  13 px regardless of mote size.
+- Click focuses that session (same as picking it in ⌘K); clicking a badge
+  opens the session switcher. The mini companion window does the same and
+  raises the main window for the switcher.
+
+Data:
+
+- Sub-agent counts are pending `Task`/`Agent` tool calls in the Claude main
+  chain (`SessionAttentionClassifier.assess`); stale sessions report zero.
+  Codex transcripts have no sub-agent signal, so Codex motes never ripple.
+- Reduced motion: no orbit advance, no ripples, no hop; positions snap.
+- Cadence: fleet activity holds the calm-phase frame interval at 1/30 s
+  (instead of 1/12 s) only while some mote is non-quiet.
+
 ## Degradation and theming
 
 - **Monochrome / menu bar**: the template mark stays a static solid

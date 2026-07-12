@@ -24,6 +24,9 @@ struct EchoformRendererView: View {
     var petDelights: PetDelights = .none
     var petShiny = false
     var onPetClick: (() -> Void)?
+    /// Fleet interactivity (INF-275), pet mode only.
+    var onFleetFocus: ((String) -> Void)?
+    var onFleetSwitch: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -46,7 +49,9 @@ struct EchoformRendererView: View {
                     brightnessLevel: brightnessLevel,
                     delights: petDelights,
                     shiny: petShiny,
-                    onPetClick: onPetClick
+                    onPetClick: onPetClick,
+                    onFleetFocus: onFleetFocus,
+                    onFleetSwitch: onFleetSwitch
                 )
                 .contextMenu {
                     Button("Change visual mode…") {

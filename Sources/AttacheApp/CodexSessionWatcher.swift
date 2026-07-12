@@ -6,6 +6,8 @@ final class CodexSessionWatcher {
     var onStatus: ((String) -> Void)?
     /// Fires when a watched session's attention state changes (INF-179).
     var onAttention: ((String, SessionAttentionState) -> Void)?
+    /// Fires when a watched session's live sub-agent count changes (INF-275).
+    var onSubAgents: ((String, Int) -> Void)?
 
     private let sessionsDirectory: URL
     private let archivedSessionsDirectory: URL
@@ -28,6 +30,7 @@ final class CodexSessionWatcher {
         didSet { if quietPolls != oldValue { coalescers.removeAll() } }
     }
     private var attentionStates: [String: SessionAttentionState] = [:]
+    private var subAgentCounts: [String: Int] = [:]
 
     init(
         sessionsDirectory: URL? = nil,
@@ -57,6 +60,10 @@ final class CodexSessionWatcher {
         for id in attentionStates.keys where !activeIDs.contains(id) {
             attentionStates[id] = nil
             onAttention?(id, .quiet)
+        }
+        for id in subAgentCounts.keys where !activeIDs.contains(id) {
+            subAgentCounts[id] = nil
+            onSubAgents?(id, 0)
         }
 
         guard !active.isEmpty else {
@@ -159,10 +166,14 @@ final class CodexSessionWatcher {
     private func classifyAttention(session: CodexSessionTarget, fileURL: URL, format: TranscriptFormat) {
         guard onAttention != nil else { return }
         guard let lines = tailLines(of: fileURL, maxBytes: 65_536) else { return }
-        let state = SessionAttentionClassifier.classify(tailLines: lines, format: format)
-        guard attentionStates[session.id] != state else { return }
-        attentionStates[session.id] = state
-        onAttention?(session.id, state)
+        let assessment = SessionAttentionClassifier.assess(tailLines: lines, format: format)
+        if subAgentCounts[session.id] != assessment.activeSubAgents {
+            subAgentCounts[session.id] = assessment.activeSubAgents
+            onSubAgents?(session.id, assessment.activeSubAgents)
+        }
+        guard attentionStates[session.id] != assessment.state else { return }
+        attentionStates[session.id] = assessment.state
+        onAttention?(session.id, assessment.state)
     }
 
     private func tailLines(of url: URL, maxBytes: Int) -> [String]? {

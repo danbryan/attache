@@ -72,6 +72,23 @@ enum BubblesPetChoreography {
         }
     }
 
+    /// Bubble anchor geometry in design units, for the fleet layer: center
+    /// of each bubble body plus its top and bottom edges.
+    static let bubbleCenters: [CGPoint] = [
+        CGPoint(x: 56, y: 181.5), CGPoint(x: 120, y: 195.5), CGPoint(x: 184, y: 181.5),
+    ]
+    static let bubbleTops: [CGFloat] = [168, 182, 168]
+    static let bubbleBottoms: [CGFloat] = [195, 209, 195]
+
+    /// A point on the orbit ellipse around a bubble.
+    static func orbitPoint(bubbleIndex: Int, phase: Double) -> CGPoint {
+        let center = bubbleCenters[bubbleIndex]
+        return CGPoint(
+            x: center.x + CGFloat(cos(phase)) * 36,
+            y: center.y + CGFloat(sin(phase)) * 23
+        )
+    }
+
     static func targets(for activity: CompanionActivityState) -> Targets {
         var targets = Targets()
         let active = bubbleIndex(for: activity.activeAgent)
@@ -509,6 +526,202 @@ final class BubblesPetMotor: ObservableObject {
         }
     }
 
+    // MARK: Fleet motion (INF-275)
+
+    private var fleetPositions: [String: CGPoint] = [:]
+    private var fleetOrbitPhases: [String: Double] = [:]
+    private var badgePhases: [CompanionAgentIdentity: Double] = [:]
+    private var lastShownIDs: Set<String> = []
+    private struct FleetTransient {
+        var position: CGPoint
+        var agent: CompanionAgentIdentity
+        var age: TimeInterval = 0
+    }
+    private var fleetTransients: [FleetTransient] = []
+    /// The last frame's motes, in design units, for hover and click
+    /// hit-testing in the view.
+    private(set) var lastFleetMotes: [BubblesFleetMote] = []
+    private var lastFleetTick: TimeInterval?
+
+    /// A stable starting angle per session so mote layouts never shuffle.
+    private static func seedPhase(_ id: String) -> Double {
+        Double(abs(id.hashValue % 628)) / 100.0
+    }
+
+    /// Computes this frame's fleet motes: orbits advance for working motes,
+    /// quiet motes ease to their parking shelf, blocked motes hop in place,
+    /// and badge membership changes animate (a leaver spawns at the badge
+    /// and decelerates to its target; a joiner flies into the badge as a
+    /// short-lived transient). Call after `pose(at:...)` each frame.
+    func fleet(activity: CompanionActivityState, reduceMotion: Bool) -> [BubblesFleetMote] {
+        let now = lastTick ?? Date().timeIntervalSinceReferenceDate
+        let dt = min(1.0 / 15.0, max(0, now - (lastFleetTick ?? now)))
+        lastFleetTick = now
+
+        let layout = BubblesFleetLayout.compute(fleet: activity.fleet)
+        var motes: [BubblesFleetMote] = []
+        var shownIDs: Set<String> = []
+        var badgeCenters: [CompanionAgentIdentity: CGPoint] = [:]
+
+        func ease(_ id: String, toward target: CGPoint, spawnAt: CGPoint) -> CGPoint {
+            var position = fleetPositions[id] ?? spawnAt
+            if reduceMotion {
+                position = target
+            } else {
+                let rate = min(1, dt * 5)
+                position.x += (target.x - position.x) * rate
+                position.y += (target.y - position.y) * rate
+            }
+            fleetPositions[id] = position
+            return position
+        }
+
+        func ripples(for session: CompanionFleetSession) -> [Double] {
+            guard session.activeSubAgents > 0, !reduceMotion else { return [] }
+            let period = max(0.45, 1.4 / (Double(session.activeSubAgents)).squareRoot())
+            return [0, 0.5].map { offset in
+                (now / period + offset).truncatingRemainder(dividingBy: 1)
+            }
+        }
+
+        for agent in CompanionAgentIdentity.allCases {
+            guard let group = layout.groups[agent] else { continue }
+            let bubble = BubblesPetChoreography.bubbleIndex(for: agent)
+            let center = BubblesPetChoreography.bubbleCenters[bubble]
+
+            var badgeCenter: CGPoint?
+            if group.orbitingBadgeCount > 0 {
+                var phase = badgePhases[agent] ?? Self.seedPhase(agent.rawValue)
+                if !reduceMotion { phase += dt * 0.5 }
+                badgePhases[agent] = phase
+                badgeCenter = BubblesPetChoreography.orbitPoint(bubbleIndex: bubble, phase: phase)
+                badgeCenters[agent] = badgeCenter
+            }
+
+            for session in group.orbiting {
+                shownIDs.insert(session.id)
+                var phase = fleetOrbitPhases[session.id] ?? Self.seedPhase(session.id)
+                if !reduceMotion { phase += dt * 0.55 }
+                fleetOrbitPhases[session.id] = phase
+                let target = BubblesPetChoreography.orbitPoint(bubbleIndex: bubble, phase: phase)
+                let position = ease(session.id, toward: target, spawnAt: badgeCenter ?? target)
+                motes.append(BubblesFleetMote(
+                    position: position,
+                    radius: session.isFocused ? 4.4 : 3.6,
+                    fill: session.isFocused ? .focused : .agent(agent),
+                    ring: session.isFocused,
+                    ripples: ripples(for: session),
+                    sessionID: session.id,
+                    title: session.title
+                ))
+            }
+
+            let shelfY = BubblesPetChoreography.bubbleBottoms[bubble] + 14
+            let parkedSlots = group.parked.count + (group.parkedBadgeCount > 0 ? 1 : 0)
+            for (index, session) in group.parked.enumerated() {
+                shownIDs.insert(session.id)
+                let x = center.x + (CGFloat(index) - CGFloat(parkedSlots - 1) / 2) * 11
+                let position = ease(session.id, toward: CGPoint(x: x, y: shelfY),
+                                    spawnAt: badgeCenter ?? CGPoint(x: x, y: shelfY))
+                motes.append(BubblesFleetMote(
+                    position: position,
+                    radius: session.isFocused ? 4.4 : 3.4,
+                    fill: session.isFocused ? .focused : .agent(agent),
+                    opacity: session.isFocused ? 0.9 : 0.4,
+                    ring: session.isFocused,
+                    sessionID: session.id,
+                    title: session.title
+                ))
+            }
+            if group.parkedBadgeCount > 0 {
+                let x = center.x + (CGFloat(group.parked.count) - CGFloat(parkedSlots - 1) / 2) * 11 + 5
+                motes.append(BubblesFleetMote(
+                    position: CGPoint(x: x, y: shelfY),
+                    radius: 7,
+                    fill: .agent(agent),
+                    opacity: 0.4,
+                    count: group.parkedBadgeCount,
+                    title: "\(group.parkedBadgeCount) quiet"
+                ))
+            }
+
+            for (index, session) in group.blocked.enumerated() {
+                shownIDs.insert(session.id)
+                let base = CGPoint(
+                    x: center.x + 30 + CGFloat(index) * 12,
+                    y: BubblesPetChoreography.bubbleTops[bubble] - 8
+                )
+                var position = ease(session.id, toward: base, spawnAt: base)
+                if !reduceMotion {
+                    let cycle = now.truncatingRemainder(dividingBy: 1.4)
+                    if cycle < 0.6 { position.y -= CGFloat(7 * sin(cycle / 0.6 * .pi)) }
+                }
+                motes.append(BubblesFleetMote(
+                    position: position,
+                    radius: 4,
+                    fill: .blocked,
+                    ring: session.isFocused,
+                    sessionID: session.id,
+                    title: session.title
+                ))
+            }
+
+            if let badgeCenter, group.orbitingBadgeCount > 0 {
+                motes.append(BubblesFleetMote(
+                    position: badgeCenter,
+                    radius: group.orbitingBadgeCount > 99 ? 9 : 7.5,
+                    fill: .agent(agent),
+                    count: group.orbitingBadgeCount,
+                    ripples: [],
+                    title: "\(group.orbitingBadgeCount) working"
+                ))
+            }
+        }
+
+        // A session that just merged into a badge flies from its last spot
+        // into the badge as a short-lived transient.
+        if !reduceMotion {
+            let merged = lastShownIDs.subtracting(shownIDs)
+            for id in merged {
+                guard let last = fleetPositions[id],
+                      let session = activity.fleet.first(where: { $0.id == id }),
+                      session.state == .working,
+                      badgeCenters[session.agent] != nil else { continue }
+                fleetTransients.append(FleetTransient(position: last, agent: session.agent))
+            }
+            var alive: [FleetTransient] = []
+            for var transient in fleetTransients {
+                guard let target = badgeCenters[transient.agent] else { continue }
+                transient.age += dt
+                let rate = min(1, dt * 7)
+                transient.position.x += (target.x - transient.position.x) * rate
+                transient.position.y += (target.y - transient.position.y) * rate
+                let dx = transient.position.x - target.x
+                let dy = transient.position.y - target.y
+                if transient.age < 1.2, dx * dx + dy * dy > 16 {
+                    motes.append(BubblesFleetMote(
+                        position: transient.position,
+                        radius: 3.2,
+                        fill: .agent(transient.agent),
+                        opacity: 0.8
+                    ))
+                    alive.append(transient)
+                }
+            }
+            fleetTransients = alive
+        } else {
+            fleetTransients.removeAll()
+        }
+
+        for id in fleetPositions.keys where !shownIDs.contains(id) {
+            fleetPositions.removeValue(forKey: id)
+            fleetOrbitPhases.removeValue(forKey: id)
+        }
+        lastShownIDs = shownIDs
+        lastFleetMotes = motes
+        return motes
+    }
+
     private func blinkMultiplier(now: TimeInterval, allowed: Bool) -> Double {
         guard allowed else {
             blinkStartedAt = nil
@@ -555,12 +768,19 @@ struct BubblesPetView: View {
     /// Clicking the pet speaks the status line; injected so the view stays
     /// model-free.
     var onPetClick: (() -> Void)?
+    /// Fleet interactivity (INF-275): click a mote to focus its session,
+    /// click a badge to open the session switcher.
+    var onFleetFocus: ((String) -> Void)?
+    var onFleetSwitch: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var motor = BubblesPetMotor()
     @State private var windowVisible = true
     @State private var hoverGaze: CGSize?
+    @State private var hoveredMote: (title: String, at: CGPoint)?
+
+    private static let headroom: CGFloat = 28
 
     var body: some View {
         GeometryReader { proxy in
@@ -575,27 +795,57 @@ struct BubblesPetView: View {
                         reduceMotion: reduceMotion
                     ),
                     arcColor: arcColor,
-                    headroom: 28
+                    headroom: Self.headroom,
+                    fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion),
+                    accentColor: theme.signatureColor
                 )
             }
             .contentShape(Rectangle())
             .onContinuousHover { phase in
-                guard delights.hoverReacts else { return }
                 switch phase {
                 case .active(let location):
-                    hoverGaze = CGSize(
-                        width: (location.x / max(1, proxy.size.width) - 0.5) * 6,
-                        height: (location.y / max(1, proxy.size.height) - 0.5) * 6
-                    )
+                    if delights.hoverReacts {
+                        hoverGaze = CGSize(
+                            width: (location.x / max(1, proxy.size.width) - 0.5) * 6,
+                            height: (location.y / max(1, proxy.size.height) - 0.5) * 6
+                        )
+                    }
+                    hoveredMote = fleetMote(at: location, in: proxy.size)
+                        .map { ($0.title, moteViewPosition($0, in: proxy.size)) }
                 case .ended:
                     hoverGaze = nil
+                    hoveredMote = nil
                 }
             }
-            .onTapGesture {
+            .gesture(SpatialTapGesture().onEnded { value in
+                if let mote = fleetMote(at: value.location, in: proxy.size) {
+                    if let sessionID = mote.sessionID {
+                        onFleetFocus?(sessionID)
+                    } else if mote.count != nil {
+                        onFleetSwitch?()
+                    }
+                    return
+                }
                 guard delights.hoverReacts,
                       activity.phase == .idle || activity.phase == .sleeping else { return }
                 motor.noteClick(at: Date())
                 onPetClick?()
+            })
+            .overlay(alignment: .topLeading) {
+                if let hoveredMote, !hoveredMote.title.isEmpty {
+                    Text(hoveredMote.title)
+                        .typoCaption(.medium)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(Color.primary.opacity(0.15)))
+                        .position(
+                            x: min(max(70, hoveredMote.at.x), proxy.size.width - 70),
+                            y: max(14, hoveredMote.at.y - 22)
+                        )
+                        .allowsHitTesting(false)
+                }
             }
         }
         .padding(36)
@@ -603,7 +853,27 @@ struct BubblesPetView: View {
         .background(HostWindowVisibilityObserver { visible in
             if windowVisible != visible { windowVisible = visible }
         })
-        .allowsHitTesting(delights.hoverReacts)
+        .allowsHitTesting(delights.hoverReacts || !activity.fleet.isEmpty)
+    }
+
+    private func moteViewPosition(_ mote: BubblesFleetMote, in size: CGSize) -> CGPoint {
+        let (s, ox, oy) = BubblesPetFigure.designTransform(size: size, headroom: Self.headroom)
+        return CGPoint(x: ox + mote.position.x * s, y: oy + mote.position.y * s)
+    }
+
+    private func fleetMote(at location: CGPoint, in size: CGSize) -> BubblesFleetMote? {
+        let (s, _, _) = BubblesPetFigure.designTransform(size: size, headroom: Self.headroom)
+        var best: (mote: BubblesFleetMote, distance: CGFloat)?
+        for mote in motor.lastFleetMotes where mote.sessionID != nil || mote.count != nil {
+            let position = moteViewPosition(mote, in: size)
+            let dx = position.x - location.x, dy = position.y - location.y
+            let distance = (dx * dx + dy * dy).squareRoot()
+            let reach = max(13, mote.radius * s + 7)
+            if distance <= reach, distance < (best?.distance ?? .infinity) {
+                best = (mote, distance)
+            }
+        }
+        return best?.mote
     }
 
     private var arcColor: Color {
@@ -613,9 +883,12 @@ struct BubblesPetView: View {
     }
 
     private var frameInterval: Double {
+        let fleetIsMoving = activity.fleet.contains { $0.state != .quiet }
         switch activity.phase {
-        case .sleeping, .idle, .paused: return 1.0 / 12.0
-        default: return 1.0 / 40.0
+        case .sleeping, .idle, .paused:
+            return fleetIsMoving ? 1.0 / 30.0 : 1.0 / 12.0
+        default:
+            return 1.0 / 40.0
         }
     }
 }

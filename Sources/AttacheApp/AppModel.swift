@@ -789,6 +789,9 @@ final class AppModel: ObservableObject {
     /// When each watched session's attention last changed, so multi-session
     /// priority can prefer the most recent activity (INF-271).
     private var attentionChangedAt: [String: Date] = [:]
+    /// Live sub-agent counts per watched session (INF-275), from the
+    /// watcher's transcript assessment.
+    @Published private var subAgentCounts: [String: Int] = [:]
     /// The latest one-shot beat for renderers (celebrate, card pop, drowsy).
     /// Renderers queue and play these; publishing the next one never cancels
     /// an animation already running.
@@ -982,6 +985,15 @@ final class AppModel: ObservableObject {
         codexSessionWatcher.onAttention = { [weak self] sessionID, state in
             DispatchQueue.main.async {
                 self?.handleAttentionChange(sessionID: sessionID, state: state)
+            }
+        }
+        codexSessionWatcher.onSubAgents = { [weak self] sessionID, count in
+            DispatchQueue.main.async {
+                if count == 0 {
+                    self?.subAgentCounts.removeValue(forKey: sessionID)
+                } else {
+                    self?.subAgentCounts[sessionID] = count
+                }
             }
         }
         NotificationCenter.default.addObserver(forName: .attachePlayCard, object: nil, queue: .main) { [weak self] note in
@@ -3354,11 +3366,37 @@ final class AppModel: ObservableObject {
             $activityPhrases.map { _ in () }.eraseToAnyPublisher(),
             $attachedTargets.map { _ in () }.eraseToAnyPublisher(),
             $cards.map { _ in () }.eraseToAnyPublisher(),
-            $userTyping.map { _ in () }.eraseToAnyPublisher()
+            $userTyping.map { _ in () }.eraseToAnyPublisher(),
+            $subAgentCounts.map { _ in () }.eraseToAnyPublisher(),
+            $attachedCodexSessionID.map { _ in () }.eraseToAnyPublisher()
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] in self?.refreshCompanionActivity() }
         .store(in: &cancellables)
+    }
+
+    /// The per-session fleet for renderers (INF-275): every watched session,
+    /// its mote state from the attention map, the focused flag, and the live
+    /// sub-agent count. Sorted stably so mote layouts never shuffle.
+    private func currentFleet() -> [CompanionFleetSession] {
+        attachedTargets.values
+            .sorted { $0.id < $1.id }
+            .map { target in
+                let state: CompanionFleetSession.State
+                switch sessionAttention[target.id] {
+                case .active: state = .working
+                case .awaitingAnswer, .possiblyWaiting: state = .blocked
+                case .erroredRecently, .turnComplete, .quiet, nil: state = .quiet
+                }
+                return CompanionFleetSession(
+                    id: target.id,
+                    agent: CompanionAgentIdentity(sourceKindRawValue: target.sourceKind.rawValue),
+                    state: state,
+                    isFocused: target.id == attachedCodexSessionID,
+                    activeSubAgents: subAgentCounts[target.id] ?? 0,
+                    title: target.displayTitle
+                )
+            }
     }
 
     private func refreshCompanionActivity() {
@@ -3460,7 +3498,8 @@ final class AppModel: ObservableObject {
             hasConversationFailure: conversationRecovery != nil,
             userTyping: userTyping,
             unreadCount: unreadCount,
-            hasCards: !cards.isEmpty
+            hasCards: !cards.isEmpty,
+            fleet: currentFleet()
         )
     }
 

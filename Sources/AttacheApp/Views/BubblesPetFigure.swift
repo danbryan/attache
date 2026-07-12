@@ -114,14 +114,27 @@ struct BubblesPetFigure: View {
     var arcColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 1)
     var bodyColor: Color = Color(red: 242 / 255, green: 242 / 255, blue: 245 / 255)
     var headroom: CGFloat = 0
+    /// Fleet motes (INF-275), pre-positioned in design units by the motor.
+    var fleetMotes: [BubblesFleetMote] = []
+    /// Theme signature color for the focused session's mote.
+    var accentColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 1)
+
+    static let blockedMoteColor = Color(red: 1.0, green: 0.69, blue: 0.125)
+
+    /// The design-to-view mapping every renderer of the mark shares, exposed
+    /// so hover and click hit-testing agree exactly with the drawing.
+    static func designTransform(size: CGSize, headroom: CGFloat) -> (s: CGFloat, ox: CGFloat, oy: CGFloat) {
+        let boxHeight = 252 + headroom
+        let s = min(size.width / 252, size.height / boxHeight)
+        let ox = (size.width - 252 * s) / 2 + 6 * s
+        let oy = (size.height - boxHeight * s) / 2 + (12 + headroom) * s
+        return (s, ox, oy)
+    }
 
     var body: some View {
         Canvas { context, size in
             let pose = self.pose.sanitized()
-            let boxHeight = 252 + headroom
-            let s = min(size.width / 252, size.height / boxHeight)
-            let ox = (size.width - 252 * s) / 2 + 6 * s
-            let oy = (size.height - boxHeight * s) / 2 + (12 + headroom) * s
+            let (s, ox, oy) = Self.designTransform(size: size, headroom: headroom)
             func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: ox + x * s, y: oy + y * s) }
 
             var figure = context
@@ -141,6 +154,62 @@ struct BubblesPetFigure: View {
             drawLimbs(in: figure, pose: pose, p: p, s: s)
             drawHead(in: figure, pose: pose, p: p, s: s)
             drawBubbles(in: figure, pose: pose, p: p, s: s)
+            drawFleet(in: figure, p: p, s: s)
+        }
+    }
+
+    private func moteColor(_ fill: BubblesFleetMote.Fill) -> Color {
+        switch fill {
+        case .agent(let agent):
+            return AttacheMascotMark.bubbleColors[BubblesPetChoreography.bubbleIndex(for: agent)]
+        case .blocked:
+            return Self.blockedMoteColor
+        case .focused:
+            return accentColor
+        }
+    }
+
+    private func drawFleet(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        for mote in fleetMotes {
+            let center = p(mote.position.x, mote.position.y)
+            let color = moteColor(mote.fill)
+            for ripple in mote.ripples {
+                let radius = (mote.radius + 3 + 13 * ripple) * s
+                var ring = Path()
+                ring.addEllipse(in: CGRect(
+                    x: center.x - radius, y: center.y - radius,
+                    width: radius * 2, height: radius * 2
+                ))
+                context.stroke(
+                    ring,
+                    with: .color(color.opacity((1 - ripple) * 0.55 * mote.opacity)),
+                    style: StrokeStyle(lineWidth: 1.3 * s)
+                )
+            }
+            let r = mote.radius * s
+            let body = Path(ellipseIn: CGRect(
+                x: center.x - r, y: center.y - r, width: r * 2, height: r * 2
+            ))
+            context.fill(body, with: .color(color.opacity(mote.opacity)))
+            if mote.ring {
+                let ringRadius = r + 2.6 * s
+                var halo = Path()
+                halo.addEllipse(in: CGRect(
+                    x: center.x - ringRadius, y: center.y - ringRadius,
+                    width: ringRadius * 2, height: ringRadius * 2
+                ))
+                context.stroke(
+                    halo,
+                    with: .color(Color.white.opacity(0.9 * mote.opacity)),
+                    style: StrokeStyle(lineWidth: 1.2 * s)
+                )
+            }
+            if let count = mote.count {
+                let text = Text("\(min(count, 999))")
+                    .font(.system(size: 8.5 * s, weight: .bold, design: .rounded))
+                    .foregroundColor(Color(red: 0.02, green: 0.04, blue: 0.09))
+                context.draw(context.resolve(text), at: center)
+            }
         }
     }
 

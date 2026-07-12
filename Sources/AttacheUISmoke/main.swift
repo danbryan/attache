@@ -449,6 +449,15 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                                                    role: kAXButtonRole as String, containing: "Celebrate")
                 _ = celebrate.press()
 
+            case "press-fleet-demo":
+                // Fleet reel support (INF-275): kicks off the simulator's
+                // scripted 40 second fleet story so a recording captures
+                // badge join/leave, ripples, and the blocked hop.
+                Thread.sleep(forTimeInterval: 2)
+                let demo = try waitForElement("fleet demo button", in: try mainWindow(),
+                                              role: kAXButtonRole as String, containing: "Fleet demo")
+                _ = demo.press()
+
             case "type-along":
                 // Delight reel support (INF-273): type like a user so the
                 // pet's types-along taps are on screen while a recording

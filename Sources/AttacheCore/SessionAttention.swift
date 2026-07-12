@@ -10,7 +10,7 @@ import Foundation
 /// or just a long build, so it is reported softly and only after a generous
 /// threshold. Exact permission detection is available through the local event
 /// bridge (a Claude Code Notification hook posting `needs_attention`).
-public enum SessionAttentionState: Equatable {
+public enum SessionAttentionState: Equatable, Sendable {
     /// Records are landing; the agent is working.
     case active
     /// The agent finished its turn; the ball is in the user's court.
@@ -35,9 +35,25 @@ public enum SessionAttentionState: Equatable {
 
 }
 
+/// A classification plus the live sub-agent count (INF-275): how many
+/// sub-agent tool calls are pending in the session's main chain right now.
+public struct SessionAssessment: Equatable, Sendable {
+    public var state: SessionAttentionState
+    public var activeSubAgents: Int
+
+    public init(state: SessionAttentionState, activeSubAgents: Int = 0) {
+        self.state = state
+        self.activeSubAgents = activeSubAgents
+    }
+}
+
 public enum SessionAttentionClassifier {
     /// Tools whose pending call always means "waiting on the user".
     public static let blockingToolNames: Set<String> = ["AskUserQuestion", "ExitPlanMode"]
+
+    /// Tools whose pending call means a sub-agent is running (Claude Code's
+    /// delegation tools). Codex transcripts have no equivalent signal.
+    public static let subAgentToolNames: Set<String> = ["Task", "Agent"]
 
     /// How recent the newest record must be for the session to read as active.
     public static let activeWindow: TimeInterval = 30
@@ -53,6 +69,18 @@ public enum SessionAttentionClassifier {
         format: TranscriptFormat,
         now: Date = Date()
     ) -> SessionAttentionState {
+        assess(tailLines: tailLines, format: format, now: now).state
+    }
+
+    /// Classification plus the live sub-agent count, from one tail scan. A
+    /// sub-agent is counted while its delegation tool call is pending and the
+    /// session is still fresh; a stale or quiet session reports zero even if
+    /// the transcript's last record left a call dangling.
+    public static func assess(
+        tailLines: [String],
+        format: TranscriptFormat,
+        now: Date = Date()
+    ) -> SessionAssessment {
         var pendingTools: [String: (name: String, timestamp: Date)] = [:]
         var lastAssistantText: (text: String, timestamp: Date)?
         var lastRecordTimestamp: Date?
@@ -85,44 +113,51 @@ public enum SessionAttentionClassifier {
             }
         }
 
-        guard let newest = lastRecordTimestamp else { return .quiet }
+        // Sub-agents only count while the session is fresh; a dangling
+        // delegation call in a stale transcript is history, not activity.
+        let subAgents = pendingTools.values.filter { subAgentToolNames.contains($0.name) }.count
+        func result(_ state: SessionAttentionState) -> SessionAssessment {
+            SessionAssessment(state: state, activeSubAgents: state == .quiet ? 0 : subAgents)
+        }
+
+        guard let newest = lastRecordTimestamp else { return result(.quiet) }
         let quiet = now.timeIntervalSince(newest)
-        if quiet > staleWindow { return .quiet }
+        if quiet > staleWindow { return result(.quiet) }
 
         // A blocking ask pending resolution is exact, regardless of quiet time.
         if pendingTools.values.contains(where: { blockingToolNames.contains($0.name) }) {
-            return .awaitingAnswer
+            return result(.awaitingAnswer)
         }
 
         // A recent error with nothing newer on top of it.
         if let errorAt = lastErrorTimestamp, errorAt >= newest.addingTimeInterval(-1),
            now.timeIntervalSince(errorAt) < pendingToolQuietThreshold {
-            return .erroredRecently
+            return result(.erroredRecently)
         }
 
         // Ordinary pending tool: soft "possibly waiting" only after a long quiet.
         if let oldestPending = pendingTools.values.map(\.timestamp).min() {
             let pendingQuiet = now.timeIntervalSince(oldestPending)
             if quiet >= pendingToolQuietThreshold {
-                return .possiblyWaiting(quietSeconds: Int(pendingQuiet))
+                return result(.possiblyWaiting(quietSeconds: Int(pendingQuiet)))
             }
-            return .active
+            return result(.active)
         }
 
         // The user spoke last: the agent is (or should be) computing.
         if let userAt = lastRealUserTimestamp, userAt >= (lastAssistantText?.timestamp ?? .distantPast) {
-            return quiet < activeWindow ? .active : .quiet
+            return result(quiet < activeWindow ? .active : .quiet)
         }
 
         // Assistant prose is the newest thing: turn is over once the stream
         // has clearly stopped. A trailing question is a direct ask.
         if let last = lastAssistantText {
-            if quiet < 10 { return .active }
-            if endsWithQuestion(last.text) { return .awaitingAnswer }
-            return quiet < activeWindow ? .active : .turnComplete
+            if quiet < 10 { return result(.active) }
+            if endsWithQuestion(last.text) { return result(.awaitingAnswer) }
+            return result(quiet < activeWindow ? .active : .turnComplete)
         }
 
-        return quiet < activeWindow ? .active : .quiet
+        return result(quiet < activeWindow ? .active : .quiet)
     }
 
     static func endsWithQuestion(_ text: String) -> Bool {

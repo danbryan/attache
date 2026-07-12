@@ -84,6 +84,46 @@ public enum CompanionToolKind: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// One pinned session as the fleet display sees it (INF-275): which agent's
+/// bubble it belongs to, whether it is working, parked, or needs the user,
+/// whether it is the focused session, and how many sub-agents it is running.
+public struct CompanionFleetSession: Equatable, Sendable, Identifiable {
+    public enum State: String, CaseIterable, Codable, Sendable {
+        /// Records are landing; the mote orbits.
+        case working
+        /// Nothing recent; the mote parks, dimmed.
+        case quiet
+        /// Awaiting an answer or possibly waiting; the mote turns amber and hops.
+        case blocked
+    }
+
+    public var id: String
+    public var agent: CompanionAgentIdentity
+    public var state: State
+    public var isFocused: Bool
+    /// Live sub-agents (pending Task/Agent tool calls in a Claude session's
+    /// main chain). Always 0 for sources with no sub-agent signal.
+    public var activeSubAgents: Int
+    /// Display title for hover affordances.
+    public var title: String
+
+    public init(
+        id: String,
+        agent: CompanionAgentIdentity,
+        state: State,
+        isFocused: Bool = false,
+        activeSubAgents: Int = 0,
+        title: String = ""
+    ) {
+        self.id = id
+        self.agent = agent
+        self.state = state
+        self.isFocused = isFocused
+        self.activeSubAgents = activeSubAgents
+        self.title = title
+    }
+}
+
 /// The consolidated state a companion renderer consumes. Semantic fields
 /// change at semantic rate (attention transitions, playback flips, phrase
 /// decay); `audio` is the existing 20 Hz `VisualizerRenderState` passed
@@ -103,6 +143,10 @@ public struct CompanionActivityState: Equatable, Sendable {
     public var userTyping: Bool
     public var unreadCount: Int
     public var hasCards: Bool
+    /// Every pinned session, for fleet displays (INF-275). Pass-through like
+    /// `unreadCount`: derived from the watch list and attention states the
+    /// app already tracks, never new monitoring.
+    public var fleet: [CompanionFleetSession]
 
     public init(
         phase: CompanionActivityPhase = .sleeping,
@@ -111,7 +155,8 @@ public struct CompanionActivityState: Equatable, Sendable {
         audio: VisualizerRenderState = VisualizerRenderState(),
         userTyping: Bool = false,
         unreadCount: Int = 0,
-        hasCards: Bool = false
+        hasCards: Bool = false,
+        fleet: [CompanionFleetSession] = []
     ) {
         self.phase = phase
         self.activeAgent = activeAgent
@@ -120,6 +165,7 @@ public struct CompanionActivityState: Equatable, Sendable {
         self.userTyping = userTyping
         self.unreadCount = unreadCount
         self.hasCards = hasCards
+        self.fleet = fleet
     }
 
     public static let initial = CompanionActivityState()
@@ -168,6 +214,7 @@ public struct CompanionActivitySignals: Equatable, Sendable {
     public var userTyping: Bool
     public var unreadCount: Int
     public var hasCards: Bool
+    public var fleet: [CompanionFleetSession]
 
     public init(
         hasPinnedSessions: Bool = false,
@@ -184,7 +231,8 @@ public struct CompanionActivitySignals: Equatable, Sendable {
         hasConversationFailure: Bool = false,
         userTyping: Bool = false,
         unreadCount: Int = 0,
-        hasCards: Bool = false
+        hasCards: Bool = false,
+        fleet: [CompanionFleetSession] = []
     ) {
         self.hasPinnedSessions = hasPinnedSessions
         self.blockedAgent = blockedAgent
@@ -201,6 +249,7 @@ public struct CompanionActivitySignals: Equatable, Sendable {
         self.userTyping = userTyping
         self.unreadCount = unreadCount
         self.hasCards = hasCards
+        self.fleet = fleet
     }
 }
 
@@ -286,6 +335,7 @@ public final class CompanionActivityDamper {
                 held.userTyping = proposed.userTyping
                 held.unreadCount = proposed.unreadCount
                 held.hasCards = proposed.hasCards
+                held.fleet = proposed.fleet
                 current = held
                 return held
             }
@@ -309,6 +359,7 @@ public final class CompanionActivityDamper {
         held.userTyping = proposed.userTyping
         held.unreadCount = proposed.unreadCount
         held.hasCards = proposed.hasCards
+        held.fleet = proposed.fleet
         current = held
         return held
     }
@@ -347,7 +398,8 @@ extension CompanionActivityState {
                 audio: audio,
                 userTyping: signals.userTyping,
                 unreadCount: signals.unreadCount,
-                hasCards: signals.hasCards
+                hasCards: signals.hasCards,
+                fleet: signals.fleet
             )
         }
 
