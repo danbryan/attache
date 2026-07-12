@@ -59,6 +59,48 @@ struct BubblesPose: Equatable {
     var bubbles: [BubblesBubblePose] = [.init(), .init(), .init()]
 
     static let neutral = BubblesPose()
+
+    /// Clamps every field to its sane range before drawing, so a misbehaving
+    /// caller (a diverged spring, a bad simulator value) can distort a frame
+    /// but never draw eyes across the whole canvas or rotate the head off its
+    /// neck. Neutral values pass through untouched, keeping the mark
+    /// pixel-identity check honest.
+    func sanitized() -> BubblesPose {
+        func limit(_ value: Double, _ range: ClosedRange<Double>) -> Double {
+            value.isFinite ? min(range.upperBound, max(range.lowerBound, value)) : range.lowerBound
+        }
+        var pose = self
+        pose.breathe = limit(pose.breathe, 0...1)
+        pose.headTilt = limit(pose.headTilt, -30...30)
+        pose.eyeOpenness = limit(pose.eyeOpenness, -0.2...1.2)
+        pose.gaze = CGSize(
+            width: CGFloat(limit(Double(pose.gaze.width), -3...3)),
+            height: CGFloat(limit(Double(pose.gaze.height), -3...3))
+        )
+        pose.browWorry = limit(pose.browWorry, 0...1)
+        pose.dizzy = limit(pose.dizzy, 0...1)
+        pose.mouthOpen = limit(pose.mouthOpen, 0...1)
+        pose.smile = limit(pose.smile, 0...1.2)
+        pose.cheekGlow = limit(pose.cheekGlow, 0...1)
+        pose.hop = CGFloat(limit(Double(pose.hop), -12...26))
+        pose.squash = limit(pose.squash, -1...1)
+        pose.sway = limit(pose.sway, -10...10)
+        pose.arcGlow = limit(pose.arcGlow, 0...1)
+        pose.arcRipple = limit(pose.arcRipple, -1.5...1.5)
+        pose.arcPhase = pose.arcPhase.isFinite ? pose.arcPhase : 0
+        pose.bubbles = pose.bubbles.map { bubble in
+            var next = bubble
+            next.lift = CGFloat(limit(Double(bubble.lift), -12...26))
+            next.jitter = CGFloat(limit(Double(bubble.jitter), -8...8))
+            next.tilt = limit(bubble.tilt, -20...20)
+            next.brightness = limit(bubble.brightness, 0...1)
+            next.dotPhase = bubble.dotPhase.map { limit($0, 0...1) }
+            next.orbit = limit(bubble.orbit, 0...1)
+            next.pop = limit(bubble.pop, 0...1)
+            return next
+        }
+        return pose
+    }
 }
 
 /// Draws one `BubblesPose` from the same 240-unit geometry as
@@ -75,6 +117,7 @@ struct BubblesPetFigure: View {
 
     var body: some View {
         Canvas { context, size in
+            let pose = self.pose.sanitized()
             let boxHeight = 252 + headroom
             let s = min(size.width / 252, size.height / boxHeight)
             let ox = (size.width - 252 * s) / 2 + 6 * s
@@ -94,14 +137,14 @@ struct BubblesPetFigure: View {
             )
             figure.translateBy(x: -anchor.x, y: -anchor.y - pose.hop * s)
 
-            drawArcs(in: figure, p: p, s: s)
-            drawLimbs(in: figure, p: p, s: s)
-            drawHead(in: figure, p: p, s: s)
-            drawBubbles(in: figure, p: p, s: s)
+            drawArcs(in: figure, pose: pose, p: p, s: s)
+            drawLimbs(in: figure, pose: pose, p: p, s: s)
+            drawHead(in: figure, pose: pose, p: p, s: s)
+            drawBubbles(in: figure, pose: pose, p: p, s: s)
         }
     }
 
-    private func drawArcs(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+    private func drawArcs(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         let arcSpecs: [(radius: CGFloat, width: CGFloat, opacity: Double)] = [
             (40, 9, 1.0), (66, 9, 0.62), (90, 9, 0.30),
         ]
@@ -123,7 +166,7 @@ struct BubblesPetFigure: View {
         }
     }
 
-    private func drawLimbs(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+    private func drawLimbs(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         var limbs = Path()
         limbs.move(to: p(102, 140))
         limbs.addCurve(to: p(70, 160), control1: p(90, 150), control2: p(80, 155))
@@ -134,7 +177,7 @@ struct BubblesPetFigure: View {
         context.stroke(limbs, with: .color(bodyColor), style: StrokeStyle(lineWidth: 7 * s, lineCap: .round))
     }
 
-    private func drawHead(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+    private func drawHead(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         var head = context
         let pivot = p(120, 112)
         head.translateBy(x: pivot.x, y: pivot.y)
@@ -230,7 +273,7 @@ struct BubblesPetFigure: View {
         }
     }
 
-    private func drawBubbles(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+    private func drawBubbles(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         let bubbles: [(x: CGFloat, y: CGFloat, tail: [(CGFloat, CGFloat)])] = [
             (36, 168, [(62, 168), (68, 160), (54, 168)]),
             (100, 182, [(120, 182), (120, 173), (111, 182)]),

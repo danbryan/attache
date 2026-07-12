@@ -23,7 +23,26 @@ struct EchoformRendererView: View {
     var body: some View {
         ZStack {
             rendererBackground
-            if shouldAnimateContinuously {
+            if visualMode == .pet {
+                // The pet owns the whole surface in every phase: it IS the
+                // idle screen, the playback visual, and the status display.
+                // Fresh 20 Hz audio rides in on the contract so the speaking
+                // mouth can track the level.
+                BubblesPetView(
+                    activity: activity.with(audio: state),
+                    theme: theme,
+                    brightnessLevel: brightnessLevel
+                )
+                .contextMenu {
+                    Button("Change visual mode…") {
+                        NotificationCenter.default.post(name: .attacheOpenSettings, object: nil)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            NotificationCenter.default.post(name: .attacheOpenSettingsSection,
+                                                            object: SettingsSection.appearance.rawValue)
+                        }
+                    }
+                }
+            } else if shouldAnimateContinuously {
                 rendererCanvas(date: Date())
             } else if isPausedOnCard {
                 pausedShimmer
@@ -261,6 +280,10 @@ struct EchoformRendererView: View {
             drawPulse(context: context, size: size, date: date, restrained: false)
             drawWaveform(context: context, size: size, band: band)
             drawBars(context: context, size: size, band: band)
+        case .pet:
+            // Pet mode never reaches the canvas path; BubblesPetView owns the
+            // surface (see body).
+            break
         }
     }
 
@@ -448,25 +471,7 @@ struct EchoformRendererView: View {
     }
 
     private func energyColor(_ energy: Double, opacity: Double = 1) -> Color {
-        let stops = theme.stops
-        let clamped = min(max(energy, 0), 1)
-        let scaled = clamped * Double(stops.count - 1)
-        let lower = min(Int(scaled), stops.count - 1)
-        let upper = min(lower + 1, stops.count - 1)
-        let t = scaled - Double(lower)
-        let a = stops[lower]
-        let b = stops[upper]
-        let baseLuminance = [0.5, 0.74, 1.0][min(max(brightnessLevel, 0), 2)]
-        // In light mode, keep the energy colors deeper/saturated so they read on
-        // a light canvas instead of washing out.
-        let luminance = colorScheme == .dark ? baseLuminance : min(baseLuminance, 0.66)
-        return Color(
-            .sRGB,
-            red: (a.red + (b.red - a.red) * t) * luminance,
-            green: (a.green + (b.green - a.green) * t) * luminance,
-            blue: (a.blue + (b.blue - a.blue) * t) * luminance,
-            opacity: opacity
-        )
+        theme.energyColor(energy, opacity: opacity, brightnessLevel: brightnessLevel, darkScheme: colorScheme == .dark)
     }
 }
 

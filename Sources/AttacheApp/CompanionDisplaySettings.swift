@@ -10,6 +10,7 @@ enum CompanionVisualMode: String, CaseIterable, Identifiable {
     case pulse
     case flow
     case combined
+    case pet
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum CompanionVisualMode: String, CaseIterable, Identifiable {
         case .pulse: return "Pulse Field"
         case .flow: return "Flow Field"
         case .combined: return "Combined"
+        case .pet: return "Pet"
         }
     }
 }
@@ -436,6 +438,33 @@ enum CompanionPreferenceKey {
     /// per-role selection existed.
     static func presentationLLMRoleKey(_ role: ModelRole, _ field: PresentationLLMField) -> String {
         "attache.presentationLLM.\(role.rawValue).\(field.rawValue)"
+    }
+}
+
+extension CompanionTheme {
+    /// The energy-to-color ramp every renderer shares (bars, pulse, pet arcs):
+    /// interpolates the theme stops by energy, scaled by the brightness level,
+    /// and kept deeper in light mode so the color reads on a bright canvas.
+    /// Extracted from EchoformRendererView so the pet renderer cannot drift
+    /// from the bars' theming.
+    func energyColor(_ energy: Double, opacity: Double = 1, brightnessLevel: Int, darkScheme: Bool) -> Color {
+        let stops = self.stops
+        let clamped = min(max(energy, 0), 1)
+        let scaled = clamped * Double(stops.count - 1)
+        let lower = min(Int(scaled), stops.count - 1)
+        let upper = min(lower + 1, stops.count - 1)
+        let t = scaled - Double(lower)
+        let a = stops[lower]
+        let b = stops[upper]
+        let baseLuminance = [0.5, 0.74, 1.0][min(max(brightnessLevel, 0), 2)]
+        let luminance = darkScheme ? baseLuminance : min(baseLuminance, 0.66)
+        return Color(
+            .sRGB,
+            red: (a.red + (b.red - a.red) * t) * luminance,
+            green: (a.green + (b.green - a.green) * t) * luminance,
+            blue: (a.blue + (b.blue - a.blue) * t) * luminance,
+            opacity: opacity
+        )
     }
 }
 

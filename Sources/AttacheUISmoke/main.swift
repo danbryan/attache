@@ -426,6 +426,20 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                                                role: kAXButtonRole as String, containing: "Pause")
                 _ = pause.press()
 
+            case "playing":
+                // Like "play" but leaves the narration running through the
+                // hold, so a recording captures live playback (the pet
+                // renderer's lip-sync evidence, INF-270).
+                _ = try runShell("scripts/send-event.sh")
+                let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, containing: "Open inbox")
+                _ = button.press()
+                let row = try waitForElement("card row play action", in: try mainWindow(),
+                                             containing: "Play Shell smoke update")
+                _ = row.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+
             // The seven call-* states below pose CallPhase.thinking,
             // .preparingAudio, .speaking, .sendQueued, .sendDelivered,
             // .failed, and .listening (INF-244's screenshot matrix). Each
@@ -544,6 +558,10 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
             captureAppWindowScreenshot(to: screenshotPath)
         }
         print("posing \(pose) for \(Int(holdSeconds))s")
+        // Wrapper scripts tail the log for this marker to time recordings;
+        // without a flush it sits in the block buffer until exit when stdout
+        // is a file, which is exactly too late.
+        fflush(stdout)
         Thread.sleep(forTimeInterval: holdSeconds)
     } catch {
         print("pose failed: \(error)")
