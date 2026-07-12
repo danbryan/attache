@@ -107,6 +107,14 @@ swift test
 - `SMOKE_POSE=inbox|settings|live` (comma-separated, applied in order) poses the
   packaged app for screenshots via the smoke harness; `SMOKE_TEXTSCALE` sets
   text size and `SMOKE_POSE_SECONDS` the hold time.
+- `ATTACHE_ACTIVITY_SIMULATOR=1` shows a debug panel that overrides
+  `CompanionActivityState` (INF-268): pick any phase/agent/tool kind or cycle
+  through all phases, with a readout of what `companionActivity` actually
+  publishes. Drives every renderer that consumes the contract.
+- `Attache --render-poses [dir]` exports the Bubbles pet pose catalog
+  (`design/pet-animation-spec.md`) as PNGs and fails if the rig's neutral
+  pose deviates by even one pixel channel from `AttacheMascotMark` (the
+  geometry lock, INF-269).
 - `ATTACHE_TWO_WAY_EXPIRY_SECONDS=<n>` overrides the two-way instruction expiry
   window (docs/two-way.md's 30-minute default) to `<n>` seconds, so
   `scripts/two-way-negative-path-smoke.sh` can drive a real expiry against the

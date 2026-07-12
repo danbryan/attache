@@ -14,10 +14,12 @@ struct AttacheMascotMark: View {
     var glow: Color = .clear
     var glowStrength: Double = 0
 
-    private static let headColor = Color(red: 1, green: 246 / 255, blue: 228 / 255)
-    private static let faceColor = Color(red: 16 / 255, green: 36 / 255, blue: 62 / 255)
-    private static let cheekColor = Color(red: 1, green: 157 / 255, blue: 161 / 255)
-    private static let bubbleColors: [Color] = [
+    // Shared with BubblesPetFigure so the animated pet and the static mark
+    // can never drift apart on brand colors.
+    static let headColor = Color(red: 1, green: 246 / 255, blue: 228 / 255)
+    static let faceColor = Color(red: 16 / 255, green: 36 / 255, blue: 62 / 255)
+    static let cheekColor = Color(red: 1, green: 157 / 255, blue: 161 / 255)
+    static let bubbleColors: [Color] = [
         Color(red: 217 / 255, green: 119 / 255, blue: 87 / 255),
         Color(red: 10 / 255, green: 132 / 255, blue: 1),
         Color(red: 16 / 255, green: 163 / 255, blue: 127 / 255),

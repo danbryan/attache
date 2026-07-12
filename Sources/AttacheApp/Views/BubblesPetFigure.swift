@@ -1,0 +1,309 @@
+import SwiftUI
+
+/// One agent bubble's pose within the figure.
+struct BubblesBubblePose: Equatable {
+    /// Units the bubble rises off its resting spot (negative droops).
+    var lift: CGFloat = 0
+    /// Small horizontal jitter, for shell shakes and wobbles.
+    var jitter: CGFloat = 0
+    /// Rotation in degrees around the bubble's center.
+    var tilt: Double = 0
+    /// 1 lit, dimmer marks the bubble inactive; hue never changes.
+    var brightness: Double = 1
+    /// Typing-dot sweep phase in 0-1; nil freezes the dots solid.
+    var dotPhase: Double?
+    /// 0-1: dots leave the bubble and orbit it (web tool flavor).
+    var orbit: Double = 0
+    /// Confetti burst progress 0-1 (celebrate one-shot).
+    var pop: Double = 0
+}
+
+/// A complete pose over the locked Bubbles geometry: every field is a small
+/// deformation of `design/attache-logo.svg`'s anatomy, so `.neutral` renders
+/// the canonical mark exactly (verified pixel-for-pixel by
+/// `Attache --render-poses`). The animation spec that motivates each
+/// parameter is `design/pet-animation-spec.md`.
+struct BubblesPose: Equatable {
+    /// Breathing cycle contribution 0-1 (scales the figure 1.000-1.015).
+    var breathe: Double = 0
+    /// Head and face rotation in degrees (positive tilts right).
+    var headTilt: Double = 0
+    /// 1 = the mark's happy arcs, 0 = closed flat lines.
+    var eyeOpenness: Double = 1
+    /// Eye and mouth glance offset in design units (clamped to about 3).
+    var gaze: CGSize = .zero
+    /// Worry brows fade in and the eye arcs flatten.
+    var browWorry: Double = 0
+    /// Eyes crossfade to dizzy X strokes.
+    var dizzy: Double = 0
+    /// Smile morphs toward a round open mouth; speech maps audio level here.
+    var mouthOpen: Double = 0
+    /// Mouth width and curve depth; 1 is the canonical smile.
+    var smile: Double = 1
+    /// Cheek opacity; the mark's resting value is 0.6.
+    var cheekGlow: Double = 0.6
+    /// Vertical body offset in units (celebrate hop).
+    var hop: CGFloat = 0
+    /// Squash-and-stretch: +1 landing squash, -1 rising stretch.
+    var squash: Double = 0
+    /// Whole-figure rock in degrees while speaking.
+    var sway: Double = 0
+    /// Arc opacity multiplier over the mark's 1.0/0.62/0.30.
+    var arcGlow: Double = 1
+    /// Arc radius ripple amount: positive outward, negative inward.
+    var arcRipple: Double = 0
+    /// Phase for the arc ripple wave.
+    var arcPhase: Double = 0
+    /// Left (Claude, rust), center (everything else, blue), right (Codex,
+    /// green); see the spec's anatomy notes for why the order is load-bearing.
+    var bubbles: [BubblesBubblePose] = [.init(), .init(), .init()]
+
+    static let neutral = BubblesPose()
+}
+
+/// Draws one `BubblesPose` from the same 240-unit geometry as
+/// `AttacheMascotMark` (design box padded to 252 so the outer voice arc never
+/// clips). `headroom` adds design units above the box so hop poses have room;
+/// with `headroom == 0` and `.neutral` the output is the canonical mark.
+/// This view is a pure function of its pose: animation lives in the caller
+/// (INF-270's pet renderer springs pose fields; this file never reads state).
+struct BubblesPetFigure: View {
+    var pose: BubblesPose = .neutral
+    var arcColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 1)
+    var bodyColor: Color = Color(red: 242 / 255, green: 242 / 255, blue: 245 / 255)
+    var headroom: CGFloat = 0
+
+    var body: some View {
+        Canvas { context, size in
+            let boxHeight = 252 + headroom
+            let s = min(size.width / 252, size.height / boxHeight)
+            let ox = (size.width - 252 * s) / 2 + 6 * s
+            let oy = (size.height - boxHeight * s) / 2 + (12 + headroom) * s
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: ox + x * s, y: oy + y * s) }
+
+            var figure = context
+            let anchor = p(120, 209)
+            figure.translateBy(x: anchor.x, y: anchor.y)
+            figure.rotate(by: .degrees(pose.sway))
+            let breatheScale = 1 + 0.015 * pose.breathe
+            let squashUp = max(0, pose.squash)
+            let stretchUp = max(0, -pose.squash)
+            figure.scaleBy(
+                x: breatheScale * (1 + 0.05 * squashUp - 0.03 * stretchUp),
+                y: breatheScale * (1 - 0.06 * squashUp + 0.05 * stretchUp)
+            )
+            figure.translateBy(x: -anchor.x, y: -anchor.y - pose.hop * s)
+
+            drawArcs(in: figure, p: p, s: s)
+            drawLimbs(in: figure, p: p, s: s)
+            drawHead(in: figure, p: p, s: s)
+            drawBubbles(in: figure, p: p, s: s)
+        }
+    }
+
+    private func drawArcs(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        let arcSpecs: [(radius: CGFloat, width: CGFloat, opacity: Double)] = [
+            (40, 9, 1.0), (66, 9, 0.62), (90, 9, 0.30),
+        ]
+        for (index, spec) in arcSpecs.enumerated() {
+            let ripple = CGFloat(4 * pose.arcRipple * sin(pose.arcPhase - Double(index) * 1.1))
+            var arc = Path()
+            arc.addArc(
+                center: p(120, 89),
+                radius: (spec.radius + ripple) * s,
+                startAngle: .degrees(-132),
+                endAngle: .degrees(-48),
+                clockwise: false
+            )
+            context.stroke(
+                arc,
+                with: .color(arcColor.opacity(spec.opacity * pose.arcGlow)),
+                style: StrokeStyle(lineWidth: spec.width * s, lineCap: .round)
+            )
+        }
+    }
+
+    private func drawLimbs(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        var limbs = Path()
+        limbs.move(to: p(102, 140))
+        limbs.addCurve(to: p(70, 160), control1: p(90, 150), control2: p(80, 155))
+        limbs.move(to: p(120, 145))
+        limbs.addLine(to: p(120, 170))
+        limbs.move(to: p(138, 140))
+        limbs.addCurve(to: p(170, 160), control1: p(150, 150), control2: p(160, 155))
+        context.stroke(limbs, with: .color(bodyColor), style: StrokeStyle(lineWidth: 7 * s, lineCap: .round))
+    }
+
+    private func drawHead(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        var head = context
+        let pivot = p(120, 112)
+        head.translateBy(x: pivot.x, y: pivot.y)
+        head.rotate(by: .degrees(pose.headTilt))
+        head.translateBy(x: -pivot.x, y: -pivot.y)
+
+        let skull = Path(ellipseIn: CGRect(
+            x: p(87, 79).x, y: p(87, 79).y, width: 66 * s, height: 66 * s
+        ))
+        head.fill(skull, with: .color(AttacheMascotMark.headColor))
+
+        var face = head
+        let gx = max(-3, min(3, pose.gaze.width))
+        let gy = max(-3, min(3, pose.gaze.height))
+        face.translateBy(x: gx * s, y: gy * s)
+
+        let openness = pose.eyeOpenness * (1 - 0.4 * pose.browWorry)
+        let eyeAlpha = 1 - pose.dizzy
+        if eyeAlpha > 0.01 {
+            var eyes = Path()
+            // Fully open is the mark's happy arc (control 10 above the lash
+            // line); fully closed curves gently DOWN (4 below) so sleep reads
+            // peaceful instead of deadpan.
+            let controlY = 111 - 14 * openness
+            eyes.move(to: p(97, 107))
+            eyes.addQuadCurve(to: p(113, 107), control: p(105, controlY))
+            eyes.move(to: p(127, 107))
+            eyes.addQuadCurve(to: p(143, 107), control: p(135, controlY))
+            face.stroke(
+                eyes,
+                with: .color(AttacheMascotMark.faceColor.opacity(eyeAlpha)),
+                style: StrokeStyle(lineWidth: 5 * s, lineCap: .round)
+            )
+        }
+        if pose.dizzy > 0.01 {
+            var crosses = Path()
+            for centerX in [105.0, 135.0] {
+                crosses.move(to: p(centerX - 6, 100))
+                crosses.addLine(to: p(centerX + 6, 111))
+                crosses.move(to: p(centerX + 6, 100))
+                crosses.addLine(to: p(centerX - 6, 111))
+            }
+            face.stroke(
+                crosses,
+                with: .color(AttacheMascotMark.faceColor.opacity(pose.dizzy)),
+                style: StrokeStyle(lineWidth: 4 * s, lineCap: .round)
+            )
+        }
+        if pose.browWorry > 0.01 {
+            var brows = Path()
+            brows.move(to: p(95, 101))
+            brows.addLine(to: p(111, 96))
+            brows.move(to: p(129, 96))
+            brows.addLine(to: p(145, 101))
+            face.stroke(
+                brows,
+                with: .color(AttacheMascotMark.faceColor.opacity(pose.browWorry)),
+                style: StrokeStyle(lineWidth: 4 * s, lineCap: .round)
+            )
+        }
+
+        for cx in [95.0, 145.0] {
+            let cheek = Path(ellipseIn: CGRect(
+                x: p(cx - 6, 113).x, y: p(cx - 6, 113).y, width: 12 * s, height: 12 * s
+            ))
+            head.fill(cheek, with: .color(AttacheMascotMark.cheekColor.opacity(pose.cheekGlow)))
+        }
+
+        // The two mouth shapes swap at a hard threshold instead of
+        // crossfading: overlapped translucent fills read as a gray plate, and
+        // in motion the flip doubles as the mouth closing between words. At
+        // `mouthOpen == 0` this is the mark's exact smile path.
+        if pose.mouthOpen < 0.15 {
+            let halfWidth = 12 * pose.smile
+            let depth = 15 * pose.smile
+            var mouth = Path()
+            mouth.move(to: p(120 - halfWidth, 119))
+            mouth.addCurve(
+                to: p(120 + halfWidth, 119),
+                control1: p(120 - halfWidth * 0.75, 119 + depth),
+                control2: p(120 + halfWidth * 0.75, 119 + depth)
+            )
+            mouth.closeSubpath()
+            face.fill(mouth, with: .color(AttacheMascotMark.faceColor))
+        } else {
+            let rx = 9 * (0.5 + 0.5 * pose.mouthOpen)
+            let ry = 3 + 11 * pose.mouthOpen
+            let center = p(120, 122 + 4 * pose.mouthOpen)
+            let open = Path(ellipseIn: CGRect(
+                x: center.x - rx * s, y: center.y - ry * s, width: rx * 2 * s, height: ry * 2 * s
+            ))
+            face.fill(open, with: .color(AttacheMascotMark.faceColor))
+        }
+    }
+
+    private func drawBubbles(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        let bubbles: [(x: CGFloat, y: CGFloat, tail: [(CGFloat, CGFloat)])] = [
+            (36, 168, [(62, 168), (68, 160), (54, 168)]),
+            (100, 182, [(120, 182), (120, 173), (111, 182)]),
+            (164, 168, [(178, 168), (172, 160), (186, 168)]),
+        ]
+        for (index, bubble) in bubbles.enumerated() {
+            let bubblePose = index < pose.bubbles.count ? pose.bubbles[index] : BubblesBubblePose()
+            let tint = AttacheMascotMark.bubbleColors[index].opacity(bubblePose.brightness)
+            let center = p(bubble.x + 20, bubble.y + 13.5)
+
+            var ctx = context
+            ctx.translateBy(x: bubblePose.jitter * s, y: -bubblePose.lift * s)
+            ctx.translateBy(x: center.x, y: center.y)
+            ctx.rotate(by: .degrees(bubblePose.tilt))
+            ctx.translateBy(x: -center.x, y: -center.y)
+
+            let body = Path(
+                roundedRect: CGRect(x: p(bubble.x, bubble.y).x, y: p(bubble.x, bubble.y).y, width: 40 * s, height: 27 * s),
+                cornerRadius: 12 * s
+            )
+            ctx.fill(body, with: .color(tint))
+            var tail = Path()
+            tail.move(to: p(bubble.tail[0].0, bubble.tail[0].1))
+            tail.addLine(to: p(bubble.tail[1].0, bubble.tail[1].1))
+            tail.addLine(to: p(bubble.tail[2].0, bubble.tail[2].1))
+            tail.closeSubpath()
+            ctx.fill(tail, with: .color(tint))
+
+            if bubblePose.orbit > 0.01 {
+                for d in 0..<3 {
+                    let angle = (bubblePose.dotPhase ?? 0) * 2 * .pi + Double(d) * 2 * .pi / 3
+                    let dotCenter = CGPoint(
+                        x: center.x + CGFloat(cos(angle)) * 26 * s * bubblePose.orbit,
+                        y: center.y + CGFloat(sin(angle)) * 15 * s * bubblePose.orbit
+                    )
+                    let dot = Path(ellipseIn: CGRect(
+                        x: dotCenter.x - 3 * s, y: dotCenter.y - 3 * s, width: 6 * s, height: 6 * s
+                    ))
+                    ctx.fill(dot, with: .color(AttacheMascotMark.headColor.opacity(bubblePose.brightness)))
+                }
+            } else {
+                for d in 0..<3 {
+                    let dotAlpha: Double
+                    if let phase = bubblePose.dotPhase {
+                        dotAlpha = 0.35 + 0.65 * max(0, sin(phase * 2 * .pi - Double(d) * 0.9))
+                    } else {
+                        dotAlpha = 1
+                    }
+                    let dot = Path(ellipseIn: CGRect(
+                        x: p(bubble.x + 9 + CGFloat(d) * 9, bubble.y + 10.5).x,
+                        y: p(bubble.x + 9 + CGFloat(d) * 9, bubble.y + 10.5).y,
+                        width: 6 * s, height: 6 * s
+                    ))
+                    ctx.fill(dot, with: .color(AttacheMascotMark.headColor.opacity(dotAlpha * bubblePose.brightness)))
+                }
+            }
+
+            if bubblePose.pop > 0.01 {
+                let progress = bubblePose.pop
+                for d in 0..<6 {
+                    let angle = -Double.pi * 5 / 6 + Double(d) * (2 * Double.pi / 3) / 5
+                    let radius = (10 + 30 * progress) * s
+                    let dotCenter = CGPoint(
+                        x: center.x + CGFloat(cos(angle)) * radius,
+                        y: center.y - 13 * s + CGFloat(sin(angle)) * radius
+                    )
+                    let size = 5 * (1 - progress * 0.5) * s
+                    let confetti = Path(ellipseIn: CGRect(
+                        x: dotCenter.x - size / 2, y: dotCenter.y - size / 2, width: size, height: size
+                    ))
+                    context.fill(confetti, with: .color(AttacheMascotMark.bubbleColors[index].opacity(1 - progress)))
+                }
+            }
+        }
+    }
+}
