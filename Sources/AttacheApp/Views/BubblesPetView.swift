@@ -138,6 +138,7 @@ enum BubblesPetChoreography {
 
         switch activity.phase {
         case .sleeping:
+            targets.pose.overhead = .sleeping
             targets.pose.eyeOpenness = 0
             targets.pose.smile = 0.6
             targets.pose.cheekGlow = 0.45
@@ -147,9 +148,11 @@ enum BubblesPetChoreography {
             for index in 0..<3 { targets.pose.bubbles[index].brightness = 0.55 }
 
         case .idle:
+            targets.pose.overhead = .none
             targets.breathePeriod = 3.2
 
         case .agentThinking:
+            targets.pose.overhead = .thinking
             targets.pose.headTilt = active == 0 ? -6 : (active == 2 ? 6 : 0)
             targets.pose.gaze = CGSize(width: active == 0 ? -2 : (active == 2 ? 2 : 0), height: -1)
             targets.pose.smile = 0.45
@@ -159,6 +162,7 @@ enum BubblesPetChoreography {
             spotlight(1, others: 0.45, lift: 8)
 
         case .toolRunning:
+            targets.pose.overhead = .tool
             targets.pose.eyeOpenness = 0.75
             targets.pose.smile = 0.6
             targets.pose.arcGlow = 0.8
@@ -168,6 +172,7 @@ enum BubblesPetChoreography {
             spotlight(1, others: 0.45, lift: 4)
 
         case .agentResponding:
+            targets.pose.overhead = .preparingAudio
             targets.pose.gaze = CGSize(width: 0, height: -1.5)
             targets.pose.smile = 0.8
             targets.pose.arcGlow = 0.85
@@ -176,6 +181,7 @@ enum BubblesPetChoreography {
             spotlight(1, others: 0.45, lift: 12)
 
         case .speaking:
+            targets.pose.overhead = .arcs
             targets.pose.arcGlow = 1
             targets.pose.arcRipple = 1
             targets.mouthTracksAudio = true
@@ -184,12 +190,14 @@ enum BubblesPetChoreography {
             spotlight(1, others: 0.4)
 
         case .paused:
+            targets.pose.overhead = .paused
             targets.pose.eyeOpenness = 0.85
             targets.pose.mouthOpen = 0.18
             targets.pose.arcGlow = 0.5
             for index in 0..<3 { targets.pose.bubbles[index].brightness = 0.75 }
 
         case .blockedOnUser:
+            targets.pose.overhead = .none
             targets.pose.browWorry = 1
             targets.pose.cheekGlow = 0.2
             targets.pose.smile = 0.3
@@ -199,6 +207,7 @@ enum BubblesPetChoreography {
             spotlight(1, others: 0.3, lift: 6)
 
         case .error:
+            targets.pose.overhead = .none
             targets.pose.dizzy = 1
             targets.pose.mouthOpen = 0.3
             targets.pose.headTilt = 4
@@ -339,6 +348,8 @@ final class BubblesPetMotor: ObservableObject {
         )
         pose.arcGlow = drive(&arcGlow, toward: targets.pose.arcGlow, Self.soft)
         pose.arcRipple = drive(&arcRipple, toward: targets.pose.arcRipple, Self.soft)
+        pose.overhead = targets.pose.overhead
+        pose.overheadPhase = (now / 2.4).truncatingRemainder(dividingBy: 1)
         for index in 0..<3 {
             pose.bubbles[index].lift = CGFloat(drive(&bubbleLift[index], toward: Double(targets.pose.bubbles[index].lift), Self.snappy))
             pose.bubbles[index].brightness = drive(&bubbleBrightness[index], toward: targets.pose.bubbles[index].brightness, Self.soft)
@@ -744,13 +755,15 @@ final class BubblesPetMotor: ObservableObject {
                 fleetOrbitPhases[session.id] = phase
                 let target = BubblesPetChoreography.ringPoint(angle: phase)
                 let position = ease(session.id, toward: target, spawnAt: badgeCenter ?? target)
+                let subs = session.activeSubAgents
                 motes.append(BubblesFleetMote(
                     position: position,
-                    radius: 3.6,
+                    radius: subs > 0 ? 5 : 3.6,
                     fill: .agent(agent),
+                    count: subs > 0 ? subs : nil,
                     ripples: ripples(for: session),
                     sessionID: session.id,
-                    title: session.title,
+                    title: subs > 0 ? "\(session.title) · \(subs) sub-agents" : session.title,
                     behind: position.y < ringCenterY - 0.5
                 ))
             }
@@ -848,15 +861,17 @@ final class BubblesPetMotor: ObservableObject {
             case .finished: glyph = .check
             case .working, .quiet: glyph = .none
             }
+            let focusedSubs = glyph == .none ? focused.activeSubAgents : 0
             motes.append(BubblesFleetMote(
                 position: position,
                 radius: 5.2,
                 fill: .focused,
                 opacity: focused.state == .quiet ? 0.85 : 1,
                 ring: true,
+                count: focusedSubs > 0 ? focusedSubs : nil,
                 ripples: ripples(for: focused),
                 sessionID: focused.id,
-                title: focused.title,
+                title: focusedSubs > 0 ? "\(focused.title) · \(focusedSubs) sub-agents" : focused.title,
                 behind: position.y < ringCenterY - 0.5,
                 glyph: glyph,
                 draggable: true

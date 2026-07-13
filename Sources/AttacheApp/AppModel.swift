@@ -5905,12 +5905,25 @@ final class AppModel: ObservableObject {
 
     /// Switch which attached session is focused, without changing the watch list.
     func focusCodexSession(_ id: String) {
-        guard attachedTargets[id] != nil, id != attachedCodexSessionID else { return }
+        guard attachedTargets[id] != nil else {
+            // Fabricated sessions from the activity simulator are not in the
+            // watch list; route their focus clicks to the panel so QA can
+            // exercise focus changes on the ring (INF-284).
+            if simulatedActivity != nil {
+                simulatedFleetFocusID = id
+            }
+            return
+        }
+        guard id != attachedCodexSessionID else { return }
         attachedCodexSessionID = id
         liveFollowUpText = ""
         resetLiveFollowUpAnswerStatus()
         updateCodexWatcher()
     }
+
+    /// The simulator's focus override (INF-284): which fabricated session the
+    /// user last clicked on the ring. Consumed by ActivitySimulatorPanel.
+    @Published var simulatedFleetFocusID: String?
 
     /// Remove a session from the watch list (stop collecting its voicemail).
     func detachCodexSession(_ id: String) {

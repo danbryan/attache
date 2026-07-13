@@ -144,9 +144,10 @@ States, per session:
   user drags it along the ring; the angle persists
   (`attache.petFocusAngle`). Focusing another session pins that mote where
   it currently sits and the old one rejoins the ring from the pin.
-- **Sub-agents** emit expanding ripple rings from the mote; cadence scales
-  with the square root of the count (floor 0.45 s). At most 2 ripplers stay
-  individual per agent.
+- **Sub-agents** emit expanding ripple rings from the mote and the live
+  count rides inside it as a numeral (the mote grows to fit); cadence
+  scales with the square root of the count (floor 0.45 s). At most 2
+  ripplers stay individual per agent.
 
 Gaze:
 
@@ -157,6 +158,17 @@ Gaze:
   the eyes return to the focused stare.
 - The hover-follow delight yields to the stare whenever a focused session
   exists.
+
+Crown (INF-284):
+
+- The space above the head is a phase totem, not a permanent speaker: the
+  voice arcs appear only while audio is the story (speaking). Thinking
+  shows a climbing thought trail, tool runs a slowly turning gear,
+  preparing audio a waveform assembling itself, paused two pause bars,
+  sleeping drifting z's. Idle, blocked, and error keep the crown empty;
+  the amber ? mote and the face carry those states.
+- The mark and every brand surface keep the arcs always; the totem exists
+  only in the live head anatomy.
 
 Lanes:
 

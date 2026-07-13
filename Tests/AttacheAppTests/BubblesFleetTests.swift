@@ -125,7 +125,24 @@ final class BubblesFleetTests: XCTestCase {
         let motor = BubblesPetMotor()
         let fleet = [session("c0", subAgents: 8)]
         let motes = runMotor(motor, fleet: fleet, ticks: 10)
-        XCTAssertTrue(motes.contains { !$0.ripples.isEmpty })
+        let rippler = motes.first { $0.sessionID == "c0" }
+        XCTAssertEqual(rippler?.ripples.isEmpty, false)
+        XCTAssertEqual(rippler?.count, 8, "the sub-agent count rides the mote as a numeral")
+    }
+
+    func testOverheadTotemFollowsThePhase() {
+        func overhead(_ phase: CompanionActivityPhase) -> BubblesOverhead {
+            BubblesPetChoreography.targets(for: CompanionActivityState(phase: phase)).pose.overhead
+        }
+        XCTAssertEqual(overhead(.idle), .none)
+        XCTAssertEqual(overhead(.speaking), .arcs)
+        XCTAssertEqual(overhead(.agentThinking), .thinking)
+        XCTAssertEqual(overhead(.toolRunning), .tool)
+        XCTAssertEqual(overhead(.agentResponding), .preparingAudio)
+        XCTAssertEqual(overhead(.paused), .paused)
+        XCTAssertEqual(overhead(.sleeping), .sleeping)
+        XCTAssertEqual(overhead(.blockedOnUser), .none,
+                       "the amber ? mote carries blocked; no crown noise")
     }
 
     func testFocusedMoteStaysPinnedWhileOthersOrbit() {

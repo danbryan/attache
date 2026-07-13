@@ -23,9 +23,26 @@ struct BubblesBubblePose: Equatable {
 /// the canonical mark exactly (verified pixel-for-pixel by
 /// `Attache --render-poses`). The animation spec that motivates each
 /// parameter is `design/pet-animation-spec.md`.
+/// What floats above the head in `.head` anatomy (INF-284): the voice arcs
+/// only while audio is the story; otherwise a small phase totem. `.full`
+/// anatomy ignores this and always draws the mark's arcs.
+enum BubblesOverhead: Equatable {
+    case none
+    case arcs
+    case thinking
+    case tool
+    case preparingAudio
+    case paused
+    case sleeping
+}
+
 struct BubblesPose: Equatable {
     /// Breathing cycle contribution 0-1 (scales the figure 1.000-1.015).
     var breathe: Double = 0
+    /// The overhead indicator for `.head` anatomy (INF-284).
+    var overhead: BubblesOverhead = .arcs
+    /// A 0-1 sawtooth clock for overhead glyph animation, motor-driven.
+    var overheadPhase: Double = 0
     /// Head and face rotation in degrees (positive tilts right).
     var headTilt: Double = 0
     /// 1 = the mark's happy arcs, 0 = closed flat lines.
@@ -86,6 +103,7 @@ struct BubblesPose: Equatable {
         pose.squash = limit(pose.squash, -1...1)
         pose.sway = limit(pose.sway, -10...10)
         pose.arcGlow = limit(pose.arcGlow, 0...1)
+        pose.overheadPhase = limit(pose.overheadPhase, 0...1)
         pose.arcRipple = limit(pose.arcRipple, -1.5...1.5)
         pose.arcPhase = pose.arcPhase.isFinite ? pose.arcPhase : 0
         pose.bubbles = pose.bubbles.map { bubble in
@@ -207,7 +225,7 @@ struct BubblesPetFigure: View {
                 drawFleet(in: figure, p: p, s: s, behind: true)
                 var headLayer = figure
                 headLayer.translateBy(x: 0, y: Self.headAnatomyDrop * s)
-                drawArcs(in: headLayer, pose: pose, p: p, s: s)
+                drawOverhead(in: headLayer, pose: pose, p: p, s: s)
                 drawHead(in: headLayer, pose: pose, p: p, s: s)
                 drawHeadConfetti(in: headLayer, pose: pose, p: p, s: s)
                 drawFleet(in: figure, p: p, s: s, behind: false)
@@ -269,14 +287,15 @@ struct BubblesPetFigure: View {
                     style: StrokeStyle(lineWidth: 1.2 * s)
                 )
             }
-            if let count = mote.count {
-                let text = Text("\(min(count, 999))")
-                    .font(.system(size: 8.5 * s, weight: .bold, design: .rounded))
-                    .foregroundColor(Color(red: 0.02, green: 0.04, blue: 0.09))
-                context.draw(context.resolve(text), at: center)
-            }
             let darkInk = Color(red: 0.02, green: 0.04, blue: 0.09)
             let onFocused = mote.fill == .focused
+            if let count = mote.count {
+                let ink = onFocused && !accentIsLight ? Color.white : darkInk
+                let text = Text("\(min(count, 999))")
+                    .font(.system(size: min(8.5, mote.radius * 1.35) * s, weight: .bold, design: .rounded))
+                    .foregroundColor(ink)
+                context.draw(context.resolve(text), at: center)
+            }
             switch mote.glyph {
             case .none:
                 break
@@ -324,6 +343,90 @@ struct BubblesPetFigure: View {
                 confetti,
                 with: .color(AttacheMascotMark.bubbleColors[d % 3].opacity(1 - progress))
             )
+        }
+    }
+
+    /// The crown for `.head` anatomy (INF-284): voice arcs only while audio
+    /// is the story, otherwise a small phase totem so the space above the
+    /// head says what is happening instead of always shouting "speaker".
+    private func drawOverhead(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        let ink = arcColor
+        let crown = p(120, 66)
+        switch pose.overhead {
+        case .none:
+            break
+        case .arcs:
+            drawArcs(in: context, pose: pose, p: p, s: s)
+        case .thinking:
+            // A thought trail: three dots climbing toward up-right, pulsing
+            // in sequence.
+            let spots: [(x: CGFloat, y: CGFloat, r: CGFloat)] = [
+                (130, 74, 2.6), (139, 65, 3.4), (150, 54, 4.2),
+            ]
+            for (index, spot) in spots.enumerated() {
+                let pulse = 0.35 + 0.65 * max(0, sin((pose.overheadPhase + Double(index) * 0.22) * 2 * .pi))
+                let dot = Path(ellipseIn: CGRect(
+                    x: p(spot.x, spot.y).x - spot.r * s, y: p(spot.x, spot.y).y - spot.r * s,
+                    width: spot.r * 2 * s, height: spot.r * 2 * s
+                ))
+                context.fill(dot, with: .color(ink.opacity(pulse)))
+            }
+        case .tool:
+            // A slowly turning gear.
+            var gear = context
+            gear.translateBy(x: crown.x, y: crown.y)
+            gear.rotate(by: .degrees(pose.overheadPhase * 360))
+            for tooth in 0..<8 {
+                var tick = gear
+                tick.rotate(by: .degrees(Double(tooth) * 45))
+                let toothPath = Path(
+                    roundedRect: CGRect(x: -1.6 * s, y: -9.5 * s, width: 3.2 * s, height: 4 * s),
+                    cornerRadius: 1.2 * s
+                )
+                tick.fill(toothPath, with: .color(ink.opacity(0.85)))
+            }
+            let wheel = Path(ellipseIn: CGRect(
+                x: crown.x - 4.6 * s, y: crown.y - 4.6 * s, width: 9.2 * s, height: 9.2 * s
+            ))
+            context.stroke(wheel, with: .color(ink.opacity(0.85)),
+                           style: StrokeStyle(lineWidth: 3.6 * s))
+        case .preparingAudio:
+            // A waveform assembling itself: five bars growing in stagger.
+            for bar in 0..<5 {
+                let stagger = max(0, min(1, pose.overheadPhase * 2.2 - Double(bar) * 0.28))
+                let height = (3 + 9 * stagger * (bar == 2 ? 1.25 : 1)) * s
+                let x = p(108 + CGFloat(bar) * 6, 66).x
+                let slot = Path(
+                    roundedRect: CGRect(x: x - 1.8 * s, y: crown.y - height / 2, width: 3.6 * s, height: height),
+                    cornerRadius: 1.8 * s
+                )
+                context.fill(slot, with: .color(ink.opacity(0.5 + 0.5 * stagger)))
+            }
+        case .paused:
+            for offset in [-4.5, 4.5] {
+                let bar = Path(
+                    roundedRect: CGRect(
+                        x: crown.x + CGFloat(offset - 2) * s, y: crown.y - 8 * s,
+                        width: 4 * s, height: 16 * s
+                    ),
+                    cornerRadius: 2 * s
+                )
+                context.fill(bar, with: .color(ink.opacity(0.8)))
+            }
+        case .sleeping:
+            // Two z's drifting up and fading, offset by half a cycle.
+            for (index, size) in [7.0, 9.5].enumerated() {
+                let cycle = (pose.overheadPhase + Double(index) * 0.5).truncatingRemainder(dividingBy: 1)
+                let rise = CGFloat(14 * cycle)
+                let alpha = (1 - cycle) * 0.7
+                let z = Text("z")
+                    .font(.system(size: size * s, weight: .bold, design: .rounded))
+                    .foregroundColor(ink.opacity(alpha))
+                context.draw(
+                    context.resolve(z),
+                    at: CGPoint(x: p(132 + CGFloat(index) * 9, 72).x, y: p(132, 72).y - rise)
+                )
+            }
         }
     }
 

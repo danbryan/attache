@@ -68,6 +68,7 @@ struct ActivitySimulatorPanel: View {
                     overriding = false
                     cycling = false
                     model.simulatedActivity = nil
+                    model.simulatedFleetFocusID = nil
                 }
                 .disabled(!overriding)
             }
@@ -131,6 +132,7 @@ struct ActivitySimulatorPanel: View {
         .onChange(of: workShare) { _ in applyIfSimulating() }
         .onChange(of: oneBlocked) { _ in applyIfSimulating() }
         .onChange(of: oneFinished) { _ in applyIfSimulating() }
+        .onChange(of: model.simulatedFleetFocusID) { _ in applyIfSimulating() }
         .onChange(of: subAgents) { _ in applyIfSimulating() }
         .onReceive(demoTimer) { _ in advanceFleetDemo() }
         .onChange(of: cycling) { active in
@@ -153,7 +155,10 @@ struct ActivitySimulatorPanel: View {
                 apply()
             }
         }
-        .onDisappear { model.simulatedActivity = nil }
+        .onDisappear {
+            model.simulatedActivity = nil
+            model.simulatedFleetFocusID = nil
+        }
     }
 
     /// Round-trip proof for QA: reads back what `companionActivity` actually
@@ -185,10 +190,11 @@ struct ActivitySimulatorPanel: View {
         if overriding { apply() }
     }
 
-    /// Fabricates a fleet from the panel's knobs: the first Claude session
-    /// is focused (and carries the sub-agents), the last is the blocked one
-    /// when that toggle is on, the second-to-last the finished one, and the
-    /// working share fills front to back.
+    /// Fabricates a fleet from the panel's knobs: the focused session is the
+    /// last one clicked on the ring (first Claude by default) and carries
+    /// the sub-agents, the last Claude is the blocked one when that toggle
+    /// is on, the second-to-last the finished one, and the working share
+    /// fills front to back.
     private func simulatedFleet() -> [CompanionFleetSession] {
         func sessions(_ count: Int, agent: CompanionAgentIdentity, prefix: String) -> [CompanionFleetSession] {
             guard count > 0 else { return [] }
@@ -197,19 +203,23 @@ struct ActivitySimulatorPanel: View {
                 var state: CompanionFleetSession.State = index < workingCount ? .working : .quiet
                 if oneFinished, agent == .claude, index == max(0, count - 2) { state = .finished }
                 if oneBlocked, agent == .claude, index == count - 1 { state = .blocked }
-                let focused = agent == .claude && index == 0
                 return CompanionFleetSession(
                     id: "sim-\(prefix)-\(index)",
                     agent: agent,
                     state: state,
-                    isFocused: focused,
-                    activeSubAgents: focused ? subAgents : 0,
+                    isFocused: false,
+                    activeSubAgents: 0,
                     title: "\(prefix) \(index + 1)"
                 )
             }
         }
-        return sessions(claudeCount, agent: .claude, prefix: "Claude")
+        var fleet = sessions(claudeCount, agent: .claude, prefix: "Claude")
             + sessions(codexCount, agent: .codex, prefix: "Codex")
+        guard !fleet.isEmpty else { return fleet }
+        let focusIndex = fleet.firstIndex { $0.id == model.simulatedFleetFocusID } ?? 0
+        fleet[focusIndex].isFocused = true
+        fleet[focusIndex].activeSubAgents = subAgents
+        return fleet
     }
 
     /// A scripted 40 second fleet story for recordings: grow to a badge,
