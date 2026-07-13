@@ -8,7 +8,7 @@ LEGACY_APP_NAME="Codex Companion"
 PRODUCT_NAME="Attache"
 EXECUTABLE_NAME="Attache"
 ICON_NAME="Attache"
-APP_VERSION="${VERSION:-0.1.4}"
+APP_VERSION="${VERSION:-0.2.0}"
 # Monotonic build number for Sparkle's version comparison (CFBundleShortVersionString
 # is the marketing version users see). A timestamp always increases across releases.
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%s)}"
