@@ -68,8 +68,12 @@ export const inbox = (() => {
 // ---- 5: ambient presence — the activity heat map -------------------------
 export const ambient = (() => {
   const narrStart = 0.4;
-  const len = narrStart + nsec("n_ambient") + 1.4;
-  return { narrStart, len };
+  const narrEnd = narrStart + nsec("n_ambient");
+  // After the narration, a short music-carried showcase of the character
+  // picker (pets can be changed).
+  const charactersAt = narrEnd + 0.5;
+  const len = charactersAt + 4.2;
+  return { narrStart, narrEnd, charactersAt, len };
 })();
 
 // ---- 6: live call --------------------------------------------------------
