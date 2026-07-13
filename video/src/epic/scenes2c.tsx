@@ -59,7 +59,8 @@ export const Personalities2: React.FC = () => {
           )}
           {showResponse && (
             <div style={{ borderRadius: 18, background: T.bgPanel, border: `1px solid ${T.stroke}`, padding: "26px 30px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 13, marginBottom: 12 }}>
+                <div style={{ width: 46, height: 46, borderRadius: 23, background: `${active.tint}22`, border: `1.5px solid ${active.tint}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>{active.emoji}</div>
                 <span style={{ color: active.tint, fontSize: 20, fontWeight: 600 }}>voice · {active.voice}</span>
                 {speaking && <div style={{ marginLeft: "auto" }}><WaveBars n={14} height={20} barWidth={4} color={active.tint} /></div>}
               </div>

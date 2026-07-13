@@ -9,55 +9,197 @@ import {
 import { ambient, live, twoway, f, karaokeEnd, ssec, stext } from "./timing2";
 
 /* ------------------------------------------------------------------ */
-/* 5 — AMBIENT: leave it in the corner; the activity heat map.         */
+/* 5 — COMPANION: the pet at a glance, and on your desktop.            */
+/*   Storyboards the n_ambient narration:                              */
+/*   "leave it in the corner"  -> the desktop widget                   */
+/*   "up to at a glance"        -> the fleet ring of Claude sessions    */
+/*   "when something matters"   -> a Done and a Needs-you notification  */
 /* ------------------------------------------------------------------ */
 
-// Verb sets rotate the way the real ActivityInsightHeatMap phrases shift
-// with the focused session's tool activity.
-const VERBS_EARLY = [
-  { text: "rendering clips", weight: 0.95, color: "#0A84FF" },
-  { text: "reading files", weight: 0.5, color: "#7A5CFF" },
-  { text: "writing captions", weight: 0.78, color: "#0A84FF" },
-  { text: "checking calendar", weight: 0.4, color: "#00C7BE" },
-  { text: "sorting inbox", weight: 0.58, color: "#7A5CFF" },
-  { text: "running tests", weight: 0.66, color: "#0A84FF" },
-  { text: "browsing sponsors", weight: 0.34, color: "#00C7BE" },
-  { text: "committing changes", weight: 0.45, color: "#7A5CFF" },
-];
-const VERBS_LATE = [
-  { text: "uploading renders", weight: 0.9, color: "#0A84FF" },
-  { text: "tagging b-roll", weight: 0.62, color: "#7A5CFF" },
-  { text: "scheduling posts", weight: 0.84, color: "#0A84FF" },
-  { text: "reconciling invoices", weight: 0.5, color: "#00C7BE" },
-  { text: "drafting replies", weight: 0.44, color: "#7A5CFF" },
-  { text: "summarizing filings", weight: 0.58, color: "#0A84FF" },
-  { text: "reading files", weight: 0.3, color: "#00C7BE" },
-  { text: "checking analytics", weight: 0.68, color: "#7A5CFF" },
-];
+const CLAUDE_HUE = "#D97757";
+const AMBER = "#FFB020";
+const clampBoth = { extrapolateLeft: "clamp" as const, extrapolateRight: "clamp" as const };
+
+// Volt, the default pet character, as inline SVG (mirrors the app icon and
+// the AttacheApp robot face: steel plate, LED eyes, antenna, mouth).
+const Volt2: React.FC<{ size?: number; talking?: boolean }> = ({ size = 170, talking = false }) => {
+  const frame = useCurrentFrame();
+  const blinkT = frame % 95;
+  const openness = blinkT < 3 ? 0.16 : blinkT < 7 ? 0.6 : 1;
+  const eyeH = 11 * openness;
+  const STEEL = "#C7D0DC", NAVY = "#10243E", LED = "#66E3FF", CORAL = "#FF9DA1";
+  return (
+    <svg width={size} height={size} viewBox="72 56 96 96" fill="none" style={{ display: "block" }}>
+      <line x1="120" y1="82" x2="120" y2="73" stroke={STEEL} strokeWidth={3} strokeLinecap="round" />
+      <circle cx="120" cy="69.5" r="3.5" fill={CORAL} />
+      <rect x="88" y="82" width="64" height="60" rx="14" fill={STEEL} />
+      <rect x="94" y="92" width="52" height="34" rx="8" fill={NAVY} />
+      <rect x="99" y={106 - eyeH / 2} width="14" height={eyeH} rx="2.5" fill={LED} />
+      <rect x="127" y={106 - eyeH / 2} width="14" height={eyeH} rx="2.5" fill={LED} />
+      <circle cx="92.5" cy="119" r="2" fill={CORAL} />
+      <circle cx="143.5" cy="119" r="2" fill={CORAL} />
+      {talking
+        ? [0, 1, 2, 3, 4].map((i) => {
+            const h = 3 + 9 * (0.55 + 0.45 * Math.sin(frame / 2.2 + i * 1.3));
+            return <rect key={i} x={108 + i * 6 - 1.8} y={134 - h / 2} width="3.6" height={h} rx="1.8" fill={NAVY} />;
+          })
+        : <rect x="109.2" y="131" width="21.6" height="3.5" rx="1.75" fill={NAVY} />}
+    </svg>
+  );
+};
+
+const Pill: React.FC<{ x: number; y: number; text: string; color: string; appear?: number }> = ({ x, y, text, color, appear = 1 }) => (
+  <div style={{
+    position: "absolute", left: x, top: y, transform: `translate(-50%,-50%) scale(${0.6 + 0.4 * appear})`,
+    padding: "4px 12px", borderRadius: 999, whiteSpace: "nowrap",
+    background: "rgba(20,20,26,0.72)", border: `1px solid ${color}`, color,
+    fontSize: 17, fontWeight: 700, opacity: appear, backdropFilter: "blur(6px)",
+  }}>{text}</div>
+);
+
+// The fleet ring: Volt centered, Claude session dots orbiting the inner
+// track, a focused pin on the outer track, and a Done / Needs-you
+// notification that spring in. Frame is scene-relative.
+const PetRing: React.FC<{ size?: number; labels?: boolean; doneAt?: number; blockAt?: number; talking?: boolean }> = ({
+  size = 520, labels = false, doneAt, blockAt, talking = false,
+}) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const cx = size / 2, cy = size / 2;
+  const Ri = size * 0.34, Ro = size * 0.47;
+  const dot = (a: number, r: number) => ({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+
+  const workers = [0, 1, 2, 3].map((i) => {
+    const a = (frame / fps) * 0.55 + (i / 4) * Math.PI * 2 + i * 0.5;
+    const pos = dot(a, Ri);
+    return { ...pos, behind: Math.sin(a) < -0.15, key: i };
+  });
+  const focus = dot(Math.PI / 2, Ro);
+  const done = dot(-Math.PI * 0.72, Ro);
+  const block = dot(-Math.PI * 0.28, Ro);
+  const spr = (at?: number) => at === undefined ? 0 : spring({ frame: frame - at, fps, config: { damping: 12, mass: 0.6 } });
+  const doneP = spr(doneAt);
+  const blockP = spr(blockAt);
+
+  const workerDot = (w: { x: number; y: number; key: number }, z: number) => (
+    <div key={`w${w.key}`} style={{
+      position: "absolute", left: w.x, top: w.y, width: 18, height: 18, borderRadius: 12,
+      transform: "translate(-50%,-50%)", background: CLAUDE_HUE, zIndex: z,
+      boxShadow: `0 0 10px ${CLAUDE_HUE}88`,
+    }} />
+  );
+
+  return (
+    <div style={{ position: "relative", width: size, height: size }}>
+      {/* faint orbit tracks */}
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ position: "absolute", inset: 0 }}>
+        <circle cx={cx} cy={cy} r={Ri} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={1.5} />
+        <circle cx={cx} cy={cy} r={Ro} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={1.5} />
+      </svg>
+      {workers.filter((w) => w.behind).map((w) => workerDot(w, 1))}
+      <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", zIndex: 2 }}>
+        <Volt2 size={size * 0.42} talking={talking} />
+      </div>
+      {workers.filter((w) => !w.behind).map((w) => workerDot(w, 3))}
+
+      {/* focused pin */}
+      <div style={{
+        position: "absolute", left: focus.x, top: focus.y, width: 26, height: 26, borderRadius: 16,
+        transform: "translate(-50%,-50%)", background: "#FFFFFF", border: "3px solid rgba(255,255,255,0.55)",
+        boxShadow: "0 0 16px rgba(255,255,255,0.5)", zIndex: 5,
+      }} />
+
+      {/* Done notification */}
+      {doneAt !== undefined && doneP > 0.02 && (
+        <div style={{
+          position: "absolute", left: done.x, top: done.y, width: 30, height: 30, borderRadius: 18,
+          transform: `translate(-50%,-50%) scale(${doneP})`, background: CLAUDE_HUE, zIndex: 6,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: "#fff", fontSize: 19, fontWeight: 800, boxShadow: `0 0 14px ${CLAUDE_HUE}`,
+        }}>✓</div>
+      )}
+      {/* Needs-you notification */}
+      {blockAt !== undefined && blockP > 0.02 && (
+        <div style={{
+          position: "absolute", left: block.x, top: block.y, width: 30, height: 30, borderRadius: 18,
+          transform: `translate(-50%,-50%) scale(${blockP})`, background: AMBER, zIndex: 6,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: "#1a1206", fontSize: 20, fontWeight: 900, boxShadow: `0 0 14px ${AMBER}`,
+        }}>?</div>
+      )}
+
+      {labels && (
+        <>
+          <Pill x={focus.x} y={focus.y + 34} text="Focused" color="#FFFFFF" />
+          {doneAt !== undefined && doneP > 0.3 && <Pill x={done.x - 4} y={done.y - 32} text="Done" color={CLAUDE_HUE} appear={doneP} />}
+          {blockAt !== undefined && blockP > 0.3 && <Pill x={block.x + 4} y={block.y - 32} text="Needs you" color={AMBER} appear={blockP} />}
+        </>
+      )}
+    </div>
+  );
+};
+
+// A soft macOS desktop wallpaper with a thin menu bar, so the widget beat
+// reads as the real desktop rather than the app stage.
+const MacDesktop: React.FC<{ children?: React.ReactNode }> = ({ children }) => (
+  <AbsoluteFill style={{ background: "linear-gradient(155deg, #2c2660 0%, #6a4b9c 42%, #b56690 74%, #e79a6f 100%)" }}>
+    <div style={{
+      position: "absolute", top: 0, left: 0, right: 0, height: 34,
+      background: "rgba(18,18,26,0.32)", display: "flex", alignItems: "center", gap: 22,
+      padding: "0 22px", color: "rgba(255,255,255,0.9)", fontSize: 17, fontWeight: 600,
+    }}>
+      <div style={{ width: 15, height: 15, borderRadius: 4, background: "rgba(255,255,255,0.9)" }} />
+      <span style={{ fontWeight: 800 }}>Finder</span>
+      <span style={{ opacity: 0.7 }}>File</span>
+      <span style={{ opacity: 0.7 }}>Edit</span>
+      <span style={{ opacity: 0.7 }}>View</span>
+      <span style={{ marginLeft: "auto", opacity: 0.85 }}>9:41</span>
+    </div>
+    {children}
+  </AbsoluteFill>
+);
 
 export const Ambient2: React.FC = () => {
   const frame = useCurrentFrame();
-  const swapF = f(ambient.len / 2);
-  const verbs = frame < swapF ? VERBS_EARLY : VERBS_LATE;
-  const breathe = 0.97 + 0.03 * Math.sin(frame / 22);
+  const deskIn = interpolate(frame, [0, 14], [0, 1], clampBoth);
+  const deskOut = interpolate(frame, [82, 102], [1, 0], clampBoth);
+  const deskOpacity = Math.min(deskIn, deskOut);
+  const appOpacity = interpolate(frame, [90, 108], [0, 1], clampBoth);
+  const breathe = 0.98 + 0.02 * Math.sin(frame / 22);
+  const capB = interpolate(frame, [110, 124, 176, 190], [0, 1, 1, 0], clampBoth);
+  const capC = interpolate(frame, [190, 204], [0, 1], clampBoth);
+
   return (
     <Stage>
-      <Aurora accent="blue" strength={0.8} />
-      <Particles count={24} />
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
-        <AppWindow width={1240} style={{ height: 660 }}>
-          <div style={{ position: "relative", height: 610 }}>
-            {/* unread pill on the left edge, like the real idle window */}
-            <div style={{ position: "absolute", left: 26, top: "44%", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-              <div style={{ padding: "3px 11px", borderRadius: 999, border: `1.5px solid ${T.gold}`, color: T.gold, fontSize: 18, fontWeight: 700 }}>4</div>
-              <div style={{ width: 3, height: 52, borderRadius: 2, background: T.gold, opacity: 0.8 }} />
+      {/* Beat A - leave it in the corner: the desktop widget */}
+      <AbsoluteFill style={{ opacity: deskOpacity }}>
+        <MacDesktop>
+          <div style={{ position: "absolute", right: 96, bottom: 92, filter: "drop-shadow(0 26px 54px rgba(0,0,0,0.42))" }}>
+            <PetRing size={340} />
+          </div>
+          <div style={{ position: "absolute", right: 108, bottom: 52, color: "#fff", fontSize: 23, fontWeight: 700, textShadow: "0 2px 12px rgba(0,0,0,0.45)", opacity: 0.92 }}>
+            Lives on your desktop
+          </div>
+        </MacDesktop>
+      </AbsoluteFill>
+
+      {/* Beat B/C - at a glance, and it speaks up: the in-app fleet ring */}
+      <AbsoluteFill style={{ opacity: appOpacity, alignItems: "center", justifyContent: "center" }}>
+        <Aurora accent="blue" strength={0.7} />
+        <Particles count={20} />
+        <AppWindow width={980} style={{ height: 690 }}>
+          <div style={{ position: "relative", height: 640, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ transform: `scale(${breathe})` }}>
+              <PetRing size={540} labels doneAt={188} blockAt={206} />
             </div>
-            <FloatingVerbs phrases={verbs} />
-            <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
-              <div style={{ transform: `scale(${breathe})` }}>
-                <Mark2 size={250} />
-              </div>
-            </AbsoluteFill>
+            <div style={{ position: "absolute", left: 0, right: 0, bottom: 26, textAlign: "center", color: T.text, fontSize: 25, fontWeight: 600, padding: "0 60px" }}>
+              <span style={{ position: "absolute", left: 0, right: 0, opacity: capB, padding: "0 60px" }}>
+                Every Claude session it runs, at a glance. Click any one to focus.
+              </span>
+              <span style={{ position: "absolute", left: 0, right: 0, opacity: capC, padding: "0 60px" }}>
+                And it speaks up the moment one needs you, or finishes.
+              </span>
+            </div>
           </div>
         </AppWindow>
       </AbsoluteFill>
