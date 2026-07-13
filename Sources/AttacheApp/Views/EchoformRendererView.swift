@@ -29,6 +29,8 @@ struct EchoformRendererView: View {
     /// The focused mote's persisted ring angle (INF-280), pet mode only.
     var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle
     var onPetFocusAngleChanged: ((Double) -> Void)?
+    /// The character in the middle of the ring (INF-283), pet mode only.
+    var petCharacter: BubblesPetCharacter = .bubbles
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -51,6 +53,7 @@ struct EchoformRendererView: View {
                     brightnessLevel: brightnessLevel,
                     delights: petDelights,
                     shiny: petShiny,
+                    character: petCharacter,
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch,
                     focusAngle: petFocusAngle,

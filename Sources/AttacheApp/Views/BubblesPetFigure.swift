@@ -119,16 +119,44 @@ enum BubblesPetAnatomy {
     case head
 }
 
+/// The character in the middle of the ring (INF-283). Every character is a
+/// renderer over the same `BubblesPose`: it must express eyes (openness,
+/// gaze, dizzy crosses, worried brows), the mouth (smile plus the open
+/// lip-sync shape), cheek glow, and head tilt; breathing, hops, squash, and
+/// sway arrive through the shared figure transform. The mark and all brand
+/// surfaces always use `.bubbles`.
+enum BubblesPetCharacter: String, CaseIterable, Identifiable {
+    case bubbles
+    case robot
+    case owl
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .bubbles: return "Bubbles"
+        case .robot: return "Volt"
+        case .owl: return "Scout"
+        }
+    }
+}
+
 struct BubblesPetFigure: View {
     var pose: BubblesPose = .neutral
     var arcColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 1)
     var bodyColor: Color = Color(red: 242 / 255, green: 242 / 255, blue: 245 / 255)
     var headroom: CGFloat = 0
     var anatomy: BubblesPetAnatomy = .full
+    /// Live companion character; only consulted by `.head` anatomy.
+    var character: BubblesPetCharacter = .bubbles
     /// Fleet motes (INF-275), pre-positioned in design units by the motor.
     var fleetMotes: [BubblesFleetMote] = []
-    /// Theme signature color for the focused session's mote.
-    var accentColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 1)
+    /// The focused session's mote fill (INF-281): white on dark, near-black
+    /// on light, so it never collides with a harness hue. Codex owns blue.
+    var accentColor: Color = .white
+    /// True when `accentColor` is light, so glyphs drawn on the focused
+    /// mote can flip to a dark stroke.
+    var accentIsLight = true
 
     static let blockedMoteColor = Color(red: 1.0, green: 0.69, blue: 0.125)
     /// How far the head layer drops in `.head` anatomy so the composition
@@ -237,7 +265,7 @@ struct BubblesPetFigure: View {
                 ))
                 context.stroke(
                     halo,
-                    with: .color(Color.white.opacity(0.9 * mote.opacity)),
+                    with: .color(color.opacity(0.55 * mote.opacity)),
                     style: StrokeStyle(lineWidth: 1.2 * s)
                 )
             }
@@ -247,15 +275,19 @@ struct BubblesPetFigure: View {
                     .foregroundColor(Color(red: 0.02, green: 0.04, blue: 0.09))
                 context.draw(context.resolve(text), at: center)
             }
+            let darkInk = Color(red: 0.02, green: 0.04, blue: 0.09)
+            let onFocused = mote.fill == .focused
             switch mote.glyph {
             case .none:
                 break
             case .question:
+                let ink = onFocused && !accentIsLight ? Color.white : darkInk
                 let glyph = Text("?")
                     .font(.system(size: mote.radius * 1.5 * s, weight: .heavy, design: .rounded))
-                    .foregroundColor(Color(red: 0.02, green: 0.04, blue: 0.09).opacity(mote.opacity))
+                    .foregroundColor(ink.opacity(mote.opacity))
                 context.draw(context.resolve(glyph), at: center)
             case .check:
+                let ink = onFocused && accentIsLight ? darkInk : Color.white
                 var check = Path()
                 let u = mote.radius * s
                 check.move(to: CGPoint(x: center.x - u * 0.5, y: center.y + u * 0.05))
@@ -263,7 +295,7 @@ struct BubblesPetFigure: View {
                 check.addLine(to: CGPoint(x: center.x + u * 0.55, y: center.y - u * 0.38))
                 context.stroke(
                     check,
-                    with: .color(Color.white.opacity(0.95 * mote.opacity)),
+                    with: .color(ink.opacity(0.95 * mote.opacity)),
                     style: StrokeStyle(lineWidth: max(1.4, u * 0.24), lineCap: .round, lineJoin: .round)
                 )
             }
@@ -296,20 +328,22 @@ struct BubblesPetFigure: View {
     }
 
     private func drawArcs(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
-        // The head anatomy tightens the voice arcs (INF-280 feedback: the
-        // full-size arcs claim too much of the surface once the ring is the
-        // main show); the mark keeps its canonical 40/66/90.
+        // The head anatomy tightens and raises the voice arcs so the session
+        // ring keeps a clear lane below them even while speech ripples them
+        // (INF-281 feedback: motes were crashing into the arcs); the mark
+        // keeps its canonical 40/66/90 at the canonical center.
         let arcSpecs: [(radius: CGFloat, width: CGFloat, opacity: Double)] = anatomy == .head
-            ? [(34, 8, 1.0), (46, 8, 0.62), (58, 8, 0.30)]
+            ? [(30, 8, 1.0), (41, 8, 0.62), (52, 8, 0.30)]
             : [(40, 9, 1.0), (66, 9, 0.62), (90, 9, 0.30)]
+        let arcCenter = anatomy == .head ? p(120, 78) : p(120, 89)
         for (index, spec) in arcSpecs.enumerated() {
             let ripple = CGFloat(4 * pose.arcRipple * sin(pose.arcPhase - Double(index) * 1.1))
             var arc = Path()
             arc.addArc(
-                center: p(120, 89),
+                center: arcCenter,
                 radius: (spec.radius + ripple) * s,
-                startAngle: .degrees(-132),
-                endAngle: .degrees(-48),
+                startAngle: .degrees(anatomy == .head ? -128 : -132),
+                endAngle: .degrees(anatomy == .head ? -52 : -48),
                 clockwise: false
             )
             context.stroke(
@@ -338,6 +372,17 @@ struct BubblesPetFigure: View {
         head.rotate(by: .degrees(pose.headTilt))
         head.translateBy(x: -pivot.x, y: -pivot.y)
 
+        switch anatomy == .head ? character : .bubbles {
+        case .bubbles:
+            drawBubblesFace(in: head, pose: pose, p: p, s: s)
+        case .robot:
+            drawRobotFace(in: head, pose: pose, p: p, s: s)
+        case .owl:
+            drawOwlFace(in: head, pose: pose, p: p, s: s)
+        }
+    }
+
+    private func drawBubblesFace(in head: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         let skull = Path(ellipseIn: CGRect(
             x: p(87, 79).x, y: p(87, 79).y, width: 66 * s, height: 66 * s
         ))
@@ -424,6 +469,212 @@ struct BubblesPetFigure: View {
                 x: center.x - rx * s, y: center.y - ry * s, width: rx * 2 * s, height: ry * 2 * s
             ))
             face.fill(open, with: .color(AttacheMascotMark.faceColor))
+        }
+    }
+
+    /// Volt (INF-283): a squared-off robot head. Eyes are LED bars whose
+    /// height is `eyeOpenness`, the mouth is an equalizer that dances with
+    /// `mouthOpen`, worry tilts the LEDs, dizzy crosses them out, and the
+    /// antenna bulb carries the cheek glow.
+    private func drawRobotFace(in head: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        let steel = Color(red: 199 / 255, green: 208 / 255, blue: 220 / 255)
+        let screen = AttacheMascotMark.faceColor
+        let led = Color(red: 102 / 255, green: 227 / 255, blue: 1)
+
+        var antenna = Path()
+        antenna.move(to: p(120, 82))
+        antenna.addLine(to: p(120, 73))
+        head.stroke(antenna, with: .color(steel), style: StrokeStyle(lineWidth: 3 * s, lineCap: .round))
+        let bulb = Path(ellipseIn: CGRect(
+            x: p(116.5, 66).x, y: p(116.5, 66).y, width: 7 * s, height: 7 * s
+        ))
+        head.fill(bulb, with: .color(AttacheMascotMark.cheekColor.opacity(0.35 + 0.65 * pose.cheekGlow)))
+
+        let plate = Path(
+            roundedRect: CGRect(x: p(88, 82).x, y: p(88, 82).y, width: 64 * s, height: 60 * s),
+            cornerRadius: 14 * s
+        )
+        head.fill(plate, with: .color(steel))
+        let glass = Path(
+            roundedRect: CGRect(x: p(94, 92).x, y: p(94, 92).y, width: 52 * s, height: 34 * s),
+            cornerRadius: 8 * s
+        )
+        head.fill(glass, with: .color(screen))
+
+        var face = head
+        let gx = max(-3, min(3, pose.gaze.width))
+        let gy = max(-3, min(3, pose.gaze.height))
+        face.translateBy(x: gx * s, y: gy * s)
+
+        let eyeAlpha = 1 - pose.dizzy
+        let openness = pose.eyeOpenness * (1 - 0.4 * pose.browWorry)
+        if eyeAlpha > 0.01 {
+            for (index, eyeX) in [99.0, 127.0].enumerated() {
+                let height = max(2.5, 11 * openness)
+                var eye = face
+                let center = p(eyeX + 7, 106)
+                let worryTilt = pose.browWorry * 14 * (index == 0 ? 1 : -1)
+                eye.translateBy(x: center.x, y: center.y)
+                eye.rotate(by: .degrees(worryTilt))
+                eye.translateBy(x: -center.x, y: -center.y)
+                let bar = Path(
+                    roundedRect: CGRect(
+                        x: p(eyeX, 106).x, y: center.y - height / 2 * s,
+                        width: 14 * s, height: height * s
+                    ),
+                    cornerRadius: 2.5 * s
+                )
+                eye.fill(bar, with: .color(led.opacity(eyeAlpha)))
+            }
+        }
+        if pose.dizzy > 0.01 {
+            var crosses = Path()
+            for centerX in [106.0, 134.0] {
+                crosses.move(to: p(centerX - 5, 101))
+                crosses.addLine(to: p(centerX + 5, 111))
+                crosses.move(to: p(centerX + 5, 101))
+                crosses.addLine(to: p(centerX - 5, 111))
+            }
+            face.stroke(
+                crosses,
+                with: .color(led.opacity(pose.dizzy)),
+                style: StrokeStyle(lineWidth: 3.5 * s, lineCap: .round)
+            )
+        }
+
+        for boltX in [92.5, 143.5] {
+            let bolt = Path(ellipseIn: CGRect(
+                x: p(boltX, 119).x, y: p(boltX, 119).y, width: 4 * s, height: 4 * s
+            ))
+            head.fill(bolt, with: .color(AttacheMascotMark.cheekColor.opacity(pose.cheekGlow)))
+        }
+
+        if pose.mouthOpen < 0.15 {
+            let halfWidth = (4 + 8 * pose.smile) * s
+            let mouth = Path(
+                roundedRect: CGRect(
+                    x: p(120, 132.5).x - halfWidth, y: p(120, 132.5).y,
+                    width: halfWidth * 2, height: 3.5 * s
+                ),
+                cornerRadius: 1.75 * s
+            )
+            face.fill(mouth, with: .color(screen))
+        } else {
+            for bar in 0..<5 {
+                let x = 108.0 + Double(bar) * 6
+                let wave = 0.55 + 0.45 * sin(Double(bar) * 2.1 + pose.mouthOpen * 9)
+                let height = (3 + 10 * pose.mouthOpen * wave) * s
+                let slot = Path(
+                    roundedRect: CGRect(
+                        x: p(CGFloat(x), 134).x, y: p(CGFloat(x), 134).y - height / 2,
+                        width: 4 * s, height: height
+                    ),
+                    cornerRadius: 2 * s
+                )
+                face.fill(slot, with: .color(screen))
+            }
+        }
+    }
+
+    /// Scout (INF-283): an owl. The big eyes have pupils that ride the gaze
+    /// (the expressive-eyeball ask), lids close with `eyeOpenness`, the beak
+    /// opens for speech, and the ear tufts read the silhouette at any size.
+    private func drawOwlFace(in head: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        let feathers = Color(red: 176 / 255, green: 137 / 255, blue: 104 / 255)
+        let faceDisc = Color(red: 245 / 255, green: 230 / 255, blue: 206 / 255)
+        let ink = AttacheMascotMark.faceColor
+        let beakColor = Color(red: 232 / 255, green: 161 / 255, blue: 61 / 255)
+
+        var tufts = Path()
+        tufts.move(to: p(94, 86))
+        tufts.addLine(to: p(100, 69))
+        tufts.addLine(to: p(111, 82))
+        tufts.closeSubpath()
+        tufts.move(to: p(146, 86))
+        tufts.addLine(to: p(140, 69))
+        tufts.addLine(to: p(129, 82))
+        tufts.closeSubpath()
+        head.fill(tufts, with: .color(feathers))
+
+        let skull = Path(ellipseIn: CGRect(
+            x: p(87, 79).x, y: p(87, 79).y, width: 66 * s, height: 66 * s
+        ))
+        head.fill(skull, with: .color(feathers))
+        let disc = Path(ellipseIn: CGRect(
+            x: p(96, 92).x, y: p(96, 92).y, width: 48 * s, height: 42 * s
+        ))
+        head.fill(disc, with: .color(faceDisc))
+
+        let gx = max(-3, min(3, pose.gaze.width))
+        let gy = max(-3, min(3, pose.gaze.height))
+        let eyeAlpha = 1 - pose.dizzy
+        let openness = pose.eyeOpenness * (1 - 0.35 * pose.browWorry)
+        for eyeX in [106.0, 134.0] {
+            let center = p(CGFloat(eyeX), 107)
+            if eyeAlpha > 0.01, openness > 0.12 {
+                let white = Path(ellipseIn: CGRect(
+                    x: center.x - 10 * s, y: center.y - 10 * s * openness,
+                    width: 20 * s, height: 20 * s * openness
+                ))
+                head.fill(white, with: .color(.white.opacity(eyeAlpha)))
+                let pupil = Path(ellipseIn: CGRect(
+                    x: center.x - 4 * s + gx * 1.9 * s,
+                    y: center.y - 4 * s * openness + gy * 1.6 * s,
+                    width: 8 * s, height: 8 * s * openness
+                ))
+                head.fill(pupil, with: .color(ink.opacity(eyeAlpha)))
+            } else if eyeAlpha > 0.01 {
+                var lid = Path()
+                lid.move(to: CGPoint(x: center.x - 9 * s, y: center.y))
+                lid.addQuadCurve(
+                    to: CGPoint(x: center.x + 9 * s, y: center.y),
+                    control: CGPoint(x: center.x, y: center.y + 6 * s)
+                )
+                head.stroke(lid, with: .color(ink.opacity(eyeAlpha)),
+                            style: StrokeStyle(lineWidth: 4 * s, lineCap: .round))
+            }
+            if pose.dizzy > 0.01 {
+                var cross = Path()
+                cross.move(to: CGPoint(x: center.x - 6 * s, y: center.y - 5 * s))
+                cross.addLine(to: CGPoint(x: center.x + 6 * s, y: center.y + 5 * s))
+                cross.move(to: CGPoint(x: center.x + 6 * s, y: center.y - 5 * s))
+                cross.addLine(to: CGPoint(x: center.x - 6 * s, y: center.y + 5 * s))
+                head.stroke(cross, with: .color(ink.opacity(pose.dizzy)),
+                            style: StrokeStyle(lineWidth: 3.5 * s, lineCap: .round))
+            }
+        }
+        if pose.browWorry > 0.01 {
+            var brows = Path()
+            brows.move(to: p(96, 96))
+            brows.addLine(to: p(113, 92))
+            brows.move(to: p(127, 92))
+            brows.addLine(to: p(144, 96))
+            head.stroke(brows, with: .color(feathers.opacity(pose.browWorry)),
+                        style: StrokeStyle(lineWidth: 4.5 * s, lineCap: .round))
+        }
+
+        for cheekX in [95.0, 145.0] {
+            let cheek = Path(ellipseIn: CGRect(
+                x: p(CGFloat(cheekX) - 5, 116).x, y: p(CGFloat(cheekX) - 5, 116).y,
+                width: 10 * s, height: 10 * s
+            ))
+            head.fill(cheek, with: .color(AttacheMascotMark.cheekColor.opacity(pose.cheekGlow)))
+        }
+
+        var upperBeak = Path()
+        upperBeak.move(to: p(114, 116))
+        upperBeak.addLine(to: p(126, 116))
+        upperBeak.addLine(to: p(120, 126))
+        upperBeak.closeSubpath()
+        head.fill(upperBeak, with: .color(beakColor))
+        if pose.mouthOpen >= 0.15 {
+            let drop = 4 + 10 * pose.mouthOpen
+            var lowerBeak = Path()
+            lowerBeak.move(to: p(115.5, 121))
+            lowerBeak.addLine(to: p(124.5, 121))
+            lowerBeak.addLine(to: p(120, 121 + CGFloat(drop)))
+            lowerBeak.closeSubpath()
+            head.fill(lowerBeak, with: .color(beakColor.opacity(0.85)))
         }
     }
 

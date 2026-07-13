@@ -82,9 +82,14 @@ enum BubblesPetChoreography {
 
     /// The session ring around the head anatomy (INF-280), in design units.
     /// The center matches the head after `BubblesPetFigure.headAnatomyDrop`;
-    /// the radii clear the compact arcs above and leave glyph room below.
+    /// the ring is flattened so its top lane clears the raised voice arcs
+    /// even while speech ripples them (INF-281).
     static let ringCenter = CGPoint(x: 120, y: 138)
-    static let ringRadii = CGSize(width: 68, height: 50)
+    static let ringRadii = CGSize(width: 68, height: 40)
+    /// The inner lane for needs-you and finished motes: hugging the face so
+    /// the glyph reads like a notification on the pet, clearly out of the
+    /// orbit traffic (INF-281).
+    static let innerRingRadii = CGSize(width: 48, height: 34)
     /// Where the focused mote rests until the user drags it: bottom center,
     /// right in front of the pet's gaze.
     static let defaultFocusAngle = Double.pi / 2
@@ -94,6 +99,14 @@ enum BubblesPetChoreography {
         CGPoint(
             x: ringCenter.x + CGFloat(cos(angle)) * ringRadii.width,
             y: ringCenter.y + CGFloat(sin(angle)) * ringRadii.height
+        )
+    }
+
+    /// A point on the inner glyph lane.
+    static func innerRingPoint(angle: Double) -> CGPoint {
+        CGPoint(
+            x: ringCenter.x + CGFloat(cos(angle)) * innerRingRadii.width,
+            y: ringCenter.y + CGFloat(sin(angle)) * innerRingRadii.height
         )
     }
 
@@ -617,9 +630,19 @@ final class BubblesPetMotor: ObservableObject {
     /// its own; the view's drag gesture and focus changes are the only
     /// writers.
     var focusedAngle: Double = BubblesPetChoreography.defaultFocusAngle
-    /// True while the user is dragging the focused mote, so the view can
-    /// raise the frame rate for a responsive hand feel.
+    /// True while the user is dragging any mote, so the view can raise the
+    /// frame rate for a responsive hand feel.
     var draggingFocus = false
+
+    /// Repins a draggable mote at a new lane angle: the focused mote moves
+    /// its persistent pin, a glyph mote its frozen spot (INF-281).
+    func setDraggedAngle(sessionID: String, angle: Double) {
+        if sessionID == lastFocusedID {
+            focusedAngle = angle
+        } else {
+            fleetOrbitPhases[sessionID] = angle
+        }
+    }
     private var lastFocusedID: String?
     /// Where the focused mote sat last frame, for the continuous stare.
     private(set) var focusedMotePosition: CGPoint?
@@ -761,9 +784,11 @@ final class BubblesPetMotor: ObservableObject {
                 ))
             }
 
+            // Needs-you and finished motes step onto the inner lane, close
+            // to the face, always in front: notifications, not traffic.
             for session in group.blocked where !session.isFocused {
                 shownIDs.insert(session.id)
-                let target = BubblesPetChoreography.ringPoint(angle: frozenAngle(session.id))
+                let target = BubblesPetChoreography.innerRingPoint(angle: frozenAngle(session.id))
                 let position = ease(session.id, toward: target, spawnAt: target)
                 let pulse = reduceMotion ? 0 : 0.4 * sin(2 * .pi * now / 1.6)
                 if lastFleetStates[session.id] != .blocked {
@@ -775,14 +800,14 @@ final class BubblesPetMotor: ObservableObject {
                     fill: .blocked,
                     sessionID: session.id,
                     title: session.title,
-                    behind: position.y < ringCenterY - 0.5,
-                    glyph: .question
+                    glyph: .question,
+                    draggable: true
                 ))
             }
 
             for session in group.finished where !session.isFocused {
                 shownIDs.insert(session.id)
-                let target = BubblesPetChoreography.ringPoint(angle: frozenAngle(session.id))
+                let target = BubblesPetChoreography.innerRingPoint(angle: frozenAngle(session.id))
                 let position = ease(session.id, toward: target, spawnAt: target)
                 if lastFleetStates[session.id] != .finished {
                     glance = (position, now + 0.9, true)
@@ -794,8 +819,8 @@ final class BubblesPetMotor: ObservableObject {
                     opacity: 0.95,
                     sessionID: session.id,
                     title: session.title,
-                    behind: position.y < ringCenterY - 0.5,
-                    glyph: .check
+                    glyph: .check,
+                    draggable: true
                 ))
             }
 
@@ -926,6 +951,8 @@ struct BubblesPetView: View {
     var delights: PetDelights = .none
     /// The shiny easter egg: golden arcs on the 1-in-20 profiles (INF-273).
     var shiny = false
+    /// The character in the middle of the ring (INF-283).
+    var character: BubblesPetCharacter = .bubbles
     /// Fleet interactivity (INF-275): click a mote to focus its session,
     /// click a badge to open the session switcher.
     var onFleetFocus: ((String) -> Void)?
@@ -941,7 +968,7 @@ struct BubblesPetView: View {
     @State private var windowVisible = true
     @State private var hoverGaze: CGSize?
     @State private var hoveredMote: (title: String, at: CGPoint)?
-    @State private var draggingFocus = false
+    @State private var draggedMote: (id: String, isFocused: Bool)?
 
     private static let headroom: CGFloat = 28
 
@@ -960,8 +987,12 @@ struct BubblesPetView: View {
                     arcColor: arcColor,
                     headroom: Self.headroom,
                     anatomy: .head,
+                    character: character,
                     fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion),
-                    accentColor: theme.signatureColor
+                    accentColor: colorScheme == .dark
+                        ? .white
+                        : Color(red: 0.10, green: 0.11, blue: 0.14),
+                    accentIsLight: colorScheme == .dark
                 )
             }
             .contentShape(Rectangle())
@@ -996,19 +1027,25 @@ struct BubblesPetView: View {
             })
             .simultaneousGesture(DragGesture(minimumDistance: 4)
                 .onChanged { value in
-                    if !draggingFocus {
+                    if draggedMote == nil {
                         guard let mote = fleetMote(at: value.startLocation, in: proxy.size),
-                              mote.draggable else { return }
-                        draggingFocus = true
+                              mote.draggable, let sessionID = mote.sessionID else { return }
+                        draggedMote = (sessionID, mote.fill == .focused)
                         motor.draggingFocus = true
                     }
-                    motor.focusedAngle = ringAngle(at: value.location, in: proxy.size)
+                    guard let draggedMote else { return }
+                    motor.setDraggedAngle(
+                        sessionID: draggedMote.id,
+                        angle: ringAngle(at: value.location, in: proxy.size)
+                    )
                 }
                 .onEnded { _ in
-                    guard draggingFocus else { return }
-                    draggingFocus = false
+                    guard let ended = draggedMote else { return }
+                    draggedMote = nil
                     motor.draggingFocus = false
-                    onFocusAngleChanged?(motor.focusedAngle)
+                    if ended.isFocused {
+                        onFocusAngleChanged?(motor.focusedAngle)
+                    }
                 })
             .onAppear { motor.focusedAngle = focusAngle }
             .overlay(alignment: .topLeading) {
@@ -1074,7 +1111,7 @@ struct BubblesPetView: View {
     }
 
     private var frameInterval: Double {
-        if draggingFocus { return 1.0 / 40.0 }
+        if draggedMote != nil { return 1.0 / 40.0 }
         let fleetIsMoving = activity.fleet.contains { $0.state != .quiet }
         switch activity.phase {
         case .sleeping, .idle, .paused:

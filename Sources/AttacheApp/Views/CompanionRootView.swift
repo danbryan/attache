@@ -178,7 +178,8 @@ struct CompanionRootView: View {
                     NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
                 },
                 petFocusAngle: model.petFocusAngle,
-                onPetFocusAngleChanged: { model.petFocusAngle = $0 }
+                onPetFocusAngleChanged: { model.petFocusAngle = $0 },
+                petCharacter: model.petCharacter
             )
             .opacity(model.surfaceOpacity)
             .ignoresSafeArea()

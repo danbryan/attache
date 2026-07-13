@@ -148,6 +148,16 @@ final class SessionAttentionTests: XCTestCase {
                        .turnComplete)
     }
 
+    func testProseSettlesToTurnCompleteAfterTenSeconds() {
+        let lines = [claudeAssistantText("All done, pushed the branch.", secondsAgo: 15)]
+        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: lines, format: .claude, now: now),
+                       .turnComplete,
+                       "a settled turn must not read as working for the whole active window")
+        let fresh = [claudeAssistantText("Still streaming this answer.", secondsAgo: 5)]
+        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: fresh, format: .claude, now: now),
+                       .active)
+    }
+
     func testEmptyTailIsQuiet() {
         XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: [], format: .claude, now: now),
                        .quiet)

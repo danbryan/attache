@@ -132,6 +132,16 @@ struct SettingsView: View {
                 .accessibilityLabel("Visual mode")
                 .frame(width: 210)
             }
+            if model.visualMode == .pet {
+                settingRow("Pet character") {
+                    Picker("", selection: $model.petCharacter) {
+                        ForEach(BubblesPetCharacter.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                    }
+                    .labelsHidden()
+                    .accessibilityLabel("Pet character")
+                    .frame(width: 210)
+                }
+            }
             settingRow("Idle screen") {
                 Picker("", selection: $model.idleBrand) {
                     ForEach(CompanionIdleBrand.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }

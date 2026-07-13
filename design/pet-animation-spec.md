@@ -130,16 +130,20 @@ States, per session:
   per-session seed so layouts never shuffle.
 - **Quiet** stops orbiting and settles into its agent's bottom-arc cluster
   (Claude left of the focus rest spot, Codex right), dimmed to 0.4.
-- **Needs-you** (blocked) freezes where it is, turns amber `#FFB020`, shows
-  a ? glyph, and pulses its radius on a calm 1.6 s cycle. Never merges.
-- **Finished** (turn complete) freezes with a check glyph in its agent hue
-  until the session goes active again. Never merges.
-- **Focused** wears the theme signature fill, a white halo, and a larger
-  radius. It does not orbit: it sits pinned at a stored angle (default
-  bottom center, in front of the gaze) and only moves when the user drags
-  it along the ring; the angle persists (`attache.petFocusAngle`).
-  Focusing another session pins that mote where it currently sits and the
-  old one rejoins the ring from the pin.
+- **Needs-you** (blocked) steps onto the inner lane (48 x 34, hugging the
+  face like a notification, always drawn in front), turns amber `#FFB020`,
+  shows a ? glyph, and pulses its radius on a calm 1.6 s cycle. Never
+  merges. Draggable along its lane.
+- **Finished** (turn complete) steps onto the inner lane with a check glyph
+  in its agent hue until the session goes active again. Never merges.
+  Draggable along its lane.
+- **Focused** fills white on dark themes and near-black on light ones (a
+  harness hue would collide with Codex blue), with a matching halo and a
+  larger radius. It does not orbit: it sits pinned at a stored angle
+  (default bottom center, in front of the gaze) and only moves when the
+  user drags it along the ring; the angle persists
+  (`attache.petFocusAngle`). Focusing another session pins that mote where
+  it currently sits and the old one rejoins the ring from the pin.
 - **Sub-agents** emit expanding ripple rings from the mote; cadence scales
   with the square root of the count (floor 0.45 s). At most 2 ripplers stay
   individual per agent.
@@ -154,10 +158,18 @@ Gaze:
 - The hover-follow delight yields to the stare whenever a focused session
   exists.
 
+Lanes:
+
+- The head anatomy raises and narrows the voice arcs (radii 30/41/52 at
+  center y 82, span -128 to -52 degrees) and flattens the ring to 68 x 40,
+  so the orbit lane never touches the arcs even at full speech ripple.
+  Three lanes total, outside in: arcs, orbit ring, inner glyph lane.
+
 Depth and crowds:
 
 - Motes on the ring's far half draw behind the arcs and head; the path
-  reads as passing around the pet.
+  reads as passing around the pet. Inner-lane glyph motes always draw in
+  front.
 - Up to 4 plain working motes per agent orbit individually; more merge into
   one orbiting count badge in the agent hue (numeral capped at 999). More
   than 4 quiet sessions merge into a dim parked badge at the cluster spot.
@@ -192,6 +204,35 @@ Data:
 - Cadence: fleet activity holds the calm-phase frame interval at 1/30 s
   (instead of 1/12 s) only while some mote is non-quiet, and 1/40 s while
   the focused mote is being dragged.
+
+## Characters (INF-283)
+
+The middle of the ring is a swappable character; the ring, gaze, glyphs,
+and interactions never change. One character is configured globally
+(Settings > Pet character); `BubblesPetCharacter` ships three:
+
+- **Bubbles**: the mark's face. The only character brand surfaces use.
+- **Volt**: a robot. LED-bar eyes carry `eyeOpenness` (worry tilts them,
+  dizzy crosses them out), the mouth is an equalizer driven by
+  `mouthOpen`, the antenna bulb carries the cheek glow.
+- **Scout**: an owl. Big eyes with pupils that ride the gaze (the most
+  expressive eye read), lids close with `eyeOpenness`, the beak opens for
+  speech, blush carries the cheek glow.
+
+The character contract is the `BubblesPose` face surface: a character must
+express `eyeOpenness`, `gaze`, `dizzy`, `browWorry`, `mouthOpen` plus
+`smile`, and `cheekGlow`, and inherit `headTilt` from the shared head
+transform. Breathing, hops, squash, sway, and the celebrate confetti come
+from the rig; a character that renders the face fields correctly gets
+every phase (sleep, idle, think, respond, tools, speak, paused, blocked,
+error) and every delight for free.
+
+A future bring-your-own tier can be sprite-based: whole-figure motion
+(breathe, hop, squash, sway) is affine and applies to any bitmap; the face
+fields quantize to roughly a dozen sprite variants (eyes open/half/
+closed/crossed, mouth smile/small/wide, worried brows on or off) composited
+or pre-baked per combination. The parametric rig stays the reference
+implementation.
 
 ## Degradation and theming
 

@@ -304,6 +304,10 @@ final class AppModel: ObservableObject {
     @Published var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle {
         didSet { defaults.set(petFocusAngle, forKey: CompanionPreferenceKey.petFocusAngle) }
     }
+    /// The character in the middle of the ring (INF-283).
+    @Published var petCharacter: BubblesPetCharacter = .bubbles {
+        didSet { defaults.set(petCharacter.rawValue, forKey: CompanionPreferenceKey.petCharacter) }
+    }
     /// The shiny easter egg (INF-273): a one-time random roll persisted per
     /// profile, so roughly 1 in 20 installs gets a golden-arc Bubbles. Zero
     /// configuration on purpose; discovery is the point.
@@ -5458,6 +5462,10 @@ final class AppModel: ObservableObject {
         petHoverReaction = defaults.bool(forKey: CompanionPreferenceKey.petHoverReaction)
         if defaults.object(forKey: CompanionPreferenceKey.petFocusAngle) != nil {
             petFocusAngle = defaults.double(forKey: CompanionPreferenceKey.petFocusAngle)
+        }
+        if let value = defaults.string(forKey: CompanionPreferenceKey.petCharacter),
+           let characterChoice = BubblesPetCharacter(rawValue: value) {
+            petCharacter = characterChoice
         }
         if let value = defaults.string(forKey: CompanionPreferenceKey.visualSymmetry),
            let symmetry = CompanionVisualSymmetry(rawValue: value) {

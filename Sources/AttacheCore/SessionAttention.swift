@@ -57,6 +57,12 @@ public enum SessionAttentionClassifier {
 
     /// How recent the newest record must be for the session to read as active.
     public static let activeWindow: TimeInterval = 30
+    /// How long assistant prose must sit unchallenged before the turn reads
+    /// complete. Long generations pause a few seconds between records, so
+    /// this cannot be instant, but it should not wait out `activeWindow`
+    /// either: a finished turn showing as still working for half a minute
+    /// reads as lag (INF-282).
+    public static let turnSettleWindow: TimeInterval = 10
     /// How long a pending ordinary tool must sit quiet before it is even
     /// softly flagged. Builds and test suites routinely run for minutes.
     public static let pendingToolQuietThreshold: TimeInterval = 150
@@ -152,9 +158,9 @@ public enum SessionAttentionClassifier {
         // Assistant prose is the newest thing: turn is over once the stream
         // has clearly stopped. A trailing question is a direct ask.
         if let last = lastAssistantText {
-            if quiet < 10 { return result(.active) }
+            if quiet < turnSettleWindow { return result(.active) }
             if endsWithQuestion(last.text) { return result(.awaitingAnswer) }
-            return result(quiet < activeWindow ? .active : .turnComplete)
+            return result(.turnComplete)
         }
 
         return result(quiet < activeWindow ? .active : .quiet)
