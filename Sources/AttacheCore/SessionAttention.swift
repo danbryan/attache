@@ -67,8 +67,10 @@ public enum SessionAttentionClassifier {
     /// This no longer gates turn completion: the exact done signal is the Stop
     /// hook, not a quiet gap, so a still-thinking turn never shows a check.
     public static let turnSettleWindow: TimeInterval = 10
-    /// How long a pending ordinary tool must sit quiet before it is even
-    /// softly flagged. Builds and test suites routinely run for minutes.
+    /// How recent a transcript error must be to still surface as an error
+    /// rather than fading to quiet. A pending tool is never flagged on quiet
+    /// time now; a long build or ssh loop stays active, and real waits come
+    /// from the Notification hook.
     public static let pendingToolQuietThreshold: TimeInterval = 150
     /// Sessions with nothing newer than this are simply quiet.
     public static let staleWindow: TimeInterval = 30 * 60
@@ -147,12 +149,11 @@ public enum SessionAttentionClassifier {
             return result(.erroredRecently)
         }
 
-        // Ordinary pending tool: soft "possibly waiting" only after a long quiet.
-        if let oldestPending = pendingTools.values.map(\.timestamp).min() {
-            let pendingQuiet = now.timeIntervalSince(oldestPending)
-            if quiet >= pendingToolQuietThreshold {
-                return result(.possiblyWaiting(quietSeconds: Int(pendingQuiet)))
-            }
+        // A pending tool means the agent is working, however long it runs. A
+        // real permission prompt (the CLI writes nothing while it waits) is now
+        // reported exactly by the Notification hook, so a long build, benchmark,
+        // or ssh loop is never guessed to be "possibly waiting on you".
+        if !pendingTools.isEmpty {
             return result(.active)
         }
 

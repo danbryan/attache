@@ -60,14 +60,13 @@ final class SessionAttentionTests: XCTestCase {
                        .active)
     }
 
-    func testLongQuietPendingToolIsPossiblyWaiting() {
+    func testLongRunningToolStaysActiveNotWaiting() {
+        // A tool pending for minutes (a long build, benchmark, or ssh loop) is
+        // still working, not waiting on you. Real permission waits come from
+        // the Notification hook now, not from a quiet-tool guess.
         let lines = [claudeToolUse(name: "Bash", id: "t3", secondsAgo: 400)]
-        let state = SessionAttentionClassifier.classify(tailLines: lines, format: .claude, now: now)
-        guard case .possiblyWaiting(let quiet) = state else {
-            return XCTFail("expected possiblyWaiting, got \(state)")
-        }
-        XCTAssertGreaterThanOrEqual(quiet, 400)
-        XCTAssertTrue(state.needsUser)
+        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: lines, format: .claude, now: now),
+                       .active)
     }
 
     func testTrailingQuestionIsAwaitingAnswer() {
@@ -134,14 +133,12 @@ final class SessionAttentionTests: XCTestCase {
                        .quiet)
     }
 
-    func testCodexPendingFunctionCall() {
+    func testCodexPendingFunctionCallIsActive() {
         let call = """
         {"type":"response_item","timestamp":"\(stamp(300))","payload":{"type":"function_call","name":"shell","call_id":"c1"}}
         """
-        let state = SessionAttentionClassifier.classify(tailLines: [call], format: .codex, now: now)
-        guard case .possiblyWaiting = state else {
-            return XCTFail("expected possiblyWaiting, got \(state)")
-        }
+        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: [call], format: .codex, now: now),
+                       .active)
     }
 
     func testCodexAnsweredCallThenProseGoesQuiet() {
