@@ -180,6 +180,31 @@ final class BubblesFleetTests: XCTestCase {
                           "focusing a mote pins it where it currently sits")
     }
 
+    func testStareAimsAtThePinnedFocusAndGlancesAtNews() {
+        let motor = BubblesPetMotor()
+        var fleet = [session("c0", focused: true), session("c1")]
+        let start = Date(timeIntervalSinceReferenceDate: 50_000)
+        var pose = BubblesPose.neutral
+        for tick in 0..<40 {
+            let state = CompanionActivityState(phase: .idle, fleet: fleet)
+            pose = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
+                              activity: state, reduceMotion: false)
+            _ = motor.fleet(activity: state, reduceMotion: false)
+        }
+        XCTAssertGreaterThan(pose.gaze.height, 1.5,
+                             "the default pin is below the head, so the stare looks down")
+
+        fleet[1].state = .blocked
+        for tick in 40..<44 {
+            let state = CompanionActivityState(phase: .idle, fleet: fleet)
+            pose = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
+                              activity: state, reduceMotion: false)
+            _ = motor.fleet(activity: state, reduceMotion: false)
+        }
+        XCTAssertGreaterThan(pose.browWorry, 0.3,
+                             "a fresh needs-you steals a worried glance")
+    }
+
     func testGlyphStates() {
         let motor = BubblesPetMotor()
         var fleet = [session("c0"), session("c1"), session("c2")]
