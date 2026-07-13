@@ -474,19 +474,14 @@ export const Mark2: React.FC<{
   const pop = (delay: number) =>
     buildFrom === null ? 1 : spring({ frame: frame - buildFrom - delay, fps, config: { damping: 13, mass: 0.7 } });
   const headP = pop(0);
-  const limbP = pop(7);
-  const bubbleP = [pop(14), pop(18), pop(22)];
-  const arcP = [pop(30), pop(34), pop(38)];
+  const arcP = [pop(20), pop(24), pop(28)];
   const arcBase = [1, 0.62, 0.3];
   const arcPulse = (i: number) =>
     talking ? 0.55 + 0.45 * Math.sin(frame / 5 - i * 1.2) : 1;
-  const dotOn = (bubble: number, dot: number) =>
-    0.3 + 0.7 * Math.max(0, Math.sin((frame - bubble * 5) / 7 - dot * 1.05));
-  const BUBBLES: { x: number; y: number; tail: string; color: string }[] = [
-    { x: 36, y: 168, tail: "M62 168 L 68 160 L 54 168 Z", color: "#D97757" },
-    { x: 100, y: 182, tail: "M120 182 L 120 173 L 111 182 Z", color: "#0A84FF" },
-    { x: 164, y: 168, tail: "M178 168 L 172 160 L 186 168 Z", color: "#10A37F" },
-  ];
+  const blinkT = frame % 95;
+  const openness = blinkT < 3 ? 0.16 : blinkT < 7 ? 0.6 : 1;
+  const eyeH = 11 * openness;
+  const STEEL = "#C7D0DC", NAVY = "#10243E", LED = "#66E3FF", CORAL = "#FF9DA1";
   return (
     <svg width={size} height={size} viewBox="-6 -12 252 252" fill="none" style={{ display: "block" }}>
       {[
@@ -497,29 +492,23 @@ export const Mark2: React.FC<{
         <path key={i} d={d} stroke="#0A84FF" strokeWidth={9} strokeLinecap="round"
           opacity={arcBase[i] * arcPulse(i) * arcP[i]} />
       ))}
+      {/* Attaché the robot (INF-291) */}
       <g opacity={headP} transform={`scale(${0.7 + 0.3 * headP})`} transform-origin="120 112">
-        <circle cx="120" cy="112" r="33" fill="#FFF6E4" />
-        <path d="M97 107 Q105 97 113 107" stroke="#10243E" strokeWidth={5} strokeLinecap="round" />
-        <path d="M127 107 Q135 97 143 107" stroke="#10243E" strokeWidth={5} strokeLinecap="round" />
-        <circle cx="95" cy="119" r="6" fill="#FF9DA1" opacity={0.6} />
-        <circle cx="145" cy="119" r="6" fill="#FF9DA1" opacity={0.6} />
-        <path d="M108 119 C 111 134, 129 134, 132 119 Z" fill="#10243E" />
+        <line x1="120" y1="82" x2="120" y2="73" stroke={STEEL} strokeWidth={3} strokeLinecap="round" />
+        <circle cx="120" cy="69.5" r="3.5" fill={CORAL} />
+        <rect x="88" y="82" width="64" height="60" rx="14" fill={STEEL} />
+        <rect x="94" y="92" width="52" height="34" rx="8" fill={NAVY} />
+        <rect x="99" y={106 - eyeH / 2} width="14" height={eyeH} rx="2.5" fill={LED} />
+        <rect x="127" y={106 - eyeH / 2} width="14" height={eyeH} rx="2.5" fill={LED} />
+        <circle cx="92.5" cy="119" r="2" fill={CORAL} />
+        <circle cx="143.5" cy="119" r="2" fill={CORAL} />
+        {talking
+          ? [0, 1, 2, 3, 4].map((i) => {
+              const h = 3 + 9 * (0.55 + 0.45 * Math.sin(frame / 2.2 + i * 1.3));
+              return <rect key={i} x={108 + i * 6 - 1.8} y={134 - h / 2} width="3.6" height={h} rx="1.8" fill={NAVY} />;
+            })
+          : <rect x="109.2" y="131" width="21.6" height="3.5" rx="1.75" fill={NAVY} />}
       </g>
-      <g opacity={limbP}>
-        <path d="M102 140 C 90 150, 80 155, 70 160" stroke="#F2F2F5" strokeWidth={7} strokeLinecap="round" />
-        <path d="M120 145 L 120 170" stroke="#F2F2F5" strokeWidth={7} strokeLinecap="round" />
-        <path d="M138 140 C 150 150, 160 155, 170 160" stroke="#F2F2F5" strokeWidth={7} strokeLinecap="round" />
-      </g>
-      {BUBBLES.map((b, i) => (
-        <g key={i} opacity={bubbleP[i]} transform={`scale(${0.6 + 0.4 * bubbleP[i]})`}
-          transform-origin={`${b.x + 20} ${b.y + 13}`}>
-          <rect x={b.x} y={b.y} width="40" height="27" rx="12" fill={b.color} />
-          <path d={b.tail} fill={b.color} />
-          {[0, 1, 2].map((d) => (
-            <circle key={d} cx={b.x + 12 + d * 9} cy={b.y + 13.5} r="3" fill="#FFF6E4" opacity={dotOn(i, d)} />
-          ))}
-        </g>
-      ))}
     </svg>
   );
 };

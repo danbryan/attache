@@ -64,11 +64,10 @@ const BubblesHead2: React.FC<{ size?: number }> = ({ size = 120 }) => (
 const Colt2: React.FC<{ size?: number }> = ({ size = 120 }) => (
   <svg width={size} height={size} viewBox="76 52 88 100" fill="none" style={{ display: "block" }}>
     <circle cx="120" cy="112" r="33" fill="#FFF6E4" />
-    <circle cx="95" cy="121" r="6" fill="#FF9DA1" opacity={0.6} />
-    <circle cx="145" cy="121" r="6" fill="#FF9DA1" opacity={0.6} />
     <circle cx="106" cy="106" r="7" fill="#fff" /><circle cx="106.5" cy="106.5" r="3.4" fill="#10243E" />
     <circle cx="134" cy="106" r="7" fill="#fff" /><circle cx="134.5" cy="106.5" r="3.4" fill="#10243E" />
-    <path d="M110 121 C 113 133, 127 133, 130 121 Z" fill="#10243E" />
+    <path d="M110 122 C 113 133, 127 133, 130 122 Z" fill="#10243E" />
+    <path d="M104 114 C 109 111, 114 114, 120 116 C 126 114, 131 111, 136 114 C 132 120, 126 119, 120 120 C 114 119, 108 120, 104 114 Z" fill="#573823" />
     <rect x="99" y="137" width="42" height="9" rx="3" fill="#D13B3B" />
     <path d="M114 143 L 126 143 L 120 152 Z" fill="#D13B3B" />
     <ellipse cx="120" cy="83.5" rx="42" ry="6.5" fill="#734F30" />
@@ -101,8 +100,8 @@ const Pill: React.FC<{ x: number; y: number; text: string; color: string; appear
 // The fleet ring: Volt centered, Claude session dots orbiting the inner
 // track, a focused pin on the outer track, and a Done / Needs-you
 // notification that spring in. Frame is scene-relative.
-const PetRing: React.FC<{ size?: number; labels?: boolean; doneAt?: number; blockAt?: number; talking?: boolean; focusAngle?: number; character?: "volt" | "bubbles" | "colt" }> = ({
-  size = 520, labels = false, doneAt, blockAt, talking = false, focusAngle = Math.PI / 2, character = "volt",
+const PetRing: React.FC<{ size?: number; labels?: boolean; doneAt?: number; blockAt?: number; talking?: boolean; focusAngle?: number; character?: "volt" | "bubbles" | "colt"; notificationsOnly?: boolean }> = ({
+  size = 520, labels = false, doneAt, blockAt, talking = false, focusAngle = Math.PI / 2, character = "volt", notificationsOnly = false,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -137,13 +136,13 @@ const PetRing: React.FC<{ size?: number; labels?: boolean; doneAt?: number; bloc
         <circle cx={cx} cy={cy} r={Ri} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={1.5} />
         <circle cx={cx} cy={cy} r={Ro} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={1.5} />
       </svg>
-      {workers.filter((w) => w.behind).map((w) => workerDot(w, 1))}
+      {!notificationsOnly && workers.filter((w) => w.behind).map((w) => workerDot(w, 1))}
       <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", zIndex: 2 }}>
         {character === "bubbles" ? <BubblesHead2 size={size * 0.42} />
           : character === "colt" ? <Colt2 size={size * 0.42} />
           : <Volt2 size={size * 0.42} talking={talking} />}
       </div>
-      {workers.filter((w) => !w.behind).map((w) => workerDot(w, 3))}
+      {!notificationsOnly && workers.filter((w) => !w.behind).map((w) => workerDot(w, 3))}
 
       {/* focused pin */}
       <div style={{
@@ -228,27 +227,22 @@ export const Ambient2: React.FC = () => {
   const breathe = 0.98 + 0.02 * Math.sin(frame / 22);
 
   // The fleet ring is centered in the centered app window; these are its
-  // coordinates in the 1920x1080 frame, for the cursor and tooltip overlays.
+  // coordinates in the 1920x1080 frame, for the hover cursor and tooltip.
+  // We only demonstrate hover (INF-291 feedback: the click/drag animation
+  // read oddly); the caption says you can click to focus.
   const RCX = 960, RCY = 566, Ri = 540 * 0.34;
   const hoverTarget = { x: RCX + Math.cos(-2.25) * Ri, y: RCY + Math.sin(-2.25) * Ri };
-  const clickAngle = 0.5;
-  const clickTarget = { x: RCX + Math.cos(clickAngle) * Ri, y: RCY + Math.sin(clickAngle) * Ri };
-
   const cur = cursorPath(frame, [
-    { f: 100, x: RCX + 30, y: RCY + 150 },
-    { f: 130, x: hoverTarget.x, y: hoverTarget.y },
-    { f: 182, x: hoverTarget.x, y: hoverTarget.y },
-    { f: 212, x: clickTarget.x, y: clickTarget.y },
-    { f: 300, x: clickTarget.x, y: clickTarget.y },
+    { f: 108, x: RCX + 30, y: RCY + 150 },
+    { f: 138, x: hoverTarget.x, y: hoverTarget.y },
+    { f: 210, x: hoverTarget.x, y: hoverTarget.y },
   ]);
-  const clickRipple = interpolate(frame, [214, 232], [0, 1], clampBoth) * interpolate(frame, [214, 216], [0, 1], clampBoth);
-  const hoverShown = frame >= 122 && frame < 188;
-  // The focus pin slides from its rest spot to the clicked session.
-  const focusAngle = interpolate(frame, [214, 244], [Math.PI / 2, clickAngle], clampBoth);
+  const hoverShown = frame >= 130 && frame < 206;
+  const cursorShown = frame >= 104 && frame < 210;
 
-  const capGlance = interpolate(frame, [96, 112, 160, 176], [0, 1, 1, 0], clampBoth);
-  const capFocus = interpolate(frame, [176, 190, 232, 246], [0, 1, 1, 0], clampBoth);
-  const capSpeak = interpolate(frame, [246, 260, charStart - 16, charStart - 8], [0, 1, 1, 0], clampBoth);
+  const capGlance = interpolate(frame, [96, 112, 158, 172], [0, 1, 1, 0], clampBoth);
+  const capFocus = interpolate(frame, [172, 186, 228, 242], [0, 1, 1, 0], clampBoth);
+  const capSpeak = interpolate(frame, [242, 256, charStart - 16, charStart - 8], [0, 1, 1, 0], clampBoth);
 
   return (
     <Stage>
@@ -256,10 +250,10 @@ export const Ambient2: React.FC = () => {
       <AbsoluteFill style={{ opacity: deskOpacity }}>
         <MacDesktop>
           <div style={{ position: "absolute", right: 118, bottom: 108, filter: "drop-shadow(0 26px 54px rgba(0,0,0,0.42))" }}>
-            <PetRing size={392} />
+            <PetRing size={392} notificationsOnly blockAt={44} />
           </div>
           <div style={{ position: "absolute", right: 150, bottom: 58, color: "#fff", fontSize: 26, fontWeight: 700, textShadow: "0 2px 12px rgba(0,0,0,0.5)", opacity: 0.94 }}>
-            Lives on your desktop
+            Lives on your desktop, and pings you
           </div>
         </MacDesktop>
       </AbsoluteFill>
@@ -271,11 +265,11 @@ export const Ambient2: React.FC = () => {
         <AppWindow width={980} style={{ height: 690 }}>
           <div style={{ position: "relative", height: 640, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ transform: `scale(${breathe})` }}>
-              <PetRing size={540} labels doneAt={232} blockAt={250} focusAngle={focusAngle} />
+              <PetRing size={540} labels doneAt={232} blockAt={250} />
             </div>
             <div style={{ position: "absolute", left: 0, right: 0, top: 18, textAlign: "center", color: T.text, fontSize: 26, fontWeight: 600, height: 34 }}>
               <span style={{ position: "absolute", left: 0, right: 0, opacity: capGlance }}>Every Claude session it runs, at a glance.</span>
-              <span style={{ position: "absolute", left: 0, right: 0, opacity: capFocus }}>Hover to see one, click to focus it.</span>
+              <span style={{ position: "absolute", left: 0, right: 0, opacity: capFocus }}>Hover to see one. Click to focus it.</span>
               <span style={{ position: "absolute", left: 0, right: 0, opacity: capSpeak }}>And it speaks up when one needs you, or finishes.</span>
             </div>
           </div>
@@ -287,26 +281,25 @@ export const Ambient2: React.FC = () => {
             <div style={{ position: "absolute", left: hoverTarget.x - 6, top: hoverTarget.y - 44, transform: "translateX(-50%)", padding: "5px 13px", borderRadius: 10, background: "rgba(20,20,26,0.85)", border: "1px solid rgba(255,255,255,0.16)", color: T.text, fontSize: 19, fontWeight: 600, whiteSpace: "nowrap", zIndex: 26 }}>Auth refactor</div>
           </>
         )}
-        {frame >= 96 && frame < charStart - 12 && <Cursor x={cur.x} y={cur.y} clicking={clickRipple} />}
+        {cursorShown && <Cursor x={cur.x} y={cur.y} />}
       </AbsoluteFill>
 
-      {/* Beat D - make it yours: the character picker */}
+      {/* Beat D - make it yours: the character picker (Attaché + Colt) */}
       <AbsoluteFill style={{ opacity: charOpacity, alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 40 }}>
         <Aurora accent="blue" strength={0.6} />
         <div style={{ fontSize: 52, fontWeight: 700, color: T.text, letterSpacing: "-0.02em" }}>
           Pick your <span style={{ color: T.gold }}>companion</span>
         </div>
-        <div style={{ display: "flex", gap: 48, alignItems: "flex-end" }}>
+        <div style={{ display: "flex", gap: 56, alignItems: "flex-end" }}>
           {[
-            { name: "Bubbles", el: <BubblesHead2 size={150} />, sel: false },
-            { name: "Volt", el: <Volt2 size={150} />, sel: true },
-            { name: "Colt", el: <Colt2 size={150} />, sel: false },
+            { name: "Attaché", el: <Volt2 size={158} />, sel: true },
+            { name: "Colt", el: <Colt2 size={158} />, sel: false },
           ].map((c) => (
             <div key={c.name} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
-              <div style={{ width: 200, height: 200, borderRadius: 26, display: "flex", alignItems: "center", justifyContent: "center", background: c.sel ? "rgba(10,132,255,0.12)" : T.bgPanel, border: `2px solid ${c.sel ? T.gold : T.stroke}`, boxShadow: c.sel ? `0 0 40px rgba(10,132,255,0.35)` : "none" }}>
+              <div style={{ width: 210, height: 210, borderRadius: 28, display: "flex", alignItems: "center", justifyContent: "center", background: c.sel ? "rgba(10,132,255,0.12)" : T.bgPanel, border: `2px solid ${c.sel ? T.gold : T.stroke}`, boxShadow: c.sel ? `0 0 40px rgba(10,132,255,0.35)` : "none" }}>
                 {c.el}
               </div>
-              <span style={{ color: c.sel ? T.gold : T.dim, fontSize: 26, fontWeight: c.sel ? 700 : 600 }}>{c.name}</span>
+              <span style={{ color: c.sel ? T.gold : T.dim, fontSize: 27, fontWeight: c.sel ? 700 : 600 }}>{c.name}</span>
             </div>
           ))}
         </div>
