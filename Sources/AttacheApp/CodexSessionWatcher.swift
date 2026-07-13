@@ -5,7 +5,7 @@ final class CodexSessionWatcher {
     var onEvent: ((NormalizedEvent) -> Void)?
     var onStatus: ((String) -> Void)?
     /// Fires when a watched session's attention state changes (INF-179).
-    var onAttention: ((String, SessionAttentionState) -> Void)?
+    var onAttention: ((String, SessionAttentionState, Date?) -> Void)?
     /// Fires when a watched session's live sub-agent count changes (INF-275).
     var onSubAgents: ((String, Int) -> Void)?
 
@@ -30,6 +30,7 @@ final class CodexSessionWatcher {
         didSet { if quietPolls != oldValue { coalescers.removeAll() } }
     }
     private var attentionStates: [String: SessionAttentionState] = [:]
+    private var attentionRecordAt: [String: Date] = [:]
     private var subAgentCounts: [String: Int] = [:]
 
     init(
@@ -59,7 +60,8 @@ final class CodexSessionWatcher {
         for id in coalescers.keys where !activeIDs.contains(id) { coalescers[id] = nil }
         for id in attentionStates.keys where !activeIDs.contains(id) {
             attentionStates[id] = nil
-            onAttention?(id, .quiet)
+            attentionRecordAt[id] = nil
+            onAttention?(id, .quiet, nil)
         }
         for id in subAgentCounts.keys where !activeIDs.contains(id) {
             subAgentCounts[id] = nil
@@ -171,9 +173,15 @@ final class CodexSessionWatcher {
             subAgentCounts[session.id] = assessment.activeSubAgents
             onSubAgents?(session.id, assessment.activeSubAgents)
         }
-        guard attentionStates[session.id] != assessment.state else { return }
+        // Emit on a state change, and also when only the newest record moved:
+        // that timestamp is how the app clears an exact hook state once the
+        // transcript advances past when the hook fired.
+        let sameState = attentionStates[session.id] == assessment.state
+        let sameRecord = attentionRecordAt[session.id] == assessment.newestRecordAt
+        guard !(sameState && sameRecord) else { return }
         attentionStates[session.id] = assessment.state
-        onAttention?(session.id, assessment.state)
+        attentionRecordAt[session.id] = assessment.newestRecordAt
+        onAttention?(session.id, assessment.state, assessment.newestRecordAt)
     }
 
     private func tailLines(of url: URL, maxBytes: Int) -> [String]? {

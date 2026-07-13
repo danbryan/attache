@@ -289,6 +289,15 @@ final class AppModel: ObservableObject {
     @Published var miniCompanionClickThrough: Bool = false {
         didSet { defaults.set(miniCompanionClickThrough, forKey: CompanionPreferenceKey.miniCompanionClickThrough) }
     }
+    /// Install Claude Code's Notification and Stop hooks so the pet's status is
+    /// exact (needs-you and done come from Claude Code itself, not a transcript
+    /// guess). On by default; toggling off removes only Attaché's hook entries.
+    @Published var installClaudeHooks: Bool = true {
+        didSet {
+            defaults.set(installClaudeHooks, forKey: CompanionPreferenceKey.installClaudeHooks)
+            applyClaudeHooks()
+        }
+    }
     /// Pet delights (INF-273): types-along ships on, the rest are opt-in.
     @Published var petTypesAlong: Bool = true {
         didSet { defaults.set(petTypesAlong, forKey: CompanionPreferenceKey.petTypesAlong) }
@@ -808,6 +817,12 @@ final class AppModel: ObservableObject {
     /// When each watched session's attention last changed, so multi-session
     /// priority can prefer the most recent activity (INF-271).
     private var attentionChangedAt: [String: Date] = [:]
+    /// The last exact attention state posted by a Claude Code lifecycle hook
+    /// (Notification -> needs you, Stop -> done) with when it fired. It stays
+    /// authoritative over the transcript classifier's guess until a transcript
+    /// record lands after `firedAt`, i.e. until the session actually moves, so
+    /// a guessed state never flips an exact one to a finished check.
+    private var hookAttention: [String: (state: SessionAttentionState, firedAt: Date)] = [:]
     /// Live sub-agent counts per watched session (INF-275), from the
     /// watcher's transcript assessment.
     @Published private var subAgentCounts: [String: Int] = [:]
@@ -1001,9 +1016,9 @@ final class AppModel: ObservableObject {
                 self?.intakeStatus = status
             }
         }
-        codexSessionWatcher.onAttention = { [weak self] sessionID, state in
+        codexSessionWatcher.onAttention = { [weak self] sessionID, state, recordAt in
             DispatchQueue.main.async {
-                self?.handleAttentionChange(sessionID: sessionID, state: state)
+                self?.handleAttentionChange(sessionID: sessionID, state: state, recordTimestamp: recordAt)
             }
         }
         codexSessionWatcher.onSubAgents = { [weak self] sessionID, count in
@@ -1323,8 +1338,21 @@ final class AppModel: ObservableObject {
             if twoWay.startupRecoveryMessage == nil {
                 intakeStatus = "Listening on \(serverURLText)."
             }
+            applyClaudeHooks()
         } catch {
             intakeStatus = "Event intake blocked: \(error.localizedDescription)"
+        }
+    }
+
+    /// Install or remove Attaché's Claude Code hooks off the main thread (small
+    /// file IO). Idempotent, so calling it on launch and on every toggle is
+    /// cheap. Under UI tests, skip it so a headless run never edits real
+    /// Claude Code settings.
+    func applyClaudeHooks() {
+        guard ProcessInfo.processInfo.environment["ATTACHE_UI_TEST"] != "1" else { return }
+        let enabled = installClaudeHooks
+        DispatchQueue.global(qos: .utility).async {
+            ClaudeHookSetup.apply(enabled: enabled)
         }
     }
 
@@ -1441,9 +1469,22 @@ final class AppModel: ObservableObject {
             notice.metadata["companion_needs_decision"] = "1"
             notice.metadata["companion_notice"] = "needs_attention"
             if let sessionID = event.externalSessionID {
+                // Exact waiting-on-you from Claude Code's Notification hook.
+                // Record it as a hook state so the transcript classifier can't
+                // flip it to a finished check while the ask is still pending.
+                hookAttention[sessionID] = (state: .awaitingAnswer, firedAt: Date())
                 sessionAttention[sessionID] = .awaitingAnswer
+                attentionChangedAt[sessionID] = Date()
             }
             persistNeedsYouNotice(event: notice, line: event.text)
+            return
+        }
+        // Exact turn completion from Claude Code's Stop hook. The pet's finished
+        // check comes only from this, never from a transcript quiet-gap guess.
+        if event.eventType == "turn_complete" {
+            if let sessionID = event.externalSessionID {
+                handleAttentionChange(sessionID: sessionID, state: .turnComplete, fromHook: true)
+            }
             return
         }
         intakeStatus = event.source == SourceKind.codex.rawValue
@@ -1466,15 +1507,35 @@ final class AppModel: ObservableObject {
     /// A watched session's attention state changed. Entering a needs-user
     /// state files a priority notice; leaving it clears any unread notices so
     /// the inbox never claims an agent is waiting after it moved on.
-    func handleAttentionChange(sessionID: String, state: SessionAttentionState) {
+    func handleAttentionChange(sessionID: String, state: SessionAttentionState,
+                               recordTimestamp: Date? = nil, fromHook: Bool = false) {
+        if fromHook {
+            hookAttention[sessionID] = (state: state, firedAt: Date())
+            applyAttentionState(sessionID: sessionID, state: state)
+            return
+        }
+        // Classifier path: an exact hook state stays authoritative until the
+        // transcript advances past when the hook fired, so a guessed state
+        // never stomps it (a still-working or waiting-on-you session was
+        // flipping to a finished check).
+        if let hook = hookAttention[sessionID] {
+            let advanced = (recordTimestamp.map { $0 > hook.firedAt }) ?? false
+            guard advanced else { return }
+            hookAttention.removeValue(forKey: sessionID)
+        }
+        applyAttentionState(sessionID: sessionID, state: state)
+    }
+
+    private func applyAttentionState(sessionID: String, state: SessionAttentionState) {
         let previous = sessionAttention[sessionID]
+        let effective: SessionAttentionState? = (state == .quiet) ? nil : state
+        // Idempotent: the watcher also emits when only the newest record moved,
+        // so a repeat of the same effective state is a no-op. This avoids churn
+        // and never resets the changed-at time multi-session priority reads.
+        guard effective != previous else { return }
         attentionChangedAt[sessionID] = Date()
         AttacheLog.watcher.info("attention \(String(sessionID.prefix(8)), privacy: .public): \(String(describing: previous), privacy: .public) -> \(String(describing: state), privacy: .public)")
-        if state == .quiet {
-            sessionAttention.removeValue(forKey: sessionID)
-        } else {
-            sessionAttention[sessionID] = state
-        }
+        sessionAttention[sessionID] = effective
         let wasNeeding = previous?.needsUser ?? false
         if state.needsUser, !wasNeeding {
             fileNeedsYouNotice(sessionID: sessionID, state: state)
@@ -1571,6 +1632,7 @@ final class AppModel: ObservableObject {
             }
             if !hasOpenNotice {
                 sessionAttention.removeValue(forKey: id)
+                hookAttention.removeValue(forKey: id)
             }
         }
     }
@@ -5642,6 +5704,9 @@ final class AppModel: ObservableObject {
         }
         if defaults.object(forKey: CompanionPreferenceKey.showTips) != nil {
             showTips = defaults.bool(forKey: CompanionPreferenceKey.showTips)
+        }
+        if defaults.object(forKey: CompanionPreferenceKey.installClaudeHooks) != nil {
+            installClaudeHooks = defaults.bool(forKey: CompanionPreferenceKey.installClaudeHooks)
         }
         if defaults.object(forKey: CompanionPreferenceKey.showPersonalitySwitcher) != nil {
             showPersonalitySwitcher = defaults.bool(forKey: CompanionPreferenceKey.showPersonalitySwitcher)

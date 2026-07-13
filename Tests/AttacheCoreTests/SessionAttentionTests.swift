@@ -83,10 +83,22 @@ final class SessionAttentionTests: XCTestCase {
                        .active)
     }
 
-    func testFinishedProseIsTurnComplete() {
+    func testFinishedProseReadsQuietNotComplete() {
+        // "Done" prose and a long silent think look identical in the
+        // transcript, so a quiet gap must not fabricate a completion (that is
+        // the Stop hook's job). Old prose simply reads quiet, never a check.
         let lines = [claudeAssistantText("All done, merged and verified.", secondsAgo: 120)]
         XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: lines, format: .claude, now: now),
-                       .turnComplete)
+                       .quiet)
+    }
+
+    func testNewestRecordTimestampIsReported() {
+        let lines = [claudeAssistantText("Working on it.", secondsAgo: 12)]
+        let assessment = SessionAttentionClassifier.assess(tailLines: lines, format: .claude, now: now)
+        let expected = now.addingTimeInterval(-12).timeIntervalSinceReferenceDate
+        XCTAssertNotNil(assessment.newestRecordAt)
+        XCTAssertEqual(assessment.newestRecordAt?.timeIntervalSinceReferenceDate ?? 0,
+                       expected, accuracy: 0.01)
     }
 
     func testUserSpokeLastMeansAgentIsComputing() {
@@ -132,7 +144,7 @@ final class SessionAttentionTests: XCTestCase {
         }
     }
 
-    func testCodexAnsweredCallThenProseCompletes() {
+    func testCodexAnsweredCallThenProseGoesQuiet() {
         let lines = [
             """
             {"type":"response_item","timestamp":"\(stamp(400))","payload":{"type":"function_call","name":"shell","call_id":"c2"}}
@@ -145,17 +157,18 @@ final class SessionAttentionTests: XCTestCase {
             """
         ]
         XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: lines, format: .codex, now: now),
-                       .turnComplete)
+                       .quiet)
     }
 
-    func testProseSettlesToTurnCompleteAfterTenSeconds() {
-        let lines = [claudeAssistantText("All done, pushed the branch.", secondsAgo: 15)]
-        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: lines, format: .claude, now: now),
-                       .turnComplete,
-                       "a settled turn must not read as working for the whole active window")
-        let fresh = [claudeAssistantText("Still streaming this answer.", secondsAgo: 5)]
-        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: fresh, format: .claude, now: now),
+    func testProseStaysActiveThenGoesQuiet() {
+        // Within the active window a settled-looking turn still reads active
+        // (it may be thinking); past it, quiet. Never a fabricated completion.
+        let recent = [claudeAssistantText("All done, pushed the branch.", secondsAgo: 15)]
+        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: recent, format: .claude, now: now),
                        .active)
+        let aged = [claudeAssistantText("All done, pushed the branch.", secondsAgo: 45)]
+        XCTAssertEqual(SessionAttentionClassifier.classify(tailLines: aged, format: .claude, now: now),
+                       .quiet)
     }
 
     func testEmptyTailIsQuiet() {

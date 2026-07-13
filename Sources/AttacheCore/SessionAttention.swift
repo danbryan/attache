@@ -40,10 +40,15 @@ public enum SessionAttentionState: Equatable, Sendable {
 public struct SessionAssessment: Equatable, Sendable {
     public var state: SessionAttentionState
     public var activeSubAgents: Int
+    /// Timestamp of the newest transcript record. Lets a caller tell whether
+    /// the transcript has advanced past an exact lifecycle-hook signal, so a
+    /// hook-driven state can stay authoritative until the session moves again.
+    public var newestRecordAt: Date?
 
-    public init(state: SessionAttentionState, activeSubAgents: Int = 0) {
+    public init(state: SessionAttentionState, activeSubAgents: Int = 0, newestRecordAt: Date? = nil) {
         self.state = state
         self.activeSubAgents = activeSubAgents
+        self.newestRecordAt = newestRecordAt
     }
 }
 
@@ -57,11 +62,10 @@ public enum SessionAttentionClassifier {
 
     /// How recent the newest record must be for the session to read as active.
     public static let activeWindow: TimeInterval = 30
-    /// How long assistant prose must sit unchallenged before the turn reads
-    /// complete. Long generations pause a few seconds between records, so
-    /// this cannot be instant, but it should not wait out `activeWindow`
-    /// either: a finished turn showing as still working for half a minute
-    /// reads as lag (INF-282).
+    /// How long a trailing question must sit unanswered before it reads as an
+    /// explicit ask. A fresh, still-streaming "...?" is not yet a real prompt.
+    /// This no longer gates turn completion: the exact done signal is the Stop
+    /// hook, not a quiet gap, so a still-thinking turn never shows a check.
     public static let turnSettleWindow: TimeInterval = 10
     /// How long a pending ordinary tool must sit quiet before it is even
     /// softly flagged. Builds and test suites routinely run for minutes.
@@ -123,7 +127,9 @@ public enum SessionAttentionClassifier {
         // delegation call in a stale transcript is history, not activity.
         let subAgents = pendingTools.values.filter { subAgentToolNames.contains($0.name) }.count
         func result(_ state: SessionAttentionState) -> SessionAssessment {
-            SessionAssessment(state: state, activeSubAgents: state == .quiet ? 0 : subAgents)
+            SessionAssessment(state: state,
+                              activeSubAgents: state == .quiet ? 0 : subAgents,
+                              newestRecordAt: lastRecordTimestamp)
         }
 
         guard let newest = lastRecordTimestamp else { return result(.quiet) }
@@ -155,12 +161,18 @@ public enum SessionAttentionClassifier {
             return result(quiet < activeWindow ? .active : .quiet)
         }
 
-        // Assistant prose is the newest thing: turn is over once the stream
-        // has clearly stopped. A trailing question is a direct ask.
+        // Assistant prose is the newest thing. A trailing question that has
+        // settled is a direct ask. Otherwise the transcript alone cannot tell
+        // "still thinking" from "turn done": both are prose followed by
+        // silence. So this never fabricates a completion from a quiet gap
+        // (that showed a finished check on a session that was still thinking).
+        // The exact done signal is Claude Code's Stop hook; here prose simply
+        // reads active while fresh, then quiet.
         if let last = lastAssistantText {
-            if quiet < turnSettleWindow { return result(.active) }
-            if endsWithQuestion(last.text) { return result(.awaitingAnswer) }
-            return result(.turnComplete)
+            if endsWithQuestion(last.text), quiet >= turnSettleWindow {
+                return result(.awaitingAnswer)
+            }
+            return result(quiet < activeWindow ? .active : .quiet)
         }
 
         return result(quiet < activeWindow ? .active : .quiet)

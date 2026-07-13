@@ -175,6 +175,12 @@ struct SettingsView: View {
                     }
                 }
             }
+            settingRow("Precise agent status") {
+                Toggle("", isOn: $model.installClaudeHooks).labelsHidden()
+                    .accessibilityLabel("Precise agent status")
+                Text("Lets Claude Code tell Attaché the instant a turn finishes or needs you, instead of guessing from the transcript. Adds two hooks to your Claude Code settings; turning this off removes them.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             settingRow("Mini companion") {
                 Toggle("", isOn: $model.miniCompanionEnabled).labelsHidden()
                     .accessibilityLabel("Mini companion")

@@ -355,6 +355,7 @@ enum CompanionPreferenceKey {
     static let petFocusAngle = "attache.petFocusAngle"
     static let petCharacter = "attache.petCharacter"
     static let petShinySeed = "attache.petShinySeed"
+    static let installClaudeHooks = "attache.installClaudeHooks"
     static let visualSymmetry = "attache.visualSymmetry"
     static let idleBrand = "attache.idleBrand"
     static let idleCustomText = "attache.idleCustomText"
