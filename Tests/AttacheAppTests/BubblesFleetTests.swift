@@ -166,7 +166,7 @@ final class BubblesFleetTests: XCTestCase {
         let motor = BubblesPetMotor()
         var fleet = [session("c0", focused: true), session("c1")]
         fleet[0].state = .working
-        let pin = BubblesPetChoreography.ringPoint(angle: BubblesPetChoreography.defaultFocusAngle)
+        let pin = BubblesPetChoreography.outerRingPoint(angle: BubblesPetChoreography.defaultFocusAngle)
         var focusedAt40 = CGPoint.zero
         var orbiterAt40 = CGPoint.zero
         var focusedAt80 = CGPoint.zero
@@ -210,8 +210,12 @@ final class BubblesFleetTests: XCTestCase {
         let motes = motor.fleet(activity: state, reduceMotion: false)
         let pinned = motes.first { $0.sessionID == "c1" }!
         XCTAssertTrue(pinned.draggable)
-        XCTAssertLessThan(abs(pinned.position.x - before.x) + abs(pinned.position.y - before.y), 6,
-                          "focusing a mote pins it where it currently sits")
+        let center = BubblesPetChoreography.ringCenter
+        let angleBefore = atan2(Double(before.y - center.y), Double(before.x - center.x))
+        let angleAfter = atan2(Double(pinned.position.y - center.y), Double(pinned.position.x - center.x))
+        let expected = BubblesPetChoreography.clampToOuterTrack(angleBefore)
+        XCTAssertLessThan(abs(angleAfter - expected), 0.35,
+                          "focusing a mote promotes it outward at the angle where it sat")
     }
 
     func testStareAimsAtThePinnedFocusAndGlancesAtNews() {
@@ -253,7 +257,7 @@ final class BubblesFleetTests: XCTestCase {
         XCTAssertEqual(finished?.fill, .agent(.claude))
     }
 
-    func testGlyphMotesSitOnTheInnerLane() {
+    func testGlyphMotesSitOnTheOuterTrack() {
         let motor = BubblesPetMotor()
         var fleet = [session("c0"), session("c1")]
         fleet[0].state = .blocked
@@ -261,14 +265,24 @@ final class BubblesFleetTests: XCTestCase {
         let motes = runMotor(motor, fleet: fleet, ticks: 60)
         for mote in motes where mote.glyph != .none {
             let dx = (mote.position.x - BubblesPetChoreography.ringCenter.x)
-                / BubblesPetChoreography.innerRingRadii.width
+                / BubblesPetChoreography.outerRingRadii.width
             let dy = (mote.position.y - BubblesPetChoreography.ringCenter.y)
-                / BubblesPetChoreography.innerRingRadii.height
+                / BubblesPetChoreography.outerRingRadii.height
             XCTAssertEqual(dx * dx + dy * dy, 1, accuracy: 0.05,
-                           "glyph motes live on the inner lane, not in orbit traffic")
+                           "glyph motes live on the outer track, out of orbit traffic")
             XCTAssertFalse(mote.behind, "glyph motes always draw in front")
             XCTAssertTrue(mote.draggable, "glyph motes can be repositioned")
         }
+    }
+
+    func testOuterTrackKeepsTheCrownClear() {
+        let crownMiddle = -Double.pi / 2
+        let clamped = BubblesPetChoreography.clampToOuterTrack(crownMiddle)
+        XCTAssertTrue(clamped <= BubblesPetChoreography.crownDeadZone.0
+                        || clamped >= BubblesPetChoreography.crownDeadZone.1,
+                      "an angle under the crown clamps to the nearest edge")
+        XCTAssertEqual(BubblesPetChoreography.clampToOuterTrack(.pi / 2), .pi / 2,
+                       "angles outside the dead zone pass through")
     }
 
     func testDraggingRepinsAGlyphMote() {
@@ -278,7 +292,7 @@ final class BubblesFleetTests: XCTestCase {
         _ = runMotor(motor, fleet: fleet, ticks: 30)
         motor.setDraggedAngle(sessionID: "c1", angle: .pi)
         let motes = runMotor(motor, fleet: fleet, ticks: 40)
-        let target = BubblesPetChoreography.innerRingPoint(angle: .pi)
+        let target = BubblesPetChoreography.outerRingPoint(angle: .pi)
         let blocked = motes.first { $0.sessionID == "c1" }!
         XCTAssertLessThan(abs(blocked.position.x - target.x) + abs(blocked.position.y - target.y), 2,
                           "a dragged glyph mote settles at its new angle")

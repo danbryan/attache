@@ -304,8 +304,10 @@ final class AppModel: ObservableObject {
     @Published var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle {
         didSet { defaults.set(petFocusAngle, forKey: CompanionPreferenceKey.petFocusAngle) }
     }
-    /// The character in the middle of the ring (INF-283).
-    @Published var petCharacter: BubblesPetCharacter = .bubbles {
+    /// The character in the middle of the ring (INF-283). Volt is the
+    /// default (INF-286): it pairs with the robotic default system voice a
+    /// fresh install speaks with.
+    @Published var petCharacter: BubblesPetCharacter = .robot {
         didSet { defaults.set(petCharacter.rawValue, forKey: CompanionPreferenceKey.petCharacter) }
     }
     /// The shiny easter egg (INF-273): a one-time random roll persisted per
@@ -1243,6 +1245,26 @@ final class AppModel: ObservableObject {
             provider: presentationProvider,
             modelID: presentationModel
         )
+    }
+
+    /// True when the selected main model is discovered and reports no
+    /// reasoning levels (an Ollama Qwen, for example), so Settings can say
+    /// so instead of offering knobs that do nothing (INF-286).
+    var selectedPresentationModelLacksReasoning: Bool {
+        guard let option = presentationModelOptions.first(where: { $0.id == presentationModel }) else {
+            return false
+        }
+        return option.reasoningEfforts.isEmpty
+    }
+
+    /// Role-override flavor of `selectedPresentationModelLacksReasoning`.
+    func roleModelLacksReasoning(for role: ModelRole) -> Bool {
+        guard let provider = roleModelProvider[role] else { return false }
+        let modelID = roleModelID[role] ?? provider.defaultModel
+        guard let option = (roleModelOptions[role] ?? []).first(where: { $0.id == modelID }) else {
+            return false
+        }
+        return option.reasoningEfforts.isEmpty
     }
 
     var selectedPresentationServiceTierOptions: [CompanionPresentationServiceTierOption] {
@@ -5924,6 +5946,10 @@ final class AppModel: ObservableObject {
     /// The simulator's focus override (INF-284): which fabricated session the
     /// user last clicked on the ring. Consumed by ActivitySimulatorPanel.
     @Published var simulatedFleetFocusID: String?
+
+    /// Mini companion size requests from its context menu (INF-286); the
+    /// window controller applies them, keeping frame persistence intact.
+    let miniCompanionResize = PassthroughSubject<NSSize, Never>()
 
     /// Remove a session from the watch list (stop collecting its voicemail).
     func detachCodexSession(_ id: String) {

@@ -256,25 +256,45 @@ struct EchoformRendererView: View {
     }
 
     private var rendererBackground: some View {
-        // Dark mode keeps the cinematic near-black stage; light mode uses the
-        // system window surface so the canvas matches the rest of the app instead
-        // of being a dark void. Energy tints are kept faint in both.
-        let center: Color = colorScheme == .dark
-            ? Color(red: 0.012, green: 0.016, blue: 0.030)
-            : Color(nsColor: .windowBackgroundColor)
-        let wash = colorScheme == .dark ? 0.18 : 0.09
-        return Rectangle()
-            .fill(
+        // Dark mode keeps the cinematic near-black stage. Light mode used to
+        // be raw system white, which glared and gave the pet no stage
+        // (INF-286 feedback); it now uses a soft cool-neutral with a gentle
+        // radial vignette so the surface reads as chosen and the character
+        // sits on a stage instead of a blank sheet. Energy tints stay faint.
+        if colorScheme == .dark {
+            let center = Color(red: 0.012, green: 0.016, blue: 0.030)
+            return AnyView(Rectangle().fill(
                 LinearGradient(
                     gradient: Gradient(colors: [
-                        energyColor(0.02, opacity: wash),
+                        energyColor(0.02, opacity: 0.18),
                         center.opacity(0.97),
-                        energyColor(0.38, opacity: wash)
+                        energyColor(0.38, opacity: 0.18)
                     ]),
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
-            )
+            ))
+        }
+        // Soft, slightly cool paper white in the middle, deepening to a
+        // muted neutral at the edges.
+        let lightCenter = Color(red: 0.957, green: 0.961, blue: 0.976)
+        let lightEdge = Color(red: 0.878, green: 0.886, blue: 0.910)
+        return AnyView(
+            Rectangle()
+                .fill(lightCenter)
+                .overlay(
+                    RadialGradient(
+                        gradient: Gradient(colors: [
+                            energyColor(0.20, opacity: 0.06),
+                            lightCenter.opacity(0),
+                            lightEdge.opacity(0.85)
+                        ]),
+                        center: .center,
+                        startRadius: 8,
+                        endRadius: 620
+                    )
+                )
+        )
     }
 
     private func rendererCanvas(date: Date) -> some View {

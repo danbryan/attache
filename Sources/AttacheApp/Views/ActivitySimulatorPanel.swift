@@ -107,10 +107,26 @@ struct ActivitySimulatorPanel: View {
                     .accessibilityLabel("Simulated sub-agents on the focused session")
             }
             .typoCaption(.medium)
-            Button(demoElapsed >= 0 ? "Fleet demo running" : "Fleet demo") { startFleetDemo() }
-                .disabled(demoElapsed >= 0)
-                .typoCaption(.medium)
-                .accessibilityLabel("Run fleet demo")
+            HStack(spacing: 6) {
+                Button(demoElapsed >= 0 ? "Fleet demo running" : "Fleet demo") { startFleetDemo() }
+                    .disabled(demoElapsed >= 0)
+                    .accessibilityLabel("Run fleet demo")
+                Button("Speak sample") {
+                    // Real speech needs the real signal path: drop the
+                    // override so the speaking phase, mouth sync, arcs, and
+                    // captions all fire as they would live.
+                    overriding = false
+                    cycling = false
+                    model.simulatedActivity = nil
+                    model.playback.preview("""
+                    Here's a taste of narration so you can watch the mouth, the arcs, \
+                    and the karaoke captions all move together. The agents wrapped two \
+                    tasks while you were away, and nothing needs your attention yet.
+                    """)
+                }
+                .accessibilityLabel("Speak a sample with captions")
+            }
+            .typoCaption(.medium)
 
             Text(stateReadout)
                 .typoCaption(.medium, design: .monospaced)

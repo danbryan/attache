@@ -51,7 +51,13 @@ struct ModelPane: View {
                     Text(model.presentationModelDiscoveryStatus)
                         .font(.caption).foregroundStyle(.secondary).padding(.leading, 146)
                 }
-                if !reasoningOptions.isEmpty {
+                if model.selectedPresentationModelLacksReasoning {
+                    settingRow(model.presentationProvider == .claudeCLI ? "Effort" : "Reasoning") {
+                        Text("This model doesn't support reasoning adjustments.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if !reasoningOptions.isEmpty {
                     settingRow(model.presentationProvider == .claudeCLI ? "Effort" : "Reasoning") {
                         Picker("", selection: $model.presentationReasoningEffort) {
                             ForEach(reasoningOptions, id: \.self) { Text($0.capitalized).tag($0) }
@@ -232,7 +238,13 @@ struct ModelPane: View {
                     roleKeyRequiredNotice(for: provider)
                 }
                 let roleReasoningOptions = model.roleReasoningOptions(for: role)
-                if !roleReasoningOptions.isEmpty {
+                if model.roleModelLacksReasoning(for: role) {
+                    settingRow(provider == .claudeCLI ? "Effort" : "Reasoning") {
+                        Text("This model doesn't support reasoning adjustments.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if !roleReasoningOptions.isEmpty {
                     settingRow(provider == .claudeCLI ? "Effort" : "Reasoning") {
                         Picker("", selection: roleReasoningBinding(role)) {
                             ForEach(roleReasoningOptions, id: \.self) { Text($0.capitalized).tag($0) }

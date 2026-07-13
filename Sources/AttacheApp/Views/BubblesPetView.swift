@@ -80,22 +80,24 @@ enum BubblesPetChoreography {
     static let bubbleTops: [CGFloat] = [168, 182, 168]
     static let bubbleBottoms: [CGFloat] = [195, 209, 195]
 
-    /// The session ring around the head anatomy (INF-280), in design units.
-    /// The center matches the head after `BubblesPetFigure.headAnatomyDrop`.
-    /// A true circle (INF-285): the crown zone (totems and speaking arcs)
-    /// lives entirely inside the ring's apex, so orbit traffic never touches
-    /// a phase indicator.
+    /// The session lanes around the head anatomy (INF-280), in design units,
+    /// centered on the head after `BubblesPetFigure.headAnatomyDrop`. Two
+    /// circular tracks (INF-286): ordinary working and quiet motes orbit the
+    /// INNER track, close to the pet and safely under the crown; the motes
+    /// that carry meaning for the user (focused, needs-you, finished) live
+    /// on the OUTER track where they stand apart.
     static let ringCenter = CGPoint(x: 120, y: 138)
-    static let ringRadii = CGSize(width: 76, height: 76)
-    /// The inner lane for needs-you and finished motes: hugging the face so
-    /// the glyph reads like a notification on the pet, clearly out of the
-    /// orbit traffic (INF-281).
-    static let innerRingRadii = CGSize(width: 48, height: 48)
+    static let ringRadii = CGSize(width: 52, height: 52)
+    static let outerRingRadii = CGSize(width: 78, height: 78)
+    /// The outer track keeps a dead zone under the crown (the totem and arc
+    /// span, -128 to -52 degrees) so a pinned mote can never sit on a phase
+    /// indicator; drags clamp to the nearest edge.
+    static let crownDeadZone = (-2.234, -0.907)
     /// Where the focused mote rests until the user drags it: bottom center,
     /// right in front of the pet's gaze.
     static let defaultFocusAngle = Double.pi / 2
 
-    /// A point on the session ring.
+    /// A point on the inner orbit track.
     static func ringPoint(angle: Double) -> CGPoint {
         CGPoint(
             x: ringCenter.x + CGFloat(cos(angle)) * ringRadii.width,
@@ -103,12 +105,23 @@ enum BubblesPetChoreography {
         )
     }
 
-    /// A point on the inner glyph lane.
-    static func innerRingPoint(angle: Double) -> CGPoint {
+    /// A point on the outer track (focused, needs-you, finished).
+    static func outerRingPoint(angle: Double) -> CGPoint {
         CGPoint(
-            x: ringCenter.x + CGFloat(cos(angle)) * innerRingRadii.width,
-            y: ringCenter.y + CGFloat(sin(angle)) * innerRingRadii.height
+            x: ringCenter.x + CGFloat(cos(angle)) * outerRingRadii.width,
+            y: ringCenter.y + CGFloat(sin(angle)) * outerRingRadii.height
         )
+    }
+
+    /// Clamps an outer-track angle out of the crown dead zone, to the
+    /// nearest edge.
+    static func clampToOuterTrack(_ angle: Double) -> Double {
+        var wrapped = angle.truncatingRemainder(dividingBy: 2 * .pi)
+        if wrapped > .pi { wrapped -= 2 * .pi }
+        if wrapped < -.pi { wrapped += 2 * .pi }
+        let (lower, upper) = crownDeadZone
+        guard wrapped > lower, wrapped < upper else { return wrapped }
+        return (wrapped - lower) < (upper - wrapped) ? lower : upper
     }
 
     /// Where an agent's quiet sessions settle: a cluster on the ring's
@@ -654,10 +667,11 @@ final class BubblesPetMotor: ObservableObject {
     /// Repins a draggable mote at a new lane angle: the focused mote moves
     /// its persistent pin, a glyph mote its frozen spot (INF-281).
     func setDraggedAngle(sessionID: String, angle: Double) {
+        let clamped = BubblesPetChoreography.clampToOuterTrack(angle)
         if sessionID == lastFocusedID {
-            focusedAngle = angle
+            focusedAngle = clamped
         } else {
-            fleetOrbitPhases[sessionID] = angle
+            fleetOrbitPhases[sessionID] = clamped
         }
     }
     private var lastFocusedID: String?
@@ -708,7 +722,10 @@ final class BubblesPetMotor: ObservableObject {
 
         func ripples(for session: CompanionFleetSession) -> [Double] {
             guard session.activeSubAgents > 0, !reduceMotion else { return [] }
-            let period = max(0.45, 1.4 / (Double(session.activeSubAgents)).squareRoot())
+            // Unbounded on purpose (INF-286): a huge sub-agent swarm may
+            // read as a blur, and that blur IS the signal. The numeral
+            // carries the exact count.
+            let period = max(0.05, 1.4 / (Double(session.activeSubAgents)).squareRoot())
             return [0, 0.5].map { offset in
                 (now / period + offset).truncatingRemainder(dividingBy: 1)
             }
@@ -729,7 +746,7 @@ final class BubblesPetMotor: ObservableObject {
                 if let previous = lastFocusedID {
                     fleetOrbitPhases[previous] = focusedAngle
                 }
-                focusedAngle = fleetOrbitPhases[focused.id] ?? focusedAngle
+                focusedAngle = BubblesPetChoreography.clampToOuterTrack(fleetOrbitPhases[focused.id] ?? focusedAngle)
                 lastFocusedID = focused.id
             }
             fleetOrbitPhases[focused.id] = focusedAngle
@@ -809,7 +826,8 @@ final class BubblesPetMotor: ObservableObject {
             // to the face, always in front: notifications, not traffic.
             for session in group.blocked where !session.isFocused {
                 shownIDs.insert(session.id)
-                let target = BubblesPetChoreography.innerRingPoint(angle: frozenAngle(session.id))
+                let angle = BubblesPetChoreography.clampToOuterTrack(frozenAngle(session.id))
+                let target = BubblesPetChoreography.outerRingPoint(angle: angle)
                 let position = ease(session.id, toward: target, spawnAt: target)
                 let pulse = reduceMotion ? 0 : 0.4 * sin(2 * .pi * now / 1.6)
                 if lastFleetStates[session.id] != .blocked {
@@ -828,7 +846,8 @@ final class BubblesPetMotor: ObservableObject {
 
             for session in group.finished where !session.isFocused {
                 shownIDs.insert(session.id)
-                let target = BubblesPetChoreography.innerRingPoint(angle: frozenAngle(session.id))
+                let angle = BubblesPetChoreography.clampToOuterTrack(frozenAngle(session.id))
+                let target = BubblesPetChoreography.outerRingPoint(angle: angle)
                 let position = ease(session.id, toward: target, spawnAt: target)
                 if lastFleetStates[session.id] != .finished {
                     glance = (position, now + 0.9, true)
@@ -860,7 +879,7 @@ final class BubblesPetMotor: ObservableObject {
 
         if let focused {
             shownIDs.insert(focused.id)
-            let target = BubblesPetChoreography.ringPoint(angle: focusedAngle)
+            let target = BubblesPetChoreography.outerRingPoint(angle: focusedAngle)
             let position = ease(focused.id, toward: target, spawnAt: target, rate: draggingFocus ? 16 : 7)
             focusedMotePosition = position
             let glyph: BubblesFleetMote.Glyph

@@ -117,37 +117,42 @@ bring-your-own pet only ever replaces the character in the middle. The
 canonical mark keeps the full anatomy everywhere brand assets render; the
 neutral-vs-mark geometry lock guards it unchanged.
 
-Every watched session is one mote on a single ring around the head (center
-120,138 after the head drop, radii 68 x 50 in design units). Harness reads
-through mote color: Claude Code rust `#D97757` (the official Claude brand
-color, including claude-oss sessions running non-Anthropic models), Codex
-the mark's blue `#0A84FF` (the official Codex mark is monochrome; no brand
-color exists), green reserved for a future open-source harness.
+Every watched session is one mote, on one of two concentric circular tracks
+around the head (center 120,138 after the head drop). Two tracks (INF-286):
+the INNER track (radius 52) carries ordinary working and quiet motes, close
+to the pet and safely under the crown; the OUTER track (radius 78) carries
+the motes that mean something to the user (focused, needs-you, finished),
+where they stand apart. Harness reads through mote color: Claude Code rust
+`#D97757` (the official Claude brand color, including claude-oss sessions
+running non-Anthropic models), Codex the mark's blue `#0A84FF` (the official
+Codex mark is monochrome; no brand color exists), green reserved for a
+future open-source harness.
 
 States, per session:
 
-- **Working** orbits the ring, lit, phase advancing 0.55 rad/s with a
-  per-session seed so layouts never shuffle.
+- **Working** orbits the inner track, lit, phase advancing 0.55 rad/s with
+  a per-session seed so layouts never shuffle.
 - **Quiet** stops orbiting and settles into its agent's bottom-arc cluster
-  (Claude left of the focus rest spot, Codex right), dimmed to 0.4.
-- **Needs-you** (blocked) steps onto the inner lane (48 x 34, hugging the
-  face like a notification, always drawn in front), turns amber `#FFB020`,
-  shows a ? glyph, and pulses its radius on a calm 1.6 s cycle. Never
-  merges. Draggable along its lane.
-- **Finished** (turn complete) steps onto the inner lane with a check glyph
-  in its agent hue until the session goes active again. Never merges.
-  Draggable along its lane.
+  on the inner track (Claude left of the focus rest spot, Codex right),
+  dimmed to 0.4.
+- **Needs-you** (blocked) steps out to the outer track, turns amber
+  `#FFB020`, shows a ? glyph, and pulses its radius on a calm 1.6 s cycle.
+  Never merges. Draggable along its track.
+- **Finished** (turn complete) steps out to the outer track with a check
+  glyph in its agent hue until the session goes active again. Never merges.
+  Draggable along its track.
 - **Focused** fills white on dark themes and near-black on light ones (a
   harness hue would collide with Codex blue), with a matching halo and a
-  larger radius. It does not orbit: it sits pinned at a stored angle
-  (default bottom center, in front of the gaze) and only moves when the
-  user drags it along the ring; the angle persists
+  larger radius, on the outer track. It does not orbit: it sits pinned at a
+  stored angle (default bottom center, in front of the gaze) and only moves
+  when the user drags it along the track; the angle persists
   (`attache.petFocusAngle`). Focusing another session pins that mote where
-  it currently sits and the old one rejoins the ring from the pin.
+  it currently sits and the old one rejoins the inner track from the pin.
 - **Sub-agents** emit expanding ripple rings from the mote and the live
   count rides inside it as a numeral (the mote grows to fit); cadence
-  scales with the square root of the count (floor 0.45 s). At most 2
-  ripplers stay individual per agent.
+  scales with the square root of the count, unbounded (a huge swarm blurs,
+  and that blur is the signal; the numeral carries the exact count). At
+  most 2 ripplers stay individual per agent.
 
 Gaze:
 
@@ -159,29 +164,28 @@ Gaze:
 - The hover-follow delight yields to the stare whenever a focused session
   exists.
 
-Crown (INF-284):
+Crown (INF-284, refined INF-285/286):
 
 - The space above the head is a phase totem, not a permanent speaker: the
   voice arcs appear only while audio is the story (speaking). Thinking
-  shows a climbing thought trail, tool runs a slowly turning gear,
-  preparing audio a waveform assembling itself, paused two pause bars,
-  sleeping drifting z's. Idle, blocked, and error keep the crown empty;
-  the amber ? mote and the face carry those states.
+  shows a thought bubble whose cloud is a pink lobed brain with a center
+  groove and rising trail dots; tool running a slowly turning gear with an
+  elapsed `Ns` counter beside it; preparing audio a clock face with the
+  elapsed count inside and a sweeping marker (waiting on the agent reads as
+  time passing); paused two pause bars; sleeping three z's centered over
+  the head pulsing in sequence. Idle, blocked, and error keep the crown
+  empty; the amber ? mote and the face carry those states.
+- The crown lives inside the ring's top apex, in a reserved dead zone
+  (the arc/totem span, -128 to -52 degrees); the outer track clamps any
+  pinned or dragged mote out of that zone, so a mote can never sit on a
+  phase indicator. Arcs radii 24/33/42 at center y 30 in head anatomy.
 - The mark and every brand surface keep the arcs always; the totem exists
   only in the live head anatomy.
 
-Lanes:
-
-- The head anatomy raises and narrows the voice arcs (radii 30/41/52 at
-  center y 82, span -128 to -52 degrees) and flattens the ring to 68 x 40,
-  so the orbit lane never touches the arcs even at full speech ripple.
-  Three lanes total, outside in: arcs, orbit ring, inner glyph lane.
-
 Depth and crowds:
 
-- Motes on the ring's far half draw behind the arcs and head; the path
-  reads as passing around the pet. Inner-lane glyph motes always draw in
-  front.
+- Motes on a track's far half draw behind the arcs and head; the path reads
+  as passing around the pet. Outer-track glyph motes always draw in front.
 - Up to 4 plain working motes per agent orbit individually; more merge into
   one orbiting count badge in the agent hue (numeral capped at 999). More
   than 4 quiet sessions merge into a dim parked badge at the cluster spot.
@@ -221,11 +225,13 @@ Data:
 
 The middle of the ring is a swappable character; the ring, gaze, glyphs,
 and interactions never change. One character is configured globally
-(Settings > Pet character); `BubblesPetCharacter` ships three:
+(Settings > Pet character); `BubblesPetCharacter` ships three. **Volt is the
+default** (INF-286): it pairs with the robotic default system voice a fresh
+install speaks with, and it is the app icon.
 
 - **Bubbles**: the mark's face. The only character brand surfaces use.
-- **Volt**: a robot. LED-bar eyes carry `eyeOpenness` (worry tilts them,
-  dizzy crosses them out), the mouth is an equalizer driven by
+- **Volt**: a robot, the default. LED-bar eyes carry `eyeOpenness` (worry
+  tilts them, dizzy crosses them out), the mouth is an equalizer driven by
   `mouthOpen`, the antenna bulb carries the cheek glow.
 - **Scout**: an owl. Big eyes with pupils that ride the gaze (the most
   expressive eye read), lids close with `eyeOpenness`, the beak opens for

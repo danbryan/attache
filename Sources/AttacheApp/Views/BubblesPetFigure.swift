@@ -414,12 +414,34 @@ struct BubblesPetFigure: View {
             ))
             context.stroke(wheel, with: .color(ink.opacity(0.85)),
                            style: StrokeStyle(lineWidth: 3.6 * s))
+            let toolSeconds = Text("\(min(pose.overheadSeconds, 999))s")
+                .font(.system(size: 7 * s, weight: .bold, design: .rounded))
+                .foregroundColor(ink.opacity(0.8))
+            context.draw(context.resolve(toolSeconds), at: CGPoint(x: crown.x + 17 * s, y: crown.y))
         case .preparingAudio:
-            // The reply is streaming in: a small elapsed counter so a long
-            // generation reads as progress, not a stall (INF-285).
-            let seconds = Text("\(min(pose.overheadSeconds, 999))s")
-                .font(.system(size: 10 * s, weight: .bold, design: .rounded))
-                .foregroundColor(ink.opacity(0.85 + 0.15 * sin(pose.overheadPhase * 2 * .pi)))
+            // The reply is streaming in: a clock with the elapsed count
+            // inside it, so waiting on the agent reads as time passing
+            // (INF-286).
+            let face = Path(ellipseIn: CGRect(
+                x: crown.x - 10 * s, y: crown.y - 10 * s, width: 20 * s, height: 20 * s
+            ))
+            context.stroke(face, with: .color(ink.opacity(0.85)),
+                           style: StrokeStyle(lineWidth: 1.8 * s))
+            let stem = Path(
+                roundedRect: CGRect(x: crown.x - 1.6 * s, y: crown.y - 13.5 * s, width: 3.2 * s, height: 3 * s),
+                cornerRadius: 1.2 * s
+            )
+            context.fill(stem, with: .color(ink.opacity(0.85)))
+            let markerAngle = pose.overheadPhase * 2 * .pi - .pi / 2
+            let marker = Path(ellipseIn: CGRect(
+                x: crown.x + CGFloat(cos(markerAngle)) * 7.6 * s - 1.4 * s,
+                y: crown.y + CGFloat(sin(markerAngle)) * 7.6 * s - 1.4 * s,
+                width: 2.8 * s, height: 2.8 * s
+            ))
+            context.fill(marker, with: .color(ink))
+            let seconds = Text("\(min(pose.overheadSeconds, 999))")
+                .font(.system(size: 8 * s, weight: .bold, design: .rounded))
+                .foregroundColor(ink.opacity(0.95))
             context.draw(context.resolve(seconds), at: crown)
         case .paused:
             for offset in [-4.5, 4.5] {

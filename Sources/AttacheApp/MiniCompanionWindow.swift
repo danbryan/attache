@@ -24,10 +24,12 @@ final class MiniCompanionWindowController: NSWindowController, NSWindowDelegate 
         self.defaults = defaults
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: Self.defaultSize),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
         )
+        panel.minSize = NSSize(width: 180, height: 194)
+        panel.maxSize = NSSize(width: 560, height: 600)
         panel.title = "Mini Companion"
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -46,6 +48,12 @@ final class MiniCompanionWindowController: NSWindowController, NSWindowDelegate 
             .receive(on: RunLoop.main)
             .sink { [weak self] clickThrough in
                 self?.window?.ignoresMouseEvents = clickThrough
+            }
+            .store(in: &cancellables)
+        model.miniCompanionResize
+            .receive(on: RunLoop.main)
+            .sink { [weak self] size in
+                self?.setSize(size)
             }
             .store(in: &cancellables)
         NotificationCenter.default.addObserver(
@@ -223,6 +231,15 @@ struct MiniCompanionView: View {
                         }
                     }
                 }
+            }
+            Menu("Size") {
+                Button("Small") { model.miniCompanionResize.send(NSSize(width: 210, height: 225)) }
+                Button("Medium") { model.miniCompanionResize.send(MiniCompanionWindowController.defaultSize) }
+                Button("Large") { model.miniCompanionResize.send(NSSize(width: 370, height: 396)) }
+                Button("Huge") { model.miniCompanionResize.send(NSSize(width: 460, height: 493)) }
+            }
+            Button("Reply in Attaché…") {
+                NotificationCenter.default.post(name: .attacheShowMainWindow, object: nil)
             }
             Button("Enable Click-Through") { model.miniCompanionClickThrough = true }
             Divider()
