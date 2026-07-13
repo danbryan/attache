@@ -6,10 +6,6 @@
       <stop offset="0.55" stop-color="#0B6BE6"/>
       <stop offset="1" stop-color="#063C9E"/>
     </linearGradient>
-    <linearGradient id="barFill" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#B8D6FF"/>
-      <stop offset="1" stop-color="#FFFFFF"/>
-    </linearGradient>
     <clipPath id="tileClip">
       <rect x="28" y="28" width="456" height="456" rx="112"/>
     </clipPath>
@@ -18,28 +14,29 @@
   <rect x="28" y="28" width="456" height="456" rx="112" fill="url(#tileBg)"/>
 
   <g clip-path="url(#tileClip)">
-    <g fill="none" stroke="#FFFFFF" stroke-opacity="0.16">
-      <circle cx="256" cy="232" r="118" stroke-width="5"/>
-      <circle cx="256" cy="232" r="165" stroke-width="5"/>
-      <circle cx="256" cy="232" r="212" stroke-width="5"/>
+    <g fill="none" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="5">
+      <circle cx="256" cy="256" r="150"/>
+      <circle cx="256" cy="256" r="205"/>
     </g>
 
-    <g fill="url(#barFill)">
-      <rect x="96"  y="398" width="20" height="34"  rx="10"/>
-      <rect x="126" y="368" width="20" height="64"  rx="10"/>
-      <rect x="156" y="328" width="20" height="104" rx="10"/>
-      <rect x="186" y="312" width="20" height="120" rx="10"/>
-      <rect x="216" y="352" width="20" height="80"  rx="10"/>
-      <rect x="246" y="312" width="20" height="120" rx="10"/>
-      <rect x="276" y="352" width="20" height="80"  rx="10"/>
-      <rect x="306" y="312" width="20" height="120" rx="10"/>
-      <rect x="336" y="328" width="20" height="104" rx="10"/>
-      <rect x="366" y="368" width="20" height="64"  rx="10"/>
-      <rect x="396" y="398" width="20" height="34"  rx="10"/>
+    <!-- Attaché the robot, in the app-icon design box (matches
+         scripts/generate-app-icon.swift; translate/scale maps design units
+         to the 512 tile). -->
+    <g transform="translate(-128,-51.2) scale(3.2)">
+      <g fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round">
+        <path d="M105.2 37.1 A 24 24 0 0 1 134.8 37.1"/>
+        <path d="M99.7 30 A 33 33 0 0 1 140.3 30" stroke-opacity="0.62"/>
+        <path d="M94.1 22.9 A 42 42 0 0 1 145.9 22.9" stroke-opacity="0.34"/>
+      </g>
+      <path d="M120 82 L120 73" fill="none" stroke="#C7D0DC" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="120" cy="67.5" r="3.5" fill="#FF9DA1"/>
+      <rect x="88" y="82" width="64" height="60" rx="14" fill="#C7D0DC"/>
+      <rect x="94" y="92" width="52" height="34" rx="8" fill="#10243E"/>
+      <rect x="99" y="100.5" width="14" height="11" rx="2.5" fill="#66E3FF"/>
+      <rect x="127" y="100.5" width="14" height="11" rx="2.5" fill="#66E3FF"/>
+      <circle cx="94.5" cy="119" r="2" fill="#FF9DA1"/>
+      <circle cx="145.5" cy="119" r="2" fill="#FF9DA1"/>
+      <rect x="109.2" y="131" width="21.6" height="3.5" rx="1.75" fill="#10243E"/>
     </g>
-
-    <path d="M 256 112 L 190 300 M 256 112 L 322 300 M 210 248 L 302 248"
-          fill="none" stroke="#FFFFFF" stroke-width="30"
-          stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>

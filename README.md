@@ -19,11 +19,11 @@
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/G0xXOal4e4U">
-    <img src="https://img.youtube.com/vi/G0xXOal4e4U/maxresdefault.jpg" width="720" alt="Watch the 2-minute tour">
+  <a href="https://youtu.be/rPipWzOEQxA">
+    <img src="https://img.youtube.com/vi/rPipWzOEQxA/maxresdefault.jpg" width="720" alt="Watch the Attaché promo">
   </a>
   <br>
-  <b><a href="https://youtu.be/G0xXOal4e4U">▶ Watch the 2-minute tour</a></b>
+  <b><a href="https://youtu.be/rPipWzOEQxA">▶ Watch the promo</a></b>
 </p>
 
 ---

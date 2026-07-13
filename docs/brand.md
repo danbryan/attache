@@ -56,19 +56,21 @@ in tests. One accent, blue, everywhere; there is no second brand color.
 ## Signature: the waveform
 
 A blue audio waveform (a row of rounded bars) is the recurring motif. It sits
-under the headline on the site, in the app icon, and in the playback UI. It ties
-every surface back to the core idea: fluent in agent, speaks human.
+under the headline on the site, on the promo art, and in the playback UI. It ties
+every surface back to the core idea: give your agents a voice.
 
 ## Logo
 
 - `docs/assets/attache-logo.svg`, primary mark, scalable.
 - `docs/assets/attache-logo.png`, 512px raster fallback.
 
-The mark is an "A" over an audio equalizer inside a field of sound-wave rings. It
-matches the macOS app icon (`scripts/generate-app-icon.swift`).
+The mark is Attaché the robot: a steel head with a navy screen, lit eyes, and a
+coral-tipped antenna, crowned by the voice arcs inside a field of sound-wave
+rings. It matches the macOS app icon (`scripts/generate-app-icon.swift`); the SVG
+and PNG are rendered from the same geometry.
 
 Keep at least 12% of the mark's width as clear space on all sides. Do not
-restretch the mark or separate the "A" from the bars.
+restretch the mark or crop the voice arcs off the top.
 
 ## Themes in the app
 
