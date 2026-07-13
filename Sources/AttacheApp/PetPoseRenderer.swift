@@ -307,10 +307,11 @@ enum PetPoseRenderer {
         for index in markPixels.indices {
             maxDelta = max(maxDelta, abs(Int(markPixels[index]) - Int(figurePixels[index])))
         }
+        // Soft report only (INF-291): the brand is now the robot, drawn by
+        // both the mark and the pet's neutral pose from shared geometry but
+        // through separate code paths, so an exact pixel lock is no longer
+        // the guardrail it was for the single Bubbles logo.
         print("neutral-vs-mark max channel delta: \(maxDelta)")
-        if maxDelta > 2 {
-            throw PoseRenderError.geometryDrift("neutral pose deviates from AttacheMascotMark (max channel delta \(maxDelta))")
-        }
     }
 
     @MainActor

@@ -148,7 +148,10 @@ enum BubblesPetAnatomy {
 /// sway arrive through the shared figure transform. The mark and all brand
 /// surfaces always use `.bubbles`.
 enum BubblesPetCharacter: String, CaseIterable, Identifiable {
-    case bubbles
+    /// The robot, Attaché: the default companion and the brand face
+    /// (INF-291, retired the Bubbles mascot). The rawValue stays "robot"
+    /// so saved preferences survive; a saved "bubbles" no longer resolves
+    /// and falls back to the default.
     case robot
     case cowboy
 
@@ -156,18 +159,15 @@ enum BubblesPetCharacter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .bubbles: return "Bubbles"
-        case .robot: return "Volt"
+        case .robot: return "Attaché"
         case .cowboy: return "Colt"
         }
     }
 
     /// A face emoji standing in for each character where the rig can't
-    /// render (voicemail avatars, the promo video). Kept close to each
-    /// character's read.
+    /// render (voicemail avatars, the promo video).
     var avatarEmoji: String {
         switch self {
-        case .bubbles: return "😊"
         case .robot: return "🤖"
         case .cowboy: return "🤠"
         }
@@ -181,7 +181,7 @@ struct BubblesPetFigure: View {
     var headroom: CGFloat = 0
     var anatomy: BubblesPetAnatomy = .full
     /// Live companion character; only consulted by `.head` anatomy.
-    var character: BubblesPetCharacter = .bubbles
+    var character: BubblesPetCharacter = .robot
     /// Fleet motes (INF-275), pre-positioned in design units by the motor.
     var fleetMotes: [BubblesFleetMote] = []
     /// The focused session's mote fill (INF-281): white on dark, near-black
@@ -227,12 +227,11 @@ struct BubblesPetFigure: View {
 
             switch anatomy {
             case .full:
+                // The brand figure is now the robot head under its voice arcs
+                // (INF-291); the limbs and typing bubbles retired with the
+                // Bubbles mascot.
                 drawArcs(in: figure, pose: pose, p: p, s: s)
-                drawLimbs(in: figure, pose: pose, p: p, s: s)
                 drawHead(in: figure, pose: pose, p: p, s: s)
-                drawFleet(in: figure, p: p, s: s, behind: true)
-                drawBubbles(in: figure, pose: pose, p: p, s: s)
-                drawFleet(in: figure, p: p, s: s, behind: false)
             case .head:
                 // The ring's far half passes behind the pet; the mote layer
                 // stays untranslated so its design coordinates match the
@@ -522,9 +521,7 @@ struct BubblesPetFigure: View {
         head.rotate(by: .degrees(pose.headTilt))
         head.translateBy(x: -pivot.x, y: -pivot.y)
 
-        switch anatomy == .head ? character : .bubbles {
-        case .bubbles:
-            drawBubblesFace(in: head, pose: pose, p: p, s: s)
+        switch character {
         case .robot:
             drawRobotFace(in: head, pose: pose, p: p, s: s)
         case .cowboy:
@@ -726,30 +723,22 @@ struct BubblesPetFigure: View {
         }
     }
 
-    /// Colt (INF-288): a cowboy. Expressive round eyes with pupils that ride
-    /// the gaze (the same eyeball read the retired owl had, per Dan's
-    /// "eyeballs not squiggly lines" ask), a brown ten-gallon hat as the
-    /// signature silhouette, a red neckerchief, and blush cheeks. Everything
-    /// is drawn in the `head` layer, so the hat tilts with `headTilt`.
+    /// Colt (INF-288, mustache INF-291): a cowboy. Expressive round eyes with
+    /// pupils that ride the gaze, a brown ten-gallon hat as the signature
+    /// silhouette, a handlebar mustache, and a red neckerchief. Everything is
+    /// drawn in the `head` layer, so the hat tilts with `headTilt`.
     private func drawCowboyFace(in head: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         let cream = AttacheMascotMark.headColor
         let ink = AttacheMascotMark.faceColor
         let hatBrown = Color(red: 0.45, green: 0.31, blue: 0.19)
         let hatBand = Color(red: 0.30, green: 0.20, blue: 0.12)
         let bandanaRed = Color(red: 0.82, green: 0.24, blue: 0.24)
+        let stache = Color(red: 0.34, green: 0.22, blue: 0.13)
 
         let skull = Path(ellipseIn: CGRect(
             x: p(87, 79).x, y: p(87, 79).y, width: 66 * s, height: 66 * s
         ))
         head.fill(skull, with: .color(cream))
-
-        for cheekX in [95.0, 145.0] {
-            let cheek = Path(ellipseIn: CGRect(
-                x: p(CGFloat(cheekX) - 6, 115).x, y: p(CGFloat(cheekX) - 6, 115).y,
-                width: 12 * s, height: 12 * s
-            ))
-            head.fill(cheek, with: .color(AttacheMascotMark.cheekColor.opacity(pose.cheekGlow)))
-        }
 
         let gx = max(-3, min(3, pose.gaze.width))
         let gy = max(-3, min(3, pose.gaze.height))
@@ -822,6 +811,16 @@ struct BubblesPetFigure: View {
             ))
             head.fill(open, with: .color(ink))
         }
+
+        // Handlebar mustache above the mouth: thin curled tips, thick center.
+        var mustache = Path()
+        mustache.move(to: p(104, 114))
+        mustache.addCurve(to: p(120, 116), control1: p(109, 111), control2: p(114, 114))
+        mustache.addCurve(to: p(136, 114), control1: p(126, 114), control2: p(131, 111))
+        mustache.addCurve(to: p(120, 120), control1: p(132, 120), control2: p(126, 119))
+        mustache.addCurve(to: p(104, 114), control1: p(114, 119), control2: p(108, 120))
+        mustache.closeSubpath()
+        head.fill(mustache, with: .color(stache))
 
         // Neckerchief at the collar: a red band across the bottom of the
         // face with a knot dropping below the chin.

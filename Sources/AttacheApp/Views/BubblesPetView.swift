@@ -994,7 +994,7 @@ struct BubblesPetView: View {
     /// The shiny easter egg: golden arcs on the 1-in-20 profiles (INF-273).
     var shiny = false
     /// The character in the middle of the ring (INF-283).
-    var character: BubblesPetCharacter = .bubbles
+    var character: BubblesPetCharacter = .robot
     /// Fleet interactivity (INF-275): click a mote to focus its session,
     /// click a badge to open the session switcher.
     var onFleetFocus: ((String) -> Void)?

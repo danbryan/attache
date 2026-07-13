@@ -290,12 +290,15 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
 - **Tagline: "Give your agents a voice."** (2026-07-11). Retires "Fluent in
   agent. Speaks human." and the older "Your AI agents, out loud" everywhere
   (README, brand, site, video).
-- **The logo is the Bubbles mascot** (2026-07-11, `design/attache-logo.svg`):
-  a hub speaking above its head with three typing agent bubbles at hand and
-  foot. Sources of truth: `AttacheMascotMark` (in-app), `AttacheAppIcon` plus
-  `scripts/generate-app-icon.swift` (icon, kept identical), `Mark2` in
-  `video/src/epic/components2.tsx` (promo). The mark's outer voice arc crests
-  above the 240-unit design box; every renderer pads to 252 or it clips.
+- **The brand is Attaché the robot** (2026-07-13, INF-291, superseding the
+  retired Bubbles mascot): the robot head broadcasting under three voice arcs.
+  Sources of truth: `AttacheMascotMark` (in-app mark/idle/menu bar),
+  `AttacheAppIcon` plus `scripts/generate-app-icon.swift` (icon, kept
+  identical), `Volt2`/`Mark2` in `video/src/epic` (promo). The default pet
+  character is the robot, named **Attaché** in the picker; **Colt** the cowboy
+  is the only other character. The Bubbles mascot (limbs, typing bubbles) is
+  fully retired. The outer voice arc still crests above the 240-unit design
+  box; every renderer pads to 252 or it clips.
 - **Built-in themes are exactly four:** macOS (default AND first in the list),
   High Contrast, Paper, Cyberpunk. Brass / classic / ember / ocean / slate-mono /
   violet-dusk were removed. Users can still author custom themes.

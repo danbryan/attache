@@ -30,7 +30,7 @@ struct EchoformRendererView: View {
     var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle
     var onPetFocusAngleChanged: ((Double) -> Void)?
     /// The character in the middle of the ring (INF-283), pet mode only.
-    var petCharacter: BubblesPetCharacter = .bubbles
+    var petCharacter: BubblesPetCharacter = .robot
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
