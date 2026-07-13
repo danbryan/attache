@@ -109,17 +109,31 @@ struct BubblesPose: Equatable {
 /// with `headroom == 0` and `.neutral` the output is the canonical mark.
 /// This view is a pure function of its pose: animation lives in the caller
 /// (INF-270's pet renderer springs pose fields; this file never reads state).
+/// Which anatomy the figure draws (INF-280). `.full` is the canonical mark:
+/// arcs, limbs, head, and the three typing bubbles; it stays pixel-locked to
+/// `AttacheMascotMark` and serves the logo, icon, and brand assets. `.head`
+/// is the live companion: face and compact arcs only, with the session ring
+/// drawn around it, so a bring-your-own pet only ever replaces the head.
+enum BubblesPetAnatomy {
+    case full
+    case head
+}
+
 struct BubblesPetFigure: View {
     var pose: BubblesPose = .neutral
     var arcColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 1)
     var bodyColor: Color = Color(red: 242 / 255, green: 242 / 255, blue: 245 / 255)
     var headroom: CGFloat = 0
+    var anatomy: BubblesPetAnatomy = .full
     /// Fleet motes (INF-275), pre-positioned in design units by the motor.
     var fleetMotes: [BubblesFleetMote] = []
     /// Theme signature color for the focused session's mote.
     var accentColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 1)
 
     static let blockedMoteColor = Color(red: 1.0, green: 0.69, blue: 0.125)
+    /// How far the head layer drops in `.head` anatomy so the composition
+    /// (compact arcs, head, ring) centers in the design box.
+    static let headAnatomyDrop: CGFloat = 26
 
     /// The design-to-view mapping every renderer of the mark shares, exposed
     /// so hover and click hit-testing agree exactly with the drawing.
@@ -138,7 +152,7 @@ struct BubblesPetFigure: View {
             func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: ox + x * s, y: oy + y * s) }
 
             var figure = context
-            let anchor = p(120, 209)
+            let anchor = anatomy == .head ? p(120, 171) : p(120, 209)
             figure.translateBy(x: anchor.x, y: anchor.y)
             figure.rotate(by: .degrees(pose.sway))
             let breatheScale = 1 + 0.015 * pose.breathe
@@ -150,19 +164,41 @@ struct BubblesPetFigure: View {
             )
             figure.translateBy(x: -anchor.x, y: -anchor.y - pose.hop * s)
 
-            drawArcs(in: figure, pose: pose, p: p, s: s)
-            drawLimbs(in: figure, pose: pose, p: p, s: s)
-            drawHead(in: figure, pose: pose, p: p, s: s)
-            drawFleet(in: figure, p: p, s: s, behindBubbles: true)
-            drawBubbles(in: figure, pose: pose, p: p, s: s)
-            drawFleet(in: figure, p: p, s: s, behindBubbles: false)
+            switch anatomy {
+            case .full:
+                drawArcs(in: figure, pose: pose, p: p, s: s)
+                drawLimbs(in: figure, pose: pose, p: p, s: s)
+                drawHead(in: figure, pose: pose, p: p, s: s)
+                drawFleet(in: figure, p: p, s: s, behind: true)
+                drawBubbles(in: figure, pose: pose, p: p, s: s)
+                drawFleet(in: figure, p: p, s: s, behind: false)
+            case .head:
+                // The ring's far half passes behind the pet; the mote layer
+                // stays untranslated so its design coordinates match the
+                // choreography's ring (already centered on the dropped head).
+                drawFleet(in: figure, p: p, s: s, behind: true)
+                var headLayer = figure
+                headLayer.translateBy(x: 0, y: Self.headAnatomyDrop * s)
+                drawArcs(in: headLayer, pose: pose, p: p, s: s)
+                drawHead(in: headLayer, pose: pose, p: p, s: s)
+                drawHeadConfetti(in: headLayer, pose: pose, p: p, s: s)
+                drawFleet(in: figure, p: p, s: s, behind: false)
+            }
         }
     }
 
+    /// Harness hues (INF-280 research): Claude keeps the mark's rust, which
+    /// IS the official Claude brand color #D97757. Codex takes the mark's
+    /// blue; its official mark is monochrome, so there is no brand color to
+    /// borrow. Green stays reserved for a future open-source harness.
     private func moteColor(_ fill: BubblesFleetMote.Fill) -> Color {
         switch fill {
-        case .agent(let agent):
-            return AttacheMascotMark.bubbleColors[BubblesPetChoreography.bubbleIndex(for: agent)]
+        case .agent(.claude):
+            return AttacheMascotMark.bubbleColors[0]
+        case .agent(.codex):
+            return AttacheMascotMark.bubbleColors[1]
+        case .agent(.none):
+            return AttacheMascotMark.bubbleColors[2]
         case .blocked:
             return Self.blockedMoteColor
         case .focused:
@@ -170,8 +206,8 @@ struct BubblesPetFigure: View {
         }
     }
 
-    private func drawFleet(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat, behindBubbles: Bool) {
-        for mote in fleetMotes where mote.behind == behindBubbles {
+    private func drawFleet(in context: GraphicsContext, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat, behind: Bool) {
+        for mote in fleetMotes where mote.behind == behind {
             let center = p(mote.position.x, mote.position.y)
             let color = moteColor(mote.fill)
             for ripple in mote.ripples {
@@ -211,13 +247,61 @@ struct BubblesPetFigure: View {
                     .foregroundColor(Color(red: 0.02, green: 0.04, blue: 0.09))
                 context.draw(context.resolve(text), at: center)
             }
+            switch mote.glyph {
+            case .none:
+                break
+            case .question:
+                let glyph = Text("?")
+                    .font(.system(size: mote.radius * 1.5 * s, weight: .heavy, design: .rounded))
+                    .foregroundColor(Color(red: 0.02, green: 0.04, blue: 0.09).opacity(mote.opacity))
+                context.draw(context.resolve(glyph), at: center)
+            case .check:
+                var check = Path()
+                let u = mote.radius * s
+                check.move(to: CGPoint(x: center.x - u * 0.5, y: center.y + u * 0.05))
+                check.addLine(to: CGPoint(x: center.x - u * 0.12, y: center.y + u * 0.42))
+                check.addLine(to: CGPoint(x: center.x + u * 0.55, y: center.y - u * 0.38))
+                context.stroke(
+                    check,
+                    with: .color(Color.white.opacity(0.95 * mote.opacity)),
+                    style: StrokeStyle(lineWidth: max(1.4, u * 0.24), lineCap: .round, lineJoin: .round)
+                )
+            }
+        }
+    }
+
+    /// Celebrate confetti for `.head` anatomy: with no bubbles to burst
+    /// from, the pop rings the head instead. Driven by the same
+    /// `pose.bubbles[i].pop` one-shots the full anatomy uses.
+    private func drawHeadConfetti(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        let progress = pose.bubbles.map(\.pop).max() ?? 0
+        guard progress > 0.01 else { return }
+        for d in 0..<10 {
+            let angle = -Double.pi / 2 + Double(d) * (2 * .pi / 10)
+            let radius = (40 + 34 * progress) * s
+            let center = p(120, 112)
+            let dotCenter = CGPoint(
+                x: center.x + CGFloat(cos(angle)) * radius,
+                y: center.y + CGFloat(sin(angle)) * radius * 0.85
+            )
+            let size = 5 * (1 - progress * 0.5) * s
+            let confetti = Path(ellipseIn: CGRect(
+                x: dotCenter.x - size / 2, y: dotCenter.y - size / 2, width: size, height: size
+            ))
+            context.fill(
+                confetti,
+                with: .color(AttacheMascotMark.bubbleColors[d % 3].opacity(1 - progress))
+            )
         }
     }
 
     private func drawArcs(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
-        let arcSpecs: [(radius: CGFloat, width: CGFloat, opacity: Double)] = [
-            (40, 9, 1.0), (66, 9, 0.62), (90, 9, 0.30),
-        ]
+        // The head anatomy tightens the voice arcs (INF-280 feedback: the
+        // full-size arcs claim too much of the surface once the ring is the
+        // main show); the mark keeps its canonical 40/66/90.
+        let arcSpecs: [(radius: CGFloat, width: CGFloat, opacity: Double)] = anatomy == .head
+            ? [(34, 8, 1.0), (46, 8, 0.62), (58, 8, 0.30)]
+            : [(40, 9, 1.0), (66, 9, 0.62), (90, 9, 0.30)]
         for (index, spec) in arcSpecs.enumerated() {
             let ripple = CGFloat(4 * pose.arcRipple * sin(pose.arcPhase - Double(index) * 1.1))
             var arc = Path()

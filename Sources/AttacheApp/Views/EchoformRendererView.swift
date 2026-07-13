@@ -26,6 +26,9 @@ struct EchoformRendererView: View {
     /// Fleet interactivity (INF-275), pet mode only.
     var onFleetFocus: ((String) -> Void)?
     var onFleetSwitch: (() -> Void)?
+    /// The focused mote's persisted ring angle (INF-280), pet mode only.
+    var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle
+    var onPetFocusAngleChanged: ((Double) -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -49,7 +52,9 @@ struct EchoformRendererView: View {
                     delights: petDelights,
                     shiny: petShiny,
                     onFleetFocus: onFleetFocus,
-                    onFleetSwitch: onFleetSwitch
+                    onFleetSwitch: onFleetSwitch,
+                    focusAngle: petFocusAngle,
+                    onFocusAngleChanged: onPetFocusAngleChanged
                 )
                 .contextMenu {
                     Button("Change visual mode…") {

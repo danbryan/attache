@@ -299,6 +299,11 @@ final class AppModel: ObservableObject {
     @Published var petHoverReaction: Bool = false {
         didSet { defaults.set(petHoverReaction, forKey: CompanionPreferenceKey.petHoverReaction) }
     }
+    /// Where the user last parked the focused mote on the session ring
+    /// (INF-280); only dragging it writes a new angle.
+    @Published var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle {
+        didSet { defaults.set(petFocusAngle, forKey: CompanionPreferenceKey.petFocusAngle) }
+    }
     /// The shiny easter egg (INF-273): a one-time random roll persisted per
     /// profile, so roughly 1 in 20 installs gets a golden-arc Bubbles. Zero
     /// configuration on purpose; discovery is the point.
@@ -3377,7 +3382,8 @@ final class AppModel: ObservableObject {
                 switch sessionAttention[target.id] {
                 case .active: state = .working
                 case .awaitingAnswer, .possiblyWaiting: state = .blocked
-                case .erroredRecently, .turnComplete, .quiet, nil: state = .quiet
+                case .turnComplete: state = .finished
+                case .erroredRecently, .quiet, nil: state = .quiet
                 }
                 return CompanionFleetSession(
                     id: target.id,
@@ -5450,6 +5456,9 @@ final class AppModel: ObservableObject {
         }
         petRareIdles = defaults.bool(forKey: CompanionPreferenceKey.petRareIdles)
         petHoverReaction = defaults.bool(forKey: CompanionPreferenceKey.petHoverReaction)
+        if defaults.object(forKey: CompanionPreferenceKey.petFocusAngle) != nil {
+            petFocusAngle = defaults.double(forKey: CompanionPreferenceKey.petFocusAngle)
+        }
         if let value = defaults.string(forKey: CompanionPreferenceKey.visualSymmetry),
            let symmetry = CompanionVisualSymmetry(rawValue: value) {
             visualSymmetry = symmetry

@@ -239,13 +239,13 @@ final class BubblesPetChoreographyTests: XCTestCase {
 
     // MARK: Delights (INF-273)
 
-    func testTypesAlongTapsBubblesOnlyWhenCalm() {
+    func testTypesAlongBouncesOnlyWhenCalm() {
         let motor = BubblesPetMotor()
         let start = Date(timeIntervalSinceReferenceDate: 8000)
         let delights = PetDelights(typesAlong: true, rareIdles: false, hoverReacts: false)
         var typingState = state(.idle)
         typingState.userTyping = true
-        var maxLift: CGFloat = 0
+        var maxHop: CGFloat = 0
         for tick in 0..<30 {
             let pose = motor.pose(
                 at: start.addingTimeInterval(Double(tick) * 0.05),
@@ -253,13 +253,13 @@ final class BubblesPetChoreographyTests: XCTestCase {
                 delights: delights,
                 reduceMotion: false
             )
-            maxLift = max(maxLift, pose.bubbles.map(\.lift).max() ?? 0)
+            maxHop = max(maxHop, pose.hop)
         }
-        XCTAssertGreaterThan(maxLift, 1.5, "typing must tap the bubbles at idle")
+        XCTAssertGreaterThan(maxHop, 0.5, "typing must bounce the pet at idle")
 
         var speakingState = state(.speaking, agent: .codex)
         speakingState.userTyping = true
-        var speakingLift: CGFloat = 0
+        var speakingHop: CGFloat = 0
         let speakingMotor = BubblesPetMotor()
         for tick in 0..<30 {
             let pose = speakingMotor.pose(
@@ -268,9 +268,9 @@ final class BubblesPetChoreographyTests: XCTestCase {
                 delights: delights,
                 reduceMotion: false
             )
-            speakingLift = max(speakingLift, pose.bubbles[0].lift)
+            speakingHop = max(speakingHop, pose.hop)
         }
-        XCTAssertLessThan(speakingLift, 0.5, "delights must never fire over speech")
+        XCTAssertLessThan(speakingHop, 0.3, "delights must never fire over speech")
     }
 
     func testClickBounceIgnoredWhileBlocked() {

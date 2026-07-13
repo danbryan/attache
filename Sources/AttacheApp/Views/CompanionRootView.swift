@@ -86,6 +86,14 @@ struct CompanionRootView: View {
     /// never covered; the full-bleed visualizer modes ignore it by design.
     @State private var bottomOverlayHeight: CGFloat = 0
 
+    /// The pet's reserved bottom band. The floor stays constant whether the
+    /// auto-hiding dock is showing or not, so waking the chrome by moving
+    /// the mouse never shifts the ring while the user reaches for a mote;
+    /// the caption/composer band still grows the inset when it is taller.
+    private var petBottomInset: CGFloat {
+        model.visualMode == .pet ? max(bottomOverlayHeight, 80) : 0
+    }
+
     init(model: AppModel) {
         self.model = model
         self.playback = model.playback
@@ -168,12 +176,14 @@ struct CompanionRootView: View {
                 onFleetFocus: { model.focusCodexSession($0) },
                 onFleetSwitch: {
                     NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
-                }
+                },
+                petFocusAngle: model.petFocusAngle,
+                onPetFocusAngleChanged: { model.petFocusAngle = $0 }
             )
             .opacity(model.surfaceOpacity)
             .ignoresSafeArea()
-            .padding(.bottom, model.visualMode == .pet ? bottomOverlayHeight : 0)
-            .animation(.easeInOut(duration: 0.22), value: bottomOverlayHeight)
+            .padding(.bottom, petBottomInset)
+            .animation(.easeInOut(duration: 0.22), value: petBottomInset)
 
             if surfaceMode == .live,
                model.showActivityInsights,

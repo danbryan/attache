@@ -195,6 +195,10 @@ struct MiniCompanionView: View {
             onFleetSwitch: {
                 NotificationCenter.default.post(name: .attacheShowMainWindow, object: nil)
                 NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
+            },
+            petFocusAngle: model.petFocusAngle,
+            onPetFocusAngleChanged: { [weak model] angle in
+                model?.petFocusAngle = angle
             }
         )
         .contentShape(Rectangle())

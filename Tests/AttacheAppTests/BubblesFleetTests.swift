@@ -128,25 +128,79 @@ final class BubblesFleetTests: XCTestCase {
         XCTAssertTrue(motes.contains { !$0.ripples.isEmpty })
     }
 
-    func testOrbitRidesTheLiftedBubble() {
-        func meanOrbitY(phase: CompanionActivityPhase) -> CGFloat {
-            let motor = BubblesPetMotor()
-            let fleet = [session("c0")]
-            let start = Date(timeIntervalSinceReferenceDate: 50_000)
-            var ys: [CGFloat] = []
-            for tick in 0..<80 {
-                let state = CompanionActivityState(phase: phase, activeAgent: .claude, fleet: fleet)
-                _ = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
-                               activity: state, reduceMotion: false)
-                let motes = motor.fleet(activity: state, reduceMotion: false)
-                if tick > 40, let mote = motes.first { ys.append(mote.position.y) }
-            }
-            return ys.reduce(0, +) / CGFloat(ys.count)
+    func testFocusedMoteStaysPinnedWhileOthersOrbit() {
+        let motor = BubblesPetMotor()
+        var fleet = [session("c0", focused: true), session("c1")]
+        fleet[0].state = .working
+        let pin = BubblesPetChoreography.ringPoint(angle: BubblesPetChoreography.defaultFocusAngle)
+        var focusedAt40 = CGPoint.zero
+        var orbiterAt40 = CGPoint.zero
+        var focusedAt80 = CGPoint.zero
+        var orbiterAt80 = CGPoint.zero
+        let start = Date(timeIntervalSinceReferenceDate: 50_000)
+        for tick in 0..<80 {
+            let state = CompanionActivityState(phase: .idle, fleet: fleet)
+            _ = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
+                           activity: state, reduceMotion: false)
+            let motes = motor.fleet(activity: state, reduceMotion: false)
+            let focusedMote = motes.first { $0.sessionID == "c0" }!
+            let orbiter = motes.first { $0.sessionID == "c1" }!
+            if tick == 40 { focusedAt40 = focusedMote.position; orbiterAt40 = orbiter.position }
+            if tick == 79 { focusedAt80 = focusedMote.position; orbiterAt80 = orbiter.position }
         }
-        let idleY = meanOrbitY(phase: .idle)
-        let respondingY = meanOrbitY(phase: .agentResponding)
-        XCTAssertLessThan(respondingY, idleY - 1,
-                          "a lifted bubble carries its orbit up with it")
+        XCTAssertLessThan(abs(focusedAt80.x - pin.x) + abs(focusedAt80.y - pin.y), 1,
+                          "the focused mote settles on its pin")
+        XCTAssertLessThan(abs(focusedAt80.x - focusedAt40.x) + abs(focusedAt80.y - focusedAt40.y), 0.5,
+                          "the pin does not drift")
+        XCTAssertGreaterThan(abs(orbiterAt80.x - orbiterAt40.x) + abs(orbiterAt80.y - orbiterAt40.y), 4,
+                             "unfocused working motes keep orbiting")
+        XCTAssertNotNil(motor.focusedMotePosition, "the stare has a target")
+    }
+
+    func testFocusChangePinsTheNewMoteWhereItSat() {
+        let motor = BubblesPetMotor()
+        var fleet = [session("c0", focused: true), session("c1")]
+        let start = Date(timeIntervalSinceReferenceDate: 50_000)
+        var before = CGPoint.zero
+        for tick in 0..<60 {
+            let state = CompanionActivityState(phase: .idle, fleet: fleet)
+            _ = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
+                           activity: state, reduceMotion: false)
+            let motes = motor.fleet(activity: state, reduceMotion: false)
+            before = motes.first { $0.sessionID == "c1" }!.position
+        }
+        fleet[0].isFocused = false
+        fleet[1].isFocused = true
+        let state = CompanionActivityState(phase: .idle, fleet: fleet)
+        _ = motor.pose(at: start.addingTimeInterval(3.05), activity: state, reduceMotion: false)
+        let motes = motor.fleet(activity: state, reduceMotion: false)
+        let pinned = motes.first { $0.sessionID == "c1" }!
+        XCTAssertTrue(pinned.draggable)
+        XCTAssertLessThan(abs(pinned.position.x - before.x) + abs(pinned.position.y - before.y), 6,
+                          "focusing a mote pins it where it currently sits")
+    }
+
+    func testGlyphStates() {
+        let motor = BubblesPetMotor()
+        var fleet = [session("c0"), session("c1"), session("c2")]
+        fleet[1].state = .blocked
+        fleet[2].state = .finished
+        let motes = runMotor(motor, fleet: fleet, ticks: 10)
+        let blocked = motes.first { $0.sessionID == "c1" }
+        let finished = motes.first { $0.sessionID == "c2" }
+        XCTAssertEqual(blocked?.glyph, .question)
+        XCTAssertEqual(blocked?.fill, .blocked)
+        XCTAssertEqual(finished?.glyph, .check)
+        XCTAssertEqual(finished?.fill, .agent(.claude))
+    }
+
+    func testFinishedNeverMergesIntoTheBadge() {
+        var fleet = (0..<12).map { session("c\($0)") }
+        fleet[11].state = .finished
+        let layout = BubblesFleetLayout.compute(fleet: fleet)
+        let group = layout.groups[.claude]
+        XCTAssertEqual(group?.orbitingBadgeCount, 11)
+        XCTAssertEqual(group?.finished.map(\.id), ["c11"])
     }
 
     func testOrbitSplitsAcrossTheBubbleDepth() {

@@ -109,70 +109,89 @@ Renderer hygiene:
   blink scheduler must not keep a timer hot between blinks (CPU target: under
   2 percent on Apple Silicon at idle).
 
-## Fleet motes (INF-275)
+## Fleet ring (INF-275, ring form INF-280)
 
-One mote per watched session, grouped around the typing bubble of its agent
-(Claude left, Codex right). The fleet answers "one session or thirty?" at a
-glance without the pet itself changing.
+The live companion draws the head anatomy: face, cheeks, mouth, and compact
+voice arcs (34/46/58 radii), no limbs and no typing bubbles, so a
+bring-your-own pet only ever replaces the character in the middle. The
+canonical mark keeps the full anatomy everywhere brand assets render; the
+neutral-vs-mark geometry lock guards it unchanged.
+
+Every watched session is one mote on a single ring around the head (center
+120,138 after the head drop, radii 68 x 50 in design units). Harness reads
+through mote color: Claude Code rust `#D97757` (the official Claude brand
+color, including claude-oss sessions running non-Anthropic models), Codex
+the mark's blue `#0A84FF` (the official Codex mark is monochrome; no brand
+color exists), green reserved for a future open-source harness.
 
 States, per session:
 
-- **Working** orbits its bubble on a 36 x 23 ellipse (design units), phase
-  advancing 0.55 rad/s with a per-session seed so layouts never shuffle.
-- **Quiet** stops orbiting and eases down to a parking shelf 14 units under
-  the bubble, dimmed to 0.4 opacity. Parked motes are still, never frozen
-  mid-orbit.
-- **Blocked** turns amber (the blockedOnUser hue, `#FFB020`) and hops in
-  place beside the bubble's top corner on the same 1.4 s cycle as the pet's
-  blocked jump. Blocked never merges into a badge.
-- **Focused** (the live/Tell Agent session) fills with the theme's signature
-  color, gains a white ring and a slightly larger radius, and never merges.
-  Complement colors were rejected: orange collides with the amber blocked
-  hue, and accent is already the app's selection grammar.
-- **Sub-agents** emit expanding ripple rings from the mote; ripple cadence
-  scales with the square root of the count (floor 0.45 s) so 2 and 20
-  sub-agents read differently. At most 2 ripplers stay individual per agent.
+- **Working** orbits the ring, lit, phase advancing 0.55 rad/s with a
+  per-session seed so layouts never shuffle.
+- **Quiet** stops orbiting and settles into its agent's bottom-arc cluster
+  (Claude left of the focus rest spot, Codex right), dimmed to 0.4.
+- **Needs-you** (blocked) freezes where it is, turns amber `#FFB020`, shows
+  a ? glyph, and pulses its radius on a calm 1.6 s cycle. Never merges.
+- **Finished** (turn complete) freezes with a check glyph in its agent hue
+  until the session goes active again. Never merges.
+- **Focused** wears the theme signature fill, a white halo, and a larger
+  radius. It does not orbit: it sits pinned at a stored angle (default
+  bottom center, in front of the gaze) and only moves when the user drags
+  it along the ring; the angle persists (`attache.petFocusAngle`).
+  Focusing another session pins that mote where it currently sits and the
+  old one rejoins the ring from the pin.
+- **Sub-agents** emit expanding ripple rings from the mote; cadence scales
+  with the square root of the count (floor 0.45 s). At most 2 ripplers stay
+  individual per agent.
 
-Anchoring and depth:
+Gaze:
 
-- Orbit centers, the parking shelf, and the blocked spot ride the bubble's
-  live pose offsets (lift and jitter), so motes stay pinned to a hopping or
-  shaking bubble instead of its resting spot.
-- Motes on the upper half of the orbit draw behind the bubble; the path
-  reads as a ring around it, not a dot crossing its face.
+- The eyes rest on the focused mote continuously; dragging it drags the
+  gaze along.
+- A mote flipping to needs-you or finished steals a 0.9 s glance with an
+  expression (worried brows for ?, a warmer cheek glow for a check), then
+  the eyes return to the focused stare.
+- The hover-follow delight yields to the stare whenever a focused session
+  exists.
 
-Crowds:
+Depth and crowds:
 
-- Up to 4 motes per agent orbit individually. More plain working sessions
-  merge into one orbiting count badge (numeral capped at 999); more than 4
-  quiet sessions merge into a dim parked badge on the shelf.
-- Membership changes animate: a session leaving the badge spawns at the
-  badge and decelerates to its own spot; a session merging in flies from its
-  last spot into the badge as a short transient (killed at arrival or 1.2 s).
+- Motes on the ring's far half draw behind the arcs and head; the path
+  reads as passing around the pet.
+- Up to 4 plain working motes per agent orbit individually; more merge into
+  one orbiting count badge in the agent hue (numeral capped at 999). More
+  than 4 quiet sessions merge into a dim parked badge at the cluster spot.
+  Needs-you, finished, and focused motes never merge.
+- Membership changes animate: a leaver spawns at the badge and decelerates
+  to its spot; a joiner flies into the badge as a short transient.
 
 Interaction:
 
-- Hover shows the session title in a capsule tooltip; hit target is at least
-  13 px regardless of mote size.
+- Hover shows the session title in a capsule tooltip; hit target is at
+  least 13 px regardless of mote size.
 - Click focuses that session (same as picking it in ⌘K); clicking a badge
   opens the session switcher. The mini companion window does the same and
   raises the main window for the switcher.
+- Dragging the focused mote slides it along the ring (clockwise or counter,
+  the hand wins); grabbing anything else is a plain window drag.
 - Clicking the pet body is a silent visual reaction (the click squash).
   Audio only ever starts from explicit play controls; the INF-273 status
   line speech on click was removed (2026-07-12 feedback).
-- In the main window the pet is inset above the bottom interaction stack
-  (composer, captions, transport, dock) and scales down instead of being
-  covered. Full-bleed visualizer modes keep drawing under the controls by
-  design.
+- In the main window the pet reserves a constant bottom band (floor 80,
+  growing with the caption/composer stack) so the ring is never covered and
+  never shifts when the auto-hiding dock wakes under the pointer. Full-bleed
+  visualizer modes keep drawing under the controls by design.
 
 Data:
 
 - Sub-agent counts are pending `Task`/`Agent` tool calls in the Claude main
   chain (`SessionAttentionClassifier.assess`); stale sessions report zero.
   Codex transcripts have no sub-agent signal, so Codex motes never ripple.
-- Reduced motion: no orbit advance, no ripples, no hop; positions snap.
+- `turnComplete` maps to the finished state; erroredRecently stays quiet.
+- Reduced motion: no orbit advance, no ripples, no pulse; positions snap.
 - Cadence: fleet activity holds the calm-phase frame interval at 1/30 s
-  (instead of 1/12 s) only while some mote is non-quiet.
+  (instead of 1/12 s) only while some mote is non-quiet, and 1/40 s while
+  the focused mote is being dragged.
 
 ## Degradation and theming
 

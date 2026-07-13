@@ -72,21 +72,43 @@ enum BubblesPetChoreography {
         }
     }
 
-    /// Bubble anchor geometry in design units, for the fleet layer: center
-    /// of each bubble body plus its top and bottom edges.
+    /// Bubble anchor geometry in design units, for the full-anatomy mark:
+    /// center of each bubble body plus its top and bottom edges.
     static let bubbleCenters: [CGPoint] = [
         CGPoint(x: 56, y: 181.5), CGPoint(x: 120, y: 195.5), CGPoint(x: 184, y: 181.5),
     ]
     static let bubbleTops: [CGFloat] = [168, 182, 168]
     static let bubbleBottoms: [CGFloat] = [195, 209, 195]
 
-    /// A point on the orbit ellipse around a bubble.
-    static func orbitPoint(bubbleIndex: Int, phase: Double) -> CGPoint {
-        let center = bubbleCenters[bubbleIndex]
-        return CGPoint(
-            x: center.x + CGFloat(cos(phase)) * 36,
-            y: center.y + CGFloat(sin(phase)) * 23
+    /// The session ring around the head anatomy (INF-280), in design units.
+    /// The center matches the head after `BubblesPetFigure.headAnatomyDrop`;
+    /// the radii clear the compact arcs above and leave glyph room below.
+    static let ringCenter = CGPoint(x: 120, y: 138)
+    static let ringRadii = CGSize(width: 68, height: 50)
+    /// Where the focused mote rests until the user drags it: bottom center,
+    /// right in front of the pet's gaze.
+    static let defaultFocusAngle = Double.pi / 2
+
+    /// A point on the session ring.
+    static func ringPoint(angle: Double) -> CGPoint {
+        CGPoint(
+            x: ringCenter.x + CGFloat(cos(angle)) * ringRadii.width,
+            y: ringCenter.y + CGFloat(sin(angle)) * ringRadii.height
         )
+    }
+
+    /// Where an agent's quiet sessions settle: a cluster on the ring's
+    /// bottom arc, Claude to the left of the focused rest spot, Codex to
+    /// the right, others straight down, spreading outward per slot.
+    static func parkAngle(agent: CompanionAgentIdentity, slot: Int) -> Double {
+        let side: Double
+        switch agent {
+        case .claude: side = 1
+        case .codex: side = -1
+        case .none: side = 0.5
+        }
+        let base = Double.pi / 2 + side * 0.55
+        return base + side * Double(slot) * 0.22
     }
 
     static func targets(for activity: CompanionActivityState) -> Targets {
@@ -334,13 +356,57 @@ final class BubblesPetMotor: ObservableObject {
         if let active = activeMoment {
             applyMoment(active.moment, startedAt: active.startedAt, to: &pose, now: now, reduceMotion: reduceMotion)
         }
-        for index in 0..<3 {
-            lastBubbleOffsets[index] = CGSize(
-                width: pose.bubbles[index].jitter,
-                height: -pose.bubbles[index].lift
+        applyFleetGaze(to: &pose, activity: activity, now: now, reduceMotion: reduceMotion)
+        return pose
+    }
+
+    /// The stare and the glance (INF-280). With a focused session pinned on
+    /// the ring the eyes rest on it; a mote that just turned needs-you or
+    /// finished steals a short look (worried brows for a question, a warm
+    /// cheek glow for a check) before the gaze returns.
+    private func applyFleetGaze(
+        to pose: inout BubblesPose,
+        activity: CompanionActivityState,
+        now: TimeInterval,
+        reduceMotion: Bool
+    ) {
+        func gazeTarget(toward point: CGPoint) -> CGSize {
+            CGSize(
+                width: (point.x - BubblesPetChoreography.ringCenter.x)
+                    / BubblesPetChoreography.ringRadii.width * 3,
+                height: (point.y - BubblesPetChoreography.ringCenter.y)
+                    / BubblesPetChoreography.ringRadii.height * 3
             )
         }
-        return pose
+
+        var desired: CGSize?
+        if let glance {
+            if now < glance.until {
+                desired = gazeTarget(toward: glance.target)
+                if glance.isGood {
+                    pose.cheekGlow = min(1, pose.cheekGlow + 0.25)
+                } else {
+                    pose.browWorry = max(pose.browWorry, 0.45)
+                }
+            } else {
+                self.glance = nil
+            }
+        }
+        if desired == nil, activity.fleet.contains(where: \.isFocused),
+           let position = focusedMotePosition {
+            desired = gazeTarget(toward: position)
+        }
+        guard let desired else {
+            fleetGaze = .zero
+            return
+        }
+        if reduceMotion {
+            fleetGaze = desired
+        } else {
+            fleetGaze.width += (desired.width - fleetGaze.width) * 0.3
+            fleetGaze.height += (desired.height - fleetGaze.height) * 0.3
+        }
+        pose.gaze = fleetGaze
     }
 
     /// The delight layer (INF-273), strictly over the calm phases: signal
@@ -361,12 +427,11 @@ final class BubblesPetMotor: ObservableObject {
         }
 
         if delights.typesAlong, userTyping, !reduceMotion {
-            for index in 0..<3 {
-                let tap = max(0, sin(now * 2 * .pi * 2.6 + Double(index) * 2.1))
-                pose.bubbles[index].lift += CGFloat(7 * tap)
-                pose.bubbles[index].tilt += 5 * tap * (index == 1 ? -1 : 1)
-                pose.bubbles[index].dotPhase = (now / 0.9 + Double(index) * 0.33).truncatingRemainder(dividingBy: 1)
-            }
+            // Head anatomy (INF-280): with no bubbles to tap, the pet types
+            // along with a light bounce, eyes dipped toward the keyboard.
+            let tap = max(0, sin(now * 2 * .pi * 2.6))
+            pose.hop += CGFloat(1.1 * tap)
+            pose.gaze.height += 1.6
             if phase == .sleeping {
                 pose.eyeOpenness = max(pose.eyeOpenness, 0.55)
             }
@@ -548,21 +613,33 @@ final class BubblesPetMotor: ObservableObject {
     /// hit-testing in the view.
     private(set) var lastFleetMotes: [BubblesFleetMote] = []
     private var lastFleetTick: TimeInterval?
-    /// The pose's live bubble displacements (jitter, -lift), captured each
-    /// `pose(at:)` so fleet anchors ride the animated bubbles instead of
-    /// their neutral resting spots.
-    private(set) var lastBubbleOffsets = [CGSize](repeating: .zero, count: 3)
+    /// The focused mote's pinned ring angle (INF-280). It never advances on
+    /// its own; the view's drag gesture and focus changes are the only
+    /// writers.
+    var focusedAngle: Double = BubblesPetChoreography.defaultFocusAngle
+    /// True while the user is dragging the focused mote, so the view can
+    /// raise the frame rate for a responsive hand feel.
+    var draggingFocus = false
+    private var lastFocusedID: String?
+    /// Where the focused mote sat last frame, for the continuous stare.
+    private(set) var focusedMotePosition: CGPoint?
+    /// A short look at a mote whose state just demanded eyes: gaze target,
+    /// deadline, and whether it was good news (check) or a question.
+    private var glance: (target: CGPoint, until: TimeInterval, isGood: Bool)?
+    private var lastFleetStates: [String: CompanionFleetSession.State] = [:]
+    private var fleetGaze = CGSize.zero
 
     /// A stable starting angle per session so mote layouts never shuffle.
     private static func seedPhase(_ id: String) -> Double {
         Double(abs(id.hashValue % 628)) / 100.0
     }
 
-    /// Computes this frame's fleet motes: orbits advance for working motes,
-    /// quiet motes ease to their parking shelf, blocked motes hop in place,
-    /// and badge membership changes animate (a leaver spawns at the badge
-    /// and decelerates to its target; a joiner flies into the badge as a
-    /// short-lived transient). Call after `pose(at:...)` each frame.
+    /// Computes this frame's fleet motes on the session ring (INF-280):
+    /// working motes orbit the pet, quiet motes settle into their agent's
+    /// bottom-arc cluster, needs-you and finished motes freeze in place with
+    /// their glyphs, the focused mote sits pinned at `focusedAngle`, and
+    /// badge membership changes animate. Call after `pose(at:...)` each
+    /// frame.
     func fleet(activity: CompanionActivityState, reduceMotion: Bool) -> [BubblesFleetMote] {
         let now = lastTick ?? Date().timeIntervalSinceReferenceDate
         let dt = min(1.0 / 15.0, max(0, now - (lastFleetTick ?? now)))
@@ -572,15 +649,16 @@ final class BubblesPetMotor: ObservableObject {
         var motes: [BubblesFleetMote] = []
         var shownIDs: Set<String> = []
         var badgeCenters: [CompanionAgentIdentity: CGPoint] = [:]
+        let ringCenterY = BubblesPetChoreography.ringCenter.y
 
-        func ease(_ id: String, toward target: CGPoint, spawnAt: CGPoint) -> CGPoint {
+        func ease(_ id: String, toward target: CGPoint, spawnAt: CGPoint, rate: Double = 5) -> CGPoint {
             var position = fleetPositions[id] ?? spawnAt
             if reduceMotion {
                 position = target
             } else {
-                let rate = min(1, dt * 5)
-                position.x += (target.x - position.x) * rate
-                position.y += (target.y - position.y) * rate
+                let blend = min(1, dt * rate)
+                position.x += (target.x - position.x) * blend
+                position.y += (target.y - position.y) * blend
             }
             fleetPositions[id] = position
             return position
@@ -594,67 +672,87 @@ final class BubblesPetMotor: ObservableObject {
             }
         }
 
+        func frozenAngle(_ id: String) -> Double {
+            let angle = fleetOrbitPhases[id] ?? Self.seedPhase(id)
+            fleetOrbitPhases[id] = angle
+            return angle
+        }
+
+        // The focused session is pinned, whatever its state. A focus change
+        // pins the new mote where it currently sits and lets the old one
+        // rejoin the ring from the pin, so nothing ever teleports.
+        let focused = activity.fleet.first(where: \.isFocused)
+        if let focused {
+            if lastFocusedID != focused.id {
+                if let previous = lastFocusedID {
+                    fleetOrbitPhases[previous] = focusedAngle
+                }
+                focusedAngle = fleetOrbitPhases[focused.id] ?? focusedAngle
+                lastFocusedID = focused.id
+            }
+            fleetOrbitPhases[focused.id] = focusedAngle
+        } else {
+            lastFocusedID = nil
+            focusedMotePosition = nil
+        }
+
+        // Glances (INF-280): a mote that just flipped to needs-you or
+        // finished draws a quick look and an expression before the eyes
+        // return to the focused stare.
+        var states: [String: CompanionFleetSession.State] = [:]
+        for session in activity.fleet { states[session.id] = session.state }
+
         for agent in CompanionAgentIdentity.allCases {
             guard let group = layout.groups[agent] else { continue }
-            let bubble = BubblesPetChoreography.bubbleIndex(for: agent)
-            let offset = lastBubbleOffsets[bubble]
-            let center = BubblesPetChoreography.bubbleCenters[bubble]
-                .applying(CGAffineTransform(translationX: offset.width, y: offset.height))
-
-            func orbitTarget(_ phase: Double) -> CGPoint {
-                let point = BubblesPetChoreography.orbitPoint(bubbleIndex: bubble, phase: phase)
-                return CGPoint(x: point.x + offset.width, y: point.y + offset.height)
-            }
 
             var badgeCenter: CGPoint?
             if group.orbitingBadgeCount > 0 {
                 var phase = badgePhases[agent] ?? Self.seedPhase(agent.rawValue)
                 if !reduceMotion { phase += dt * 0.5 }
                 badgePhases[agent] = phase
-                badgeCenter = orbitTarget(phase)
+                badgeCenter = BubblesPetChoreography.ringPoint(angle: phase)
                 badgeCenters[agent] = badgeCenter
             }
 
-            for session in group.orbiting {
+            for session in group.orbiting where !session.isFocused {
                 shownIDs.insert(session.id)
                 var phase = fleetOrbitPhases[session.id] ?? Self.seedPhase(session.id)
                 if !reduceMotion { phase += dt * 0.55 }
                 fleetOrbitPhases[session.id] = phase
-                let target = orbitTarget(phase)
+                let target = BubblesPetChoreography.ringPoint(angle: phase)
                 let position = ease(session.id, toward: target, spawnAt: badgeCenter ?? target)
                 motes.append(BubblesFleetMote(
                     position: position,
-                    radius: session.isFocused ? 4.4 : 3.6,
-                    fill: session.isFocused ? .focused : .agent(agent),
-                    ring: session.isFocused,
+                    radius: 3.6,
+                    fill: .agent(agent),
                     ripples: ripples(for: session),
                     sessionID: session.id,
                     title: session.title,
-                    behind: position.y < center.y - 0.5
+                    behind: position.y < ringCenterY - 0.5
                 ))
             }
 
-            let shelfY = BubblesPetChoreography.bubbleBottoms[bubble] + 14 + offset.height
-            let parkedSlots = group.parked.count + (group.parkedBadgeCount > 0 ? 1 : 0)
-            for (index, session) in group.parked.enumerated() {
+            for (index, session) in group.parked.enumerated() where !session.isFocused {
                 shownIDs.insert(session.id)
-                let x = center.x + (CGFloat(index) - CGFloat(parkedSlots - 1) / 2) * 11
-                let position = ease(session.id, toward: CGPoint(x: x, y: shelfY),
-                                    spawnAt: badgeCenter ?? CGPoint(x: x, y: shelfY))
+                let target = BubblesPetChoreography.ringPoint(
+                    angle: BubblesPetChoreography.parkAngle(agent: agent, slot: index)
+                )
+                let position = ease(session.id, toward: target, spawnAt: badgeCenter ?? target)
                 motes.append(BubblesFleetMote(
                     position: position,
-                    radius: session.isFocused ? 4.4 : 3.4,
-                    fill: session.isFocused ? .focused : .agent(agent),
-                    opacity: session.isFocused ? 0.9 : 0.4,
-                    ring: session.isFocused,
+                    radius: 3.4,
+                    fill: .agent(agent),
+                    opacity: 0.4,
                     sessionID: session.id,
                     title: session.title
                 ))
             }
             if group.parkedBadgeCount > 0 {
-                let x = center.x + (CGFloat(group.parked.count) - CGFloat(parkedSlots - 1) / 2) * 11 + 5
+                let slot = group.parked.filter { !$0.isFocused }.count
                 motes.append(BubblesFleetMote(
-                    position: CGPoint(x: x, y: shelfY),
+                    position: BubblesPetChoreography.ringPoint(
+                        angle: BubblesPetChoreography.parkAngle(agent: agent, slot: slot)
+                    ),
                     radius: 7,
                     fill: .agent(agent),
                     opacity: 0.4,
@@ -663,24 +761,41 @@ final class BubblesPetMotor: ObservableObject {
                 ))
             }
 
-            for (index, session) in group.blocked.enumerated() {
+            for session in group.blocked where !session.isFocused {
                 shownIDs.insert(session.id)
-                let base = CGPoint(
-                    x: center.x + 30 + CGFloat(index) * 12,
-                    y: BubblesPetChoreography.bubbleTops[bubble] - 8 + offset.height
-                )
-                var position = ease(session.id, toward: base, spawnAt: base)
-                if !reduceMotion {
-                    let cycle = now.truncatingRemainder(dividingBy: 1.4)
-                    if cycle < 0.6 { position.y -= CGFloat(7 * sin(cycle / 0.6 * .pi)) }
+                let target = BubblesPetChoreography.ringPoint(angle: frozenAngle(session.id))
+                let position = ease(session.id, toward: target, spawnAt: target)
+                let pulse = reduceMotion ? 0 : 0.4 * sin(2 * .pi * now / 1.6)
+                if lastFleetStates[session.id] != .blocked {
+                    glance = (position, now + 0.9, false)
                 }
                 motes.append(BubblesFleetMote(
                     position: position,
-                    radius: 4,
+                    radius: 4.8 + CGFloat(pulse),
                     fill: .blocked,
-                    ring: session.isFocused,
                     sessionID: session.id,
-                    title: session.title
+                    title: session.title,
+                    behind: position.y < ringCenterY - 0.5,
+                    glyph: .question
+                ))
+            }
+
+            for session in group.finished where !session.isFocused {
+                shownIDs.insert(session.id)
+                let target = BubblesPetChoreography.ringPoint(angle: frozenAngle(session.id))
+                let position = ease(session.id, toward: target, spawnAt: target)
+                if lastFleetStates[session.id] != .finished {
+                    glance = (position, now + 0.9, true)
+                }
+                motes.append(BubblesFleetMote(
+                    position: position,
+                    radius: 4.6,
+                    fill: .agent(agent),
+                    opacity: 0.95,
+                    sessionID: session.id,
+                    title: session.title,
+                    behind: position.y < ringCenterY - 0.5,
+                    glyph: .check
                 ))
             }
 
@@ -692,10 +807,37 @@ final class BubblesPetMotor: ObservableObject {
                     count: group.orbitingBadgeCount,
                     ripples: [],
                     title: "\(group.orbitingBadgeCount) working",
-                    behind: badgeCenter.y < center.y - 0.5
+                    behind: badgeCenter.y < ringCenterY - 0.5
                 ))
             }
         }
+
+        if let focused {
+            shownIDs.insert(focused.id)
+            let target = BubblesPetChoreography.ringPoint(angle: focusedAngle)
+            let position = ease(focused.id, toward: target, spawnAt: target, rate: draggingFocus ? 16 : 7)
+            focusedMotePosition = position
+            let glyph: BubblesFleetMote.Glyph
+            switch focused.state {
+            case .blocked: glyph = .question
+            case .finished: glyph = .check
+            case .working, .quiet: glyph = .none
+            }
+            motes.append(BubblesFleetMote(
+                position: position,
+                radius: 5.2,
+                fill: .focused,
+                opacity: focused.state == .quiet ? 0.85 : 1,
+                ring: true,
+                ripples: ripples(for: focused),
+                sessionID: focused.id,
+                title: focused.title,
+                behind: position.y < ringCenterY - 0.5,
+                glyph: glyph,
+                draggable: true
+            ))
+        }
+        lastFleetStates = states
 
         // A session that just merged into a badge flies from its last spot
         // into the badge as a short-lived transient.
@@ -788,6 +930,10 @@ struct BubblesPetView: View {
     /// click a badge to open the session switcher.
     var onFleetFocus: ((String) -> Void)?
     var onFleetSwitch: (() -> Void)?
+    /// The focused mote's persisted ring angle and its writeback when the
+    /// user finishes dragging it (INF-280).
+    var focusAngle: Double = BubblesPetChoreography.defaultFocusAngle
+    var onFocusAngleChanged: ((Double) -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -795,6 +941,7 @@ struct BubblesPetView: View {
     @State private var windowVisible = true
     @State private var hoverGaze: CGSize?
     @State private var hoveredMote: (title: String, at: CGPoint)?
+    @State private var draggingFocus = false
 
     private static let headroom: CGFloat = 28
 
@@ -812,6 +959,7 @@ struct BubblesPetView: View {
                     ),
                     arcColor: arcColor,
                     headroom: Self.headroom,
+                    anatomy: .head,
                     fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion),
                     accentColor: theme.signatureColor
                 )
@@ -846,6 +994,23 @@ struct BubblesPetView: View {
                       activity.phase == .idle || activity.phase == .sleeping else { return }
                 motor.noteClick(at: Date())
             })
+            .simultaneousGesture(DragGesture(minimumDistance: 4)
+                .onChanged { value in
+                    if !draggingFocus {
+                        guard let mote = fleetMote(at: value.startLocation, in: proxy.size),
+                              mote.draggable else { return }
+                        draggingFocus = true
+                        motor.draggingFocus = true
+                    }
+                    motor.focusedAngle = ringAngle(at: value.location, in: proxy.size)
+                }
+                .onEnded { _ in
+                    guard draggingFocus else { return }
+                    draggingFocus = false
+                    motor.draggingFocus = false
+                    onFocusAngleChanged?(motor.focusedAngle)
+                })
+            .onAppear { motor.focusedAngle = focusAngle }
             .overlay(alignment: .topLeading) {
                 if let hoveredMote, !hoveredMote.title.isEmpty {
                     Text(hoveredMote.title)
@@ -876,6 +1041,17 @@ struct BubblesPetView: View {
         return CGPoint(x: ox + mote.position.x * s, y: oy + mote.position.y * s)
     }
 
+    /// The ring angle under a view-space point, for dragging the focused
+    /// mote along the path.
+    private func ringAngle(at location: CGPoint, in size: CGSize) -> Double {
+        let (s, ox, oy) = BubblesPetFigure.designTransform(size: size, headroom: Self.headroom)
+        let dx = ((location.x - ox) / s - BubblesPetChoreography.ringCenter.x)
+            / BubblesPetChoreography.ringRadii.width
+        let dy = ((location.y - oy) / s - BubblesPetChoreography.ringCenter.y)
+            / BubblesPetChoreography.ringRadii.height
+        return atan2(dy, dx)
+    }
+
     private func fleetMote(at location: CGPoint, in size: CGSize) -> BubblesFleetMote? {
         let (s, _, _) = BubblesPetFigure.designTransform(size: size, headroom: Self.headroom)
         var best: (mote: BubblesFleetMote, distance: CGFloat)?
@@ -898,6 +1074,7 @@ struct BubblesPetView: View {
     }
 
     private var frameInterval: Double {
+        if draggingFocus { return 1.0 / 40.0 }
         let fleetIsMoving = activity.fleet.contains { $0.state != .quiet }
         switch activity.phase {
         case .sleeping, .idle, .paused:

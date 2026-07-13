@@ -93,8 +93,12 @@ public struct CompanionFleetSession: Equatable, Sendable, Identifiable {
         case working
         /// Nothing recent; the mote parks, dimmed.
         case quiet
-        /// Awaiting an answer or possibly waiting; the mote turns amber and hops.
+        /// Awaiting an answer or possibly waiting; the mote turns amber,
+        /// shows a question mark, and pulses.
         case blocked
+        /// The turn completed; the mote shows a check until the session
+        /// goes active again or the user focuses it (INF-280).
+        case finished
     }
 
     public var id: String

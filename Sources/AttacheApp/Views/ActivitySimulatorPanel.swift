@@ -17,6 +17,7 @@ struct ActivitySimulatorPanel: View {
     @State private var codexCount = 0
     @State private var workShare = 2
     @State private var oneBlocked = false
+    @State private var oneFinished = false
     @State private var subAgents = 0
     @State private var demoElapsed = -1.0
     private let cycleTimer = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
@@ -98,6 +99,9 @@ struct ActivitySimulatorPanel: View {
                 Toggle("Blocked", isOn: $oneBlocked)
                     .toggleStyle(.checkbox)
                     .accessibilityLabel("Simulate one blocked session")
+                Toggle("Done", isOn: $oneFinished)
+                    .toggleStyle(.checkbox)
+                    .accessibilityLabel("Simulate one finished session")
                 Stepper("Subs: \(subAgents)", value: $subAgents, in: 0...30)
                     .accessibilityLabel("Simulated sub-agents on the focused session")
             }
@@ -126,6 +130,7 @@ struct ActivitySimulatorPanel: View {
         .onChange(of: codexCount) { _ in applyIfSimulating() }
         .onChange(of: workShare) { _ in applyIfSimulating() }
         .onChange(of: oneBlocked) { _ in applyIfSimulating() }
+        .onChange(of: oneFinished) { _ in applyIfSimulating() }
         .onChange(of: subAgents) { _ in applyIfSimulating() }
         .onReceive(demoTimer) { _ in advanceFleetDemo() }
         .onChange(of: cycling) { active in
@@ -182,13 +187,15 @@ struct ActivitySimulatorPanel: View {
 
     /// Fabricates a fleet from the panel's knobs: the first Claude session
     /// is focused (and carries the sub-agents), the last is the blocked one
-    /// when that toggle is on, and the working share fills front to back.
+    /// when that toggle is on, the second-to-last the finished one, and the
+    /// working share fills front to back.
     private func simulatedFleet() -> [CompanionFleetSession] {
         func sessions(_ count: Int, agent: CompanionAgentIdentity, prefix: String) -> [CompanionFleetSession] {
             guard count > 0 else { return [] }
             let workingCount = workShare == 0 ? 0 : (workShare == 1 ? (count + 1) / 2 : count)
             return (0..<count).map { index in
                 var state: CompanionFleetSession.State = index < workingCount ? .working : .quiet
+                if oneFinished, agent == .claude, index == max(0, count - 2) { state = .finished }
                 if oneBlocked, agent == .claude, index == count - 1 { state = .blocked }
                 let focused = agent == .claude && index == 0
                 return CompanionFleetSession(
@@ -233,9 +240,9 @@ struct ActivitySimulatorPanel: View {
         case ..<8:      claudeCount = 3;  codexCount = 2
         case ..<14:     claudeCount = 12; codexCount = 3
         case ..<20:     subAgents = 8
-        case ..<26:     oneBlocked = true
+        case ..<26:     oneBlocked = true; oneFinished = true
         case ..<32:     workShare = 1
-        default:        claudeCount = 24; codexCount = 6; workShare = 2; oneBlocked = false
+        default:        claudeCount = 24; codexCount = 6; workShare = 2; oneBlocked = false; oneFinished = false
         }
         apply()
     }

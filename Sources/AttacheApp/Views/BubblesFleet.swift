@@ -2,12 +2,12 @@ import AttacheCore
 import SwiftUI
 
 /// Which sessions render individually and which merge into count badges
-/// (INF-275). Pure and unit-tested; the motor layers positions and motion on
-/// top of this decision.
+/// (INF-275, ring form INF-280). Pure and unit-tested; the motor layers ring
+/// positions and motion on top of this decision.
 ///
 /// Rules, in order:
-/// - Blocked sessions are always individual; they are the ones that need
-///   eyes and a click target.
+/// - Blocked (needs-you) and finished sessions are always individual; they
+///   carry glyphs and need eyes and a click target.
 /// - The focused session is always individual, whatever its state.
 /// - Working sessions running sub-agents stay individual (they ripple), up
 ///   to two per agent; beyond that they join the badge and the badge does
@@ -24,10 +24,11 @@ struct BubblesFleetLayout: Equatable {
         var parked: [CompanionFleetSession] = []
         var parkedBadgeCount = 0
         var blocked: [CompanionFleetSession] = []
+        var finished: [CompanionFleetSession] = []
 
         var isEmpty: Bool {
             orbiting.isEmpty && orbitingBadgeCount == 0 && parked.isEmpty
-                && parkedBadgeCount == 0 && blocked.isEmpty
+                && parkedBadgeCount == 0 && blocked.isEmpty && finished.isEmpty
         }
     }
 
@@ -44,6 +45,7 @@ struct BubblesFleetLayout: Equatable {
             var group = AgentGroup()
 
             group.blocked = members.filter { $0.state == .blocked }
+            group.finished = members.filter { $0.state == .finished }
 
             let working = members.filter { $0.state == .working }
             let focusedWorking = working.filter(\.isFocused)
@@ -64,7 +66,7 @@ struct BubblesFleetLayout: Equatable {
             let plainQuiet = quiet.filter { !$0.isFocused }
             if plainQuiet.count <= individualCap {
                 // Fleet order, not focused-first: a focus change must move
-                // the ring, never shuffle motes between shelf slots.
+                // the ring, never shuffle motes between slots.
                 group.parked = quiet
             } else {
                 group.parked = quiet.filter(\.isFocused)
@@ -88,6 +90,14 @@ struct BubblesFleetMote: Equatable {
         case focused
     }
 
+    /// The state glyph inside the mote (INF-280): ? for needs-you, a check
+    /// for a completed turn. Badges carry counts instead.
+    enum Glyph: Equatable {
+        case none
+        case question
+        case check
+    }
+
     var position: CGPoint
     var radius: CGFloat = 3.6
     var fill: Fill
@@ -102,7 +112,11 @@ struct BubblesFleetMote: Equatable {
     var sessionID: String?
     /// Hover affordance text (session title, or a badge summary).
     var title = ""
-    /// True on the far half of the orbit: the figure draws these before the
-    /// bubbles so the orbit reads as a ring passing behind them.
+    /// True on the far half of the ring: the figure draws these behind the
+    /// head and arcs so the orbit reads as passing around the pet.
     var behind = false
+    var glyph: Glyph = .none
+    /// True only for the focused mote, which the user may drag along the
+    /// ring; the view's drag gesture checks this flag.
+    var draggable = false
 }
