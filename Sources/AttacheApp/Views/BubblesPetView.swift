@@ -81,15 +81,16 @@ enum BubblesPetChoreography {
     static let bubbleBottoms: [CGFloat] = [195, 209, 195]
 
     /// The session ring around the head anatomy (INF-280), in design units.
-    /// The center matches the head after `BubblesPetFigure.headAnatomyDrop`;
-    /// the ring is flattened so its top lane clears the raised voice arcs
-    /// even while speech ripples them (INF-281).
+    /// The center matches the head after `BubblesPetFigure.headAnatomyDrop`.
+    /// A true circle (INF-285): the crown zone (totems and speaking arcs)
+    /// lives entirely inside the ring's apex, so orbit traffic never touches
+    /// a phase indicator.
     static let ringCenter = CGPoint(x: 120, y: 138)
-    static let ringRadii = CGSize(width: 68, height: 40)
+    static let ringRadii = CGSize(width: 76, height: 76)
     /// The inner lane for needs-you and finished motes: hugging the face so
     /// the glyph reads like a notification on the pet, clearly out of the
     /// orbit traffic (INF-281).
-    static let innerRingRadii = CGSize(width: 48, height: 34)
+    static let innerRingRadii = CGSize(width: 48, height: 48)
     /// Where the focused mote rests until the user drags it: bottom center,
     /// right in front of the pet's gaze.
     static let defaultFocusAngle = Double.pi / 2
@@ -350,6 +351,11 @@ final class BubblesPetMotor: ObservableObject {
         pose.arcRipple = drive(&arcRipple, toward: targets.pose.arcRipple, Self.soft)
         pose.overhead = targets.pose.overhead
         pose.overheadPhase = (now / 2.4).truncatingRemainder(dividingBy: 1)
+        if targets.pose.overhead != lastOverhead {
+            lastOverhead = targets.pose.overhead
+            overheadStartedAt = now
+        }
+        pose.overheadSeconds = Int(now - (overheadStartedAt ?? now))
         for index in 0..<3 {
             pose.bubbles[index].lift = CGFloat(drive(&bubbleLift[index], toward: Double(targets.pose.bubbles[index].lift), Self.snappy))
             pose.bubbles[index].brightness = drive(&bubbleBrightness[index], toward: targets.pose.bubbles[index].brightness, Self.soft)
@@ -655,6 +661,8 @@ final class BubblesPetMotor: ObservableObject {
         }
     }
     private var lastFocusedID: String?
+    private var lastOverhead: BubblesOverhead?
+    private var overheadStartedAt: TimeInterval?
     /// Where the focused mote sat last frame, for the continuous stare.
     private(set) var focusedMotePosition: CGPoint?
     /// A short look at a mote whose state just demanded eyes: gaze target,

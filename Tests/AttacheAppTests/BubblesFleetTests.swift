@@ -130,6 +130,23 @@ final class BubblesFleetTests: XCTestCase {
         XCTAssertEqual(rippler?.count, 8, "the sub-agent count rides the mote as a numeral")
     }
 
+    func testOverheadSecondsCountTheRespondingWait() {
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 60_000)
+        var pose = BubblesPose.neutral
+        for tick in 0..<70 {
+            pose = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
+                              activity: CompanionActivityState(phase: .agentResponding),
+                              reduceMotion: false)
+        }
+        XCTAssertEqual(pose.overhead, .preparingAudio)
+        XCTAssertGreaterThanOrEqual(pose.overheadSeconds, 3)
+        pose = motor.pose(at: start.addingTimeInterval(3.6),
+                          activity: CompanionActivityState(phase: .speaking),
+                          reduceMotion: false)
+        XCTAssertEqual(pose.overheadSeconds, 0, "the counter resets when the state changes")
+    }
+
     func testOverheadTotemFollowsThePhase() {
         func overhead(_ phase: CompanionActivityPhase) -> BubblesOverhead {
             BubblesPetChoreography.targets(for: CompanionActivityState(phase: phase)).pose.overhead

@@ -43,6 +43,9 @@ struct BubblesPose: Equatable {
     var overhead: BubblesOverhead = .arcs
     /// A 0-1 sawtooth clock for overhead glyph animation, motor-driven.
     var overheadPhase: Double = 0
+    /// Whole seconds spent in the current overhead state, for the
+    /// preparing-audio elapsed counter (INF-285).
+    var overheadSeconds: Int = 0
     /// Head and face rotation in degrees (positive tilts right).
     var headTilt: Double = 0
     /// 1 = the mark's happy arcs, 0 = closed flat lines.
@@ -104,6 +107,7 @@ struct BubblesPose: Equatable {
         pose.sway = limit(pose.sway, -10...10)
         pose.arcGlow = limit(pose.arcGlow, 0...1)
         pose.overheadPhase = limit(pose.overheadPhase, 0...1)
+        pose.overheadSeconds = max(0, pose.overheadSeconds)
         pose.arcRipple = limit(pose.arcRipple, -1.5...1.5)
         pose.arcPhase = pose.arcPhase.isFinite ? pose.arcPhase : 0
         pose.bubbles = pose.bubbles.map { bubble in
@@ -347,30 +351,50 @@ struct BubblesPetFigure: View {
     }
 
     /// The crown for `.head` anatomy (INF-284): voice arcs only while audio
-    /// is the story, otherwise a small phase totem so the space above the
-    /// head says what is happening instead of always shouting "speaker".
+    /// is the story, otherwise a small phase totem. Everything here stays
+    /// inside the reserved crown zone above the circular ring's apex
+    /// (INF-285), so orbit traffic never touches an indicator.
     private func drawOverhead(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         let ink = arcColor
-        let crown = p(120, 66)
+        let crown = p(120, 22)
         switch pose.overhead {
         case .none:
             break
         case .arcs:
             drawArcs(in: context, pose: pose, p: p, s: s)
         case .thinking:
-            // A thought trail: three dots climbing toward up-right, pulsing
-            // in sequence.
-            let spots: [(x: CGFloat, y: CGFloat, r: CGFloat)] = [
-                (130, 74, 2.6), (139, 65, 3.4), (150, 54, 4.2),
-            ]
-            for (index, spot) in spots.enumerated() {
-                let pulse = 0.35 + 0.65 * max(0, sin((pose.overheadPhase + Double(index) * 0.22) * 2 * .pi))
+            // A thought bubble whose cloud is a brain (Dan's pick, INF-285):
+            // two trail dots rising from the head into a pink lobed blob
+            // with a center groove, gently swelling as it "thinks".
+            let brainPink = Color(red: 238 / 255, green: 154 / 255, blue: 166 / 255)
+            let swell = 1 + 0.06 * sin(pose.overheadPhase * 2 * .pi)
+            for (index, trail) in [(x: 106.0, y: 46.0, r: 2.2), (x: 111.0, y: 38.0, r: 3.2)].enumerated() {
+                let alpha = 0.5 + 0.5 * max(0, sin((pose.overheadPhase + Double(index) * 0.3) * 2 * .pi))
                 let dot = Path(ellipseIn: CGRect(
-                    x: p(spot.x, spot.y).x - spot.r * s, y: p(spot.x, spot.y).y - spot.r * s,
-                    width: spot.r * 2 * s, height: spot.r * 2 * s
+                    x: p(trail.x, trail.y).x - trail.r * s, y: p(trail.x, trail.y).y - trail.r * s,
+                    width: trail.r * 2 * s, height: trail.r * 2 * s
                 ))
-                context.fill(dot, with: .color(ink.opacity(pulse)))
+                context.fill(dot, with: .color(brainPink.opacity(alpha)))
             }
+            let lobes: [(x: CGFloat, y: CGFloat, r: CGFloat)] = [
+                (117, 24, 7.5), (125, 21, 8), (132, 25, 6.5), (121, 28, 7), (129, 29, 6),
+            ]
+            for lobe in lobes {
+                let radius = lobe.r * swell * s
+                let blob = Path(ellipseIn: CGRect(
+                    x: p(lobe.x, lobe.y).x - radius, y: p(lobe.x, lobe.y).y - radius,
+                    width: radius * 2, height: radius * 2
+                ))
+                context.fill(blob, with: .color(brainPink))
+            }
+            var groove = Path()
+            groove.move(to: p(124.5, 14))
+            groove.addQuadCurve(to: p(124.5, 33), control: p(121, 24))
+            context.stroke(
+                groove,
+                with: .color(Color(red: 0.75, green: 0.35, blue: 0.44).opacity(0.75)),
+                style: StrokeStyle(lineWidth: 1.6 * s, lineCap: .round)
+            )
         case .tool:
             // A slowly turning gear.
             var gear = context
@@ -391,17 +415,12 @@ struct BubblesPetFigure: View {
             context.stroke(wheel, with: .color(ink.opacity(0.85)),
                            style: StrokeStyle(lineWidth: 3.6 * s))
         case .preparingAudio:
-            // A waveform assembling itself: five bars growing in stagger.
-            for bar in 0..<5 {
-                let stagger = max(0, min(1, pose.overheadPhase * 2.2 - Double(bar) * 0.28))
-                let height = (3 + 9 * stagger * (bar == 2 ? 1.25 : 1)) * s
-                let x = p(108 + CGFloat(bar) * 6, 66).x
-                let slot = Path(
-                    roundedRect: CGRect(x: x - 1.8 * s, y: crown.y - height / 2, width: 3.6 * s, height: height),
-                    cornerRadius: 1.8 * s
-                )
-                context.fill(slot, with: .color(ink.opacity(0.5 + 0.5 * stagger)))
-            }
+            // The reply is streaming in: a small elapsed counter so a long
+            // generation reads as progress, not a stall (INF-285).
+            let seconds = Text("\(min(pose.overheadSeconds, 999))s")
+                .font(.system(size: 10 * s, weight: .bold, design: .rounded))
+                .foregroundColor(ink.opacity(0.85 + 0.15 * sin(pose.overheadPhase * 2 * .pi)))
+            context.draw(context.resolve(seconds), at: crown)
         case .paused:
             for offset in [-4.5, 4.5] {
                 let bar = Path(
@@ -414,31 +433,26 @@ struct BubblesPetFigure: View {
                 context.fill(bar, with: .color(ink.opacity(0.8)))
             }
         case .sleeping:
-            // Two z's drifting up and fading, offset by half a cycle.
-            for (index, size) in [7.0, 9.5].enumerated() {
-                let cycle = (pose.overheadPhase + Double(index) * 0.5).truncatingRemainder(dividingBy: 1)
-                let rise = CGFloat(14 * cycle)
-                let alpha = (1 - cycle) * 0.7
-                let z = Text("z")
-                    .font(.system(size: size * s, weight: .bold, design: .rounded))
-                    .foregroundColor(ink.opacity(alpha))
-                context.draw(
-                    context.resolve(z),
-                    at: CGPoint(x: p(132 + CGFloat(index) * 9, 72).x, y: p(132, 72).y - rise)
-                )
+            // Three z's centered over the head, pulsing in sequence.
+            for (index, z) in [(x: 104.0, size: 6.5), (x: 120.0, size: 10.0), (x: 136.0, size: 6.5)].enumerated() {
+                let pulse = 0.3 + 0.7 * max(0, sin((pose.overheadPhase + Double(index) * 0.33) * 2 * .pi))
+                let glyph = Text("z")
+                    .font(.system(size: z.size * s, weight: .bold, design: .rounded))
+                    .foregroundColor(ink.opacity(pulse))
+                context.draw(context.resolve(glyph), at: p(CGFloat(z.x), 24))
             }
         }
     }
 
     private func drawArcs(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
-        // The head anatomy tightens and raises the voice arcs so the session
-        // ring keeps a clear lane below them even while speech ripples them
-        // (INF-281 feedback: motes were crashing into the arcs); the mark
-        // keeps its canonical 40/66/90 at the canonical center.
+        // The head anatomy tightens and raises the voice arcs into the crown
+        // zone inside the circular ring's apex (INF-285), so orbit traffic
+        // never touches them even while speech ripples them; the mark keeps
+        // its canonical 40/66/90 at the canonical center.
         let arcSpecs: [(radius: CGFloat, width: CGFloat, opacity: Double)] = anatomy == .head
-            ? [(30, 8, 1.0), (41, 8, 0.62), (52, 8, 0.30)]
+            ? [(24, 7, 1.0), (33, 7, 0.62), (42, 7, 0.30)]
             : [(40, 9, 1.0), (66, 9, 0.62), (90, 9, 0.30)]
-        let arcCenter = anatomy == .head ? p(120, 78) : p(120, 89)
+        let arcCenter = anatomy == .head ? p(120, 30) : p(120, 89)
         for (index, spec) in arcSpecs.enumerated() {
             let ripple = CGFloat(4 * pose.arcRipple * sin(pose.arcPhase - Double(index) * 1.1))
             var arc = Path()

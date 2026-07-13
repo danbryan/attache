@@ -458,6 +458,19 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                                               role: kAXButtonRole as String, containing: "Fleet demo")
                 _ = demo.press()
 
+            case "sim-phase":
+                // Crown totem QA (INF-285): pins the simulator to the phase
+                // named by SMOKE_POSE_PHASE so a capture can study one totem
+                // without racing the cycler.
+                let phaseName = ProcessInfo.processInfo.environment["SMOKE_POSE_PHASE"] ?? "agentThinking"
+                Thread.sleep(forTimeInterval: 2)
+                let picker = try waitForElement("simulated phase picker", in: try mainWindow(),
+                                                role: kAXPopUpButtonRole as String, containing: "Simulated phase")
+                try selectPopup(picker, item: phaseName)
+                let simulate = try waitForElement("simulate button", in: try mainWindow(),
+                                                  role: kAXButtonRole as String, containing: "Simulate")
+                _ = simulate.press()
+
             case "type-along":
                 // Delight reel support (INF-273): type like a user so the
                 // pet's types-along taps are on screen while a recording
