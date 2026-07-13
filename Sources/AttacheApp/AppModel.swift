@@ -772,6 +772,14 @@ final class AppModel: ObservableObject {
     /// source raw value so `companionActivity` can attribute the responding
     /// agent (INF-268).
     @Published private var composingNarrationTokens: [UUID: String] = [:]
+    /// When the current "preparing a recap / its audio" burst began, for the
+    /// agentResponding clock (INF-290). Reset each time composing and audio
+    /// prep both idle, so the counter tracks the current update, not the sum
+    /// of overlapping composes.
+    private var respondingBurstStartedAt: Date?
+    /// After this long, a still-"preparing" state is treated as a stalled
+    /// compose and the crown falls back to calm rather than a runaway clock.
+    private static let respondingSelfHealSeconds: TimeInterval = 20
     /// Failed instructions the user has moved past (snapshotted at call
     /// start): they stay in the Sent log but stop surfacing as a red error
     /// in the call composer. Memory-only on purpose; a relaunch re-surfaces
@@ -3498,12 +3506,28 @@ final class AppModel: ObservableObject {
             cards.first { $0.id == id }.map { CompanionAgentIdentity(sourceKindRawValue: $0.sourceKind) }
         }
 
+        // The "preparing" clock (agentResponding) is driven by composing a
+        // recap or synthesizing its audio. Two guards (INF-290): reset the
+        // burst clock whenever composing/prep genuinely idles, so its counter
+        // reflects the current update rather than accumulating across
+        // back-to-back composes on a busy pinned session; and self-heal after
+        // a hard cap, so a hung compose (a stalled presentation model that
+        // never calls back) can never freeze the crown on a runaway clock.
+        let composeSource = composingNarrationTokens.values.first
+        let isPreparing = composeSource != nil || playback.isBusy
+        if isPreparing {
+            if respondingBurstStartedAt == nil { respondingBurstStartedAt = Date() }
+        } else {
+            respondingBurstStartedAt = nil
+        }
         let respondingAgent: CompanionAgentIdentity? = {
-            if let source = composingNarrationTokens.values.first {
-                return CompanionAgentIdentity(sourceKindRawValue: source)
+            guard isPreparing else { return nil }
+            if let started = respondingBurstStartedAt,
+               Date().timeIntervalSince(started) > Self.respondingSelfHealSeconds {
+                return nil
             }
-            if playback.isBusy { return speakingAgent ?? .none }
-            return nil
+            if let composeSource { return CompanionAgentIdentity(sourceKindRawValue: composeSource) }
+            return speakingAgent ?? .none
         }()
 
         return CompanionActivitySignals(
