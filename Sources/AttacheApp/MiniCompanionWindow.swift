@@ -208,7 +208,8 @@ struct MiniCompanionView: View {
             onPetFocusAngleChanged: { [weak model] angle in
                 model?.petFocusAngle = angle
             },
-            petCharacter: model.petCharacter
+            petCharacter: model.petCharacter,
+            fleetNotificationsOnly: true
         )
         .contentShape(Rectangle())
         .contextMenu {

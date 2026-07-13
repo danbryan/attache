@@ -696,12 +696,19 @@ final class BubblesPetMotor: ObservableObject {
     /// their glyphs, the focused mote sits pinned at `focusedAngle`, and
     /// badge membership changes animate. Call after `pose(at:...)` each
     /// frame.
-    func fleet(activity: CompanionActivityState, reduceMotion: Bool) -> [BubblesFleetMote] {
+    func fleet(activity: CompanionActivityState, reduceMotion: Bool, notificationsOnly: Bool = false) -> [BubblesFleetMote] {
         let now = lastTick ?? Date().timeIntervalSinceReferenceDate
         let dt = min(1.0 / 15.0, max(0, now - (lastFleetTick ?? now)))
         lastFleetTick = now
 
-        let layout = BubblesFleetLayout.compute(fleet: activity.fleet)
+        // The desktop mini companion is a calm notification indicator
+        // (INF-291): it keeps only the focused session and the motes that
+        // ping (needs-you, finished), dropping the orbiting working and
+        // quiet motes and their badges.
+        let sourceFleet = notificationsOnly
+            ? activity.fleet.filter { $0.isFocused || $0.state == .blocked || $0.state == .finished }
+            : activity.fleet
+        let layout = BubblesFleetLayout.compute(fleet: sourceFleet)
         var motes: [BubblesFleetMote] = []
         var shownIDs: Set<String> = []
         var badgeCenters: [CompanionAgentIdentity: CGPoint] = [:]
@@ -995,6 +1002,9 @@ struct BubblesPetView: View {
     var shiny = false
     /// The character in the middle of the ring (INF-283).
     var character: BubblesPetCharacter = .robot
+    /// The desktop mini companion keeps only focus/needs-you/finished motes
+    /// (a calm notification indicator), dropping the orbiting fleet (INF-291).
+    var fleetNotificationsOnly = false
     /// Fleet interactivity (INF-275): click a mote to focus its session,
     /// click a badge to open the session switcher.
     var onFleetFocus: ((String) -> Void)?
@@ -1030,7 +1040,7 @@ struct BubblesPetView: View {
                     headroom: Self.headroom,
                     anatomy: .head,
                     character: character,
-                    fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion),
+                    fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion, notificationsOnly: fleetNotificationsOnly),
                     accentColor: colorScheme == .dark
                         ? .white
                         : Color(red: 0.10, green: 0.11, blue: 0.14),

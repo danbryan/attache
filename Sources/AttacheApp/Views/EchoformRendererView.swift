@@ -31,6 +31,8 @@ struct EchoformRendererView: View {
     var onPetFocusAngleChanged: ((Double) -> Void)?
     /// The character in the middle of the ring (INF-283), pet mode only.
     var petCharacter: BubblesPetCharacter = .robot
+    /// Desktop mini companion: show only focus/needs-you/finished (INF-291).
+    var fleetNotificationsOnly = false
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -54,6 +56,7 @@ struct EchoformRendererView: View {
                     delights: petDelights,
                     shiny: petShiny,
                     character: petCharacter,
+                    fleetNotificationsOnly: fleetNotificationsOnly,
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch,
                     focusAngle: petFocusAngle,
