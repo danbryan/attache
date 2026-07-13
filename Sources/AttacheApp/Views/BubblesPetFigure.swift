@@ -150,7 +150,7 @@ enum BubblesPetAnatomy {
 enum BubblesPetCharacter: String, CaseIterable, Identifiable {
     case bubbles
     case robot
-    case owl
+    case cowboy
 
     var id: String { rawValue }
 
@@ -158,7 +158,18 @@ enum BubblesPetCharacter: String, CaseIterable, Identifiable {
         switch self {
         case .bubbles: return "Bubbles"
         case .robot: return "Volt"
-        case .owl: return "Scout"
+        case .cowboy: return "Colt"
+        }
+    }
+
+    /// A face emoji standing in for each character where the rig can't
+    /// render (voicemail avatars, the promo video). Kept close to each
+    /// character's read.
+    var avatarEmoji: String {
+        switch self {
+        case .bubbles: return "😊"
+        case .robot: return "🤖"
+        case .cowboy: return "🤠"
         }
     }
 }
@@ -516,8 +527,8 @@ struct BubblesPetFigure: View {
             drawBubblesFace(in: head, pose: pose, p: p, s: s)
         case .robot:
             drawRobotFace(in: head, pose: pose, p: p, s: s)
-        case .owl:
-            drawOwlFace(in: head, pose: pose, p: p, s: s)
+        case .cowboy:
+            drawCowboyFace(in: head, pose: pose, p: p, s: s)
         }
     }
 
@@ -715,106 +726,132 @@ struct BubblesPetFigure: View {
         }
     }
 
-    /// Scout (INF-283): an owl. The big eyes have pupils that ride the gaze
-    /// (the expressive-eyeball ask), lids close with `eyeOpenness`, the beak
-    /// opens for speech, and the ear tufts read the silhouette at any size.
-    private func drawOwlFace(in head: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
-        let feathers = Color(red: 176 / 255, green: 137 / 255, blue: 104 / 255)
-        let faceDisc = Color(red: 245 / 255, green: 230 / 255, blue: 206 / 255)
+    /// Colt (INF-288): a cowboy. Expressive round eyes with pupils that ride
+    /// the gaze (the same eyeball read the retired owl had, per Dan's
+    /// "eyeballs not squiggly lines" ask), a brown ten-gallon hat as the
+    /// signature silhouette, a red neckerchief, and blush cheeks. Everything
+    /// is drawn in the `head` layer, so the hat tilts with `headTilt`.
+    private func drawCowboyFace(in head: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        let cream = AttacheMascotMark.headColor
         let ink = AttacheMascotMark.faceColor
-        let beakColor = Color(red: 232 / 255, green: 161 / 255, blue: 61 / 255)
-
-        var tufts = Path()
-        tufts.move(to: p(94, 86))
-        tufts.addLine(to: p(100, 69))
-        tufts.addLine(to: p(111, 82))
-        tufts.closeSubpath()
-        tufts.move(to: p(146, 86))
-        tufts.addLine(to: p(140, 69))
-        tufts.addLine(to: p(129, 82))
-        tufts.closeSubpath()
-        head.fill(tufts, with: .color(feathers))
+        let hatBrown = Color(red: 0.45, green: 0.31, blue: 0.19)
+        let hatBand = Color(red: 0.30, green: 0.20, blue: 0.12)
+        let bandanaRed = Color(red: 0.82, green: 0.24, blue: 0.24)
 
         let skull = Path(ellipseIn: CGRect(
             x: p(87, 79).x, y: p(87, 79).y, width: 66 * s, height: 66 * s
         ))
-        head.fill(skull, with: .color(feathers))
-        let disc = Path(ellipseIn: CGRect(
-            x: p(96, 92).x, y: p(96, 92).y, width: 48 * s, height: 42 * s
-        ))
-        head.fill(disc, with: .color(faceDisc))
+        head.fill(skull, with: .color(cream))
+
+        for cheekX in [95.0, 145.0] {
+            let cheek = Path(ellipseIn: CGRect(
+                x: p(CGFloat(cheekX) - 6, 115).x, y: p(CGFloat(cheekX) - 6, 115).y,
+                width: 12 * s, height: 12 * s
+            ))
+            head.fill(cheek, with: .color(AttacheMascotMark.cheekColor.opacity(pose.cheekGlow)))
+        }
 
         let gx = max(-3, min(3, pose.gaze.width))
         let gy = max(-3, min(3, pose.gaze.height))
         let eyeAlpha = 1 - pose.dizzy
         let openness = pose.eyeOpenness * (1 - 0.35 * pose.browWorry)
         for eyeX in [106.0, 134.0] {
-            let center = p(CGFloat(eyeX), 107)
+            let center = p(CGFloat(eyeX), 106)
             if eyeAlpha > 0.01, openness > 0.12 {
                 let white = Path(ellipseIn: CGRect(
-                    x: center.x - 10 * s, y: center.y - 10 * s * openness,
-                    width: 20 * s, height: 20 * s * openness
+                    x: center.x - 7 * s, y: center.y - 7 * s * openness,
+                    width: 14 * s, height: 14 * s * openness
                 ))
                 head.fill(white, with: .color(.white.opacity(eyeAlpha)))
                 let pupil = Path(ellipseIn: CGRect(
-                    x: center.x - 4 * s + gx * 1.9 * s,
-                    y: center.y - 4 * s * openness + gy * 1.6 * s,
-                    width: 8 * s, height: 8 * s * openness
+                    x: center.x - 3.4 * s + gx * 1.6 * s,
+                    y: center.y - 3.4 * s * openness + gy * 1.4 * s,
+                    width: 6.8 * s, height: 6.8 * s * openness
                 ))
                 head.fill(pupil, with: .color(ink.opacity(eyeAlpha)))
             } else if eyeAlpha > 0.01 {
                 var lid = Path()
-                lid.move(to: CGPoint(x: center.x - 9 * s, y: center.y))
+                lid.move(to: CGPoint(x: center.x - 7 * s, y: center.y))
                 lid.addQuadCurve(
-                    to: CGPoint(x: center.x + 9 * s, y: center.y),
-                    control: CGPoint(x: center.x, y: center.y + 6 * s)
+                    to: CGPoint(x: center.x + 7 * s, y: center.y),
+                    control: CGPoint(x: center.x, y: center.y + 5 * s)
                 )
                 head.stroke(lid, with: .color(ink.opacity(eyeAlpha)),
                             style: StrokeStyle(lineWidth: 4 * s, lineCap: .round))
             }
             if pose.dizzy > 0.01 {
                 var cross = Path()
-                cross.move(to: CGPoint(x: center.x - 6 * s, y: center.y - 5 * s))
-                cross.addLine(to: CGPoint(x: center.x + 6 * s, y: center.y + 5 * s))
-                cross.move(to: CGPoint(x: center.x + 6 * s, y: center.y - 5 * s))
-                cross.addLine(to: CGPoint(x: center.x - 6 * s, y: center.y + 5 * s))
+                cross.move(to: CGPoint(x: center.x - 5 * s, y: center.y - 5 * s))
+                cross.addLine(to: CGPoint(x: center.x + 5 * s, y: center.y + 5 * s))
+                cross.move(to: CGPoint(x: center.x + 5 * s, y: center.y - 5 * s))
+                cross.addLine(to: CGPoint(x: center.x - 5 * s, y: center.y + 5 * s))
                 head.stroke(cross, with: .color(ink.opacity(pose.dizzy)),
                             style: StrokeStyle(lineWidth: 3.5 * s, lineCap: .round))
             }
         }
         if pose.browWorry > 0.01 {
             var brows = Path()
-            brows.move(to: p(96, 96))
-            brows.addLine(to: p(113, 92))
-            brows.move(to: p(127, 92))
-            brows.addLine(to: p(144, 96))
-            head.stroke(brows, with: .color(feathers.opacity(pose.browWorry)),
-                        style: StrokeStyle(lineWidth: 4.5 * s, lineCap: .round))
+            brows.move(to: p(98, 97))
+            brows.addLine(to: p(113, 93))
+            brows.move(to: p(127, 93))
+            brows.addLine(to: p(142, 97))
+            head.stroke(brows, with: .color(ink.opacity(pose.browWorry)),
+                        style: StrokeStyle(lineWidth: 4 * s, lineCap: .round))
         }
 
-        for cheekX in [95.0, 145.0] {
-            let cheek = Path(ellipseIn: CGRect(
-                x: p(CGFloat(cheekX) - 5, 116).x, y: p(CGFloat(cheekX) - 5, 116).y,
-                width: 10 * s, height: 10 * s
+        // Mouth: the same smile / open-mouth swap the mark uses.
+        if pose.mouthOpen < 0.15 {
+            let halfWidth = 11 * pose.smile
+            let depth = 13 * pose.smile
+            var mouth = Path()
+            mouth.move(to: p(120 - halfWidth, 121))
+            mouth.addCurve(
+                to: p(120 + halfWidth, 121),
+                control1: p(120 - halfWidth * 0.75, 121 + depth),
+                control2: p(120 + halfWidth * 0.75, 121 + depth)
+            )
+            mouth.closeSubpath()
+            head.fill(mouth, with: .color(ink))
+        } else {
+            let rx = 8 * (0.5 + 0.5 * pose.mouthOpen)
+            let ry = 3 + 9 * pose.mouthOpen
+            let mouthCenter = p(120, 123 + 3 * pose.mouthOpen)
+            let open = Path(ellipseIn: CGRect(
+                x: mouthCenter.x - rx * s, y: mouthCenter.y - ry * s,
+                width: rx * 2 * s, height: ry * 2 * s
             ))
-            head.fill(cheek, with: .color(AttacheMascotMark.cheekColor.opacity(pose.cheekGlow)))
+            head.fill(open, with: .color(ink))
         }
 
-        var upperBeak = Path()
-        upperBeak.move(to: p(114, 116))
-        upperBeak.addLine(to: p(126, 116))
-        upperBeak.addLine(to: p(120, 126))
-        upperBeak.closeSubpath()
-        head.fill(upperBeak, with: .color(beakColor))
-        if pose.mouthOpen >= 0.15 {
-            let drop = 4 + 10 * pose.mouthOpen
-            var lowerBeak = Path()
-            lowerBeak.move(to: p(115.5, 121))
-            lowerBeak.addLine(to: p(124.5, 121))
-            lowerBeak.addLine(to: p(120, 121 + CGFloat(drop)))
-            lowerBeak.closeSubpath()
-            head.fill(lowerBeak, with: .color(beakColor.opacity(0.85)))
-        }
+        // Neckerchief at the collar: a red band across the bottom of the
+        // face with a knot dropping below the chin.
+        let kerchief = Path(
+            roundedRect: CGRect(x: p(99, 137).x, y: p(99, 137).y, width: 42 * s, height: 9 * s),
+            cornerRadius: 3 * s
+        )
+        head.fill(kerchief, with: .color(bandanaRed))
+        var knot = Path()
+        knot.move(to: p(114, 143))
+        knot.addLine(to: p(126, 143))
+        knot.addLine(to: p(120, 152))
+        knot.closeSubpath()
+        head.fill(knot, with: .color(bandanaRed))
+
+        // The hat, last, so its brim covers the forehead.
+        let brim = Path(ellipseIn: CGRect(
+            x: p(78, 77).x, y: p(78, 77).y, width: 84 * s, height: 13 * s
+        ))
+        head.fill(brim, with: .color(hatBrown))
+        let crown = Path(
+            roundedRect: CGRect(x: p(101, 55).x, y: p(101, 55).y, width: 38 * s, height: 27 * s),
+            cornerRadius: 11 * s
+        )
+        head.fill(crown, with: .color(hatBrown))
+        let band = Path(
+            roundedRect: CGRect(x: p(101, 73).x, y: p(101, 73).y, width: 38 * s, height: 6 * s),
+            cornerRadius: 2 * s
+        )
+        head.fill(band, with: .color(hatBand))
     }
 
     private func drawBubbles(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {

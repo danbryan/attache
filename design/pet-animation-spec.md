@@ -233,9 +233,11 @@ install speaks with, and it is the app icon.
 - **Volt**: a robot, the default. LED-bar eyes carry `eyeOpenness` (worry
   tilts them, dizzy crosses them out), the mouth is an equalizer driven by
   `mouthOpen`, the antenna bulb carries the cheek glow.
-- **Scout**: an owl. Big eyes with pupils that ride the gaze (the most
-  expressive eye read), lids close with `eyeOpenness`, the beak opens for
-  speech, blush carries the cheek glow.
+- **Colt**: a cowboy (INF-288, replaced the Scout owl). Expressive round
+  eyes with pupils that ride the gaze, lids close with `eyeOpenness`, a
+  brown ten-gallon hat is the signature silhouette, a red neckerchief and
+  blush cheeks round it out. Pairs with the Cowboy personality and the
+  Grandpa Spuds Oxley promo voice.
 
 The character contract is the `BubblesPose` face surface: a character must
 express `eyeOpenness`, `gaze`, `dizzy`, `browWorry`, `mouthOpen` plus
