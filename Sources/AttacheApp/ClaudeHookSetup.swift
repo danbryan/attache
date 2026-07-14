@@ -23,9 +23,18 @@ enum ClaudeHookSetup {
 
     static var entries: [ClaudeHookInstaller.Entry] {
         let path = scriptURL.path
+        func entry(_ event: String, _ type: String) -> ClaudeHookInstaller.Entry {
+            .init(event: event, command: "'\(path)' \(type)")
+        }
         return [
-            .init(event: "Notification", command: "'\(path)' needs_attention"),
-            .init(event: "Stop", command: "'\(path)' turn_complete")
+            entry("UserPromptSubmit", "turn_started"),   // instant "working"
+            entry("Stop", "turn_complete"),               // done
+            entry("StopFailure", "turn_failed"),          // errored
+            entry("Notification", "needs_attention"),     // needs you
+            entry("SessionStart", "session_start"),       // greet
+            entry("SessionEnd", "session_end"),           // farewell
+            entry("Setup", "session_setup"),              // configuring
+            entry("PreCompact", "compacting")             // squish
         ]
     }
 

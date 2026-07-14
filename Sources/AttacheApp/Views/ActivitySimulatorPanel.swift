@@ -84,6 +84,20 @@ struct ActivitySimulatorPanel: View {
             }
             .typoCaption(.medium)
 
+            HStack(spacing: 6) {
+                Button("Greet") { model.triggerMoment(.greet, agent: agent) }
+                    .accessibilityLabel("Greet moment")
+                Button("Farewell") { model.triggerMoment(.farewell, agent: agent) }
+                    .accessibilityLabel("Farewell moment")
+                Button("Configuring") { model.triggerMoment(.configuring, agent: agent) }
+                    .accessibilityLabel("Configuring moment")
+                Button("Compacting") { model.triggerMoment(.compacting, agent: agent) }
+                    .accessibilityLabel("Compacting moment")
+                Button("Errored") { model.triggerMoment(.errored, agent: agent) }
+                    .accessibilityLabel("Errored moment")
+            }
+            .typoCaption(.medium)
+
             Stepper("Claude fleet: \(claudeCount)", value: $claudeCount, in: 0...40)
                 .typoCaption(.medium)
                 .accessibilityLabel("Simulated Claude fleet size")

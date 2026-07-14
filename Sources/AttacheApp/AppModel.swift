@@ -1487,6 +1487,21 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        // Instant "working" on prompt submit (UserPromptSubmit hook), so the
+        // orbit starts immediately instead of waiting for the transcript poll.
+        if event.eventType == "turn_started" {
+            if let sessionID = event.externalSessionID {
+                handleAttentionChange(sessionID: sessionID, state: .active, fromHook: true)
+            }
+            return
+        }
+        // One-shot pet moments from the other lifecycle hooks (errored, greet,
+        // farewell, configuring, compacting).
+        if let momentKind = Self.momentKind(forEventType: event.eventType) {
+            let agent = event.externalSessionID.map { agentIdentity(forSessionID: $0) } ?? .none
+            companionMoment = CompanionActivityMoment(kind: momentKind, agent: agent, at: Date())
+            return
+        }
         intakeStatus = event.source == SourceKind.codex.rawValue
             ? "Preparing Codex spoken update."
             : "Preparing spoken update."
@@ -3512,6 +3527,18 @@ final class AppModel: ObservableObject {
     /// through the same publisher real transitions use.
     func triggerMoment(_ kind: CompanionActivityMoment.Kind, agent: CompanionAgentIdentity) {
         companionMoment = CompanionActivityMoment(kind: kind, agent: agent, at: Date())
+    }
+
+    /// Maps a lifecycle-hook event type to the one-shot pet moment it plays.
+    private static func momentKind(forEventType type: String) -> CompanionActivityMoment.Kind? {
+        switch type {
+        case "turn_failed": return .errored
+        case "session_start": return .greet
+        case "session_end": return .farewell
+        case "session_setup": return .configuring
+        case "compacting": return .compacting
+        default: return nil
+        }
     }
 
     /// Maps a watched session to the bubble identity its events light up.

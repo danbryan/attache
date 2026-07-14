@@ -551,6 +551,11 @@ final class BubblesPetMotor: ObservableObject {
         case .celebrate: return 1.2
         case .cardArrived: return 0.8
         case .drowsy: return 2.5
+        case .errored: return 1.6
+        case .configuring: return 2.6
+        case .compacting: return 1.6
+        case .greet: return 1.2
+        case .farewell: return 1.6
         }
     }
 
@@ -587,6 +592,51 @@ final class BubblesPetMotor: ObservableObject {
             pose.eyeOpenness *= 1 - 0.65 * sin(progress * .pi)
             if !reduceMotion {
                 pose.headTilt += 4 * sin(progress * .pi)
+            }
+        case .errored:
+            // A turn died on an API error: eyes cross to dizzy X's, brows worry,
+            // and a quick shudder that eases out.
+            let pulse = sin(progress * .pi)
+            pose.dizzy = max(pose.dizzy, pulse)
+            pose.browWorry = max(pose.browWorry, 0.85 * pulse)
+            pose.smile = 1 - 0.8 * pulse
+            if !reduceMotion {
+                pose.headTilt += 5 * sin(now * 22) * (1 - progress) * pulse
+            }
+        case .configuring:
+            // Being set up: eyes roll up, half-lidded, scanning side to side.
+            let hold = sin(min(1, progress / 0.25) * .pi / 2)
+                * (progress > 0.82 ? (1 - progress) / 0.18 : 1)
+            pose.gaze.height = -3 * hold
+            pose.eyeOpenness = 0.35 + 0.12 * (0.5 + 0.5 * sin(now * 9))
+            if !reduceMotion {
+                pose.gaze.width = 2.4 * sin(now * 3.2) * hold
+            }
+        case .compacting:
+            // Context compaction: the head squishes flatter and wider (positive
+            // squash), settling down, then springs back.
+            let squishStrength = sin(progress * .pi)
+            pose.squash = squishStrength
+            pose.hop = -7 * squishStrength
+            if !reduceMotion {
+                pose.browWorry = max(pose.browWorry, 0.3 * squishStrength)
+            }
+        case .greet:
+            // A session appeared: eyes pop bright, a hello ring pulses out, a bob.
+            pose.eyeOpenness = max(pose.eyeOpenness, 1)
+            pose.smile = 1
+            if !reduceMotion {
+                pose.arcRipple = sin(progress * .pi)
+                pose.arcPhase = now * 2.6
+                pose.hop = CGFloat(11 * sin(min(1, progress / 0.55) * .pi))
+            }
+        case .farewell:
+            // A session ended: eyes dim, a soft inward pulse, a little bow.
+            pose.eyeOpenness *= 1 - 0.7 * sin(progress * .pi)
+            if !reduceMotion {
+                pose.arcRipple = -0.6 * sin(progress * .pi)
+                pose.arcPhase = now * 2.6
+                pose.headTilt += 6 * sin(progress * .pi)
             }
         }
     }

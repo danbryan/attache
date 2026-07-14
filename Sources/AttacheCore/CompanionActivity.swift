@@ -270,6 +270,21 @@ public struct CompanionActivityMoment: Equatable, Identifiable, Sendable {
         case cardArrived
         /// A pinned session went stale (attention -> quiet).
         case drowsy
+        /// A turn ended on an API error (Claude Code StopFailure hook): the
+        /// eyes cross into dizzy X's with a worried shudder.
+        case errored
+        /// A session is being set up (Setup hook): the eyes roll up and scan,
+        /// half-lidded, like it is being plugged in and configured.
+        case configuring
+        /// Context is being compacted (PreCompact hook): the whole head squishes
+        /// flatter and wider, then springs back.
+        case compacting
+        /// A session just appeared (SessionStart hook): eyes pop, a hello ring
+        /// pulses outward, a little bob.
+        case greet
+        /// A session ended (SessionEnd hook): the eyes dim, a soft inward pulse,
+        /// a small bow.
+        case farewell
     }
 
     public var id: UUID
