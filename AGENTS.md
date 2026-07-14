@@ -53,6 +53,12 @@ one app process.
 - `Sources/AttacheApp`: the SwiftUI/AppKit app. Session watchers, the local event
   server, speech playback, two-way delivery adapters and coordinator, views.
 - `docs/two-way.md`: two-way channel design of record.
+- `Sources/AttacheApp/Personality.swift`: a personality is one first-class unit
+  that owns its brain (`prompt`), voice (`PersonalityVoiceRef`), and pet
+  (`BubblesPetCharacter`). `PersonalityStore` persists the set, migrates a
+  pre-unification user's separate voice/pet onto their active personality, and
+  imports/exports JSON. `CompanionPersonality.anotherTakePrompt` (Core) is the
+  pure "another take" re-narration engine. See Decisions of Record.
 - New logic that can be unit-tested belongs in `AttacheCore`.
 
 ## Build Rules
@@ -305,6 +311,16 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
 - **The three built-in personalities are domain-agnostic.** Explainer, Big
   Picture, and Inquisitive must read for any profession (finance, medicine, law,
   athletics, content), not just developers. No build/log/ship/deploy specifics.
+- **A personality is one unit: brain, voice, and pet** (2026-07-14, INF-293..302,
+  "Personality Manager"). `Personality` owns a `voiceRef` (engine + voice) and a
+  `petCharacter`; switching a personality applies all three together, and a voice
+  or pet edit folds onto the active personality rather than an orphan global.
+  Built-in defaults: the three domain-agnostic personalities use the robot;
+  Cowboy is Colt with a weathered on-device voice. **"Another take"** lets any
+  voicemail card or live turn be re-narrated by a different personality that
+  briefly reacts to the prior take then gives its own spin, in its own voice and
+  pet. Another-take is narration only: it never triggers a reverse-send and never
+  touches the frozen agent destinations.
 - **Recap length is dynamic.** The recap prompt scales a sentence ceiling by item
   count, clusters related items, compresses solved problems to their outcome, and
   preserves decisions.
