@@ -105,6 +105,29 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         }
     }
 
+    func testExportImportRoundTripCreatesFreshCustomPersonality() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let source = Personality(
+                id: "custom.src", name: "Source", prompt: "Speak plainly.",
+                voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceID: "v", elevenLabsVoiceName: "Rae"),
+                petCharacter: .cowboy
+            )
+            model.personalities = [source]
+            model.activePersonalityID = "custom.src"
+            let data = try XCTUnwrap(model.exportPersonalityData(id: "custom.src"))
+            model.importPersonality(from: data)
+            let imported = model.personalities.first { $0.id == model.activePersonalityID }
+            XCTAssertNotEqual(imported?.id, "custom.src")
+            XCTAssertEqual(imported?.isBuiltIn, false)
+            XCTAssertEqual(imported?.name, "Source")
+            XCTAssertEqual(imported?.prompt, "Speak plainly.")
+            XCTAssertEqual(imported?.petCharacter, .cowboy)
+            XCTAssertEqual(imported?.voiceRef?.elevenLabsVoiceName, "Rae")
+            XCTAssertEqual(model.personalities.count, 2)
+        }
+    }
+
     func testCapturingVoiceFoldsOntoActivePersonality() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())

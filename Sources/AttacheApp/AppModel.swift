@@ -4552,6 +4552,25 @@ final class AppModel: ObservableObject {
         personalityStore.save(personalities, activeID: activePersonalityID)
     }
 
+    /// Export a personality as JSON for sharing or backup (INF-295), mirroring
+    /// the custom-themes interchange.
+    func exportPersonalityData(id: String) -> Data? {
+        guard let personality = personalities.first(where: { $0.id == id }) else { return nil }
+        return try? PersonalityStore.exportData(personality)
+    }
+
+    /// Import a personality from JSON, giving it a fresh identity so it never
+    /// clobbers an existing one, then make it active (INF-295).
+    func importPersonality(from data: Data) {
+        guard let imported = try? PersonalityStore.importPersonality(from: data) else {
+            intakeStatus = "Could not import that personality file."
+            return
+        }
+        personalities.append(imported)
+        selectPersonality(imported.id)
+        intakeStatus = "Imported \"\(imported.name)\"."
+    }
+
     func updatePersonality(id: String, name: String, prompt: String) {
         guard let index = personalities.firstIndex(where: { $0.id == id }) else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)

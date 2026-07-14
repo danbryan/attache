@@ -132,6 +132,29 @@ extension Personality {
     }
 }
 
+extension Personality {
+    /// A short, human label for this personality's voice, for list rows and the
+    /// editor. Never surfaces provider internals like a raw voice id.
+    var voiceSummary: String {
+        guard let ref = voiceRef else { return "Inherits app voice" }
+        switch ref.provider {
+        case .system:
+            return "On-device voice"
+        case .elevenLabs:
+            return "ElevenLabs" + (ref.elevenLabsVoiceName.map { ": \($0)" } ?? " voice")
+        case .xai:
+            return "xAI" + (ref.xaiVoiceName.map { ": \($0)" } ?? " voice")
+        case .openai:
+            return "OpenAI" + (ref.openaiVoiceName.map { ": \($0)" } ?? " voice")
+        }
+    }
+
+    /// The pet avatar emoji shown in list rows (🤖 default / 🤠 Colt).
+    var petAvatarEmoji: String {
+        (petCharacter ?? .robot).avatarEmoji
+    }
+}
+
 /// Persists the personality list and the active selection in UserDefaults,
 /// seeding the built-ins and migrating any existing custom persona on first run.
 final class PersonalityStore {

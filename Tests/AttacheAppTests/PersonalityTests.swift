@@ -232,4 +232,23 @@ final class PersonalityTests: XCTestCase {
         XCTAssertEqual(imported.petCharacter, .cowboy)
         XCTAssertEqual(imported.voiceRef?.systemVoiceIdentifier, Personality.cowboyPreferredVoiceID)
     }
+
+    // MARK: - T3: manager UI summaries
+
+    func testVoiceSummaryAndPetAvatarLabels() {
+        XCTAssertEqual(Personality(id: "a", name: "A", prompt: "p").voiceSummary, "Inherits app voice")
+        XCTAssertEqual(Personality(id: "b", name: "B", prompt: "p", voiceRef: .systemVoice(nil)).voiceSummary, "On-device voice")
+        XCTAssertEqual(
+            Personality(id: "c", name: "C", prompt: "p",
+                        voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceName: "Rae")).voiceSummary,
+            "ElevenLabs: Rae"
+        )
+        XCTAssertEqual(
+            Personality(id: "d", name: "D", prompt: "p",
+                        voiceRef: PersonalityVoiceRef(provider: .xai)).voiceSummary,
+            "xAI voice"
+        )
+        XCTAssertEqual(Personality(id: "e", name: "E", prompt: "p", petCharacter: .cowboy).petAvatarEmoji, "🤠")
+        XCTAssertEqual(Personality(id: "f", name: "F", prompt: "p").petAvatarEmoji, "🤖")
+    }
 }

@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Manage companion personalities. Clicking a personality makes it active and
-/// drops straight into editing it; one prompt defines each one.
+/// drops straight into editing it: prompt, voice, and pet together (INF-295).
 struct PersonalitiesPane: View {
     @ObservedObject var model: AppModel
     @State private var draftName = ""
@@ -12,14 +14,15 @@ struct PersonalitiesPane: View {
             HStack {
                 Text("Personalities").typoTitle()
                 Spacer()
-                Button {
-                    model.addPersonality()
-                } label: {
+                Button { importPersonality() } label: {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                }
+                Button { model.addPersonality() } label: {
                     Label("New", systemImage: "plus")
                 }
             }
 
-            Text("One prompt defines each personality's tone, attitude, detail, and language. Click one to make it active and edit it.")
+            Text("Each personality bundles a prompt, a voice, and a pet. Click one to make it active and edit it.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -52,16 +55,23 @@ struct PersonalitiesPane: View {
         return HStack(spacing: 10) {
             Image(systemName: isActive ? "largecircle.fill.circle" : "circle")
                 .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+            Text(personality.petAvatarEmoji)
             VStack(alignment: .leading, spacing: 1) {
                 Text(personality.name).typoBody(.medium)
-                if personality.isBuiltIn {
-                    Text("Built-in").typoCaption(.semibold).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    if personality.isBuiltIn {
+                        Text("Built-in").typoCaption(.semibold).foregroundStyle(.secondary)
+                    }
+                    Text(personality.voiceSummary).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer()
-            Button {
-                model.duplicatePersonality(id: personality.id)
-            } label: {
+            Button { exportPersonality(personality) } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .buttonStyle(.borderless)
+            .help("Export")
+            Button { model.duplicatePersonality(id: personality.id) } label: {
                 Image(systemName: "doc.on.doc")
             }
             .buttonStyle(.borderless)
@@ -102,8 +112,31 @@ struct PersonalitiesPane: View {
             TextField("Name", text: $draftName).textFieldStyle(.roundedBorder)
             TextEditor(text: $draftPrompt)
                 .typoLabel(design: .monospaced)
-                .frame(minHeight: 200)
+                .frame(minHeight: 160)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor)))
+
+            // Pet and voice apply immediately to the active personality.
+            HStack(spacing: 12) {
+                Picker("Pet", selection: Binding(
+                    get: { model.petCharacter },
+                    set: { model.selectPetCharacter($0) }
+                )) {
+                    ForEach(BubblesPetCharacter.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                }
+                .frame(maxWidth: 200)
+
+                Picker("On-device voice", selection: Binding(
+                    get: { model.speechProvider == .system ? (model.speechVoiceIdentifier ?? "") : "" },
+                    set: { id in model.selectSpeechVoice(model.speechVoiceOptions.first { $0.id == id }) }
+                )) {
+                    Text("System default").tag("")
+                    ForEach(model.speechVoiceOptions) { Text($0.title).tag($0.id) }
+                }
+            }
+            Text("Voice: \(personality.voiceSummary). For ElevenLabs, xAI, or OpenAI voices, choose one in the Voice tab while this personality is active.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             HStack {
                 Spacer()
                 Button("Revert") { reloadDraft() }
@@ -125,5 +158,24 @@ struct PersonalitiesPane: View {
         guard let active = model.activePersonality else { return }
         draftName = active.name
         draftPrompt = active.prompt
+    }
+
+    private func exportPersonality(_ personality: Personality) {
+        guard let data = model.exportPersonalityData(id: personality.id) else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(personality.name).json"
+        panel.allowedContentTypes = [.json]
+        if panel.runModal() == .OK, let url = panel.url {
+            try? data.write(to: url)
+        }
+    }
+
+    private func importPersonality() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) {
+            model.importPersonality(from: data)
+        }
     }
 }
