@@ -19,10 +19,9 @@ struct ActivitySimulatorPanel: View {
     @State private var oneBlocked = false
     @State private var oneFinished = false
     @State private var subAgents = 0
-    /// Sub-agents assigned per fleet slot by the "Add subs" button, so you can
-    /// load several sessions (including non-focused ones), not just one.
+    /// Sub-agents assigned per fleet slot by "Add subs to focused", kept when
+    /// focus moves so several sessions (including non-focused ones) can carry them.
     @State private var subsBySlot: [Int: Int] = [:]
-    @State private var nextSubSlot = 0
     @State private var demoElapsed = -1.0
     private let cycleTimer = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
     private let demoTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
@@ -117,10 +116,10 @@ struct ActivitySimulatorPanel: View {
             }
             .typoCaption(.medium)
             HStack(spacing: 6) {
-                Button("Add subs to a session") { addSubsToNextSession() }
+                Button("Add subs to focused") { addSubsToFocusedSession() }
                     .disabled(claudeCount + codexCount == 0 || subAgents == 0)
-                    .accessibilityLabel("Add sub-agents to the next session")
-                Button("Clear subs") { subsBySlot = [:]; nextSubSlot = 0; applyIfSimulating() }
+                    .accessibilityLabel("Add sub-agents to the focused session")
+                Button("Clear subs") { subsBySlot = [:]; applyIfSimulating() }
                     .accessibilityLabel("Clear simulated sub-agents")
             }
             .typoCaption(.medium)
@@ -213,13 +212,15 @@ struct ActivitySimulatorPanel: View {
             .accessibilityLabel("\(title) moment")
     }
 
-    /// Assign the current Subs count to the next session in rotation, so
-    /// repeated clicks load several sessions, focused or not.
-    private func addSubsToNextSession() {
-        let total = claudeCount + codexCount
-        guard total > 0 else { return }
-        subsBySlot[nextSubSlot % total] = subAgents
-        nextSubSlot += 1
+    /// Assign the current Subs count to the currently focused session, and keep
+    /// it there when focus moves. Focus a session, set the count, add; then
+    /// focus another and add to it, to load several sessions.
+    private func addSubsToFocusedSession() {
+        let ids = (0..<claudeCount).map { "sim-Claude-\($0)" }
+            + (0..<codexCount).map { "sim-Codex-\($0)" }
+        guard !ids.isEmpty else { return }
+        let focusIndex = ids.firstIndex { $0 == model.simulatedFleetFocusID } ?? 0
+        subsBySlot[focusIndex] = subAgents
         applyIfSimulating()
     }
 
