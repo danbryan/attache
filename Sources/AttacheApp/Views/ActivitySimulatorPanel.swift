@@ -75,25 +75,27 @@ struct ActivitySimulatorPanel: View {
             .typoCaption(.medium)
 
             HStack(spacing: 6) {
-                Button("Celebrate") { previewMoment(.celebrate) }
+                Button("Celebrate") { model.triggerMoment(.celebrate, agent: agent) }
                     .accessibilityLabel("Celebrate moment")
-                Button("Pop") { previewMoment(.cardArrived) }
+                Button("Pop") { model.triggerMoment(.cardArrived, agent: agent) }
                     .accessibilityLabel("Pop moment")
-                Button("Drowsy") { previewMoment(.drowsy) }
+                Button("Drowsy") { model.triggerMoment(.drowsy, agent: agent) }
                     .accessibilityLabel("Drowsy moment")
+                Button("Needs you") { model.triggerMoment(.needsYou, agent: agent) }
+                    .accessibilityLabel("Needs you moment")
             }
             .typoCaption(.medium)
 
             HStack(spacing: 6) {
-                Button("Greet") { previewMoment(.greet) }
+                Button("Greet") { model.triggerMoment(.greet, agent: agent) }
                     .accessibilityLabel("Greet moment")
-                Button("Farewell") { previewMoment(.farewell) }
+                Button("Farewell") { model.triggerMoment(.farewell, agent: agent) }
                     .accessibilityLabel("Farewell moment")
-                Button("Configuring") { previewMoment(.configuring) }
+                Button("Configuring") { model.triggerMoment(.configuring, agent: agent) }
                     .accessibilityLabel("Configuring moment")
-                Button("Compacting") { previewMoment(.compacting) }
+                Button("Compacting") { model.triggerMoment(.compacting, agent: agent) }
                     .accessibilityLabel("Compacting moment")
-                Button("Errored") { previewMoment(.errored) }
+                Button("Errored") { model.triggerMoment(.errored, agent: agent) }
                     .accessibilityLabel("Errored moment")
             }
             .typoCaption(.medium)
@@ -199,16 +201,6 @@ struct ActivitySimulatorPanel: View {
         if let toolKind = state.toolKind { parts.append(toolKind.rawValue) }
         if state.userTyping { parts.append("typing") }
         return parts.joined(separator: " · ")
-    }
-
-    /// Preview a one-shot moment. Drops the pet to a simulated idle first so a
-    /// signal phase (blocked, speaking, paused) does not suppress it, then plays
-    /// it. Without this, clicking a moment while the pet is blocked does nothing.
-    private func previewMoment(_ kind: CompanionActivityMoment.Kind) {
-        phase = .idle
-        overriding = true
-        apply()
-        model.triggerMoment(kind, agent: agent)
     }
 
     private func apply() {

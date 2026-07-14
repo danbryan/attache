@@ -540,7 +540,9 @@ final class BubblesPetMotor: ObservableObject {
         }
         guard activeMoment == nil else { return }
         queuedMoments.removeAll { date.timeIntervalSince($0.at) > CompanionActivityMoment.shelfLife }
-        let stageIsOwned = phase == .blockedOnUser || phase == .speaking || phase == .paused
+        // Needs-you no longer owns the stage: the pet keeps reacting and the
+        // question-mark badge carries the reminder, so a moment can play over it.
+        let stageIsOwned = phase == .speaking || phase == .paused
         guard !stageIsOwned, !queuedMoments.isEmpty else { return }
         let next = queuedMoments.removeFirst()
         activeMoment = (next, now)
@@ -551,6 +553,7 @@ final class BubblesPetMotor: ObservableObject {
         case .celebrate: return 1.2
         case .cardArrived: return 0.8
         case .drowsy: return 2.5
+        case .needsYou: return 1.1
         case .errored: return 1.6
         case .configuring: return 2.6
         case .compacting: return 1.6
@@ -592,6 +595,18 @@ final class BubblesPetMotor: ObservableObject {
             pose.eyeOpenness *= 1 - 0.65 * sin(progress * .pi)
             if !reduceMotion {
                 pose.headTilt += 4 * sin(progress * .pi)
+            }
+        case .needsYou:
+            // A session just asked for you: a quick startle perk (eyes widen, a
+            // small bounce, brief worry), then the pet moves on. The lasting
+            // reminder is the pinned question-mark badge in the ring.
+            let pulse = sin(progress * .pi)
+            pose.eyeOpenness = max(pose.eyeOpenness, 1 + 0.18 * pulse)
+            pose.browWorry = max(pose.browWorry, 0.5 * pulse)
+            if !reduceMotion {
+                pose.hop = CGFloat(7 * sin(min(1, progress / 0.4) * .pi))
+                pose.arcRipple = 0.5 * pulse
+                pose.arcPhase = now * 2.6
             }
         case .errored:
             // A turn died on an API error: eyes cross to dizzy X's, brows worry,

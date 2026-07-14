@@ -26,10 +26,29 @@ final class CompanionActivityStateTests: XCTestCase {
 
     // MARK: Precedence, top down
 
-    func testBlockedOnUserOverridesEverything() {
+    func testNeedsYouIsNotAPhaseAndNeverOverridesLiveActivity() {
+        // A session needing the user no longer becomes the pet's phase; it stays
+        // lively (here, speaking wins) and the needs-you lives in the ring badge.
         let state = CompanionActivityState.derive(from: everythingAtOnce())
-        XCTAssertEqual(state.phase, .blockedOnUser)
-        XCTAssertEqual(state.activeAgent, .claude)
+        XCTAssertEqual(state.phase, .speaking)
+        XCTAssertEqual(state.activeAgent, .codex)
+        XCTAssertNotEqual(state.phase, .blockedOnUser)
+    }
+
+    func testLoneNeedsYouLeavesThePetIdleNotBlocked() {
+        var signals = everythingAtOnce()
+        signals.erroredAgent = nil
+        signals.workingAgent = nil
+        signals.respondingAgent = nil
+        signals.toolAgent = nil
+        signals.toolKind = nil
+        signals.playbackIsPlaying = false
+        signals.speakingAgent = nil
+        signals.isConversing = false
+        signals.hasConversationFailure = false
+        // Only a needs-you session and a pinned session remain.
+        let state = CompanionActivityState.derive(from: signals)
+        XCTAssertEqual(state.phase, .idle, "a lone needs-you session leaves the pet idle; the badge carries the reminder")
     }
 
     func testSpeakingBeatsEverythingExceptBlocked() {

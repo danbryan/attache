@@ -1472,9 +1472,15 @@ final class AppModel: ObservableObject {
                 // Exact waiting-on-you from Claude Code's Notification hook.
                 // Record it as a hook state so the transcript classifier can't
                 // flip it to a finished check while the ask is still pending.
+                let wasNeeding = sessionAttention[sessionID]?.needsUser ?? false
                 hookAttention[sessionID] = (state: .awaitingAnswer, firedAt: Date())
                 sessionAttention[sessionID] = .awaitingAnswer
                 attentionChangedAt[sessionID] = Date()
+                if !wasNeeding {
+                    companionMoment = CompanionActivityMoment(
+                        kind: .needsYou, agent: agentIdentity(forSessionID: sessionID), at: Date()
+                    )
+                }
             }
             persistNeedsYouNotice(event: notice, line: event.text)
             return
@@ -1554,6 +1560,9 @@ final class AppModel: ObservableObject {
         let wasNeeding = previous?.needsUser ?? false
         if state.needsUser, !wasNeeding {
             fileNeedsYouNotice(sessionID: sessionID, state: state)
+            companionMoment = CompanionActivityMoment(
+                kind: .needsYou, agent: agentIdentity(forSessionID: sessionID), at: Date()
+            )
         } else if !state.needsUser, wasNeeding {
             resolveNeedsYouNotices(sessionID: sessionID)
         }

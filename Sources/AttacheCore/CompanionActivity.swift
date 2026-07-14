@@ -270,6 +270,10 @@ public struct CompanionActivityMoment: Equatable, Identifiable, Sendable {
         case cardArrived
         /// A pinned session went stale (attention -> quiet).
         case drowsy
+        /// A session just asked for the user (attention -> needs you): a quick
+        /// alert perk, then the pet moves on. The lasting reminder is the pinned
+        /// question-mark badge, not a frozen expression.
+        case needsYou
         /// A turn ended on an API error (Claude Code StopFailure hook): the
         /// eyes cross into dizzy X's with a worried shudder.
         case errored
@@ -387,21 +391,26 @@ public final class CompanionActivityDamper {
 extension CompanionActivityState {
     /// Pure reducer from a signal snapshot to the state renderers show.
     ///
+    /// A session that needs the user is deliberately NOT a phase here. The pet
+    /// stays lively and keeps reacting to whatever it observes; "needs you"
+    /// persists instead as a pinned question-mark badge in the ring (from the
+    /// fleet) plus a one-shot alert beat when it first happens. That way a
+    /// celebration can play over it and the user still notices the badge, and
+    /// they can leave two or three badges pinned until they get to them.
+    ///
     /// Precedence (highest first):
     ///
-    /// 1. `blockedOnUser` - an agent waiting on the user must never be
-    ///    covered by anything, including speech.
-    /// 2. `speaking` - active narration is the app's core act; the mouth
+    /// 1. `speaking` - active narration is the app's core act; the mouth
     ///    moving to it beats ambient agent activity.
-    /// 3. `paused` - a held recap still owns the stage.
-    /// 4. `error` - a session error or failed call interrupts ambience but
+    /// 2. `paused` - a held recap still owns the stage.
+    /// 3. `error` - a session error or failed call interrupts ambience but
     ///    never live speech (the speech is often the error being narrated).
-    /// 5. `agentResponding` - a turn just finished; its recap is on the way.
-    /// 6. `toolRunning` - visible tool activity, with `toolKind` flavor.
-    /// 7. `agentThinking` - an agent (or the live personality) is working
+    /// 4. `agentResponding` - a turn just finished; its recap is on the way.
+    /// 5. `toolRunning` - visible tool activity, with `toolKind` flavor.
+    /// 6. `agentThinking` - an agent (or the live personality) is working
     ///    with nothing more specific to show.
-    /// 8. `idle` - sessions pinned, everything quiet.
-    /// 9. `sleeping` - nothing pinned at all.
+    /// 7. `idle` - sessions pinned, everything quiet.
+    /// 8. `sleeping` - nothing pinned at all.
     ///
     /// `toolKind` is populated only for `toolRunning`; every other phase
     /// clears it so a renderer never shows a stale flavor.
@@ -422,9 +431,6 @@ extension CompanionActivityState {
             )
         }
 
-        if let blocked = signals.blockedAgent {
-            return ambient(.blockedOnUser, blocked)
-        }
         if signals.playbackIsPlaying, !signals.playbackIsPaused {
             return ambient(.speaking, signals.speakingAgent ?? .none)
         }
