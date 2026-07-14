@@ -4416,6 +4416,10 @@ final class AppModel: ObservableObject {
         writeActivePersonalityToDefaults()
         refreshPresentationStatus()
         intakeStatus = "Personality set to \(activePersonality?.name ?? "Attaché")."
+        // Apply after the base status so a missing-key fallback hint wins.
+        if let personality = activePersonality {
+            applyPersonalityVoiceAndPet(personality)
+        }
     }
 
     @discardableResult
@@ -4453,7 +4457,10 @@ final class AppModel: ObservableObject {
         let copy = Personality(
             id: "custom.\(UUID().uuidString)",
             name: "\(source.name) Copy",
-            prompt: source.prompt
+            prompt: source.prompt,
+            voiceRef: source.voiceRef,
+            petCharacter: source.petCharacter,
+            accentColorHex: source.accentColorHex
         )
         if let index = personalities.firstIndex(where: { $0.id == id }) {
             personalities.insert(copy, at: index + 1)
@@ -4461,6 +4468,82 @@ final class AppModel: ObservableObject {
             personalities.append(copy)
         }
         selectPersonality(copy.id)
+    }
+
+    /// Apply a personality's bundled voice and pet so a switch changes brain,
+    /// voice, and pet as one unit (INF-296). A nil voiceRef means "inherit the
+    /// current voice", so switching among voice-agnostic personalities leaves the
+    /// user's chosen voice alone. A cloud voice whose API key is missing falls
+    /// back to the on-device engine with a hint instead of failing the switch.
+    private func applyPersonalityVoiceAndPet(_ personality: Personality) {
+        petCharacter = personality.petCharacter ?? .robot
+        guard let ref = personality.voiceRef?.resolved(availableSystemVoiceIDs: installedSystemVoiceIDs()) else {
+            return
+        }
+        switch ref.provider {
+        case .system:
+            speechProvider = .system
+            speechVoiceIdentifier = ref.systemVoiceIdentifier
+        case .elevenLabs:
+            guard hasSpeechAPIKey(for: .elevenLabs) else { return fallBackToSystemVoice(missing: "ElevenLabs") }
+            if let value = ref.elevenLabsVoiceID { elevenLabsVoiceID = value }
+            if let value = ref.elevenLabsVoiceName { elevenLabsVoiceName = value }
+            if let value = ref.elevenLabsModelID { elevenLabsModelID = value }
+            if let value = ref.elevenLabsOutputFormat { elevenLabsOutputFormat = value }
+            speechProvider = .elevenLabs
+        case .xai:
+            guard hasSpeechAPIKey(for: .xai) else { return fallBackToSystemVoice(missing: "xAI") }
+            if let value = ref.xaiVoiceID { xaiVoiceID = value }
+            if let value = ref.xaiVoiceName { xaiVoiceName = value }
+            if let value = ref.xaiBaseURL { xaiBaseURL = value }
+            if let value = ref.xaiLanguage { xaiLanguage = value }
+            speechProvider = .xai
+        case .openai:
+            guard hasSpeechAPIKey(for: .openai) else { return fallBackToSystemVoice(missing: "OpenAI") }
+            if let value = ref.openaiVoiceID { openaiVoiceID = value }
+            if let value = ref.openaiVoiceName { openaiVoiceName = value }
+            speechProvider = .openai
+        }
+    }
+
+    private func installedSystemVoiceIDs() -> Set<String> {
+        Set(speechVoiceOptions.map { $0.id })
+    }
+
+    private func hasSpeechAPIKey(for provider: CompanionSpeechProvider) -> Bool {
+        switch provider {
+        case .system: return true
+        case .elevenLabs: return !elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .xai: return !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .openai: return !openaiVoiceAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private func fallBackToSystemVoice(missing provider: String) {
+        speechProvider = .system
+        intakeStatus = "\(provider) needs an API key, so this personality is using the on-device voice for now."
+    }
+
+    /// Change the pet as a user action, keeping it in sync with the active
+    /// personality. Programmatic switches set `petCharacter` directly instead.
+    func selectPetCharacter(_ character: BubblesPetCharacter) {
+        petCharacter = character
+        capturePetIntoActivePersonality()
+    }
+
+    /// Fold the current voice selection onto the active personality, so a voice
+    /// edit belongs to the personality rather than an orphan global (INF-296).
+    func captureCurrentVoiceIntoActivePersonality() {
+        guard let index = personalities.firstIndex(where: { $0.id == activePersonalityID }) else { return }
+        personalities[index].voiceRef = PersonalityVoiceRef.capture(from: defaults)
+        personalityStore.save(personalities, activeID: activePersonalityID)
+    }
+
+    /// Fold the current pet onto the active personality (INF-296).
+    func capturePetIntoActivePersonality() {
+        guard let index = personalities.firstIndex(where: { $0.id == activePersonalityID }) else { return }
+        personalities[index].petCharacter = petCharacter
+        personalityStore.save(personalities, activeID: activePersonalityID)
     }
 
     func updatePersonality(id: String, name: String, prompt: String) {
@@ -4588,6 +4671,7 @@ final class AppModel: ObservableObject {
         speechVoiceIdentifier = option?.id
         intakeStatus = option.map { "Assistant voice set to \($0.title)." } ?? "Assistant voice set to system default."
         previewAssistantVoice()
+        captureCurrentVoiceIntoActivePersonality()
     }
 
     func selectElevenLabsVoice(_ voice: RemoteVoiceOption) {
@@ -4596,6 +4680,7 @@ final class AppModel: ObservableObject {
         elevenLabsVoiceName = voice.name
         intakeStatus = "ElevenLabs voice set to \(voice.name)."
         previewAssistantVoice()
+        captureCurrentVoiceIntoActivePersonality()
     }
 
     func selectXAIVoice(_ voice: RemoteVoiceOption) {
@@ -4604,6 +4689,7 @@ final class AppModel: ObservableObject {
         xaiVoiceName = voice.name
         intakeStatus = "xAI voice set to \(voice.name)."
         previewAssistantVoice()
+        captureCurrentVoiceIntoActivePersonality()
     }
 
     func selectOpenAIVoice(_ voice: RemoteVoiceOption) {
@@ -4612,6 +4698,7 @@ final class AppModel: ObservableObject {
         openaiVoiceName = voice.name
         intakeStatus = "OpenAI voice set to \(voice.name)."
         previewAssistantVoice()
+        captureCurrentVoiceIntoActivePersonality()
     }
 
     func saveOpenAIVoiceIntegration() {

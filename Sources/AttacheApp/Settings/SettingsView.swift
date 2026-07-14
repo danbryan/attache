@@ -134,7 +134,10 @@ struct SettingsView: View {
             }
             if model.visualMode == .pet {
                 settingRow("Pet character") {
-                    Picker("", selection: $model.petCharacter) {
+                    Picker("", selection: Binding(
+                        get: { model.petCharacter },
+                        set: { model.selectPetCharacter($0) }
+                    )) {
                         ForEach(BubblesPetCharacter.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
                     }
                     .labelsHidden()
