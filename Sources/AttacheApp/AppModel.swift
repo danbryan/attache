@@ -4475,7 +4475,36 @@ final class AppModel: ObservableObject {
         guard !personalities.isEmpty else { return }
         let currentIndex = personalities.firstIndex { $0.id == activePersonalityID } ?? 0
         let nextIndex = (currentIndex + offset + personalities.count) % personalities.count
-        selectPersonality(personalities[nextIndex].id)
+        switchPersonalityFromUI(personalities[nextIndex].id)
+    }
+
+    /// True while a live voice conversation is in progress (its frozen target is
+    /// captured). Used to decide whether a personality switch also clarifies the
+    /// last turn (INF-301).
+    var isLiveCallActive: Bool { conversationTargetSnapshot != nil }
+
+    /// The user-facing personality switch from the dock or the ⌘[ / ⌘] shortcut.
+    /// In a live call it clarifies the last turn in the new personality's voice;
+    /// otherwise it is a plain switch. Kept separate from `selectPersonality` so
+    /// the internal switch `anotherTake` performs never re-enters clarify.
+    func switchPersonalityFromUI(_ id: String) {
+        if isLiveCallActive {
+            clarifyWithPersonality(id)
+        } else {
+            selectPersonality(id)
+        }
+    }
+
+    /// Live "clarify with a different personality" (INF-301): the new personality
+    /// reacts to the most recent update and gives its own take in its voice and
+    /// pet, then listening resumes under it. Narration only, so it never changes
+    /// the frozen agent-send target or the Ask Attaché / Tell Agent routing.
+    func clarifyWithPersonality(_ id: String) {
+        if let last = cards.max(by: { $0.createdAt < $1.createdAt }) {
+            anotherTake(card: last, targetPersonalityID: id)
+        } else {
+            selectPersonality(id)
+        }
     }
 
     func addPersonality() {

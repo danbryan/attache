@@ -105,6 +105,56 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         }
     }
 
+    // MARK: - T7: live clarify with a different personality
+
+    func testSwitchFromUIWithoutCallIsPlainSwitch() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let a = Personality(id: "custom.a", name: "A", prompt: "p", petCharacter: .robot)
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            model.personalities = [a, b]
+            model.activePersonalityID = "custom.a"
+            XCTAssertFalse(model.isLiveCallActive)
+            model.switchPersonalityFromUI("custom.b")
+            XCTAssertEqual(model.activePersonalityID, "custom.b")
+            XCTAssertEqual(model.petCharacter, .cowboy)
+        }
+    }
+
+    func testClarifyWithNoCardsFallsBackToPlainSwitch() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let a = Personality(id: "custom.a", name: "A", prompt: "p", petCharacter: .robot)
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            model.personalities = [a, b]
+            model.activePersonalityID = "custom.a"
+            XCTAssertTrue(model.cards.isEmpty)
+            model.clarifyWithPersonality("custom.b")
+            // Switched to the target, and clarify never fabricates a frozen call target.
+            XCTAssertEqual(model.activePersonalityID, "custom.b")
+            XCTAssertNil(model.conversationTargetSnapshot)
+        }
+    }
+
+    func testClarifyWithACardSwitchesToTargetWithoutFrozenTarget() throws {
+        try restoringDefaults {
+            let store = try CardStore.inMemory()
+            _ = try store.insertEvent(NormalizedEvent(
+                source: "codex", eventType: "assistant.completed", externalSessionID: "s1",
+                title: "T", text: "did stuff",
+                metadata: ["companion_summary": "did stuff", "companion_spoken_text": "I did stuff."]
+            ))
+            let model = try AppModel(store: store)
+            let a = Personality(id: "custom.a", name: "A", prompt: "p")
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            model.personalities = [a, b]
+            model.activePersonalityID = "custom.a"
+            model.clarifyWithPersonality("custom.b")
+            XCTAssertEqual(model.activePersonalityID, "custom.b")
+            XCTAssertNil(model.conversationTargetSnapshot)
+        }
+    }
+
     func testExportImportRoundTripCreatesFreshCustomPersonality() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())

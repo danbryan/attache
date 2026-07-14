@@ -148,7 +148,7 @@ extension CompanionRootView {
             // belongs to the dock button, not every menu line.
             ForEach(model.personalities) { personality in
                 Button {
-                    model.selectPersonality(personality.id)
+                    model.switchPersonalityFromUI(personality.id)
                 } label: {
                     if personality.id == model.activePersonalityID {
                         Label(personality.name, systemImage: "checkmark")
