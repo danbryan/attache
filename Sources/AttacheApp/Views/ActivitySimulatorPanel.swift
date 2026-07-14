@@ -22,6 +22,9 @@ struct ActivitySimulatorPanel: View {
     /// Sub-agents assigned per fleet slot by "Add subs to focused", kept when
     /// focus moves so several sessions (including non-focused ones) can carry them.
     @State private var subsBySlot: [Int: Int] = [:]
+    /// When set, the pet compacts (ramping squish) as if the focused session
+    /// fired PreCompact, for previewing the sustained compaction.
+    @State private var compactingSince: Date?
     @State private var demoElapsed = -1.0
     private let cycleTimer = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
     private let demoTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
@@ -121,6 +124,11 @@ struct ActivitySimulatorPanel: View {
                     .accessibilityLabel("Add sub-agents to the focused session")
                 Button("Clear subs") { subsBySlot = [:]; applyIfSimulating() }
                     .accessibilityLabel("Clear simulated sub-agents")
+                Button(compactingSince == nil ? "Compact" : "Compacting…") {
+                    compactingSince = compactingSince == nil ? Date() : nil
+                    applyIfSimulating()
+                }
+                .accessibilityLabel("Toggle sustained compaction preview")
             }
             .typoCaption(.medium)
             HStack(spacing: 6) {
@@ -232,7 +240,8 @@ struct ActivitySimulatorPanel: View {
             userTyping: model.userTyping,
             unreadCount: model.unreadCount,
             hasCards: !model.cards.isEmpty,
-            fleet: simulatedFleet()
+            fleet: simulatedFleet(),
+            compactingSince: compactingSince
         )
     }
 

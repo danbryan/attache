@@ -170,6 +170,47 @@ final class BubblesPetChoreographyTests: XCTestCase {
         CompanionActivityMoment(kind: kind, agent: agent, at: at)
     }
 
+    func testFocusedCompactionSquishesAndOwnsTheCrown() {
+        // The app sets `compactingSince` on the activity when the FOCUSED
+        // session compacts (from the PreCompact hook). Given that, the motor
+        // must squish the pet and show the compacting crown. This proves the
+        // pipeline downstream of the hook, so a real session that does not
+        // squish is one where the hook never fired (a session that predates
+        // the hook install), not an app bug.
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 5000)
+        var activity = state(.agentThinking, agent: .claude)
+        activity.compactingSince = start.addingTimeInterval(-30)  // 30s into a ~42s ramp
+        var pose = BubblesPose()
+        for tick in 0..<80 {
+            pose = motor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: activity,
+                reduceMotion: true
+            )
+        }
+        XCTAssertGreaterThan(pose.compaction, 0.4, "the focused session's compaction squishes the pet")
+        XCTAssertEqual(pose.overhead, .compacting, "the crown shows the compacting symbol")
+    }
+
+    func testNoSquishWhenNothingIsCompacting() {
+        // With no `compactingSince` (no PreCompact fired, or the compacting
+        // session is not focused), the pet does not squish and keeps its
+        // ambient crown. This is exactly what a non-hooked session shows.
+        let motor = BubblesPetMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 6000)
+        var pose = BubblesPose()
+        for tick in 0..<40 {
+            pose = motor.pose(
+                at: start.addingTimeInterval(Double(tick) * 0.05),
+                activity: state(.agentThinking, agent: .claude),
+                reduceMotion: true
+            )
+        }
+        XCTAssertLessThan(pose.compaction, 0.05)
+        XCTAssertNotEqual(pose.overhead, .compacting)
+    }
+
     func testCelebrateMomentHopsAndPopsTheAgentBubble() {
         let motor = BubblesPetMotor()
         let start = Date(timeIntervalSinceReferenceDate: 4000)
