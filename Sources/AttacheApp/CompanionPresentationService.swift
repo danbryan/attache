@@ -841,6 +841,90 @@ final class CompanionPresentationService {
         return decoded.choices.first?.message.content ?? ""
     }
 
+    /// Produce an "another take" of an existing card in a target personality's
+    /// voice (INF-299): a brief nod to the personality that narrated it, then the
+    /// target's own spin. Runs T5's pure prompt through the same model path as
+    /// the normal presentation, and hands back a presented event the caller files
+    /// as a new card linked to the original. Completes with nil when no
+    /// presentation model is configured or the model call fails.
+    func prepareAnotherTake(
+        original: VoicemailCard,
+        targetPersonality: Personality,
+        priorPersonalityName: String,
+        completion: @escaping (NormalizedEvent?) -> Void
+    ) {
+        let unresolved = CompanionPresentationSettings.load(
+            role: .presentation, defaults: defaults, environment: environment, resolveSecrets: false
+        )
+        guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else {
+            completion(nil)
+            return
+        }
+        Task {
+            let settings = CompanionPresentationSettings.load(role: .presentation, defaults: defaults, environment: environment)
+            guard settings.isConfigured else {
+                await MainActor.run { completion(nil) }
+                return
+            }
+            do {
+                let memory = memoryStore.loadSnapshot()
+                let prompt = CompanionPersonality.anotherTakePrompt(
+                    sourceText: original.rawText,
+                    priorTake: original.spokenText,
+                    priorPersonalityName: priorPersonalityName,
+                    targetProfilePrompt: targetPersonality.prompt,
+                    memoryContext: memory.context,
+                    spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+                )
+                let content = try await Self.requestChatCompletion(messages: prompt.messages, settings: settings)
+                let parsed = Self.splitCardSummary(content)
+                guard !parsed.spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw CompanionPresentationError.emptyResponse
+                }
+                let presented = Self.anotherTakeEvent(
+                    from: original,
+                    targetPersonality: targetPersonality,
+                    summary: parsed.summary,
+                    spoken: parsed.spokenText,
+                    needsDecision: parsed.needsDecision
+                )
+                await MainActor.run { completion(presented) }
+            } catch {
+                await MainActor.run { completion(nil) }
+            }
+        }
+    }
+
+    /// Build the presented event for an "another take": it carries the target
+    /// personality's summary and spoken text, records the target as the producing
+    /// personality, and links back to the original card via `companion_take_of`.
+    /// Pure, so the linkage is unit-testable without a model.
+    static func anotherTakeEvent(
+        from original: VoicemailCard,
+        targetPersonality: Personality,
+        summary: String,
+        spoken: String,
+        needsDecision: Bool
+    ) -> NormalizedEvent {
+        var metadata: [String: String] = [:]
+        metadata["companion_summary"] = summary
+        metadata["companion_spoken_text"] = spoken
+        if needsDecision { metadata["companion_needs_decision"] = "1" }
+        metadata["companion_presentation_strategy"] = "another-take"
+        metadata["companion_personality_id"] = targetPersonality.id
+        metadata["companion_personality_name"] = targetPersonality.name
+        metadata["companion_take_of"] = original.id
+        return NormalizedEvent(
+            source: original.sourceKind,
+            eventType: "assistant.completed",
+            externalSessionID: original.externalSessionID,
+            projectPath: original.projectPath,
+            title: original.sessionTitle ?? original.summary,
+            text: original.rawText,
+            metadata: metadata
+        )
+    }
+
     private static func splitCardSummary(_ content: String) -> (summary: String, spokenText: String, needsDecision: Bool) {
         let text = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return ("", "", false) }

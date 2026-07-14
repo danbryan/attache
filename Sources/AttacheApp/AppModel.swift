@@ -1793,6 +1793,36 @@ final class AppModel: ObservableObject {
         playInboxCard(card)
     }
 
+    /// Hear an "another take" of a card in a different personality's voice
+    /// (INF-299). Switches to the target personality (its voice and pet, with a
+    /// greeting), asks the model for its own spin on the original, then files and
+    /// plays a new card linked back to the original.
+    func anotherTake(card: VoicemailCard, targetPersonalityID: String) {
+        guard let target = personalities.first(where: { $0.id == targetPersonalityID }) else { return }
+        let priorName = card.producedByPersonalityName ?? activePersonality?.name ?? "Attaché"
+        selectPersonality(targetPersonalityID)
+        intakeStatus = "Getting another take from \(target.name)…"
+        presentationService.prepareAnotherTake(
+            original: card,
+            targetPersonality: target,
+            priorPersonalityName: priorName
+        ) { [weak self] presented in
+            guard let self else { return }
+            guard let presented else {
+                self.intakeStatus = "Another take needs a presentation model. Set one up in Settings."
+                return
+            }
+            do {
+                let takeCard = try self.store.insertEvent(presented)
+                self.reloadCards(select: takeCard.id)
+                self.playInboxCard(takeCard)
+                self.intakeStatus = "Another take from \(target.name)."
+            } catch {
+                self.intakeStatus = "Another take failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
     func playSelected() {
         guard let card = selectedCard else { return }
         let startProgress = selectedStartProgress

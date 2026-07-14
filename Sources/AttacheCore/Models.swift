@@ -168,13 +168,29 @@ public struct StoredSession: Identifiable, Codable, Equatable {
 }
 
 public extension VoicemailCard {
+    /// Parsed metadata blob, or empty when absent or malformed.
+    var metadataObject: [String: Any] {
+        guard let data = metadataJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return object
+    }
+
     /// The presentation step can flag an update as blocked on the user
     /// (INF-169). Absent or malformed metadata reads as false.
     var needsDecision: Bool {
-        guard let data = metadataJSON.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        return (object["companion_needs_decision"] as? String) == "1"
+        (metadataObject["companion_needs_decision"] as? String) == "1"
     }
+
+    /// When this card is an "another take" of an earlier card (INF-299), the
+    /// original card's id. Nil for ordinary cards.
+    var takeOf: String? { metadataObject["companion_take_of"] as? String }
+
+    /// True when this card is a re-narration of another card.
+    var isAnotherTake: Bool { takeOf != nil }
+
+    /// The personality that produced this card, when recorded. Used as the
+    /// "prior take" attribution when making another take of it.
+    var producedByPersonalityName: String? { metadataObject["companion_personality_name"] as? String }
 }

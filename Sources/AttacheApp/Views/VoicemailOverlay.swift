@@ -393,6 +393,26 @@ extension CompanionRootView {
                 .disabled(model.isGeneratingFollowUpAnswer || model.followUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
+            HStack {
+                Text("Didn't land? Hear it from someone else.")
+                    .typoCaption()
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    ForEach(model.personalities.filter { $0.name != card.producedByPersonalityName }) { personality in
+                        Button {
+                            model.anotherTake(card: card, targetPersonalityID: personality.id)
+                        } label: {
+                            Text("\(personality.petAvatarEmoji)  \(personality.name)")
+                        }
+                    }
+                } label: {
+                    Label("Another take", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
             followUpRecoveryActions()
 
             if model.isGeneratingFollowUpAnswer {
