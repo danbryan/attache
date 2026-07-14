@@ -445,6 +445,97 @@ public enum CompanionPersonality {
         }
     }
 
+    /// The "another take" prompt (INF-297): re-narrate one update in the target
+    /// personality's voice, opening with a brief nod to what a different
+    /// personality already said, then giving the target's own spin. Pure and
+    /// deterministic; the caller runs it through the presentation model and
+    /// `stripDashes` on the spoken result, exactly like the normal path. Reuses
+    /// the shared identity, output format, and recap-style length scaling so a
+    /// take files as an ordinary card.
+    public static func anotherTakePrompt(
+        sourceText: String,
+        priorTake: String,
+        priorPersonalityName: String,
+        targetProfilePrompt: String = defaultProfilePrompt,
+        memoryContext: String?,
+        spokenLanguageName: String? = nil,
+        maxSourceCharacters: Int = 12_000
+    ) -> CompanionPresentationPrompt {
+        let rawSource = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clippedSource: String
+        let truncated: Bool
+        if rawSource.count > maxSourceCharacters {
+            let end = rawSource.index(rawSource.startIndex, offsetBy: maxSourceCharacters)
+            clippedSource = String(rawSource[..<end]) + "\n\n[Agent output truncated.]"
+            truncated = true
+        } else {
+            clippedSource = rawSource
+            truncated = false
+        }
+        let trimmedPrior = priorTake.trimmingCharacters(in: .whitespacesAndNewlines)
+        let priorName = priorPersonalityName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let priorNameForPrompt = priorName.isEmpty ? "another personality" : priorName
+        let ceiling = anotherTakeSentenceCeiling(sourceCharacters: rawSource.count + trimmedPrior.count)
+        let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
+        let languageBlock = spokenLanguageName.map {
+            "\n- Speak in \($0), translating what matters even if the source is in another language."
+        } ?? ""
+
+        let system = """
+        \(companionIdentityPrompt)
+
+        \(targetProfilePrompt.trimmingCharacters(in: .whitespacesAndNewlines))\(memoryBlock)
+
+        Another-take task:\(languageBlock)
+        - The user already heard \(priorNameForPrompt)'s take on this same update and wants to hear it again from you, in your own voice and character.
+        - Open with one short beat that reacts to \(priorNameForPrompt)'s take: agree, push back, or reframe it. One clause or one short sentence. Do not repeat their take back or summarize it at length.
+        - Then give your own take on the underlying update, in your voice: what actually matters here and what the user can do next. Bring your own angle, not a paraphrase of \(priorNameForPrompt).
+        - Read for any profession or domain. Use only what the source below actually says; never assume software, coding, or any specific field unless the source makes it explicit.
+        - This is spoken and captioned: short sentences, headline first, no lists, no code, no reciting paths, hashes, URLs, or IDs.
+        - Keep it tight: at most \(ceiling) sentences, including the opening beat. Let the information set the length; do not pad.
+        - Do not talk to the agent. Speak directly to the user. No stage directions, no parentheticals, no asterisk notes.
+        - Never use em dashes; write with commas, periods, or parentheses instead.
+
+        Required output format:
+        CARD_SUMMARY: <a tight 6-12 word card summary, no period>
+        NEEDS_DECISION: <yes only if the update explicitly blocks the user on a choice; omit otherwise>
+
+        <spoken another-take update>
+        """
+
+        let user = """
+        Here is \(priorNameForPrompt)'s earlier take on the update. React to it in one short beat, do not repeat it:
+        \(trimmedPrior.isEmpty ? "[No prior take text was provided.]" : trimmedPrior)
+
+        Here is the underlying agent update to give your own take on:
+        \(clippedSource.isEmpty ? "[No source text was provided.]" : clippedSource)
+
+        Write your another-take spoken update now.
+        """
+
+        return CompanionPresentationPrompt(
+            messages: [
+                CompanionChatMessage(role: "system", content: system),
+                CompanionChatMessage(role: "user", content: user)
+            ],
+            memoryContext: memoryContext,
+            rawOutputCharacterCount: rawSource.count,
+            truncatedRawOutput: truncated
+        )
+    }
+
+    /// Upper bound (in sentences) on an "another take", scaled to how much source
+    /// and prior narration there is to react to. Mirrors `recapSentenceCeiling`:
+    /// a one-line update stays a sentence or two, a dense one earns a few more.
+    public static func anotherTakeSentenceCeiling(sourceCharacters: Int) -> Int {
+        switch sourceCharacters {
+        case ..<400: return 2
+        case ..<1200: return 3
+        case ..<4000: return 4
+        default: return 5
+        }
+    }
+
     /// Replaces em/en dashes with a comma so spoken text and captions never show
     /// the dash, even when the model ignores the no-em-dash instruction in the
     /// prompt. Keeps the pause (comma) and tidies the spacing artifacts.

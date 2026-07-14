@@ -468,4 +468,92 @@ final class CompanionPersonalityTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("No other sessions are being watched."))
     }
+
+    // MARK: - T5: "another take" re-narration engine
+
+    private func anotherTakeParts(_ prompt: CompanionPresentationPrompt) -> (system: String, user: String) {
+        let system = prompt.messages.first { $0.role == "system" }?.content ?? ""
+        let user = prompt.messages.first { $0.role == "user" }?.content ?? ""
+        return (system, user)
+    }
+
+    func testAnotherTakeReferencesPriorTakeAsABriefNod() {
+        let prompt = CompanionPersonality.anotherTakePrompt(
+            sourceText: "Deploy finished; two checks are red.",
+            priorTake: "The herd's mostly through the gate, two strays left.",
+            priorPersonalityName: "Cowboy",
+            targetProfilePrompt: "You are precise and calm.",
+            memoryContext: nil
+        )
+        let (system, user) = anotherTakeParts(prompt)
+        XCTAssertTrue(system.contains("Cowboy"))
+        XCTAssertTrue(user.contains("The herd's mostly through the gate, two strays left."))
+        XCTAssertTrue(system.lowercased().contains("one short beat"))
+        XCTAssertTrue(system.lowercased().contains("do not repeat"))
+    }
+
+    func testAnotherTakeEnforcesDomainAgnosticPhrasing() {
+        let prompt = CompanionPersonality.anotherTakePrompt(
+            sourceText: "x", priorTake: "y", priorPersonalityName: "Explainer",
+            targetProfilePrompt: "Be curious.", memoryContext: nil
+        )
+        let system = anotherTakeParts(prompt).system.lowercased()
+        XCTAssertTrue(system.contains("any profession"))
+        XCTAssertTrue(system.contains("never assume software"))
+    }
+
+    func testAnotherTakeForbidsEmDashesAndStripDashesRemovesThem() {
+        let prompt = CompanionPersonality.anotherTakePrompt(
+            sourceText: "x", priorTake: "y", priorPersonalityName: "Big Picture",
+            targetProfilePrompt: "Be visionary.", memoryContext: nil
+        )
+        XCTAssertTrue(anotherTakeParts(prompt).system.lowercased().contains("never use em dashes"))
+        XCTAssertEqual(
+            CompanionPersonality.stripDashes("We shipped it — finally."),
+            "We shipped it, finally."
+        )
+    }
+
+    func testAnotherTakeSentenceCeilingScalesWithLength() {
+        XCTAssertEqual(CompanionPersonality.anotherTakeSentenceCeiling(sourceCharacters: 50), 2)
+        XCTAssertEqual(CompanionPersonality.anotherTakeSentenceCeiling(sourceCharacters: 800), 3)
+        XCTAssertEqual(CompanionPersonality.anotherTakeSentenceCeiling(sourceCharacters: 3000), 4)
+        XCTAssertEqual(CompanionPersonality.anotherTakeSentenceCeiling(sourceCharacters: 9000), 5)
+        let shortPrompt = CompanionPersonality.anotherTakePrompt(
+            sourceText: String(repeating: "a", count: 50), priorTake: "",
+            priorPersonalityName: "X", targetProfilePrompt: "Y", memoryContext: nil
+        )
+        let longPrompt = CompanionPersonality.anotherTakePrompt(
+            sourceText: String(repeating: "a", count: 9000), priorTake: "",
+            priorPersonalityName: "X", targetProfilePrompt: "Y", memoryContext: nil
+        )
+        XCTAssertTrue(anotherTakeParts(shortPrompt).system.contains("at most 2 sentences"))
+        XCTAssertTrue(anotherTakeParts(longPrompt).system.contains("at most 5 sentences"))
+    }
+
+    func testAnotherTakeIsDeterministic() {
+        func make() -> CompanionPresentationPrompt {
+            CompanionPersonality.anotherTakePrompt(
+                sourceText: "same", priorTake: "prior", priorPersonalityName: "A",
+                targetProfilePrompt: "B", memoryContext: "mem"
+            )
+        }
+        XCTAssertEqual(make(), make())
+    }
+
+    func testAnotherTakeUsesCardSummaryFormatForFiling() {
+        let prompt = CompanionPersonality.anotherTakePrompt(
+            sourceText: "s", priorTake: "p", priorPersonalityName: "A",
+            targetProfilePrompt: "B", memoryContext: nil
+        )
+        XCTAssertTrue(anotherTakeParts(prompt).system.contains("CARD_SUMMARY:"))
+    }
+
+    func testAnotherTakeHandlesMissingPriorNameGracefully() {
+        let prompt = CompanionPersonality.anotherTakePrompt(
+            sourceText: "s", priorTake: "p", priorPersonalityName: "   ",
+            targetProfilePrompt: "B", memoryContext: nil
+        )
+        XCTAssertTrue(anotherTakeParts(prompt).system.contains("another personality"))
+    }
 }
