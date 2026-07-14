@@ -410,10 +410,6 @@ final class BubblesPetMotor: ObservableObject {
             pose.compaction = compactionValue
             pose.overhead = .compacting
             pose.overheadSeconds = Int(max(0, now - (activity.compactingSince?.timeIntervalSinceReferenceDate ?? now)))
-        } else if let focused = activity.fleet.first(where: \.isFocused), focused.activeSubAgents > 0 {
-            // The focused session's sub-agents swarm from the crown with a count.
-            pose.overhead = .swarm
-            pose.overheadCount = focused.activeSubAgents
         }
         applyFleetGaze(to: &pose, activity: activity, now: now, reduceMotion: reduceMotion)
         return pose

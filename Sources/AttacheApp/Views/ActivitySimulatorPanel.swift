@@ -248,7 +248,10 @@ struct ActivitySimulatorPanel: View {
         guard !fleet.isEmpty else { return fleet }
         let focusIndex = fleet.firstIndex { $0.id == model.simulatedFleetFocusID } ?? 0
         fleet[focusIndex].isFocused = true
-        fleet[focusIndex].activeSubAgents = subAgents
+        // Sub-agents live on the first session, not the focused one, so you can
+        // focus a different session and confirm a non-focused session's
+        // sub-agents keep rippling in the ring.
+        fleet[0].activeSubAgents = subAgents
         return fleet
     }
 
