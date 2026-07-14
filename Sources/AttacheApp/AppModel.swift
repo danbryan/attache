@@ -4411,6 +4411,7 @@ final class AppModel: ObservableObject {
 
     func selectPersonality(_ id: String) {
         guard personalities.contains(where: { $0.id == id }) else { return }
+        let changed = id != activePersonalityID
         activePersonalityID = id
         personalityStore.save(personalities, activeID: id)
         writeActivePersonalityToDefaults()
@@ -4419,6 +4420,11 @@ final class AppModel: ObservableObject {
         // Apply after the base status so a missing-key fallback hint wins.
         if let personality = activePersonality {
             applyPersonalityVoiceAndPet(personality)
+        }
+        // A brief wave when the character actually changes, then the pet resumes
+        // its normal activity (INF-298).
+        if changed {
+            triggerMoment(.greet, agent: .none)
         }
     }
 

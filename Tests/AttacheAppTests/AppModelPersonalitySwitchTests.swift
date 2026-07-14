@@ -92,6 +92,19 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         }
     }
 
+    func testSwitchingToADifferentPersonalityGreetsAndFollowsCharacter() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let a = Personality(id: "custom.a", name: "A", prompt: "p", petCharacter: .robot)
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            model.personalities = [a, b]
+            model.activePersonalityID = "custom.a"
+            model.selectPersonality("custom.b")
+            XCTAssertEqual(model.companionMoment?.kind, .greet)
+            XCTAssertEqual(model.petCharacter, .cowboy)
+        }
+    }
+
     func testCapturingVoiceFoldsOntoActivePersonality() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
