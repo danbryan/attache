@@ -410,6 +410,10 @@ final class BubblesPetMotor: ObservableObject {
             pose.compaction = compactionValue
             pose.overhead = .compacting
             pose.overheadSeconds = Int(max(0, now - (activity.compactingSince?.timeIntervalSinceReferenceDate ?? now)))
+        } else if let focused = activity.fleet.first(where: \.isFocused), focused.activeSubAgents > 0 {
+            // The focused session's sub-agents swarm from the crown with a count.
+            pose.overhead = .swarm
+            pose.overheadCount = focused.activeSubAgents
         }
         applyFleetGaze(to: &pose, activity: activity, now: now, reduceMotion: reduceMotion)
         return pose
@@ -636,6 +640,7 @@ final class BubblesPetMotor: ObservableObject {
             // Being set up: eyes roll up, half-lidded, scanning side to side.
             let hold = sin(min(1, progress / 0.25) * .pi / 2)
                 * (progress > 0.82 ? (1 - progress) / 0.18 : 1)
+            pose.overhead = .configuring
             pose.gaze.height = -3 * hold
             pose.eyeOpenness = 0.35 + 0.12 * (0.5 + 0.5 * sin(now * 9))
             if !reduceMotion {

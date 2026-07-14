@@ -35,6 +35,8 @@ enum BubblesOverhead: Equatable {
     case paused
     case sleeping
     case compacting
+    case configuring
+    case swarm
 }
 
 /// An emoji or small drawn prop rendered beside the pet during a moment (a
@@ -65,6 +67,8 @@ struct BubblesPose: Equatable {
     /// Whole seconds spent in the current overhead state, for the
     /// preparing-audio elapsed counter (INF-285).
     var overheadSeconds: Int = 0
+    /// A count for the overhead symbol (the swarm's live sub-agent count).
+    var overheadCount: Int = 0
     /// Head and face rotation in degrees (positive tilts right).
     var headTilt: Double = 0
     /// 1 = the mark's happy arcs, 0 = closed flat lines.
@@ -552,6 +556,34 @@ struct BubblesPetFigure: View {
                 context.stroke(arrow, with: .color(ink.opacity(0.85)),
                                style: StrokeStyle(lineWidth: 3 * s, lineCap: .round, lineJoin: .round))
             }
+        case .configuring:
+            // A loading spinner sweeping around: being set up.
+            let start = pose.overheadPhase * 360
+            var spinner = Path()
+            spinner.addArc(center: crown, radius: 7 * s,
+                           startAngle: .degrees(start), endAngle: .degrees(start + 260), clockwise: false)
+            context.stroke(spinner, with: .color(ink.opacity(0.85)),
+                           style: StrokeStyle(lineWidth: 3 * s, lineCap: .round))
+        case .swarm:
+            // Sub-agent sprites fanned above the head, plus a live count.
+            let count = max(1, pose.overheadCount)
+            let shown = min(5, count)
+            for i in 0..<shown {
+                let t = shown == 1 ? 0.5 : Double(i) / Double(shown - 1)
+                let angle = (t - 0.5) * 30.0
+                let drift = 3 + 3 * (0.5 + 0.5 * sin((pose.overheadPhase + Double(i) * 0.2) * 2 * .pi))
+                let rad = 9 + drift
+                let dx = rad * sin(angle * .pi / 180)
+                let dy = -rad * cos(angle * .pi / 180)
+                let dotCenter = CGPoint(x: crown.x + CGFloat(dx) * s, y: crown.y + CGFloat(dy) * s)
+                let r = 2.6 * s
+                let dot = Path(ellipseIn: CGRect(x: dotCenter.x - r, y: dotCenter.y - r, width: r * 2, height: r * 2))
+                context.fill(dot, with: .color(ink.opacity(0.85)))
+            }
+            let label = Text("×\(min(count, 999))")
+                .font(.system(size: 7.5 * s, weight: .bold, design: .rounded))
+                .foregroundColor(ink.opacity(0.85))
+            context.draw(context.resolve(label), at: CGPoint(x: crown.x + 20 * s, y: crown.y))
         }
     }
 
