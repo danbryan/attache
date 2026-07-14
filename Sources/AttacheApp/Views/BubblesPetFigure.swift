@@ -84,6 +84,10 @@ struct BubblesPose: Equatable {
     var hop: CGFloat = 0
     /// Squash-and-stretch: +1 landing squash, -1 rising stretch.
     var squash: Double = 0
+    /// Compaction squish 0-1: a strong, dedicated flatten-and-widen for context
+    /// compaction (up to ~55% shorter, ~38% wider), separate from the subtle
+    /// celebrate squash.
+    var compaction: Double = 0
     /// Whole-figure rock in degrees while speaking.
     var sway: Double = 0
     /// Arc opacity multiplier over the mark's 1.0/0.62/0.30.
@@ -239,9 +243,10 @@ struct BubblesPetFigure: View {
             let breatheScale = 1 + 0.015 * pose.breathe
             let squashUp = max(0, pose.squash)
             let stretchUp = max(0, -pose.squash)
+            let compaction = min(1, max(0, pose.compaction))
             figure.scaleBy(
-                x: breatheScale * (1 + 0.05 * squashUp - 0.03 * stretchUp),
-                y: breatheScale * (1 - 0.06 * squashUp + 0.05 * stretchUp)
+                x: breatheScale * (1 + 0.05 * squashUp - 0.03 * stretchUp + 0.38 * compaction),
+                y: breatheScale * (1 - 0.06 * squashUp + 0.05 * stretchUp - 0.55 * compaction)
             )
             figure.translateBy(x: -anchor.x, y: -anchor.y - pose.hop * s)
 

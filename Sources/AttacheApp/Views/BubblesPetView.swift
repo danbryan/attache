@@ -556,7 +556,7 @@ final class BubblesPetMotor: ObservableObject {
         case .needsYou: return 1.1
         case .errored: return 1.6
         case .configuring: return 2.6
-        case .compacting: return 1.6
+        case .compacting: return 3.0
         case .greet: return 1.2
         case .farewell: return 1.6
         case .permissionAsk: return 2.2
@@ -630,13 +630,15 @@ final class BubblesPetMotor: ObservableObject {
                 pose.gaze.width = 2.4 * sin(now * 3.2) * hold
             }
         case .compacting:
-            // Context compaction: the head squishes flatter and wider (positive
-            // squash), settling down, then springs back.
+            // Context compaction: the whole head squishes hard, much flatter and
+            // wider, then springs back. This one-shot is the preview; the real
+            // one holds for the whole (up to ~45s) compaction with the crown pass.
             let squishStrength = sin(progress * .pi)
-            pose.squash = squishStrength
-            pose.hop = -7 * squishStrength
+            pose.compaction = squishStrength
+            pose.hop = -4 * squishStrength
             if !reduceMotion {
-                pose.browWorry = max(pose.browWorry, 0.3 * squishStrength)
+                pose.browWorry = max(pose.browWorry, 0.35 * squishStrength)
+                pose.eyeOpenness *= 1 - 0.4 * squishStrength
             }
         case .greet:
             // A session appeared: a hand rises beside the face and waves hello.
