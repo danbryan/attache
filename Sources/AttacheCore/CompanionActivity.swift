@@ -151,6 +151,11 @@ public struct CompanionActivityState: Equatable, Sendable {
     /// `unreadCount`: derived from the watch list and attention states the
     /// app already tracks, never new monitoring.
     public var fleet: [CompanionFleetSession]
+    /// When the FOCUSED session began compacting its context (PreCompact), or
+    /// nil. The pet squishes gradually toward full while this holds and springs
+    /// back when it clears (PostCompact or a focus change). Focus-tied on
+    /// purpose: the pet only reacts to the session the user is watching.
+    public var compactingSince: Date?
 
     public init(
         phase: CompanionActivityPhase = .sleeping,
@@ -160,7 +165,8 @@ public struct CompanionActivityState: Equatable, Sendable {
         userTyping: Bool = false,
         unreadCount: Int = 0,
         hasCards: Bool = false,
-        fleet: [CompanionFleetSession] = []
+        fleet: [CompanionFleetSession] = [],
+        compactingSince: Date? = nil
     ) {
         self.phase = phase
         self.activeAgent = activeAgent
@@ -170,6 +176,7 @@ public struct CompanionActivityState: Equatable, Sendable {
         self.unreadCount = unreadCount
         self.hasCards = hasCards
         self.fleet = fleet
+        self.compactingSince = compactingSince
     }
 
     public static let initial = CompanionActivityState()

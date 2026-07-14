@@ -823,6 +823,9 @@ final class AppModel: ObservableObject {
     /// record lands after `firedAt`, i.e. until the session actually moves, so
     /// a guessed state never flips an exact one to a finished check.
     private var hookAttention: [String: (state: SessionAttentionState, firedAt: Date)] = [:]
+    /// When each session began compacting its context (PreCompact), cleared on
+    /// PostCompact. Only the focused session's value drives the pet's squish.
+    private var compactingSince: [String: Date] = [:]
     /// Live sub-agent counts per watched session (INF-275), from the
     /// watcher's transcript assessment.
     @Published private var subAgentCounts: [String: Int] = [:]
@@ -1501,8 +1504,24 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        // Sustained, focus-tied compaction: the focused session's squish ramps
+        // while this holds (PreCompact -> PostCompact).
+        if event.eventType == "compact_start" {
+            if let sid = event.externalSessionID {
+                compactingSince[sid] = Date()
+                refreshCompanionActivity()
+            }
+            return
+        }
+        if event.eventType == "compact_end" {
+            if let sid = event.externalSessionID {
+                compactingSince.removeValue(forKey: sid)
+                refreshCompanionActivity()
+            }
+            return
+        }
         // One-shot pet moments from the other lifecycle hooks (errored, greet,
-        // farewell, configuring, compacting).
+        // farewell, configuring).
         if let momentKind = Self.momentKind(forEventType: event.eventType) {
             let agent = event.externalSessionID.map { agentIdentity(forSessionID: $0) } ?? .none
             companionMoment = CompanionActivityMoment(kind: momentKind, agent: agent, at: Date())
@@ -1657,6 +1676,7 @@ final class AppModel: ObservableObject {
             if !hasOpenNotice {
                 sessionAttention.removeValue(forKey: id)
                 hookAttention.removeValue(forKey: id)
+                compactingSince.removeValue(forKey: id)
             }
         }
     }
@@ -3517,7 +3537,7 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshCompanionActivity() {
-        let next: CompanionActivityState
+        var next: CompanionActivityState
         if let simulatedActivity {
             next = simulatedActivity
         } else {
@@ -3526,6 +3546,9 @@ final class AppModel: ObservableObject {
                 audio: playback.clock.renderState
             )
             next = activityDamper.damp(derived, now: Date())
+            // Focus-tied compaction: only the session the user is watching
+            // drives the squish, so switching focus releases it.
+            next.compactingSince = attachedCodexSessionID.flatMap { compactingSince[$0] }
         }
         if next != companionActivity {
             companionActivity = next
@@ -3545,7 +3568,6 @@ final class AppModel: ObservableObject {
         case "session_start": return .greet
         case "session_end": return .farewell
         case "session_setup": return .configuring
-        case "compacting": return .compacting
         case "permission_ask": return .permissionAsk
         case "permission_denied": return .permissionDenied
         default: return nil

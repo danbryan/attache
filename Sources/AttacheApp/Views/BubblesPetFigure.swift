@@ -34,6 +34,7 @@ enum BubblesOverhead: Equatable {
     case preparingAudio
     case paused
     case sleeping
+    case compacting
 }
 
 /// An emoji or small drawn prop rendered beside the pet during a moment (a
@@ -534,6 +535,22 @@ struct BubblesPetFigure: View {
                     .font(.system(size: z.size * s, weight: .bold, design: .rounded))
                     .foregroundColor(ink.opacity(pulse))
                 context.draw(context.resolve(glyph), at: p(CGFloat(z.x), 24))
+            }
+        case .compacting:
+            // Two arrows pressing together; the gap closes as compaction deepens.
+            let gap = (9 - 6 * min(1, max(0, pose.compaction))) * s
+            let w = 7 * s, tip = 4 * s
+            var top = Path()
+            top.move(to: CGPoint(x: crown.x - w, y: crown.y - gap - tip))
+            top.addLine(to: CGPoint(x: crown.x, y: crown.y - gap + tip))
+            top.addLine(to: CGPoint(x: crown.x + w, y: crown.y - gap - tip))
+            var bottom = Path()
+            bottom.move(to: CGPoint(x: crown.x - w, y: crown.y + gap + tip))
+            bottom.addLine(to: CGPoint(x: crown.x, y: crown.y + gap - tip))
+            bottom.addLine(to: CGPoint(x: crown.x + w, y: crown.y + gap + tip))
+            for arrow in [top, bottom] {
+                context.stroke(arrow, with: .color(ink.opacity(0.85)),
+                               style: StrokeStyle(lineWidth: 3 * s, lineCap: .round, lineJoin: .round))
             }
         }
     }

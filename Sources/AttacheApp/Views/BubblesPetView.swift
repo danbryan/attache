@@ -399,6 +399,18 @@ final class BubblesPetMotor: ObservableObject {
         if let active = activeMoment {
             applyMoment(active.moment, startedAt: active.startedAt, to: &pose, now: now, reduceMotion: reduceMotion)
         }
+        // Sustained, focus-tied compaction: ramp toward full over ~42s while the
+        // focused session compacts, then ease back when it clears. Overrides the
+        // crown so it is the only thing shown, as agreed.
+        let compactionTarget = activity.compactingSince.map {
+            min(1, max(0, (now - $0.timeIntervalSinceReferenceDate) / 42))
+        } ?? 0
+        compactionValue += (compactionTarget - compactionValue) * 0.12
+        if compactionValue > 0.02 {
+            pose.compaction = compactionValue
+            pose.overhead = .compacting
+            pose.overheadSeconds = Int(max(0, now - (activity.compactingSince?.timeIntervalSinceReferenceDate ?? now)))
+        }
         applyFleetGaze(to: &pose, activity: activity, now: now, reduceMotion: reduceMotion)
         return pose
     }
@@ -635,6 +647,7 @@ final class BubblesPetMotor: ObservableObject {
             // one holds for the whole (up to ~45s) compaction with the crown pass.
             let squishStrength = sin(progress * .pi)
             pose.compaction = squishStrength
+            pose.overhead = .compacting
             pose.hop = -4 * squishStrength
             if !reduceMotion {
                 pose.browWorry = max(pose.browWorry, 0.35 * squishStrength)
@@ -791,6 +804,8 @@ final class BubblesPetMotor: ObservableObject {
     private var lastFocusedID: String?
     private var lastOverhead: BubblesOverhead?
     private var overheadStartedAt: TimeInterval?
+    /// Eased compaction 0-1, so the squish ramps up smoothly and springs back.
+    private var compactionValue: Double = 0
     /// Where the focused mote sat last frame, for the continuous stare.
     private(set) var focusedMotePosition: CGPoint?
     /// A short look at a mote whose state just demanded eyes: gaze target,

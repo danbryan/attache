@@ -34,7 +34,8 @@ enum ClaudeHookSetup {
             entry("SessionStart", "session_start"),       // greet
             entry("SessionEnd", "session_end"),           // farewell
             entry("Setup", "session_setup"),              // configuring
-            entry("PreCompact", "compacting"),            // squish
+            entry("PreCompact", "compact_start"),         // squish begins
+            entry("PostCompact", "compact_end"),          // squish releases
             entry("PermissionRequest", "permission_ask"), // choose flags
             entry("PermissionDenied", "permission_denied")// red flag shake
         ]
