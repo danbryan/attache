@@ -155,10 +155,12 @@ final class PersonalityStore {
                 let lastBuiltIn = existing.lastIndex(where: \.isBuiltIn).map { $0 + 1 } ?? existing.count
                 existing.insert(contentsOf: missing, at: lastBuiltIn)
             }
-            if !missing.isEmpty || existing.count != before {
-                save(existing, activeID: resolvedActiveID(in: existing))
+            var activeID = resolvedActiveID(in: existing)
+            var changed = !missing.isEmpty || existing.count != before
+            if migrateVoiceAndPetIfNeeded(list: &existing, activeID: &activeID) { changed = true }
+            if changed {
+                save(existing, activeID: activeID)
             }
-            let activeID = resolvedActiveID(in: existing)
             return (existing, activeID)
         }
 
@@ -168,6 +170,7 @@ final class PersonalityStore {
             seeded.append(migrated)
             activeID = migrated.id
         }
+        _ = migrateVoiceAndPetIfNeeded(list: &seeded, activeID: &activeID)
         save(seeded, activeID: activeID)
         return (seeded, activeID)
     }
@@ -190,6 +193,60 @@ final class PersonalityStore {
         return list.first?.id ?? Personality.defaultActiveID
     }
 
+    private let voicePetMigratedKey = "attache.personalityVoicePetMigrated"
+
+    /// One-time upgrade for users whose voice and pet were separate global
+    /// settings before personalities owned them. Folds the current global voice
+    /// and pet into the active personality so nothing is lost, without ever
+    /// overwriting a value the user already set or mutating a built-in's designed
+    /// default. Runs exactly once, guarded by a defaults flag. Returns whether it
+    /// changed the list or the active selection.
+    private func migrateVoiceAndPetIfNeeded(list: inout [Personality], activeID: inout String) -> Bool {
+        guard !defaults.bool(forKey: voicePetMigratedKey) else { return false }
+        defaults.set(true, forKey: voicePetMigratedKey)
+
+        let globalVoice = PersonalityVoiceRef.capture(from: defaults)
+        let globalPet = defaults.string(forKey: CompanionPreferenceKey.petCharacter)
+            .flatMap(BubblesPetCharacter.init(rawValue:))
+        let voiceIsCustom = globalVoice.provider != .system || globalVoice.systemVoiceIdentifier != nil
+
+        guard let index = list.firstIndex(where: { $0.id == activeID }) else { return false }
+        let active = list[index]
+
+        if active.isBuiltIn {
+            // Preserve the user's exact prior setup as an owned, editable copy and
+            // switch to it; leave the built-in's designed default untouched. Only
+            // when they had actually customized voice or pet.
+            let petDiffers = globalPet != nil && globalPet != active.petCharacter
+            guard voiceIsCustom || petDiffers else { return false }
+            let copy = Personality(
+                id: "custom.migrated.\(active.id)",
+                name: "My \(active.name)",
+                prompt: active.prompt,
+                isBuiltIn: false,
+                voiceRef: voiceIsCustom ? globalVoice : active.voiceRef,
+                petCharacter: globalPet ?? active.petCharacter
+            )
+            let insertAt = list.lastIndex(where: \.isBuiltIn).map { $0 + 1 } ?? list.count
+            list.insert(copy, at: insertAt)
+            activeID = copy.id
+            return true
+        }
+
+        var updated = active
+        var changed = false
+        if updated.voiceRef == nil {
+            updated.voiceRef = globalVoice
+            changed = true
+        }
+        if updated.petCharacter == nil, let globalPet {
+            updated.petCharacter = globalPet
+            changed = true
+        }
+        if changed { list[index] = updated }
+        return changed
+    }
+
     /// Preserves a persona the user defined before personalities existed (from the
     /// UserDefaults prompt key or the legacy CompanionPersonality.md file).
     private func migratedPersonality() -> Personality? {
@@ -206,5 +263,28 @@ final class PersonalityStore {
             }
         }
         return nil
+    }
+}
+
+extension PersonalityStore {
+    /// Export a single personality as pretty JSON. This is the interchange format
+    /// for import and export, mirroring the custom-themes registry.
+    static func exportData(_ personality: Personality) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(personality)
+    }
+
+    /// Decode an imported personality, giving it a fresh id and clearing the
+    /// built-in flag so an import never clobbers an existing entry or impersonates
+    /// a built-in. Voice, pet, prompt, name, and accent are preserved.
+    static func importPersonality(
+        from data: Data,
+        newID: () -> String = { "custom.\(UUID().uuidString.prefix(8))" }
+    ) throws -> Personality {
+        var decoded = try JSONDecoder().decode(Personality.self, from: data)
+        decoded.id = newID()
+        decoded.isBuiltIn = false
+        return decoded
     }
 }
