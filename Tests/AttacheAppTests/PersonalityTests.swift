@@ -251,4 +251,15 @@ final class PersonalityTests: XCTestCase {
         XCTAssertEqual(Personality(id: "e", name: "E", prompt: "p", petCharacter: .cowboy).petAvatarEmoji, "🤠")
         XCTAssertEqual(Personality(id: "f", name: "F", prompt: "p").petAvatarEmoji, "🤖")
     }
+
+    // MARK: - T9: onboarding bundles voice + pet
+
+    func testOnboardingWelcomePersonalitiesAreCurrentBuiltIns() {
+        let builtInIDs = Set(Personality.builtIns.map(\.id))
+        XCTAssertFalse(OnboardingSheet.welcomePersonalities.isEmpty)
+        for entry in OnboardingSheet.welcomePersonalities {
+            XCTAssertTrue(builtInIDs.contains(entry.id), "onboarding references \(entry.id), not a current built-in")
+            XCTAssertFalse(Personality.retiredBuiltInIDs.contains(entry.id), "onboarding references retired \(entry.id)")
+        }
+    }
 }

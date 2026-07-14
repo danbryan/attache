@@ -256,6 +256,8 @@ struct OnboardingSheet: View {
     private func pickVoice(_ option: CompanionVoiceOption) {
         model.speechProvider = .system
         model.speechVoiceIdentifier = option.id
+        // The voice belongs to the active personality, not an orphan global.
+        model.captureCurrentVoiceIntoActivePersonality()
     }
 
     private func voiceRow(_ option: CompanionVoiceOption) -> some View {
@@ -284,15 +286,16 @@ struct OnboardingSheet: View {
         .accessibilityAction { pickVoice(option) }
     }
 
-    private static let welcomePersonalities: [(id: String, blurb: String)] = [
-        ("builtin.conciseBrief", "Tight and factual. The outcome, then one blocker if there is one."),
+    static let welcomePersonalities: [(id: String, blurb: String)] = [
         ("builtin.bigPicture", "Outcomes only. What shipped or what's stuck, never the play-by-play."),
-        ("builtin.inquisitive", "Summarizes, then suggests one worthwhile next move.")
+        ("builtin.explainer", "Walks you through what happened and why it matters, in plain terms."),
+        ("builtin.inquisitive", "Summarizes, then raises the one thing worth checking next."),
+        ("builtin.cowboy", "An old trail boss with dust on his words, riding in with his own voice and hat.")
     ]
 
     private var finishStep: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Personalities shape how recaps are written and spoken. Pick one; edit or add more later in Settings > Personalities.")
+            Text("Each personality brings its own voice and pet. Pick one, hear a sample; edit or add more later in Settings > Personalities.")
                 .typoCaption()
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -330,11 +333,18 @@ struct OnboardingSheet: View {
             Image(systemName: selected ? "largecircle.fill.circle" : "circle")
                 .typoIcon(size: 14)
                 .foregroundStyle(selected ? accent : Color.secondary)
+            Text(personality.petAvatarEmoji)
             VStack(alignment: .leading, spacing: 1) {
                 Text(personality.name).typoBody(selected ? .semibold : .regular)
                 Text(blurb).typoCaption().foregroundStyle(.secondary)
             }
             Spacer()
+            Button("Sample") {
+                model.selectPersonality(personality.id)
+                model.previewAssistantVoice()
+            }
+            .typoCaption(.medium)
+            .accessibilityLabel("Hear \(personality.name) sample")
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(selected ? accent.opacity(0.12) : Color.primary.opacity(0.05),
