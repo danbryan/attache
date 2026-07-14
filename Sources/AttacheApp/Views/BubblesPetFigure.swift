@@ -176,7 +176,7 @@ enum BubblesPetAnatomy {
 /// lip-sync shape), cheek glow, and head tilt; breathing, hops, squash, and
 /// sway arrive through the shared figure transform. The mark and all brand
 /// surfaces always use `.bubbles`.
-enum BubblesPetCharacter: String, CaseIterable, Identifiable {
+enum BubblesPetCharacter: String, CaseIterable, Identifiable, Codable {
     /// The robot, Attaché: the default companion and the brand face
     /// (INF-291, retired the Bubbles mascot). The rawValue stays "robot"
     /// so saved preferences survive; a saved "bubbles" no longer resolves

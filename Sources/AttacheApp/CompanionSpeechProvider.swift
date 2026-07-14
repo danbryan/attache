@@ -1,7 +1,7 @@
 import Foundation
 import AttacheCore
 
-enum CompanionSpeechProvider: String, CaseIterable, Identifiable {
+enum CompanionSpeechProvider: String, CaseIterable, Identifiable, Codable {
     case system
     case elevenLabs
     case xai

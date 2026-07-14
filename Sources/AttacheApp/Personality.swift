@@ -9,17 +9,44 @@ struct Personality: Identifiable, Codable, Equatable {
     var name: String
     var prompt: String
     var isBuiltIn: Bool
+    /// The engine + voice this personality speaks in. `nil` means "inherit the
+    /// app's current global voice selection", which keeps lists persisted before
+    /// personalities owned a voice working unchanged.
+    var voiceRef: PersonalityVoiceRef?
+    /// The pet character shown while this personality is active. `nil` renders
+    /// the default robot (Attaché).
+    var petCharacter: BubblesPetCharacter?
+    /// Optional per-personality accent (hex), used by the switcher chip and the
+    /// pet greeting. Non-load-bearing.
+    var accentColorHex: String?
 
-    init(id: String, name: String, prompt: String, isBuiltIn: Bool = false) {
+    init(
+        id: String,
+        name: String,
+        prompt: String,
+        isBuiltIn: Bool = false,
+        voiceRef: PersonalityVoiceRef? = nil,
+        petCharacter: BubblesPetCharacter? = nil,
+        accentColorHex: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.prompt = prompt
         self.isBuiltIn = isBuiltIn
+        self.voiceRef = voiceRef
+        self.petCharacter = petCharacter
+        self.accentColorHex = accentColorHex
     }
 }
 
 extension Personality {
     static let defaultActiveID = "builtin.bigPicture"
+
+    /// The Cowboy's preferred on-device voice: a low, weathered classic that
+    /// reads like a trail boss. If it is not installed, voice resolution
+    /// (`PersonalityVoiceRef.resolved(availableSystemVoiceIDs:)`) drops it and
+    /// falls back to the app default rather than failing.
+    static let cowboyPreferredVoiceID = "com.apple.speech.synthesis.voice.Fred"
 
     static let newTemplate = """
     Describe how Attaché should deliver updates: tone, attitude, level of detail, \
@@ -39,7 +66,7 @@ extension Personality {
     // each must read for any profession, never just developers. Custom
     // personalities are meant to lead.
     static let builtIns: [Personality] = [
-        Personality(id: "builtin.explainer", name: "Explainer", isBuiltIn: true, prompt: """
+        Personality(id: "builtin.explainer", name: "Explainer", isBuiltIn: true, petCharacter: .robot, prompt: """
         You're the Explainer, and you genuinely light up when something clicks for \
         someone. You narrate what the agents did like you're walking a sharp friend \
         through it, never a lecture: name what happened, why it matters, and what it \
@@ -51,7 +78,7 @@ extension Personality {
         little warmth through. Keep it tight; if a deeper version is worth having, \
         offer it in a few words rather than dumping it.
         """),
-        Personality(id: "builtin.bigPicture", name: "Big Picture", isBuiltIn: true, prompt: """
+        Personality(id: "builtin.bigPicture", name: "Big Picture", isBuiltIn: true, petCharacter: .robot, prompt: """
         You're Big Picture, constitutionally incapable of losing the plot. You don't \
         care how the work got done, the false starts, the back-and-forth, and the \
         redos are none of your concern; you care where things stand and where they're \
@@ -62,7 +89,7 @@ extension Personality {
         Never narrate the intermediate steps, and if the only honest headline is a \
         problem, say it plainly and stop.
         """),
-        Personality(id: "builtin.inquisitive", name: "Inquisitive", isBuiltIn: true, prompt: """
+        Personality(id: "builtin.inquisitive", name: "Inquisitive", isBuiltIn: true, petCharacter: .robot, prompt: """
         You're Inquisitive, always thinking half a step ahead. You give the update \
         straight, in a sentence or two, then you can't quite help yourself: you wonder \
         about the thing that isn't obvious yet, the edge case, the assumption worth \
@@ -72,7 +99,7 @@ extension Personality {
         invitation ("Worth checking whether..." / "You might look at..."), and when \
         nothing genuinely useful comes to mind, just deliver the update and let it be.
         """),
-        Personality(id: "builtin.cowboy", name: "Cowboy", isBuiltIn: true, prompt: """
+        Personality(id: "builtin.cowboy", name: "Cowboy", isBuiltIn: true, petCharacter: .cowboy, voiceRef: .systemVoice(Personality.cowboyPreferredVoiceID), prompt: """
         You're the Cowboy, an old trail boss with a level voice and a lot of miles \
         behind you, and these agents are your herd. You talk plain and easy with a \
         little dust on your words: reckon, y'all, ain't, "hold your horses", "riding \
@@ -90,8 +117,18 @@ extension Personality {
         """)
     ]
 
-    private init(id: String, name: String, isBuiltIn: Bool, prompt: String) {
-        self.init(id: id, name: name, prompt: prompt, isBuiltIn: isBuiltIn)
+    private init(
+        id: String,
+        name: String,
+        isBuiltIn: Bool,
+        petCharacter: BubblesPetCharacter,
+        voiceRef: PersonalityVoiceRef? = nil,
+        prompt: String
+    ) {
+        self.init(
+            id: id, name: name, prompt: prompt, isBuiltIn: isBuiltIn,
+            voiceRef: voiceRef, petCharacter: petCharacter
+        )
     }
 }
 
