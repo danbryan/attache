@@ -559,6 +559,8 @@ final class BubblesPetMotor: ObservableObject {
         case .compacting: return 1.6
         case .greet: return 1.2
         case .farewell: return 1.6
+        case .permissionAsk: return 2.2
+        case .permissionDenied: return 1.3
         }
     }
 
@@ -637,21 +639,66 @@ final class BubblesPetMotor: ObservableObject {
                 pose.browWorry = max(pose.browWorry, 0.3 * squishStrength)
             }
         case .greet:
-            // A session appeared: eyes pop bright, a hello ring pulses out, a bob.
+            // A session appeared: a hand rises beside the face and waves hello.
             pose.eyeOpenness = max(pose.eyeOpenness, 1)
             pose.smile = 1
+            let greetRise = sin(min(1, progress / 0.3) * .pi / 2)
+            let greetFade = progress > 0.78 ? (1 - progress) / 0.22 : 1
+            pose.props = [BubblesProp(
+                content: .emoji("👋"),
+                position: CGPoint(x: 172, y: 104 - 16 * greetRise),
+                size: 34,
+                rotation: reduceMotion ? 0 : 20 * sin(now * 9),
+                opacity: greetRise * greetFade
+            )]
             if !reduceMotion {
-                pose.arcRipple = sin(progress * .pi)
-                pose.arcPhase = now * 2.6
-                pose.hop = CGFloat(11 * sin(min(1, progress / 0.55) * .pi))
+                pose.hop = CGFloat(5 * sin(min(1, progress / 0.5) * .pi))
             }
         case .farewell:
-            // A session ended: eyes dim, a soft inward pulse, a little bow.
-            pose.eyeOpenness *= 1 - 0.7 * sin(progress * .pi)
+            // A session ended: a hand waves goodbye, then lowers as the eyes dim.
+            let byeRise = sin(min(1, progress / 0.28) * .pi / 2)
+            let byeDrop = progress > 0.62 ? (progress - 0.62) / 0.38 : 0
+            let byePresent = byeRise * (1 - byeDrop)
+            pose.props = [BubblesProp(
+                content: .emoji("👋"),
+                position: CGPoint(x: 172, y: 104 - 14 * byePresent + 16 * byeDrop),
+                size: 32,
+                rotation: reduceMotion ? 0 : 16 * sin(now * 7),
+                opacity: byePresent
+            )]
+            pose.eyeOpenness *= 1 - 0.55 * sin(progress * .pi)
             if !reduceMotion {
-                pose.arcRipple = -0.6 * sin(progress * .pi)
-                pose.arcPhase = now * 2.6
-                pose.headTilt += 6 * sin(progress * .pi)
+                pose.headTilt += 5 * sin(progress * .pi)
+            }
+        case .permissionAsk:
+            // A green flag and a red flag rise beside the face to choose.
+            let askRise = sin(min(1, progress / 0.3) * .pi / 2)
+            let askFade = progress > 0.82 ? (1 - progress) / 0.18 : 1
+            let bob = reduceMotion ? 0 : 3 * sin(now * 4)
+            pose.props = [
+                BubblesProp(content: .flag(red: false),
+                            position: CGPoint(x: 62, y: 98 - 8 * askRise + bob),
+                            size: 30, rotation: -10, opacity: askRise * askFade),
+                BubblesProp(content: .flag(red: true),
+                            position: CGPoint(x: 178, y: 98 - 8 * askRise - bob),
+                            size: 30, rotation: 10, opacity: askRise * askFade)
+            ]
+            pose.browWorry = max(pose.browWorry, 0.3 * askRise)
+        case .permissionDenied:
+            // A tool was denied: a red flag pops up and shakes "no".
+            let denyRise = sin(min(1, progress / 0.25) * .pi / 2)
+            let denyFade = progress > 0.7 ? (1 - progress) / 0.3 : 1
+            pose.props = [BubblesProp(
+                content: .flag(red: true),
+                position: CGPoint(x: 172, y: 96 - 10 * denyRise),
+                size: 32,
+                rotation: reduceMotion ? 8 : 16 * sin(now * 22),
+                opacity: denyRise * denyFade
+            )]
+            pose.browWorry = max(pose.browWorry, 0.6 * denyRise)
+            pose.smile = 1 - 0.6 * denyRise
+            if !reduceMotion {
+                pose.headTilt += 4 * sin(now * 20) * denyRise
             }
         }
     }

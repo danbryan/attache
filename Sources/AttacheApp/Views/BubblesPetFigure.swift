@@ -36,6 +36,24 @@ enum BubblesOverhead: Equatable {
     case sleeping
 }
 
+/// An emoji or small drawn prop rendered beside the pet during a moment (a
+/// waving hand, a permission flag). Character-agnostic: it sits at a design
+/// coordinate around any pet, so the brain reads it as the pet's own gesture
+/// even though the pet has no arms. Populated by `applyMoment`.
+struct BubblesProp: Equatable {
+    enum Content: Equatable {
+        case emoji(String)
+        case flag(red: Bool)
+    }
+    var content: Content
+    /// Position in the pose's design units (the head sits around 120, 112).
+    var position: CGPoint
+    /// Emoji point size / flag height, in design units.
+    var size: CGFloat = 24
+    var rotation: Double = 0
+    var opacity: Double = 1
+}
+
 struct BubblesPose: Equatable {
     /// Breathing cycle contribution 0-1 (scales the figure 1.000-1.015).
     var breathe: Double = 0
@@ -77,6 +95,8 @@ struct BubblesPose: Equatable {
     /// Left (Claude, rust), center (everything else, blue), right (Codex,
     /// green); see the spec's anatomy notes for why the order is load-bearing.
     var bubbles: [BubblesBubblePose] = [.init(), .init(), .init()]
+    /// Emoji / flag props drawn beside the pet for the current moment.
+    var props: [BubblesProp] = []
 
     static let neutral = BubblesPose()
 
@@ -242,6 +262,7 @@ struct BubblesPetFigure: View {
                 drawOverhead(in: headLayer, pose: pose, p: p, s: s)
                 drawHead(in: headLayer, pose: pose, p: p, s: s)
                 drawHeadConfetti(in: headLayer, pose: pose, p: p, s: s)
+                drawProps(in: headLayer, pose: pose, p: p, s: s)
                 drawFleet(in: figure, p: p, s: s, behind: false)
             }
         }
@@ -338,6 +359,42 @@ struct BubblesPetFigure: View {
     /// Celebrate confetti for `.head` anatomy: with no bubbles to burst
     /// from, the pop rings the head instead. Driven by the same
     /// `pose.bubbles[i].pop` one-shots the full anatomy uses.
+    /// Emoji / flag props beside the pet (a waving hand, permission flags). They
+    /// read as the pet's own gesture without the pet needing arms, and work for
+    /// any character.
+    private func drawProps(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
+        for prop in pose.props where prop.opacity > 0.01 {
+            let center = p(prop.position.x, prop.position.y)
+            var layer = context
+            layer.opacity = min(1, max(0, prop.opacity))
+            layer.translateBy(x: center.x, y: center.y)
+            layer.rotate(by: .degrees(prop.rotation))
+            switch prop.content {
+            case .emoji(let emoji):
+                let text = Text(emoji).font(.system(size: max(1, prop.size) * s))
+                layer.draw(layer.resolve(text), at: .zero)
+            case .flag(let red):
+                let h = max(1, prop.size) * s
+                let pole = Path { path in
+                    path.move(to: CGPoint(x: -h * 0.34, y: -h * 0.62))
+                    path.addLine(to: CGPoint(x: -h * 0.34, y: h * 0.62))
+                }
+                layer.stroke(pole, with: .color(Color(white: 0.82)),
+                             style: StrokeStyle(lineWidth: 2.4 * s, lineCap: .round))
+                let cloth = Path { path in
+                    path.move(to: CGPoint(x: -h * 0.34, y: -h * 0.62))
+                    path.addLine(to: CGPoint(x: h * 0.52, y: -h * 0.42))
+                    path.addLine(to: CGPoint(x: -h * 0.34, y: -h * 0.12))
+                    path.closeSubpath()
+                }
+                let color = red
+                    ? Color(red: 0.91, green: 0.24, blue: 0.24)
+                    : Color(red: 0.20, green: 0.78, blue: 0.36)
+                layer.fill(cloth, with: .color(color))
+            }
+        }
+    }
+
     private func drawHeadConfetti(in context: GraphicsContext, pose: BubblesPose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
         let progress = pose.bubbles.map(\.pop).max() ?? 0
         guard progress > 0.01 else { return }

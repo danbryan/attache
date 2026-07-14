@@ -289,6 +289,11 @@ public struct CompanionActivityMoment: Equatable, Identifiable, Sendable {
         /// A session ended (SessionEnd hook): the eyes dim, a soft inward pulse,
         /// a small bow.
         case farewell
+        /// A permission dialog appeared (PermissionRequest hook): a green flag
+        /// and a red flag rise beside the face to choose.
+        case permissionAsk
+        /// A tool call was denied (PermissionDenied hook): a red flag shakes.
+        case permissionDenied
     }
 
     public var id: UUID

@@ -3546,6 +3546,8 @@ final class AppModel: ObservableObject {
         case "session_end": return .farewell
         case "session_setup": return .configuring
         case "compacting": return .compacting
+        case "permission_ask": return .permissionAsk
+        case "permission_denied": return .permissionDenied
         default: return nil
         }
     }

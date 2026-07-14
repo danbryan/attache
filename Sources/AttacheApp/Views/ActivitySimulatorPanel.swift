@@ -74,29 +74,18 @@ struct ActivitySimulatorPanel: View {
             }
             .typoCaption(.medium)
 
-            HStack(spacing: 6) {
-                Button("Celebrate") { model.triggerMoment(.celebrate, agent: agent) }
-                    .accessibilityLabel("Celebrate moment")
-                Button("Pop") { model.triggerMoment(.cardArrived, agent: agent) }
-                    .accessibilityLabel("Pop moment")
-                Button("Drowsy") { model.triggerMoment(.drowsy, agent: agent) }
-                    .accessibilityLabel("Drowsy moment")
-                Button("Needs you") { model.triggerMoment(.needsYou, agent: agent) }
-                    .accessibilityLabel("Needs you moment")
-            }
-            .typoCaption(.medium)
-
-            HStack(spacing: 6) {
-                Button("Greet") { model.triggerMoment(.greet, agent: agent) }
-                    .accessibilityLabel("Greet moment")
-                Button("Farewell") { model.triggerMoment(.farewell, agent: agent) }
-                    .accessibilityLabel("Farewell moment")
-                Button("Configuring") { model.triggerMoment(.configuring, agent: agent) }
-                    .accessibilityLabel("Configuring moment")
-                Button("Compacting") { model.triggerMoment(.compacting, agent: agent) }
-                    .accessibilityLabel("Compacting moment")
-                Button("Errored") { model.triggerMoment(.errored, agent: agent) }
-                    .accessibilityLabel("Errored moment")
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
+                momentButton("Celebrate", .celebrate)
+                momentButton("Pop", .cardArrived)
+                momentButton("Drowsy", .drowsy)
+                momentButton("Needs you", .needsYou)
+                momentButton("Greet", .greet)
+                momentButton("Farewell", .farewell)
+                momentButton("Configuring", .configuring)
+                momentButton("Compacting", .compacting)
+                momentButton("Errored", .errored)
+                momentButton("Permission", .permissionAsk)
+                momentButton("Denied", .permissionDenied)
             }
             .typoCaption(.medium)
 
@@ -201,6 +190,15 @@ struct ActivitySimulatorPanel: View {
         if let toolKind = state.toolKind { parts.append(toolKind.rawValue) }
         if state.userTyping { parts.append("typing") }
         return parts.joined(separator: " · ")
+    }
+
+    /// A moment preview button. Full-width in its grid cell and never truncated,
+    /// so labels like "Configuring" and "Permission" always show in full.
+    @ViewBuilder
+    private func momentButton(_ title: String, _ kind: CompanionActivityMoment.Kind) -> some View {
+        Button(title) { model.triggerMoment(kind, agent: agent) }
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel("\(title) moment")
     }
 
     private func apply() {
