@@ -19,6 +19,10 @@ struct ActivitySimulatorPanel: View {
     @State private var oneBlocked = false
     @State private var oneFinished = false
     @State private var subAgents = 0
+    /// Sub-agents assigned per fleet slot by the "Add subs" button, so you can
+    /// load several sessions (including non-focused ones), not just one.
+    @State private var subsBySlot: [Int: Int] = [:]
+    @State private var nextSubSlot = 0
     @State private var demoElapsed = -1.0
     private let cycleTimer = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
     private let demoTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
@@ -109,7 +113,15 @@ struct ActivitySimulatorPanel: View {
                     .toggleStyle(.checkbox)
                     .accessibilityLabel("Simulate one finished session")
                 Stepper("Subs: \(subAgents)", value: $subAgents, in: 0...30)
-                    .accessibilityLabel("Simulated sub-agents on the focused session")
+                    .accessibilityLabel("Sub-agents to add per click")
+            }
+            .typoCaption(.medium)
+            HStack(spacing: 6) {
+                Button("Add subs to a session") { addSubsToNextSession() }
+                    .disabled(claudeCount + codexCount == 0 || subAgents == 0)
+                    .accessibilityLabel("Add sub-agents to the next session")
+                Button("Clear subs") { subsBySlot = [:]; nextSubSlot = 0; applyIfSimulating() }
+                    .accessibilityLabel("Clear simulated sub-agents")
             }
             .typoCaption(.medium)
             HStack(spacing: 6) {
@@ -201,6 +213,16 @@ struct ActivitySimulatorPanel: View {
             .accessibilityLabel("\(title) moment")
     }
 
+    /// Assign the current Subs count to the next session in rotation, so
+    /// repeated clicks load several sessions, focused or not.
+    private func addSubsToNextSession() {
+        let total = claudeCount + codexCount
+        guard total > 0 else { return }
+        subsBySlot[nextSubSlot % total] = subAgents
+        nextSubSlot += 1
+        applyIfSimulating()
+    }
+
     private func apply() {
         model.simulatedActivity = CompanionActivityState(
             phase: phase,
@@ -248,10 +270,11 @@ struct ActivitySimulatorPanel: View {
         guard !fleet.isEmpty else { return fleet }
         let focusIndex = fleet.firstIndex { $0.id == model.simulatedFleetFocusID } ?? 0
         fleet[focusIndex].isFocused = true
-        // Sub-agents live on the first session, not the focused one, so you can
-        // focus a different session and confirm a non-focused session's
-        // sub-agents keep rippling in the ring.
-        fleet[0].activeSubAgents = subAgents
+        // Sub-agents come from the "Add subs" button per slot, so any sessions
+        // (including non-focused ones) can carry them, not just one.
+        for index in fleet.indices {
+            fleet[index].activeSubAgents = subsBySlot[index] ?? 0
+        }
         return fleet
     }
 
