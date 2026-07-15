@@ -50,13 +50,16 @@ final class AttacheEvaluationHarnessTests: XCTestCase {
 
     // Criterion: reports contain no secret literals.
     func testReportNoSecrets() {
-        let result = AttacheEvaluationHarness.scenarioReportNoSecrets()
+        let results = AttacheEvaluationHarness.runAllScenarios()
+        let result = AttacheEvaluationHarness.scenarioReportNoSecrets(results: results)
         XCTAssertTrue(result.passed, "reports should contain no secrets: \(result.violations)")
     }
 
     // Criterion: repeated runs are deterministic.
     func testDeterminism() {
-        let result = AttacheEvaluationHarness.scenarioDeterminism()
+        let run1 = AttacheEvaluationHarness.runAllScenarios()
+        let run2 = AttacheEvaluationHarness.runAllScenarios()
+        let result = AttacheEvaluationHarness.scenarioDeterminism(run1: run1, run2: run2)
         XCTAssertTrue(result.passed, "repeated runs should be deterministic: \(result.violations)")
     }
 

@@ -306,9 +306,9 @@ public enum AttacheEvaluationHarness {
 
     // MARK: - Report No Secrets
 
-    /// Verify reports contain no secret literals (INF-330).
-    public static func scenarioReportNoSecrets() -> AttacheEvaluationScenarioResult {
-        let results = runAllScenarios()
+    /// Verify reports contain no secret literals (INF-330). Uses a pre-computed
+    /// result set to avoid recursion.
+    public static func scenarioReportNoSecrets(results: [AttacheEvaluationScenarioResult]) -> AttacheEvaluationScenarioResult {
         let report = AttacheEvaluationReport(scenarioResults: results)
         let human = report.humanReport()
         let json = report.jsonReport()
@@ -325,10 +325,9 @@ public enum AttacheEvaluationHarness {
 
     // MARK: - Determinism
 
-    /// Verify repeated runs are deterministic (INF-330).
-    public static func scenarioDeterminism() -> AttacheEvaluationScenarioResult {
-        let run1 = runAllScenarios()
-        let run2 = runAllScenarios()
+    /// Verify repeated runs are deterministic (INF-330). Uses a pre-computed
+    /// result set to avoid recursion.
+    public static func scenarioDeterminism(run1: [AttacheEvaluationScenarioResult], run2: [AttacheEvaluationScenarioResult]) -> AttacheEvaluationScenarioResult {
         let passed = run1 == run2
         return AttacheEvaluationScenarioResult(
             scenarioID: "determinism", profileName: "all",
@@ -359,10 +358,8 @@ public enum AttacheEvaluationHarness {
         results.append(scenarioMemoryScopeEgressSeparate())
         // Incomplete never complete.
         results.append(scenarioIncompleteNeverComplete())
-        // Report no secrets.
-        results.append(scenarioReportNoSecrets())
-        // Determinism.
-        results.append(scenarioDeterminism())
+        // Report no secrets (uses the results so far, not recursive).
+        results.append(scenarioReportNoSecrets(results: results))
         return results
     }
 
