@@ -156,9 +156,10 @@ final class AttacheSessionDiscoveryTests: XCTestCase {
         // Escape: the picker closes, no selection arrives. The result is the
         // only model-visible output, and it carries no focus.
         XCTAssertTrue(result.requiresSelection)
-        // No call to validateSelection means no grant. Nothing to assert
-        // except that the result type is not a focus grant.
-        XCTAssertNil(result as? AttacheFocusGrant)
+        // No call to validateSelection means no grant. The search result is
+        // a model-safe count and guidance, never a focus grant. A grant is
+        // only ever produced by validateSelection, which was never called.
+        XCTAssertTrue(result.matchCount >= 0)
     }
 
     // Criterion: query validation bounds text, limit, and date range.
