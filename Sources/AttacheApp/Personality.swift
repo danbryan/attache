@@ -136,6 +136,10 @@ struct Personality: Identifiable, Codable, Equatable {
     /// Optional per-personality accent (hex), used by the switcher chip and the
     /// character greeting. Non-load-bearing.
     var accentColorHex: String?
+    /// Optional per-personality context strategy override (INF-305). A
+    /// personality references policy; it does not duplicate mutable detected
+    /// capability facts. `nil` means fall back to the global default strategy.
+    var contextStrategy: AttacheContextStrategy?
 
     init(
         id: String,
@@ -147,7 +151,8 @@ struct Personality: Identifiable, Codable, Equatable {
         visualMode: AttacheVisualMode? = nil,
         modelRef: PersonalityModelRef? = nil,
         playbackSpeed: Double? = nil,
-        accentColorHex: String? = nil
+        accentColorHex: String? = nil,
+        contextStrategy: AttacheContextStrategy? = nil
     ) {
         self.id = id
         self.name = name
@@ -159,11 +164,12 @@ struct Personality: Identifiable, Codable, Equatable {
         self.modelRef = modelRef
         self.playbackSpeed = playbackSpeed
         self.accentColorHex = accentColorHex
+        self.contextStrategy = contextStrategy
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, prompt, isBuiltIn, voiceRef, character, visualMode
-        case modelRef, playbackSpeed, accentColorHex
+        case modelRef, playbackSpeed, accentColorHex, contextStrategy
         case legacyCharacter = "petCharacter"
     }
 
@@ -180,6 +186,7 @@ struct Personality: Identifiable, Codable, Equatable {
         modelRef = try container.decodeIfPresent(PersonalityModelRef.self, forKey: .modelRef)
         playbackSpeed = try container.decodeIfPresent(Double.self, forKey: .playbackSpeed)
         accentColorHex = try container.decodeIfPresent(String.self, forKey: .accentColorHex)
+        contextStrategy = try container.decodeIfPresent(AttacheContextStrategy.self, forKey: .contextStrategy)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -194,6 +201,7 @@ struct Personality: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(modelRef, forKey: .modelRef)
         try container.encodeIfPresent(playbackSpeed, forKey: .playbackSpeed)
         try container.encodeIfPresent(accentColorHex, forKey: .accentColorHex)
+        try container.encodeIfPresent(contextStrategy, forKey: .contextStrategy)
     }
 }
 
