@@ -1,3 +1,4 @@
+import AttacheCore
 import Foundation
 
 enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, Codable {
@@ -191,5 +192,21 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
+    }
+}
+
+extension AttachePresentationProvider {
+    /// The real data-egress classification for this provider at a resolved
+    /// endpoint (INF-307). One classification drives onboarding, integration
+    /// settings, personality model selection, consent, memory egress, and
+    /// diagnostics. A CLI that runs locally but sends to a subscription is
+    /// `.subscriptionRemoteCLI`, not on-device.
+    func dataEgress(endpoint: String?, enabled: Bool = true) -> AttacheDataEgress {
+        AttacheDataEgressClassifier.classify(
+            providerRawValue: rawValue,
+            endpoint: endpoint,
+            isCLI: isCLI,
+            enabled: enabled
+        )
     }
 }

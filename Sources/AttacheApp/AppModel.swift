@@ -3873,9 +3873,10 @@ final class AppModel: ObservableObject {
     /// under your existing login and expose no Attaché-chosen endpoint, so they
     /// don't trip the consent moment; HTTP providers do when their base URL is
     /// non-loopback (so a Custom endpoint pointed at localhost stays local).
+    /// Subscription CLIs (Codex, Claude Code) run locally but send prompts to a
+    /// remote subscription, so they are disclosed as remote (INF-307).
     func presentationProviderSendsToCloud(_ provider: AttachePresentationProvider) -> Bool {
-        if provider.isCLI { return false }
-        return NetworkSecurity.isCloudEndpoint(endpointForIntegration(provider))
+        provider.dataEgress(endpoint: endpointForIntegration(provider)).isRemoteService
     }
 
     var presentationSendsToCloud: Bool { presentationProviderSendsToCloud(presentationProvider) }
