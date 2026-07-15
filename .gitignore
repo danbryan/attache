@@ -12,3 +12,4 @@ tmp/
 dist/
 scratch/
 scripts/__pycache__/
+design/poses/hero-loop-frames/

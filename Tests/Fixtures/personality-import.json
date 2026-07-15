@@ -1,0 +1,20 @@
+{
+  "id": "fixture.imported-navigator",
+  "isBuiltIn": false,
+  "modelRef": {
+    "fallbackProviders": [
+      "codex_cli"
+    ],
+    "model": "qwen3:7b",
+    "provider": "ollama",
+    "reasoningEffort": "high"
+  },
+  "name": "Imported Navigator",
+  "character": "cowboy",
+  "playbackSpeed": 1.15,
+  "prompt": "Speak like a calm navigator. Lead with the destination, then name the next useful turn in one concise sentence.",
+  "visualMode": "character",
+  "voiceRef": {
+    "provider": "system"
+  }
+}

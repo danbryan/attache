@@ -18,8 +18,8 @@ final class AnotherTakeEventTests: XCTestCase {
 
     func testAnotherTakeEventLinksToOriginalAndRecordsTarget() {
         let original = makeCard(id: "orig-1", sessionID: "sess-9", project: "/tmp/p")
-        let target = Personality(id: "builtin.bigPicture", name: "Big Picture", prompt: "p", petCharacter: .robot)
-        let event = CompanionPresentationService.anotherTakeEvent(
+        let target = Personality(id: "builtin.bigPicture", name: "Big Picture", prompt: "p", character: .robot)
+        let event = AttachePresentationService.anotherTakeEvent(
             from: original, targetPersonality: target,
             summary: "Where it stands", spoken: "Bottom line, you shipped.", needsDecision: false
         )
@@ -38,7 +38,7 @@ final class AnotherTakeEventTests: XCTestCase {
     func testAnotherTakeEventFlagsNeedsDecision() {
         let original = makeCard(id: "o", sessionID: nil, project: nil)
         let target = Personality(id: "p", name: "P", prompt: "x")
-        let event = CompanionPresentationService.anotherTakeEvent(
+        let event = AttachePresentationService.anotherTakeEvent(
             from: original, targetPersonality: target, summary: "s", spoken: "sp", needsDecision: true
         )
         XCTAssertEqual(event.metadata["companion_needs_decision"], "1")
@@ -47,8 +47,8 @@ final class AnotherTakeEventTests: XCTestCase {
     func testInsertedAnotherTakeCardCarriesTakeOfThroughStore() throws {
         let store = try CardStore.inMemory()
         let original = makeCard(id: "orig-1", sessionID: "sess-9", project: "/tmp/p")
-        let target = Personality(id: "builtin.bigPicture", name: "Big Picture", prompt: "p", petCharacter: .robot)
-        let event = CompanionPresentationService.anotherTakeEvent(
+        let target = Personality(id: "builtin.bigPicture", name: "Big Picture", prompt: "p", character: .robot)
+        let event = AttachePresentationService.anotherTakeEvent(
             from: original, targetPersonality: target,
             summary: "Where it stands", spoken: "Bottom line, you shipped.", needsDecision: false
         )

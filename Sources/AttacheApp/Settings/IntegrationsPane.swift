@@ -6,7 +6,6 @@ import SwiftUI
 struct IntegrationsPane: View {
     @ObservedObject var model: AppModel
     @State private var expanded: String?
-    @State private var showKey: [String: Bool] = [:]
 
     private struct Provider {
         let id: String
@@ -14,17 +13,19 @@ struct IntegrationsPane: View {
         let powers: String
         let hasKey: Bool
         let hasEndpoint: Bool
+        let guide: AttacheDocumentationLinks.ModelIntegrationGuide
     }
 
     private let providers: [Provider] = [
-        Provider(id: "xai", name: "xAI / Grok", powers: "Model + Voice", hasKey: true, hasEndpoint: false),
-        Provider(id: "elevenlabs", name: "ElevenLabs", powers: "Voice", hasKey: true, hasEndpoint: false),
-        Provider(id: "openai", name: "OpenAI", powers: "Voice", hasKey: true, hasEndpoint: false),
-        Provider(id: "groq", name: "Groq", powers: "Model", hasKey: true, hasEndpoint: false),
-        Provider(id: "ollama", name: "Ollama", powers: "Model · local", hasKey: false, hasEndpoint: true),
-        Provider(id: "lmstudio", name: "LM Studio", powers: "Model · local", hasKey: false, hasEndpoint: true),
-        Provider(id: "custom", name: "OpenAI-compatible", powers: "Model", hasKey: true, hasEndpoint: true),
-        Provider(id: "ondevice", name: "On-device (Apple)", powers: "Voice", hasKey: false, hasEndpoint: false)
+        Provider(id: "xai", name: "xAI / Grok", powers: "Model + Voice", hasKey: true, hasEndpoint: false, guide: .xai),
+        Provider(id: "elevenlabs", name: "ElevenLabs", powers: "Voice", hasKey: true, hasEndpoint: false, guide: .elevenLabs),
+        Provider(id: "openai", name: "OpenAI", powers: "Voice", hasKey: true, hasEndpoint: false, guide: .openAIVoice),
+        Provider(id: "groq", name: "Groq", powers: "Model", hasKey: true, hasEndpoint: false, guide: .groq),
+        Provider(id: "ollama", name: "Ollama", powers: "Model · local", hasKey: false, hasEndpoint: true, guide: .ollama),
+        Provider(id: "custom", name: "OpenAI-compatible", powers: "Model", hasKey: true, hasEndpoint: true, guide: .openAICompatible),
+        Provider(id: "codex", name: "Codex CLI", powers: "Model · subscription", hasKey: false, hasEndpoint: false, guide: .codexCLI),
+        Provider(id: "claude", name: "Claude Code", powers: "Model · subscription", hasKey: false, hasEndpoint: false, guide: .claudeCode),
+        Provider(id: "ondevice", name: "On-device (Apple)", powers: "Voice", hasKey: false, hasEndpoint: false, guide: .onDeviceVoice)
     ]
 
     var body: some View {
@@ -34,7 +35,7 @@ struct IntegrationsPane: View {
                 .typoLabel()
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Connect a provider to unlock it in Model and Voice. Click a row to add its key or endpoint, then Save & Test.")
+            Text("Connect a provider to use it in a character's Model or Voice. Each row includes a short setup guide and a real readiness check.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             localSources
@@ -69,6 +70,11 @@ struct IntegrationsPane: View {
                 get: { model.claudeCodeSourceEnabled },
                 set: { model.setClaudeCodeSourceEnabled($0) }
             ))
+            Toggle("Precise Claude Code status", isOn: $model.installClaudeHooks)
+            Text("Adds Attaché's Notification and Stop hooks so character reactions update immediately. Turning it off removes only Attaché's hooks.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
@@ -98,7 +104,7 @@ struct IntegrationsPane: View {
 
     private func row(_ provider: Provider) -> some View {
         let isExpanded = expanded == provider.id
-        let expandable = provider.hasKey || provider.hasEndpoint
+        let expandable = true
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 healthDot(model.healthStatus(provider.id))
@@ -136,24 +142,16 @@ struct IntegrationsPane: View {
                 }
             }
             if provider.hasKey {
-                HStack(spacing: 8) {
-                    let shown = showKey[provider.id] ?? false
-                    Group {
-                        if shown {
-                            TextField("API key", text: keyBinding(provider.id))
-                        } else {
-                            SecureField("API key", text: keyBinding(provider.id))
-                        }
-                    }
-                    .textFieldStyle(.roundedBorder)
-                    Button { showKey[provider.id] = !shown } label: {
-                        Image(systemName: shown ? "eye.slash" : "eye")
-                    }
-                    .buttonStyle(.borderless)
-                }
+                RevealableAPIKeyField(
+                    placeholder: "API key",
+                    accessibilityName: "\(provider.name) API key",
+                    text: keyBinding(provider.id)
+                )
             }
             HStack {
                 statusText(model.healthStatus(provider.id))
+                Link("Setup guide", destination: AttacheDocumentationLinks.modelIntegration(provider.guide))
+                    .font(.caption)
                 Spacer()
                 Button(provider.hasKey ? "Save & Test" : "Test") { saveAndTest(provider) }
             }
@@ -212,9 +210,41 @@ struct IntegrationsPane: View {
     private func endpointBinding(_ id: String) -> Binding<String> {
         switch id {
         case "ollama": return $model.ollamaBaseURL
-        case "lmstudio": return $model.lmStudioBaseURL
         case "custom": return $model.customBaseURL
         default: return .constant("")
+        }
+    }
+}
+
+/// The standard credential field used everywhere an integration can be
+/// configured. It is masked by default and reveals only after an explicit eye
+/// button press. The reveal state is intentionally ephemeral and never saved.
+struct RevealableAPIKeyField: View {
+    var placeholder: String
+    var accessibilityName: String
+    @Binding var text: String
+    @State private var isRevealed = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Group {
+                if isRevealed {
+                    TextField(placeholder, text: $text)
+                } else {
+                    SecureField(placeholder, text: $text)
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel(accessibilityName)
+
+            Button {
+                isRevealed.toggle()
+            } label: {
+                Image(systemName: isRevealed ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(isRevealed ? "Hide \(accessibilityName)" : "Reveal \(accessibilityName)")
+            .help(isRevealed ? "Hide API key" : "Reveal API key")
         }
     }
 }

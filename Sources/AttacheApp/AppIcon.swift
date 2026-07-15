@@ -1,13 +1,13 @@
 import AppKit
 
-/// Draws the Attaché app icon: Volt, the default companion character
+/// Draws the Attaché app icon: Volt, the default attache character
 /// (INF-286, original in-house artwork), on the vivid macOS-blue tile with
 /// faint broadcast rings and the voice-arc crown. This is a fixed brand
 /// asset, identical to the baked bundle icon
 /// (scripts/generate-app-icon.swift), so the running app's Dock icon matches
-/// Finder regardless of the in-app theme or the user's chosen pet character.
+/// Finder regardless of the in-app theme or the user's chosen character.
 enum AttacheAppIcon {
-    static func image(side: CGFloat = 512, dark: Bool = true, theme: CompanionTheme = .macOS) -> NSImage {
+    static func image(side: CGFloat = 512, dark: Bool = true, theme: AttacheTheme = .macOS) -> NSImage {
         let image = NSImage(size: NSSize(width: side, height: side))
         image.lockFocus()
         draw(side: side)
@@ -15,12 +15,12 @@ enum AttacheAppIcon {
         return image
     }
 
-    static func draw(side: CGFloat, dark: Bool = true, theme: CompanionTheme = .macOS) {
+    static func draw(side: CGFloat, dark: Bool = true, theme: AttacheTheme = .macOS) {
         let s = side / 512
         func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> NSRect {
             NSRect(x: x * s, y: y * s, width: w * s, height: h * s)
         }
-        // Volt uses the pet renderer's 240-unit, y-down design coordinates,
+        // Volt uses the character renderer's 240-unit, y-down design coordinates,
         // scaled up and centered on the 512 tile. `m` flips into AppKit's
         // y-up space.
         let k: CGFloat = 3.2
@@ -33,7 +33,7 @@ enum AttacheAppIcon {
             NSRect(x: (ox + x * k) * s, y: (512 - oy - (y + h) * k) * s, width: w * k * s, height: h * k * s)
         }
 
-        // macOS-blue brand palette, shared with the Bubbles-era tile.
+        // macOS-blue brand palette, shared with the Attache-era tile.
         let tileTop = NSColor(srgbRed: 0.180, green: 0.565, blue: 1.000, alpha: 1)
         let tileMid = NSColor(srgbRed: 0.043, green: 0.420, blue: 0.902, alpha: 1)
         let tileDeep = NSColor(srgbRed: 0.024, green: 0.235, blue: 0.620, alpha: 1)
@@ -57,7 +57,7 @@ enum AttacheAppIcon {
             circle.stroke()
         }
 
-        // Voice arcs crown Volt just like they crowned Bubbles: the brand is
+        // Voice arcs crown Volt just like they crowned Attache: the brand is
         // still "give your agents a voice". AppKit is y-up, so the upward
         // arcs sweep counterclockwise around the shared center.
         let arcSpecs: [(radius: CGFloat, alpha: CGFloat)] = [(24, 1.0), (33, 0.62), (42, 0.34)]

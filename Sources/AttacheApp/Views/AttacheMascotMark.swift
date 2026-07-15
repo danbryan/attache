@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// The Attaché mark (INF-291, rebranded from the retired "Bubbles" mascot):
-/// Attaché the robot broadcasting under its voice arcs. Drawn from the same
-/// 240-unit robot geometry as the pet's head and the app icon, so the in-app
+/// The Attaché mark: the robot broadcasting under its voice arcs. Drawn from the same
+/// 240-unit robot geometry as the character's head and the app icon, so the in-app
 /// mark, the Dock icon, and the promo video never drift.
 ///
 /// `monochrome` renders a solid robot silhouette (no screen detail) for
@@ -14,16 +13,15 @@ struct AttacheMascotMark: View {
     var glow: Color = .clear
     var glowStrength: Double = 0
 
-    // Shared with BubblesPetFigure so the animated pet and the static mark
-    // can never drift apart on brand colors. `bubbleColors` are the fleet
-    // agent hues (Claude rust, Codex blue, other green), kept under this
-    // name for the mote renderer.
+    // Shared with AttacheCharacterFigure so the animated character and the static mark
+    // can never drift apart on brand colors. `agentColors` are the fleet
+    // hues: Claude rust, Codex blue, and other green.
     static let headColor = Color(red: 1, green: 246 / 255, blue: 228 / 255)
     static let faceColor = Color(red: 16 / 255, green: 36 / 255, blue: 62 / 255)
     static let cheekColor = Color(red: 1, green: 157 / 255, blue: 161 / 255)
     static let steelColor = Color(red: 199 / 255, green: 208 / 255, blue: 220 / 255)
     static let ledColor = Color(red: 102 / 255, green: 227 / 255, blue: 1)
-    static let bubbleColors: [Color] = [
+    static let agentColors: [Color] = [
         Color(red: 217 / 255, green: 119 / 255, blue: 87 / 255),
         Color(red: 10 / 255, green: 132 / 255, blue: 1),
         Color(red: 16 / 255, green: 163 / 255, blue: 127 / 255),

@@ -4,22 +4,23 @@ import AppKit
 // registry is cached per process, so a helper spawn is the only way to see
 // voices downloaded after launch).
 if CommandLine.arguments.contains("--print-voices") {
-    for option in CompanionVoiceCatalog.options() {
+    for option in AttacheVoiceCatalog.options() {
         print("\(option.id)\t\(option.name)\t\(option.gender)\t\(option.localeIdentifier)")
     }
     exit(0)
 }
 
-// Design renders for the pet pose catalog (INF-269): exports the spec poses
+// Design renders for the character pose catalog (INF-269): exports the spec poses
 // as PNGs and proves the neutral pose still matches the locked mark, then
 // exits without starting the app.
-if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-poses") {
+let characterPoseFlags = ["--render-character-poses", "--render-poses"]
+if let flagIndex = CommandLine.arguments.firstIndex(where: characterPoseFlags.contains) {
     let outputPath = CommandLine.arguments.indices.contains(flagIndex + 1)
         ? CommandLine.arguments[flagIndex + 1]
-        : "design/pet"
+        : "design/character"
     Task { @MainActor in
         do {
-            try PetPoseRenderer.renderAll(to: URL(fileURLWithPath: outputPath))
+            try CharacterPoseRenderer.renderAll(to: URL(fileURLWithPath: outputPath))
             exit(0)
         } catch {
             fputs("pose render failed: \(error)\n", stderr)
@@ -37,7 +38,7 @@ if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-brand-poses") 
         : "design/poses"
     Task { @MainActor in
         do {
-            try PetPoseRenderer.renderBrand(to: URL(fileURLWithPath: outputPath))
+            try CharacterPoseRenderer.renderBrand(to: URL(fileURLWithPath: outputPath))
             exit(0)
         } catch {
             fputs("brand pose render failed: \(error)\n", stderr)

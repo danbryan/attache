@@ -262,21 +262,21 @@ defaults write "$BUNDLE_ID" attache.presentationLLMEnabled -bool true
 defaults write "$BUNDLE_ID" attache.voicemailMode -bool true
 defaults write "$BUNDLE_ID" attache.showActivityInsights -bool false
 defaults write "$BUNDLE_ID" attache.showTips -bool false
-# The auto-fallback chain itself (INF-258/D5): on, naming lmStudio as the one
-# fallback entry. Both ollama (primary) and lmStudio (fallback) are always
-# "configured" with no API key and never trip cloud consent (their endpoints
-# are loopback), so this scenario needs no Integrations key and no
-# consent-sheet setup, unlike a cloud provider chain would.
+# The auto-fallback chain itself (INF-258/D5): a loopback Custom provider is
+# the failing primary and Ollama is the succeeding fallback. The Custom key is
+# a disposable environment value used only by the mock, and both endpoints are
+# loopback so neither path opens a cloud-consent sheet.
 defaults write "$BUNDLE_ID" attache.conversationFallbackChainEnabled -bool true
-defaults write "$BUNDLE_ID" attache.conversationFallbackChainProviders -array "lmStudio"
-defaults write "$BUNDLE_ID" attache.lmStudioBaseURL -string "http://127.0.0.1:${FALLBACK_PORT}/v1"
+defaults write "$BUNDLE_ID" attache.conversationFallbackChainProviders -array "ollama"
+defaults write "$BUNDLE_ID" attache.ollamaBaseURL -string "http://127.0.0.1:${FALLBACK_PORT}/v1"
 
 echo "==> Running Attaché conversation auto-fallback UI smoke"
 SMOKE_ONLY=f22 \
 SMOKE_KEEP_STATE=1 \
 ATTACHE_DISABLE_TOPIC_TAGGING=1 \
-ATTACHE_LLM_PROVIDER=ollama \
+ATTACHE_LLM_PROVIDER=custom \
 ATTACHE_LLM_BASE_URL="http://127.0.0.1:${FALLBACK_PRIMARY_PORT}/v1" \
+ATTACHE_LLM_API_KEY="attache-local-smoke-key" \
 ATTACHE_CONVERSATION_FALLBACK_PROMPT="ATTACHE_CONVERSATION_FALLBACK $FALLBACK_NONCE" \
 ATTACHE_CONVERSATION_FALLBACK_PRIMARY_LOG="$FALLBACK_PRIMARY_LOG" \
 ATTACHE_CONVERSATION_FALLBACK_FALLBACK_LOG="$FALLBACK_LOG" \

@@ -21,7 +21,8 @@ machine.
 Personalities are single prompts that define how Attaché narrates: tone,
 attitude, level of detail, language. Community personalities live in
 [`examples/personalities/`](examples/personalities/) and ship with the repo;
-users paste them into **Settings → Personalities → New**.
+users paste them into the prompt field in **Settings → Personalities → Create
+character**.
 
 To add one:
 
@@ -31,8 +32,9 @@ To add one:
 2. Keep it under 2,000 characters. It shapes style only; Attaché injects the
    functional scaffolding (output format, what to include) around it, so don't
    restate that.
-3. Test it in the app: Settings → Personalities → New, paste, play a card.
-   A good personality survives ten updates in a row without getting annoying.
+3. Test it in the app: Settings → Personalities → Create character, paste the
+   prompt, preview the greeting, and play a card. A good personality survives
+   ten updates in a row without getting annoying.
 4. Open a PR with the file and one sentence on when someone would want it.
 
 What makes a good one: a clear voice you can hear ("late-night radio
@@ -43,6 +45,19 @@ actual update will be declined.
 
 `swift test` validates every file in the gallery (exists, non-empty, length
 cap), so a failing PR check means the file needs trimming.
+
+### Share a complete character
+
+The app's Import and Export buttons use JSON character files. A complete file
+includes the prompt, visual presence, voice engine and voice, playback pace,
+model provider and model ID, reasoning effort, and ordered fallback providers.
+Credentials are never exported. Import always assigns a fresh ID, so it cannot
+overwrite an existing character.
+
+Use Export on a character you have already tested as the template. Keep provider
+and model identifiers portable, and choose only a reasoning level the selected
+provider/model advertises. Older exports without voice or model fields remain
+importable; Attaché fills those fields from the current configuration once.
 
 ## Contribute a theme
 

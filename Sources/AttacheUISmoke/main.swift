@@ -51,6 +51,16 @@ func settingsWindow() throws -> AXElement {
     return window
 }
 
+func personalityStudioWindow() throws -> AXElement {
+    guard let window = app.appWindows.first(where: {
+        $0.title == "Create Character" || $0.title == "Edit Character"
+    }) else {
+        let titles = app.appWindows.map { "\"\($0.title)\"" }.joined(separator: ", ")
+        throw SmokeError(message: "no character studio window found; open windows: [\(titles)]")
+    }
+    return window
+}
+
 func runShell(_ script: String) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -177,27 +187,6 @@ func selectSettingsSection(_ title: String, paneMarker: String) throws {
         _ = row.press()
     }
     _ = try waitForElement("\(title) pane content", in: try settingsWindow(), containing: paneMarker)
-}
-
-/// Opens the Model pane and expands the "Advanced: per-task models" disclosure
-/// if it is collapsed (INF-253/D3). The disclosure's expanded state is
-/// view-local, so navigating to another settings section and back collapses
-/// it again; call this every time the row controls are needed. Returns the
-/// Recap row's provider picker once expansion is confirmed.
-@discardableResult
-func expandAdvancedPerRoleModels() throws -> AXElement {
-    try selectSettingsSection("Model", paneMarker: "Provider")
-    let window = try settingsWindow()
-    if let recapProvider = window.firstDescendant(role: kAXPopUpButtonRole as String, containing: "Recap provider") {
-        return recapProvider
-    }
-    let disclosure = try waitForElement("Advanced per-task models disclosure", in: try settingsWindow(),
-                                        containing: "Advanced: per-task models")
-    guard disclosure.press() else {
-        throw SmokeError(message: "AXPress failed on \(disclosure.summary); actions: \(disclosure.actionNames)")
-    }
-    return try waitForElement("Recap provider picker", in: try settingsWindow(),
-                              role: kAXPopUpButtonRole as String, containing: "Recap provider", timeout: 8)
 }
 
 /// Opens a popup button and picks the menu item with the given title. The menu
@@ -428,7 +417,7 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
 
             case "playing":
                 // Like "play" but leaves the narration running through the
-                // hold, so a recording captures live playback (the pet
+                // hold, so a recording captures live playback (the character
                 // renderer's lip-sync evidence, INF-270).
                 _ = try runShell("scripts/send-event.sh")
                 let button = try waitForElement("voicemail dock button", in: try mainWindow(),
@@ -473,17 +462,17 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
 
             case "type-along":
                 // Delight reel support (INF-273): type like a user so the
-                // pet's types-along taps are on screen while a recording
+                // character's types-along taps are on screen while a recording
                 // runs, then leave the hold open for the rare-idle window.
                 Thread.sleep(forTimeInterval: 6)
-                app.type("pair programming with bubbles ")
+                app.type("pair programming with attache ")
                 Thread.sleep(forTimeInterval: 3)
-                app.type("the pet types along while the agents rest ")
+                app.type("the character types along while the agents rest ")
 
             case "play-selected-when-ready":
                 // Choreography demo support (INF-271): the first card of a
                 // fresh profile selects itself on arrival, so pressing Space
-                // starts its narration with no overlay covering the pet.
+                // starts its narration with no overlay covering the character.
                 // Space is a no-op until a card exists, making this safe to
                 // poll while a real agent turn is still composing.
                 try waitUntil("selected card starts speaking", timeout: 240, interval: 4) {
@@ -525,7 +514,7 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 try waitForConversationStatus(containingAll: ["Speaking"], timeout: 30)
                 // Best-effort freeze: a conversation reply plays through the
                 // same live preview transport the off-call "play" case above
-                // pauses (livePreviewTransportBar in CompanionRootView.swift),
+                // pauses (livePreviewTransportBar in AttacheRootView.swift),
                 // reachable on-call because this is a preview, not a saved
                 // card. If it is not found quickly, fall through and hold
                 // whatever is on screen instead of failing the whole pose.
@@ -685,6 +674,19 @@ if enabled("f2") {
     run.step("f2-event", "unread badge shows the new card") {
         _ = try waitForElement("unread badge", in: try mainWindow(),
                                role: kAXButtonRole as String, containing: "unread")
+    }
+    run.step("f2-event", "off-call event stays silent until explicit play") {
+        // Give any incorrect automatic playback enough time to surface. An
+        // off-call event must remain an unread voicemail with no speaking or
+        // pause transport until the next step presses its Play action.
+        Thread.sleep(forTimeInterval: 0.8)
+        let window = try mainWindow()
+        guard window.firstDescendant(containing: "Assistant speaking") == nil else {
+            throw SmokeError(message: "off-call voicemail started speaking without an explicit play action")
+        }
+        guard window.firstDescendant(role: kAXButtonRole as String, containing: "Pause") == nil else {
+            throw SmokeError(message: "off-call voicemail exposed active playback before Play was pressed")
+        }
     }
     var overlayOpened = false
     run.step("f2-event", "AXPress opens the voicemail overlay") {
@@ -1749,20 +1751,42 @@ if enabled("f10") {
         _ = try waitForElement("first-run welcome", in: try mainWindow(), containing: "Welcome to Attaché", timeout: 15)
     }
 
+    run.step("f10-no-key-first-run", "onboarding API keys can be revealed only on demand") {
+        let getStarted = try waitForElement(
+            "Get started button",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Get started"
+        )
+        guard getStarted.press() else { throw SmokeError(message: "AXPress failed on \(getStarted.summary)") }
+
+        for expectedTitle in ["Connect your agents", "Pick a voice"] {
+            _ = try waitForElement("onboarding step \(expectedTitle)", in: try mainWindow(), containing: expectedTitle)
+            let next = try waitForElement("Continue button", in: try mainWindow(), role: kAXButtonRole as String, exactly: "Continue")
+            guard next.press() else { throw SmokeError(message: "AXPress failed on \(next.summary)") }
+        }
+
+        _ = try waitForElement("model integration step", in: try mainWindow(), containing: "Connect a model")
+        let xai = try waitForElement("xAI provider card", in: try mainWindow(), role: kAXButtonRole as String, containing: "xAI")
+        guard xai.press() else { throw SmokeError(message: "AXPress failed on \(xai.summary)") }
+        let reveal = try waitForElement("reveal xAI API key", in: try mainWindow(), role: kAXButtonRole as String, exactly: "Reveal xAI API key")
+        guard reveal.press() else { throw SmokeError(message: "AXPress failed on \(reveal.summary)") }
+        _ = try waitForElement("hide xAI API key", in: try mainWindow(), role: kAXButtonRole as String, exactly: "Hide xAI API key")
+    }
+
     run.step("f10-no-key-first-run", "skip path reaches the idle dock") {
-        try dismissOnboardingIfPresent()
+        let skip = try waitForElement("skip button", in: try mainWindow(), role: kAXButtonRole as String, containing: "Skip for now")
+        guard skip.press() else { throw SmokeError(message: "AXPress failed on \(skip.summary)") }
         _ = try waitForElement("voicemail dock button", in: try mainWindow(),
                                role: kAXButtonRole as String, containing: "Open inbox")
     }
 
-    run.step("f10-no-key-first-run", "default personality model is local Ollama with no paid key") {
+    run.step("f10-no-key-first-run", "default character owns a local Ollama model with no paid key") {
         app.activate()
         app.key(Key.comma, command: true)
         try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
-        try selectSettingsSection("Model", paneMarker: "Provider")
-        _ = try waitForElement("Ollama provider", in: try settingsWindow(), containing: "Ollama", timeout: 8)
-        _ = try waitForElement("local data residency caption", in: try settingsWindow(),
-                               containing: "Local provider: nothing leaves this Mac", timeout: 8)
+        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        _ = try waitForElement("active Attaché character", in: try settingsWindow(), containing: "Attaché", timeout: 8)
         _ = try waitForElement("default local model id", in: try settingsWindow(), containing: "qwen3:7b", timeout: 8)
     }
 
@@ -1986,26 +2010,26 @@ if enabled("f6") {
     }
 }
 
-// MARK: Flow 10: mini companion window (INF-272)
+// MARK: Flow 10: mini attache window (INF-272)
 
 if enabled("mini") {
-    run.step("mini-window", "mini companion toggle opens the floating window") {
+    run.step("mini-window", "mini attache toggle opens the floating window") {
         app.activate()
         app.key(Key.comma, command: true)
         try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
-        let toggle = try waitForElement("mini companion toggle", in: try settingsWindow(),
-                                        role: kAXCheckBoxRole as String, containing: "Mini companion")
+        let toggle = try waitForElement("mini attache toggle", in: try settingsWindow(),
+                                        role: kAXCheckBoxRole as String, containing: "Mini window")
         guard toggle.press() else { throw SmokeError(message: "AXPress failed on \(toggle.summary)") }
-        try waitUntil("mini companion window to appear", timeout: 10) {
-            app.axApp.windows.contains { $0.title.contains("Mini Companion") }
+        try waitUntil("mini attache window to appear", timeout: 10) {
+            app.axApp.windows.contains { $0.title.contains("Attaché Mini Window") }
         }
     }
-    run.step("mini-window", "mini companion toggle closes it again") {
-        let toggle = try waitForElement("mini companion toggle", in: try settingsWindow(),
-                                        role: kAXCheckBoxRole as String, containing: "Mini companion")
+    run.step("mini-window", "mini attache toggle closes it again") {
+        let toggle = try waitForElement("mini attache toggle", in: try settingsWindow(),
+                                        role: kAXCheckBoxRole as String, containing: "Mini window")
         guard toggle.press() else { throw SmokeError(message: "AXPress failed on \(toggle.summary)") }
-        try waitUntil("mini companion window to close", timeout: 10) {
-            !app.axApp.windows.contains { $0.title.contains("Mini Companion") }
+        try waitUntil("mini attache window to close", timeout: 10) {
+            !app.axApp.windows.contains { $0.title.contains("Attaché Mini Window") }
         }
         app.key(Key.escape)
         try waitUntil("settings window closes", timeout: 10) { (try? settingsWindow()) == nil }
@@ -2074,66 +2098,7 @@ if enabled("f5") {
         }
         chosenTextScale = slider.doubleValue ?? chosenTextScale
     }
-    run.step("f5-settings", "recap model override switches to LM Studio") {
-        let recapProvider = try expandAdvancedPerRoleModels()
-        guard recapProvider.stringValue.contains("Use main model") else {
-            throw SmokeError(message: "expected recap provider to start on \"Use main model\", found \"\(recapProvider.stringValue)\"")
-        }
-        try selectPopup(recapProvider, item: "LM Studio")
-        try waitUntil("recap provider to read LM Studio", timeout: 5) {
-            recapProvider.stringValue.contains("LM Studio")
-        }
-        // A per-role override reveals that role's own Model row once a real
-        // provider (not "Use main model") is chosen (INF-253/D3).
-        _ = try waitForElement("Recap model control", in: try settingsWindow(), containing: "Recap model")
-    }
-    run.step("f5-settings", "an un-keyed provider on a role shows the existing key-required state without crashing") {
-        // Conversation is the first Advanced row, so its on-screen position
-        // never shifts regardless of whether a later row (recap, just set to
-        // LM Studio above) has grown taller with its own Model/Reasoning/Speed
-        // controls. Groq requires an API key and is not configured in this
-        // profile; picking it for conversation must show the same
-        // key-required notice the main picker already uses, not crash
-        // (INF-253/D3 spec item 5).
-        _ = try expandAdvancedPerRoleModels()
-        let conversationProvider = try waitForElement("Conversation provider picker", in: try settingsWindow(),
-                                                       role: kAXPopUpButtonRole as String, containing: "Conversation provider")
-        // selectPopup's menu-item wait is a fixed 5s; under shared-machine
-        // load the popup's menu can occasionally take longer to attach, so
-        // retry once rather than fail the whole step on a single slow open.
-        do {
-            try selectPopup(conversationProvider, item: "Groq")
-        } catch {
-            try selectPopup(conversationProvider, item: "Groq")
-        }
-        // Groq also sends data to the cloud, so unless this profile already
-        // consented, the shared CloudConsentSheet (same one the main picker
-        // uses) appears before the selection applies; enable it to reach the
-        // un-keyed state this step is actually testing.
-        if let enable = (try? waitForElement("cloud consent Enable button", in: try settingsWindow(),
-                                             role: kAXButtonRole as String, exactly: "Enable", timeout: 3)) {
-            guard enable.press() else {
-                throw SmokeError(message: "AXPress failed on cloud consent Enable button: \(enable.summary)")
-            }
-        }
-        try waitUntil("conversation provider to read Groq", timeout: 5) {
-            conversationProvider.stringValue.contains("Groq")
-        }
-        _ = try waitForElement("Groq key-required notice", in: try settingsWindow(), containing: "needs an", timeout: 5)
-        // Rendered as a link-style button (`.buttonStyle(.link)`), so it's an
-        // AXLink, not an AXButton; match on text only.
-        _ = try waitForElement("key-required Integrations link", in: try settingsWindow(),
-                               exactly: "API key", timeout: 5)
-        guard (try? settingsWindow()) != nil else {
-            throw SmokeError(message: "settings window disappeared after selecting an un-keyed provider")
-        }
-        // Clean up so this role doesn't leave stray state for the rest of the suite.
-        try selectPopup(conversationProvider, item: "Use main model")
-        try waitUntil("conversation provider to read Use main model again", timeout: 5) {
-            conversationProvider.stringValue.contains("Use main model")
-        }
-    }
-    run.step("f5-settings", "theme, engine, and recap model override persist across relaunch") {
+    run.step("f5-settings", "theme, engine, and text size persist across relaunch") {
         app.terminateAndWait()
         try app.launch()
         app.activate()
@@ -2158,49 +2123,6 @@ if enabled("f5") {
         try waitUntil("persisted text size to match \(chosenTextScale)", timeout: 5) {
             abs((slider.doubleValue ?? 0) - chosenTextScale) < 0.03
         }
-        let recapProvider = try expandAdvancedPerRoleModels()
-        try waitUntil("persisted recap provider to read LM Studio", timeout: 5) {
-            recapProvider.stringValue.contains("LM Studio")
-        }
-        let defaultsOutput = try runShell("defaults read com.bryanlabs.attache attache.presentationLLM.recap.provider")
-        guard defaultsOutput.contains("lmStudio") else {
-            throw SmokeError(message: "expected persisted recap provider default to be lmStudio, found: \(defaultsOutput)")
-        }
-    }
-    run.step("f5-settings", "recap model override resets to Use main model and clears the per-role key") {
-        let recapProvider = try expandAdvancedPerRoleModels()
-        try selectPopup(recapProvider, item: "Use main model")
-        try waitUntil("recap provider to read Use main model", timeout: 5) {
-            recapProvider.stringValue.contains("Use main model")
-        }
-        // The role's Model row only shows while an override is set; resetting
-        // to "Use main model" must hide it again, not leave it dangling.
-        try waitForElementGone("Recap model control", in: try settingsWindow(), containing: "Recap model", timeout: 5)
-        _ = try runShell("""
-            for field in provider model reasoningEffort serviceTier; do
-              if defaults read com.bryanlabs.attache "attache.presentationLLM.recap.$field" >/dev/null 2>&1; then
-                echo "recap.$field key still present after reset" >&2
-                exit 1
-              fi
-            done
-            """)
-        // Fallback restored, not just a coincidentally-matching leftover: with
-        // every recap.* key gone, `CompanionPresentationSettings.load(role:
-        // .recap, ...)` re-resolves purely from the main/global keys (see
-        // PerRoleModelPaneTests.testResettingToUseMainModelClearsEveryRoleKeyAndRestoresFallback,
-        // which changes the global provider *between* setting and clearing
-        // the override to rule out a stale coincidental match). Here in the
-        // UI we confirm the main row itself still reads normally, i.e.
-        // clearing recap's override left the main model control unaffected.
-        let mainProvider = try waitForElement("Main model provider picker", in: try settingsWindow(),
-                                              role: kAXPopUpButtonRole as String, containing: "Main model provider")
-        guard !mainProvider.stringValue.isEmpty else {
-            throw SmokeError(message: "could not read the main provider value after clearing recap's override")
-        }
-        // The next step assumes it's still looking at Appearance's Text size
-        // slider (that's where the pre-existing relaunch step left it); hand
-        // settings back on that section since this step navigated to Model.
-        try selectSettingsSection("Appearance", paneMarker: "Text size")
     }
     run.step("f5-settings", "theme, engine, and text size return to what the user had") {
         let slider = try waitForElement("Text size slider", in: try settingsWindow(),
@@ -2452,7 +2374,7 @@ if enabled("f20") {
     // recovery message is surfaced in the app's status area on launch, not
     // just the audit row (TwoWayCoordinator.startupRecoveryMessage ->
     // AppModel.intakeStatus, rendered in the selected card's status line in
-    // the full voicemail surface, `CompanionRootView.cardControlPanel`).
+    // the full voicemail surface, `AttacheRootView.cardControlPanel`).
     // That surface is distinct from the Command-K-style "Open inbox" search
     // palette (`InboxOverlay`) the dock button / Cmd+I opens: reaching
     // `cardControlPanel` requires the palette's own "follow up" action
@@ -2681,6 +2603,112 @@ if enabled("f22") {
         guard fallbackText.contains("\"last_user\": \"\(prompt)\"") else {
             throw SmokeError(message: "fallback request did not carry the original prompt. Log:\n\(fallbackText)")
         }
+    }
+}
+
+// MARK: Personality creator studio. This stays in the default local suite: it
+// uses only built-in prompts, the on-device voice, and a disposable profile.
+
+if enabled("personality") {
+    run.step("personality-studio", "the personality wardrobe opens from Settings") {
+        try dismissOnboardingIfPresent()
+        app.activate()
+        app.key(Key.comma, command: true)
+        try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        _ = try waitForElement("active personality wardrobe", in: try settingsWindow(), containing: "Your wardrobe")
+    }
+
+    run.step("personality-studio", "the creator exposes explicit presence, personality, voice, and model choices") {
+        let create = try waitForElement(
+            "Create character button",
+            in: try settingsWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Create character"
+        )
+        guard create.press() else { throw SmokeError(message: "AXPress failed on \(create.summary)") }
+        try waitUntil("character studio window", timeout: 10) { (try? personalityStudioWindow()) != nil }
+        let studio = try personalityStudioWindow()
+        _ = try waitForElement("creator title", in: studio, containing: "Create a character")
+        _ = try waitForElement("explicit configuration promise", in: studio, containing: "Every character owns its personality, voice, and model")
+        _ = try waitForElement("wardrobe choice", in: studio, containing: "Choose Echo presence")
+        _ = try waitForElement("personality prompt", in: studio, containing: "Personality instructions")
+        _ = try waitForElement("personality starting point", in: studio, containing: "Starting point")
+        _ = try waitForElement("new personality affordance", in: studio, containing: "Write a new personality")
+        _ = try waitForElement("voice choice", in: studio, containing: "Character voice engine")
+        _ = try waitForElement("model choice", in: studio, containing: "Character model provider")
+        _ = try waitForElement("sprite help", in: studio, containing: "Learn about custom sprites")
+        try waitForElementGone("legacy follow app voice", in: studio, containing: "Follow the app voice", timeout: 1)
+        try waitForElementGone("legacy follow app model", in: studio, containing: "Follow the app's main model", timeout: 1)
+
+        guard let before = studio.frame else { throw SmokeError(message: "character studio has no AX frame") }
+        let requested = CGPoint(x: before.minX + 24, y: before.minY + 18)
+        guard studio.setPosition(requested) else { throw SmokeError(message: "character studio rejected an AX window move") }
+        try waitUntil("character studio to move", timeout: 5) {
+            guard let after = (try? personalityStudioWindow())?.frame else { return false }
+            return abs(after.minX - before.minX) > 5 || abs(after.minY - before.minY) > 5
+        }
+    }
+
+    run.step("personality-studio", "a fourth custom Echo personality can be authored") {
+        let bars = try waitForElement(
+            "Echo presence",
+            in: try personalityStudioWindow(),
+            role: kAXButtonRole as String,
+            containing: "Choose Echo presence"
+        )
+        guard bars.press() else { throw SmokeError(message: "AXPress failed on \(bars.summary)") }
+
+        let newPersonality = try waitForElement(
+            "write new personality",
+            in: try personalityStudioWindow(),
+            role: kAXButtonRole as String,
+            containing: "Write a new personality"
+        )
+        guard newPersonality.press() else { throw SmokeError(message: "AXPress failed on \(newPersonality.summary)") }
+
+        let name = try waitForElement(
+            "character name",
+            in: try personalityStudioWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Character name"
+        )
+        _ = name.setFocused()
+        if !name.setValue("Smoke Character") { app.type("Smoke Character") }
+
+        let prompt = try waitForElement(
+            "personality instructions",
+            in: try personalityStudioWindow(),
+            containing: "Personality instructions"
+        )
+        _ = prompt.setFocused()
+        let customPrompt = "Speak like a calm navigator. Lead with the outcome and keep every update to two sentences."
+        if !prompt.setValue(customPrompt) { app.type(customPrompt) }
+
+        let save = try waitForElement(
+            "creator save button",
+            in: try personalityStudioWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Create character"
+        )
+        guard save.press() else { throw SmokeError(message: "AXPress failed on \(save.summary)") }
+        try waitUntil("character studio closes after save", timeout: 10) { (try? personalityStudioWindow()) == nil }
+        _ = try waitForElement("created character", in: try settingsWindow(), containing: "Smoke Character")
+        _ = try waitForElement("created Echo presence", in: try settingsWindow(), containing: "Echo voice bars")
+    }
+
+    run.step("personality-studio", "a complete personality JSON imports through the app workflow") {
+        let importButton = try waitForElement(
+            "Import personality button",
+            in: try settingsWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Import"
+        )
+        guard importButton.press() else { throw SmokeError(message: "AXPress failed on \(importButton.summary)") }
+        _ = try waitForElement("imported personality", in: try settingsWindow(), containing: "Imported Navigator")
+        _ = try waitForElement("imported personality model", in: try settingsWindow(), containing: "qwen3:7b")
+        app.key(Key.escape)
+        try waitUntil("settings window closes", timeout: 10) { (try? settingsWindow()) == nil }
     }
 }
 

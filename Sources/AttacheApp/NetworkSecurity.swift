@@ -4,13 +4,13 @@ enum NetworkSecurity {
     /// Only attach a Bearer credential when the destination is https or loopback,
     /// so a misconfigured base URL can't leak an API key in cleartext to a
     /// third-party or attacker-controlled host. Local model servers (Ollama,
-    /// LM Studio) run over http on loopback and carry no key, so they're allowed.
+    /// Ollama runs over http on loopback and carries no key, so it is allowed.
     static func allowsBearer(_ url: URL) -> Bool {
         if url.scheme?.lowercased() == "https" { return true }
         return isLoopbackHost(url.host)
     }
 
-    /// True for the loopback hosts local model servers (Ollama, LM Studio) run on,
+    /// True for the loopback hosts local model servers such as Ollama,
     /// so they're never treated as "data leaves this Mac".
     static func isLoopbackHost(_ host: String?) -> Bool {
         switch host?.lowercased() {

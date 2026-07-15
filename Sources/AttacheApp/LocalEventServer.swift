@@ -87,7 +87,7 @@ final class LocalEventServer {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
 
-        let url = CompanionAppSupport.eventTokenURL(fileManager: fileManager)
+        let url = AttacheAppSupport.eventTokenURL(fileManager: fileManager)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(token.utf8).write(to: url, options: .atomic)
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -142,7 +142,7 @@ final class LocalEventServer {
                 if errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR {
                     return
                 }
-                NSLog("\(CompanionAppSupport.appDisplayName) event listener accept failed: \(Self.posixError().localizedDescription)")
+                NSLog("\(AttacheAppSupport.appDisplayName) event listener accept failed: \(Self.posixError().localizedDescription)")
                 return
             }
 

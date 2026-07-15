@@ -18,9 +18,9 @@ struct AgentActivityPhrase: Identifiable, Equatable {
     /// agent-aware renderers.
     var agentKind: SourceKind = .codex
 
-    /// The companion-contract flavor of this phrase (edit, read, shell, web).
-    var toolKind: CompanionToolKind {
-        CompanionToolKind.classify(phrase: text, sourceHint: source.rawValue)
+    /// The attache-contract flavor of this phrase (edit, read, shell, web).
+    var toolKind: AttacheToolKind {
+        AttacheToolKind.classify(phrase: text, sourceHint: source.rawValue)
     }
 }
 

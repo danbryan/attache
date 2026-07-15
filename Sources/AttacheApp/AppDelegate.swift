@@ -16,14 +16,16 @@ extension Notification.Name {
     static let attachePlayCard = Notification.Name("attache.playCard")
     static let attacheFocusSession = Notification.Name("attache.focusSession")
     static let attacheOpenSettingsSection = Notification.Name("attache.openSettingsSection")
+    static let attacheOpenPersonalityStudio = Notification.Name("attache.openPersonalityStudio")
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = AppModel()
     private var statusItem: NSStatusItem?
-    private var windowController: CompanionWindowController?
-    private var miniWindowController: MiniCompanionWindowController?
+    private var windowController: AttacheWindowController?
+    private var miniWindowController: MiniAttacheWindowController?
     private var settingsWindowController: SettingsWindowController?
+    private var personalityStudioWindowController: PersonalityStudioWindowController?
     private var cancellables: Set<AnyCancellable> = []
     // Sparkle keeps the app current without pestering: a quiet background check
     // and one prompt only when an update is actually available. Feed URL and the
@@ -39,9 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         #if DEBUG
-        CompanionTheme.auditContrastFloor()
+        AttacheTheme.auditContrastFloor()
         #endif
-        CompanionNotifier.shared.configure()
+        AttacheNotifier.shared.configure()
         updateAppIcon()
         setupMainMenu()
         if model.showInMenuBar { setupStatusItem() }
@@ -50,21 +52,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateDockBadge()
         requestNotificationPermissionIfUseful()
         model.startEventServer()
-        windowController?.showCompanion()
+        windowController?.showAttache()
         NotificationCenter.default.addObserver(forName: .attacheOpenSettings, object: nil, queue: .main) { [weak self] _ in
             self?.showSettings()
         }
+        NotificationCenter.default.addObserver(forName: .attacheOpenPersonalityStudio, object: nil, queue: .main) { [weak self] note in
+            guard let request = note.object as? PersonalityStudioRequest else { return }
+            self?.showPersonalityStudio(request)
+        }
         NotificationCenter.default.addObserver(forName: .attacheShowOnboarding, object: nil, queue: .main) { [weak self] _ in
-            self?.windowController?.showCompanion()
+            self?.windowController?.showAttache()
             self?.model.startOnboarding()
         }
         NotificationCenter.default.addObserver(forName: .attacheShowMainWindow, object: nil, queue: .main) { [weak self] _ in
-            self?.windowController?.showCompanion()
+            self?.windowController?.showAttache()
         }
-        model.$miniCompanionEnabled
+        model.$miniAttacheEnabled
             .receive(on: RunLoop.main)
             .sink { [weak self] enabled in
-                self?.applyMiniCompanion(enabled)
+                self?.applyMiniAttache(enabled)
             }
             .store(in: &cancellables)
         DistributedNotificationCenter.default.addObserver(
@@ -99,27 +105,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        windowController?.showCompanion()
+        windowController?.showAttache()
         return true
     }
 
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
-        item.button?.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: CompanionAppSupport.appDisplayName)
+        item.button?.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: AttacheAppSupport.appDisplayName)
         item.button?.imagePosition = .imageLeading
         updateStatusTitle()
         rebuildMenu()
     }
 
     private func setupWindow() {
-        windowController = CompanionWindowController(model: model)
+        windowController = AttacheWindowController(model: model)
     }
 
-    private func applyMiniCompanion(_ enabled: Bool) {
+    private func applyMiniAttache(_ enabled: Bool) {
         if enabled {
             if miniWindowController == nil {
-                miniWindowController = MiniCompanionWindowController(model: model)
+                miniWindowController = MiniAttacheWindowController(model: model)
             }
             miniWindowController?.show()
         } else {
@@ -128,12 +134,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
-    @objc private func toggleMiniCompanion() {
-        model.miniCompanionEnabled.toggle()
+    @objc private func toggleMiniAttache() {
+        model.miniAttacheEnabled.toggle()
     }
 
     @objc private func toggleMiniClickThrough() {
-        model.miniCompanionClickThrough.toggle()
+        model.miniAttacheClickThrough.toggle()
     }
 
     private func setupMainMenu() {
@@ -175,7 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         nextPersonalityItem.target = self
         appMenu.addItem(nextPersonalityItem)
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "Quit \(CompanionAppSupport.appDisplayName)", action: #selector(quit), keyEquivalent: "q"))
+        appMenu.addItem(NSMenuItem(title: "Quit \(AttacheAppSupport.appDisplayName)", action: #selector(quit), keyEquivalent: "q"))
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
@@ -208,7 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func requestNotificationPermissionIfUseful() {
         guard model.unreadCount > 0 || model.voicemailMode else { return }
-        CompanionNotifier.shared.requestAuthorizationIfUndetermined { [weak self] _ in
+        AttacheNotifier.shared.requestAuthorizationIfUndetermined { [weak self] _ in
             DispatchQueue.main.async {
                 self?.updateDockBadge()
             }
@@ -255,7 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        model.$miniCompanionClickThrough
+        model.$miniAttacheClickThrough
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.rebuildMenu()
@@ -290,11 +296,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The most urgent state wins the icon: an agent waiting on the user
         // shows the alert, otherwise the monochrome Attaché mark.
         if model.anyWatchedSessionNeedsUser {
-            statusItem?.button?.image = NSImage(systemSymbolName: "exclamationmark.bubble.fill", accessibilityDescription: CompanionAppSupport.appDisplayName)
+            statusItem?.button?.image = NSImage(systemSymbolName: "exclamationmark.bubble.fill", accessibilityDescription: AttacheAppSupport.appDisplayName)
         } else if let brand = brandTemplateImage() {
             statusItem?.button?.image = brand
         } else {
-            statusItem?.button?.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: CompanionAppSupport.appDisplayName)
+            statusItem?.button?.image = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: AttacheAppSupport.appDisplayName)
         }
     }
 
@@ -320,21 +326,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard unread > 0 else {
             NSApp.dockTile.contentView = nil
             NSApp.dockTile.badgeLabel = nil
-            CompanionNotifier.shared.setApplicationBadgeCount(0)
+            AttacheNotifier.shared.setApplicationBadgeCount(0)
             return
         }
 
         NSApp.dockTile.contentView = nil
         NSApp.dockTile.badgeLabel = nil
-        CompanionNotifier.shared.setApplicationBadgeCount(unread)
+        AttacheNotifier.shared.setApplicationBadgeCount(unread)
 
-        CompanionNotifier.shared.canUseNativeApplicationBadge { [weak self] canUseNativeBadge in
+        AttacheNotifier.shared.canUseNativeApplicationBadge { [weak self] canUseNativeBadge in
             DispatchQueue.main.async {
                 guard let self, self.model.unreadCount == unread else { return }
                 guard canUseNativeBadge else { return }
                 NSApp.dockTile.contentView = nil
                 NSApp.dockTile.badgeLabel = nil
-                CompanionNotifier.shared.setApplicationBadgeCount(unread)
+                AttacheNotifier.shared.setApplicationBadgeCount(unread)
             }
         }
     }
@@ -348,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildMenu() {
         let menu = NSMenu()
-        let versionItem = NSMenuItem(title: "\(CompanionAppSupport.appDisplayName) \(Self.shortVersionString)", action: nil, keyEquivalent: "")
+        let versionItem = NSMenuItem(title: "\(AttacheAppSupport.appDisplayName) \(Self.shortVersionString)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false
         menu.addItem(versionItem)
         menu.addItem(.separator())
@@ -379,7 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(focusItem)
         }
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: NSLocalizedString("Open Attaché", comment: ""), action: #selector(openCompanion), keyEquivalent: "o"))
+        menu.addItem(NSMenuItem(title: NSLocalizedString("Open Attaché", comment: ""), action: #selector(openAttache), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Open Inbox", comment: ""), action: #selector(openInbox), keyEquivalent: "i"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Find Session…", comment: ""), action: #selector(openPalette), keyEquivalent: "k"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Previous Personality", comment: ""), action: #selector(previousPersonality), keyEquivalent: "["))
@@ -394,40 +400,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let modeItem = NSMenuItem(title: modeTitle, action: #selector(toggleVoicemailMode), keyEquivalent: "")
         menu.addItem(modeItem)
         menu.addItem(.separator())
-        // The mini companion's guaranteed control path: with click-through on,
+        // The mini attache's guaranteed control path: with click-through on,
         // the floating window ignores every event, so the menu bar is how you
         // get it back (INF-272).
         let miniItem = NSMenuItem(
-            title: NSLocalizedString(model.miniCompanionEnabled ? "Hide Mini Companion" : "Show Mini Companion", comment: ""),
-            action: #selector(toggleMiniCompanion),
+            title: NSLocalizedString(model.miniAttacheEnabled ? "Hide Mini Window" : "Show Mini Window", comment: ""),
+            action: #selector(toggleMiniAttache),
             keyEquivalent: ""
         )
         menu.addItem(miniItem)
-        if model.miniCompanionEnabled {
+        if model.miniAttacheEnabled {
             let clickThroughItem = NSMenuItem(
-                title: NSLocalizedString("Mini Companion Click-Through", comment: ""),
+                title: NSLocalizedString("Mini Window Click-Through", comment: ""),
                 action: #selector(toggleMiniClickThrough),
                 keyEquivalent: ""
             )
-            clickThroughItem.state = model.miniCompanionClickThrough ? .on : .off
+            clickThroughItem.state = model.miniAttacheClickThrough ? .on : .off
             menu.addItem(clickThroughItem)
         }
         menu.addItem(.separator())
         let checkUpdatesItem = NSMenuItem(title: NSLocalizedString("Check for Updates…", comment: ""), action: #selector(showUpdates), keyEquivalent: "")
         menu.addItem(checkUpdatesItem)
-        menu.addItem(NSMenuItem(title: "Quit \(CompanionAppSupport.appDisplayName)", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit \(AttacheAppSupport.appDisplayName)", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
         statusItem?.menu = menu
     }
 
-    @objc private func openCompanion() {
-        windowController?.showCompanion()
+    @objc private func openAttache() {
+        windowController?.showAttache()
     }
 
     @objc private func showAbout() {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: CompanionAppSupport.appDisplayName,
+            .applicationName: AttacheAppSupport.appDisplayName,
             .applicationVersion: Self.shortVersionString,
             .version: ""
         ])
@@ -439,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func focusSessionFromMenu(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
-        windowController?.showCompanion()
+        windowController?.showAttache()
         model.focusCodexSession(id)
     }
 
@@ -453,7 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showOnboarding() {
-        windowController?.showCompanion()
+        windowController?.showAttache()
         model.startOnboarding()
     }
 
@@ -464,9 +470,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController?.show()
     }
 
+    private func showPersonalityStudio(_ request: PersonalityStudioRequest) {
+        if personalityStudioWindowController == nil {
+            personalityStudioWindowController = PersonalityStudioWindowController(model: model)
+        }
+        personalityStudioWindowController?.show(request)
+    }
+
     @objc private func simulateEvent() {
         model.simulateEvent()
-        windowController?.showCompanion()
+        windowController?.showAttache()
     }
 
     @objc private func markAllHeard() {
@@ -478,46 +491,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openTalk() {
-        windowController?.showCompanion()
+        windowController?.showAttache()
         NotificationCenter.default.post(name: .attacheOpenTalk, object: nil)
     }
 
     @objc private func openHistory() {
-        windowController?.showCompanion()
+        windowController?.showAttache()
         NotificationCenter.default.post(name: .attacheOpenHistory, object: nil)
     }
 
     @objc private func openPalette() {
-        windowController?.showCompanion()
+        windowController?.showAttache()
         NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
     }
 
     @objc private func openShortcuts() {
-        windowController?.showCompanion()
+        windowController?.showAttache()
         NotificationCenter.default.post(name: .attacheOpenShortcuts, object: nil)
     }
 
     @objc private func previousPersonality() {
         model.selectAdjacentPersonality(offset: -1)
-        windowController?.showCompanion()
+        windowController?.showAttache()
     }
 
     @objc private func nextPersonality() {
         model.selectAdjacentPersonality(offset: 1)
-        windowController?.showCompanion()
+        windowController?.showAttache()
     }
 
     @objc private func openInbox() {
-        windowController?.showCompanion()
+        windowController?.showAttache()
         NotificationCenter.default.post(name: .attacheOpenInbox, object: nil)
     }
 
     @objc private func enableNotifications() {
-        CompanionNotifier.shared.requestAuthorization { [weak self] state in
+        AttacheNotifier.shared.requestAuthorization { [weak self] state in
             DispatchQueue.main.async {
                 self?.updateDockBadge()
                 if state.shouldOpenSystemSettings {
-                    CompanionNotifier.shared.openSystemNotificationSettings()
+                    AttacheNotifier.shared.openSystemNotificationSettings()
                 }
             }
         }

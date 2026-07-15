@@ -191,7 +191,7 @@ public enum CaptionAlignmentBuilder {
         guard !words.isEmpty else { return 1200 }
 
         let base = words.reduce(0) { partial, item in
-            partial + max(180, min(520, item.word.count * 58))
+            partial + max(150, min(520, Int(speechWeight(for: item.word) * 58)))
         }
         let punctuationPauses = text.reduce(0) { partial, character in
             partial + (".,;:!?".contains(character) ? 130 : 0)
@@ -206,20 +206,20 @@ public enum CaptionAlignmentBuilder {
             return CaptionAlignment(text: text, words: [], totalDurationMs: totalDuration)
         }
 
-        let weights = ranges.map { max(1, $0.word.count) }
+        let weights = ranges.map { speechWeight(for: $0.word) }
         let totalWeight = weights.reduce(0, +)
-        var elapsedWeight = 0
+        var elapsedWeight = 0.0
 
         let timings = ranges.enumerated().map { index, item in
-            let startMs = Int((Double(elapsedWeight) / Double(totalWeight)) * Double(totalDuration))
+            let startMs = Int((elapsedWeight / totalWeight) * Double(totalDuration))
             elapsedWeight += weights[index]
             let nextStartMs = index == ranges.count - 1
                 ? totalDuration
-                : Int((Double(elapsedWeight) / Double(totalWeight)) * Double(totalDuration))
+                : Int((elapsedWeight / totalWeight) * Double(totalDuration))
             return WordTiming(
                 word: item.word,
                 startMs: startMs,
-                durationMs: max(minimumWordDurationMs, nextStartMs - startMs),
+                durationMs: max(1, nextStartMs - startMs),
                 charStart: item.charStart,
                 charEnd: item.charEnd
             )
@@ -269,6 +269,9 @@ public enum CaptionAlignmentBuilder {
             [(token, tokenStart, tokenStart + token.count)]
         }
 
+        let technical = technicalSegments(token: token, tokenStart: tokenStart)
+        if technical.count > 1 { return technical }
+
         guard token.count > spacelessRunThreshold else { return whole() }
 
         var boundaries: [Range<String.Index>] = []
@@ -290,6 +293,89 @@ public enum CaptionAlignmentBuilder {
             pieces.append((piece, charStart, charStart + piece.count))
         }
         return pieces.isEmpty ? whole() : pieces
+    }
+
+    /// Split identifiers and paths the way they are usually spoken: at camel
+    /// case, acronym, digit, and common separator boundaries. Each separator
+    /// stays attached to the preceding piece, so concatenating the timings is
+    /// byte-for-byte equivalent at the Character level to the source token.
+    private static func technicalSegments(
+        token: String,
+        tokenStart: Int
+    ) -> [(String, Int, Int)] {
+        let characters = Array(token)
+        guard characters.count > 1 else { return [(token, tokenStart, tokenStart + token.count)] }
+
+        let separators = CharacterSet(charactersIn: "._/\\:-=()[]{}#@")
+        func isSeparator(_ character: Character) -> Bool {
+            character.unicodeScalars.allSatisfy { separators.contains($0) }
+        }
+        func isUpper(_ character: Character) -> Bool {
+            character.isLetter && String(character) == String(character).uppercased()
+                && String(character) != String(character).lowercased()
+        }
+        func isLower(_ character: Character) -> Bool {
+            character.isLetter && String(character) == String(character).lowercased()
+                && String(character) != String(character).uppercased()
+        }
+
+        let hasSeparator = characters.contains(where: isSeparator)
+        let hasCaseBoundary = (1..<characters.count).contains { index in
+            let previous = characters[index - 1]
+            let current = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            return (isLower(previous) && isUpper(current))
+                || (isUpper(previous) && isUpper(current) && next.map(isLower) == true)
+        }
+        guard hasSeparator || hasCaseBoundary else {
+            return [(token, tokenStart, tokenStart + token.count)]
+        }
+
+        var boundaries: Set<Int> = [0, characters.count]
+        for index in 1..<characters.count {
+            let previous = characters[index - 1]
+            let current = characters[index]
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+
+            if isSeparator(previous) {
+                boundaries.insert(index)
+            }
+            if isLower(previous) && isUpper(current) {
+                boundaries.insert(index)
+            }
+            if previous.isNumber != current.isNumber,
+               (previous.isNumber || current.isNumber) {
+                boundaries.insert(index)
+            }
+            if isUpper(previous), isUpper(current), let next, isLower(next) {
+                boundaries.insert(index)
+            }
+        }
+
+        let ordered = boundaries.sorted()
+        guard ordered.count > 2 else { return [(token, tokenStart, tokenStart + token.count)] }
+        return zip(ordered, ordered.dropFirst()).compactMap { lower, upper in
+            guard lower < upper else { return nil }
+            let piece = String(characters[lower..<upper])
+            return (piece, tokenStart + lower, tokenStart + upper)
+        }
+    }
+
+    /// A rough speech cost rather than raw character length. Short words get a
+    /// floor, numbers and all-caps pieces get extra time, and punctuation earns
+    /// a small pause. The actual audio duration still supplies the outer clock.
+    private static func speechWeight(for token: String) -> Double {
+        let letters = token.filter(\.isLetter).count
+        let digits = token.filter(\.isNumber).count
+        let punctuation = token.count - letters - digits
+        let allCaps = letters > 1 && token.filter(\.isLetter).allSatisfy {
+            String($0) == String($0).uppercased()
+        }
+        return max(
+            2.4,
+            Double(letters) + Double(digits) * 1.25 + Double(punctuation) * 0.7
+                + (allCaps ? Double(letters) * 0.25 : 0)
+        )
     }
 }
 

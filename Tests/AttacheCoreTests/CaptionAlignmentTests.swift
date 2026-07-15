@@ -60,4 +60,35 @@ final class CaptionAlignmentTests: XCTestCase {
         XCTAssertTrue(rendered.contains("word18"))
         XCTAssertTrue(rendered.contains("word25"))
     }
+
+    func testTechnicalIdentifierIsSplitIntoSpeakableKaraokePieces() {
+        let text = "Called AttachePresentationModelService.fetchModels(provider:baseURLText:apiKey:)."
+        let alignment = CaptionAlignmentBuilder.fallback(text: text, durationMs: 6200)
+        let pieces = alignment.words.map(\.word)
+
+        XCTAssertGreaterThan(pieces.count, 8, "\(pieces)")
+        XCTAssertTrue(pieces.contains { $0.contains("Attache") }, "\(pieces)")
+        XCTAssertTrue(pieces.contains { $0.contains("Presentation") }, "\(pieces)")
+        XCTAssertTrue(pieces.contains { $0.contains("URL") }, "\(pieces)")
+        XCTAssertEqual(
+            pieces.joined(separator: " ").replacingOccurrences(of: " ", with: ""),
+            text.replacingOccurrences(of: " ", with: "")
+        )
+    }
+
+    func testFallbackTimingsNeverOverlapAndCoverFullDuration() {
+        let text = "Verified api.x.ai/v1/models and qwen3:14b-instruct_q4_K_M successfully."
+        let alignment = CaptionAlignmentBuilder.fallback(text: text, durationMs: 4700)
+
+        for pair in zip(alignment.words, alignment.words.dropFirst()) {
+            XCTAssertLessThanOrEqual(pair.0.startMs + pair.0.durationMs, pair.1.startMs)
+            XCTAssertLessThan(pair.0.charStart, pair.0.charEnd)
+        }
+        let last = try! XCTUnwrap(alignment.words.last)
+        XCTAssertEqual(last.startMs + last.durationMs, 4700)
+        XCTAssertEqual(
+            alignment.words.map(\.word).joined(separator: " ").replacingOccurrences(of: " ", with: ""),
+            text.replacingOccurrences(of: " ", with: "")
+        )
+    }
 }

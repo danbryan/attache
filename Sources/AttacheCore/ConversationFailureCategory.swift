@@ -7,7 +7,7 @@ import Foundation
 /// state machine - can reference the category without AttacheCore depending
 /// on AttacheApp.
 /// `String`-backed so a category can be stored as stable card metadata (e.g.
-/// `companion_presentation_error_category`) and read back later without
+/// `attache_presentation_error_category`) and read back later without
 /// re-classifying the original error text.
 /// `CaseIterable` (INF-258/D5) so `ConversationFallbackChain.shouldTrigger`
 /// can be proven correct against every case at once - in particular, that

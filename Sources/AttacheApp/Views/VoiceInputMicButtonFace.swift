@@ -1,9 +1,9 @@
 import SwiftUI
 
 struct VoiceInputMicButtonFace: View {
-    var mode: CompanionVoiceInputMode
+    var mode: AttacheVoiceInputMode
     var isListening: Bool
-    var theme: CompanionTheme
+    var theme: AttacheTheme
     var size: CGFloat
     var symbolSize: CGFloat
 

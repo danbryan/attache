@@ -18,7 +18,7 @@ defer { try? fileManager.removeItem(at: iconsetURL) }
 
 // Mirrors AttacheAppIcon.draw in Sources/AttacheApp/AppIcon.swift so the
 // packaged icon and the running app's Dock icon stay identical: Volt, the
-// default companion character (INF-286, original in-house artwork), on the
+// default Attaché character (INF-286, original in-house artwork), on the
 // macOS-blue tile with the voice-arc crown.
 func drawIcon(side: CGFloat) {
     let s = side / 512
@@ -35,7 +35,7 @@ func drawIcon(side: CGFloat) {
         NSRect(x: (ox + x * k) * s, y: (512 - oy - (y + h) * k) * s, width: w * k * s, height: h * k * s)
     }
 
-    // macOS-blue brand palette, shared with the Bubbles-era tile.
+    // macOS-blue brand palette, shared with the earlier tile.
     let tileTop = NSColor(srgbRed: 0.180, green: 0.565, blue: 1.000, alpha: 1)
     let tileMid = NSColor(srgbRed: 0.043, green: 0.420, blue: 0.902, alpha: 1)
     let tileDeep = NSColor(srgbRed: 0.024, green: 0.235, blue: 0.620, alpha: 1)
@@ -59,8 +59,8 @@ func drawIcon(side: CGFloat) {
         circle.stroke()
     }
 
-    // Voice arcs crown Volt just like they crowned Bubbles: the brand is
-    // still "give your agents a voice". AppKit is y-up, so the upward
+    // Voice arcs crown Attaché consistently across the icon and in-app mark,
+    // reinforcing "give your agents a voice". AppKit is y-up, so the upward
     // arcs sweep counterclockwise around the shared center.
     let arcSpecs: [(radius: CGFloat, alpha: CGFloat)] = [(24, 1.0), (33, 0.62), (42, 0.34)]
     for spec in arcSpecs {

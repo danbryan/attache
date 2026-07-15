@@ -5,12 +5,14 @@ enum CLILanguageModelError: LocalizedError {
     case notInstalled(String)
     case failed(String)
     case empty
+    case timedOut(String)
 
     var errorDescription: String? {
         switch self {
         case .notInstalled(let tool): return "\(tool) isn't installed or couldn't be found. Install it and sign in, then try again."
         case .failed(let detail): return detail
         case .empty: return "The model returned an empty response."
+        case .timedOut(let tool): return "\(tool) did not answer within 90 seconds."
         }
     }
 }
@@ -31,7 +33,7 @@ struct CLILanguageModel {
     var reasoningEffort: String? = nil   // Codex: model_reasoning_effort (low/medium/high/xhigh)
     var serviceTier: String? = nil       // Codex: service_tier (fast = 1.5x, flex = cheaper)
 
-    func complete(messages: [CompanionChatMessage]) async throws -> String {
+    func complete(messages: [AttacheChatMessage]) async throws -> String {
         guard let executable = Self.locate(tool.executableName) else {
             throw CLILanguageModelError.notInstalled(tool.displayName)
         }
@@ -173,7 +175,7 @@ struct CLILanguageModel {
 
     /// Flatten the chat messages into one prompt the CLI can take, since it has no
     /// separate system/role channels for a one-shot run.
-    static func renderPrompt(messages: [CompanionChatMessage]) -> String {
+    static func renderPrompt(messages: [AttacheChatMessage]) -> String {
         var system = ""
         var turns: [String] = []
         for message in messages {
@@ -266,16 +268,35 @@ struct CLILanguageModel {
                 errCollector.append(chunk)
             }
 
-            process.terminationHandler = { proc in
+            let completionGate = CLICompletionGate()
+            @Sendable func finish(_ result: Result<String, Error>) {
+                guard completionGate.claim() else { return }
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
+                continuation.resume(with: result)
+            }
+
+            let timeoutItem = DispatchWorkItem {
+                let name = URL(fileURLWithPath: executable).lastPathComponent == "claude"
+                    ? "Claude Code"
+                    : "Codex"
+                finish(.failure(CLILanguageModelError.timedOut(name)))
+                if process.isRunning { process.terminate() }
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(
+                deadline: .now() + 90,
+                execute: timeoutItem
+            )
+
+            process.terminationHandler = { proc in
+                timeoutItem.cancel()
                 outCollector.append(outPipe.fileHandleForReading.readDataToEndOfFile())
                 errCollector.append(errPipe.fileHandleForReading.readDataToEndOfFile())
                 let stdout = String(decoding: outCollector.snapshot(), as: UTF8.self)
                 let stderr = String(decoding: errCollector.snapshot(), as: UTF8.self)
                 if proc.terminationStatus != 0 {
-                    continuation.resume(
-                        throwing: CLILanguageModelError.failed(
+                    finish(.failure(
+                        CLILanguageModelError.failed(
                             processFailureMessage(
                                 executable: executable,
                                 code: proc.terminationStatus,
@@ -283,9 +304,9 @@ struct CLILanguageModel {
                                 stderr: stderr
                             )
                         )
-                    )
+                    ))
                 } else {
-                    continuation.resume(returning: stdout)
+                    finish(.success(stdout))
                 }
             }
 
@@ -305,9 +326,10 @@ struct CLILanguageModel {
                     try? inputPipe.fileHandleForWriting.close()
                 }
             } catch {
+                timeoutItem.cancel()
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
-                continuation.resume(throwing: CLILanguageModelError.notInstalled(executable))
+                finish(.failure(CLILanguageModelError.notInstalled(executable)))
                 return
             }
         }
@@ -409,6 +431,21 @@ struct CLILanguageModel {
             parts.append(path)
         }
         return parts.joined(separator: ":")
+    }
+}
+
+/// A subprocess timeout and Foundation's termination callback race on separate
+/// queues. Only the winner may resume the checked continuation.
+private final class CLICompletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return false }
+        finished = true
+        return true
     }
 }
 

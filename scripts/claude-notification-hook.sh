@@ -3,7 +3,7 @@
 #
 # Claude Code fires the Notification hook exactly when it is waiting on you
 # (a permission prompt or idle input). This forwards that moment to Attaché
-# as an exact needs_attention event for the same session, so the companion
+# as an exact needs_attention event for the same session, so the Attaché
 # can say "Claude is waiting on you" the second it happens. The notice
 # clears automatically once the session's transcript moves again.
 #

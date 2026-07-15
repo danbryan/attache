@@ -18,16 +18,15 @@ in.
 
 ## 2. Finish onboarding
 
-Onboarding gets four choices out of the way:
+Onboarding connects the pieces each character needs:
 
 - **A voice.** Any macOS voice, or a cloud voice if you connect one later.
-- **A personality.** How the updates sound. Start with a built-in (Explainer,
-  Big Picture, Inquisitive) and change it whenever.
-- **A model.** The text brain that writes each update. Run it locally with
-  [Ollama](https://ollama.com), or connect a cloud provider (ElevenLabs, xAI,
-  OpenAI, Claude).
 - **The sources it watches.** Turn on Codex, Claude Code, or both. Nothing is
   read from a source until you enable it.
+- **A model.** Test and select Ollama, xAI, Groq, Claude, Codex, or another
+  OpenAI-compatible provider. Continue unlocks once Attaché has a working model.
+- **A character.** Start with Attaché, Colt, or the voice-only Echo. The voice
+  and model you just selected are saved directly onto that character.
 
 ## 3. Hear it work
 
@@ -81,8 +80,10 @@ Attaché.
 - **Voices.** For a big step up at no cost, download a macOS Premium voice
   (System Settings, Accessibility, Spoken Content, Manage Voices; Ava or Zoe are
   good), then pick it in Settings, Voice & Captions. Or connect a cloud voice.
-- **Personalities.** Write your own in Settings, Personalities. Describe any
-  voice and any attitude you want, including the language it speaks in.
+- **Personalities.** Open Settings, Personalities to create a character. Choose
+  Attaché, Colt, or the voice-only Echo presence, start from a built-in style,
+  then choose its explicit voice, model, and supported reasoning effort. Preview its quick
+  greeting before saving, or edit the prompt directly for any attitude and language.
 - **Themes.** The default follows your system accent color. Cyberpunk, Paper,
   and High Contrast are built in, and you can write and share your own.
 

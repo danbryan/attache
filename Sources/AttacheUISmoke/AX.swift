@@ -147,6 +147,12 @@ struct AXElement {
         return AXUIElementSetAttributeValue(raw, kAXSizeAttribute as CFString, value) == .success
     }
 
+    func setPosition(_ requestedPosition: CGPoint) -> Bool {
+        var position = requestedPosition
+        guard let value = AXValueCreate(.cgPoint, &position) else { return false }
+        return AXUIElementSetAttributeValue(raw, kAXPositionAttribute as CFString, value) == .success
+    }
+
     func raiseWindow() {
         perform("AXRaise")
     }

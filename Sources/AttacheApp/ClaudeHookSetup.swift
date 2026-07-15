@@ -1,7 +1,7 @@
 import AttacheCore
 import Foundation
 
-/// Installs (and removes) the Claude Code lifecycle hooks that give the pet its
+/// Installs (and removes) the Claude Code lifecycle hooks that give the character its
 /// exact status. It writes a small, self-contained hook script into Attaché's
 /// Application Support directory and merges two entries into Claude Code's
 /// `settings.json` (a `Notification` hook for "waiting on you" and a `Stop`

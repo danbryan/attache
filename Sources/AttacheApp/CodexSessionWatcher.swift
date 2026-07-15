@@ -163,7 +163,7 @@ final class CodexSessionWatcher {
     /// run during AppModel's init, before the handler is assigned, and a
     /// transition recorded-but-undelivered there is silently lost. A watched
     /// session that was mid-turn at launch then never reports its
-    /// `.active -> .turnComplete` edge, which is exactly the edge the pet's
+    /// `.active -> .turnComplete` edge, which is exactly the edge the character's
     /// celebration hangs off (INF-271).
     private func classifyAttention(session: CodexSessionTarget, fileURL: URL, format: TranscriptFormat) {
         guard onAttention != nil else { return }

@@ -3,7 +3,7 @@ import XCTest
 
 final class SpeechConfigurationTests: XCTestCase {
     func testMissingElevenLabsKeyFallsBackToSystemVoice() {
-        var configuration = CompanionSpeechConfiguration.systemDefault
+        var configuration = AttacheSpeechConfiguration.systemDefault
         configuration.provider = .elevenLabs
         configuration.elevenLabsVoiceID = "voice-id"
 
@@ -15,7 +15,7 @@ final class SpeechConfigurationTests: XCTestCase {
     }
 
     func testMissingCloudVoiceFallsBackEvenWhenKeyExists() {
-        var configuration = CompanionSpeechConfiguration.systemDefault
+        var configuration = AttacheSpeechConfiguration.systemDefault
         configuration.provider = .xai
         configuration.xaiAPIKey = "configured"
         configuration.xaiVoiceID = "  "
@@ -27,7 +27,7 @@ final class SpeechConfigurationTests: XCTestCase {
     }
 
     func testMissingOpenAIKeyFallsBackToSystemVoice() {
-        var configuration = CompanionSpeechConfiguration.systemDefault
+        var configuration = AttacheSpeechConfiguration.systemDefault
         configuration.provider = .openai
         configuration.openaiVoiceID = "marin"
 
@@ -38,7 +38,7 @@ final class SpeechConfigurationTests: XCTestCase {
     }
 
     func testConfiguredCloudVoiceRemainsSelected() {
-        var configuration = CompanionSpeechConfiguration.systemDefault
+        var configuration = AttacheSpeechConfiguration.systemDefault
         configuration.provider = .elevenLabs
         configuration.elevenLabsAPIKey = "configured"
         configuration.elevenLabsVoiceID = "voice-id"
@@ -50,7 +50,7 @@ final class SpeechConfigurationTests: XCTestCase {
     }
 
     func testSystemVoiceNeverFallsBack() {
-        let configuration = CompanionSpeechConfiguration.systemDefault
+        let configuration = AttacheSpeechConfiguration.systemDefault
 
         XCTAssertNil(configuration.playbackUnavailableReason)
         XCTAssertEqual(configuration.resolvedForPlayback(systemVoiceIdentifier: "system-voice"), configuration)

@@ -20,7 +20,7 @@ struct PaletteKeyMonitor: NSViewRepresentable {
                     onShiftCommandDelete: onShiftCommandDelete)
     }
 
-    /// Claims key status for the window a palette opens in. The companion
+    /// Claims key status for the window a palette opens in. The attache
     /// window is often main but not key at that moment; without key status
     /// the search field cannot take focus, so typing beeps and goes nowhere
     /// and Escape never reaches the overlay.

@@ -7,7 +7,7 @@ import AttacheCore
 /// adds UI-facing mutators (`selectRoleProvider`/`selectRoleModel`/
 /// `selectRoleModelID`/`setRoleReasoningEffort`/`setRoleServiceTier`) on top of
 /// D2's read-path plumbing, which `PerRoleModelSettingsTests` already covers
-/// via `CompanionPresentationSettings.load(role:)` directly. These tests cover
+/// via `AttachePresentationSettings.load(role:)` directly. These tests cover
 /// the write path: a role override persists to that role's keys only, is
 /// picked back up on the next launch, and clearing it (back to "Use main
 /// model") removes every one of that role's keys so `load(role:)` falls all
@@ -21,16 +21,16 @@ import AttacheCore
 @MainActor
 final class PerRoleModelPaneTests: XCTestCase {
     private let preferenceKeys: [String] = [
-        CompanionPreferenceKey.presentationLLMProvider,
-        CompanionPreferenceKey.presentationLLMModel,
-        CompanionPreferenceKey.presentationReasoningEffort,
-        CompanionPreferenceKey.presentationServiceTier
+        AttachePreferenceKey.presentationLLMProvider,
+        AttachePreferenceKey.presentationLLMModel,
+        AttachePreferenceKey.presentationReasoningEffort,
+        AttachePreferenceKey.presentationServiceTier
     ] + ModelRole.allCases.flatMap { role in
         [
-            CompanionPreferenceKey.presentationLLMRoleKey(role, .provider),
-            CompanionPreferenceKey.presentationLLMRoleKey(role, .model),
-            CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort),
-            CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier)
+            AttachePreferenceKey.presentationLLMRoleKey(role, .provider),
+            AttachePreferenceKey.presentationLLMRoleKey(role, .model),
+            AttachePreferenceKey.presentationLLMRoleKey(role, .reasoningEffort),
+            AttachePreferenceKey.presentationLLMRoleKey(role, .serviceTier)
         ]
     }
 
@@ -40,8 +40,8 @@ final class PerRoleModelPaneTests: XCTestCase {
         let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
 
-        defaults.set(CompanionPresentationProvider.ollama.rawValue, forKey: CompanionPreferenceKey.presentationLLMProvider)
-        defaults.set("global-model", forKey: CompanionPreferenceKey.presentationLLMModel)
+        defaults.set(AttachePresentationProvider.ollama.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
         XCTAssertNil(model.roleModelProvider[.recap], "recap should start on \"Use main model\"")
@@ -49,19 +49,19 @@ final class PerRoleModelPaneTests: XCTestCase {
         model.selectRoleProvider(.groq, for: .recap)
 
         XCTAssertEqual(model.roleModelProvider[.recap], .groq)
-        XCTAssertEqual(model.roleModelID[.recap], CompanionPresentationProvider.groq.defaultModel)
+        XCTAssertEqual(model.roleModelID[.recap], AttachePresentationProvider.groq.defaultModel)
         XCTAssertEqual(
-            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(.recap, .provider)),
-            CompanionPresentationProvider.groq.rawValue
+            defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, .provider)),
+            AttachePresentationProvider.groq.rawValue
         )
         // Every other role, and the global keys, must be untouched.
         for role: ModelRole in [.conversation, .presentation, .tagging] {
             XCTAssertNil(model.roleModelProvider[role], "\(role) must not see recap's override")
         }
-        XCTAssertEqual(defaults.string(forKey: CompanionPreferenceKey.presentationLLMProvider), CompanionPresentationProvider.ollama.rawValue)
-        XCTAssertEqual(defaults.string(forKey: CompanionPreferenceKey.presentationLLMModel), "global-model")
+        XCTAssertEqual(defaults.string(forKey: AttachePreferenceKey.presentationLLMProvider), AttachePresentationProvider.ollama.rawValue)
+        XCTAssertEqual(defaults.string(forKey: AttachePreferenceKey.presentationLLMModel), "global-model")
 
-        let recapSettings = CompanionPresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
+        let recapSettings = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
         XCTAssertEqual(recapSettings.provider, .groq)
     }
 
@@ -86,8 +86,8 @@ final class PerRoleModelPaneTests: XCTestCase {
         let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
 
-        defaults.set(CompanionPresentationProvider.ollama.rawValue, forKey: CompanionPreferenceKey.presentationLLMProvider)
-        defaults.set("global-model", forKey: CompanionPreferenceKey.presentationLLMModel)
+        defaults.set(AttachePresentationProvider.ollama.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
         model.selectRoleProvider(.groq, for: .recap)
@@ -97,20 +97,20 @@ final class PerRoleModelPaneTests: XCTestCase {
         // Change the global/main model *after* setting the override, so a
         // leftover per-role key would be immediately visible as a mismatch
         // below, not a coincidental match.
-        defaults.set(CompanionPresentationProvider.custom.rawValue, forKey: CompanionPreferenceKey.presentationLLMProvider)
-        defaults.set("new-global-model", forKey: CompanionPreferenceKey.presentationLLMModel)
+        defaults.set(AttachePresentationProvider.custom.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("new-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         model.selectRoleProvider(nil, for: .recap)
 
         XCTAssertNil(model.roleModelProvider[.recap])
-        for field: CompanionPreferenceKey.PresentationLLMField in [.provider, .model, .reasoningEffort, .serviceTier] {
+        for field: AttachePreferenceKey.PresentationLLMField in [.provider, .model, .reasoningEffort, .serviceTier] {
             XCTAssertNil(
-                defaults.object(forKey: CompanionPreferenceKey.presentationLLMRoleKey(.recap, field)),
+                defaults.object(forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, field)),
                 "clearing the override must remove the \(field) key, not just leave a stale value"
             )
         }
 
-        let recapSettings = CompanionPresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
+        let recapSettings = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
         XCTAssertEqual(recapSettings.provider, .custom, "recap must fall back to the new main/global provider")
         XCTAssertEqual(recapSettings.model, "new-global-model", "recap must fall back to the new main/global model, proving it re-resolves rather than keeping a stale cached value")
     }
@@ -125,7 +125,7 @@ final class PerRoleModelPaneTests: XCTestCase {
         model.selectRoleProvider(.custom, for: .tagging)
         model.selectRoleModelID("gpt-5-mini", for: .tagging)
 
-        XCTAssertEqual(model.roleReasoningEffort[.tagging], "default")
+        XCTAssertEqual(model.roleReasoningEffort[.tagging], "none")
         XCTAssertTrue(model.roleServiceTierOptions(for: .tagging).contains { $0.id == "flex" })
     }
 }

@@ -47,12 +47,12 @@ final class MultilingualTests: XCTestCase {
             source: "claude_code", eventType: "assistant.completed",
             title: "t", text: "Build finished.", metadata: [:]
         )
-        let prompt = CompanionPersonality.presentationPrompt(
+        let prompt = AttachePersonality.presentationPrompt(
             for: event, memoryContext: nil, spokenLanguageName: "Korean")
         let system = prompt.messages.first?.content ?? ""
         XCTAssertTrue(system.contains("in Korean"), system)
 
-        let englishPrompt = CompanionPersonality.presentationPrompt(
+        let englishPrompt = AttachePersonality.presentationPrompt(
             for: event, memoryContext: nil, spokenLanguageName: nil)
         XCTAssertFalse(englishPrompt.messages.first?.content.contains("still answer in") ?? true)
     }

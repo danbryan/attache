@@ -221,7 +221,7 @@ Two-way has five intentionally separate verification layers:
    The smoke forces plain watched-card readback and skips topic
    tagging so success depends on Codex's watched answer, not a presentation-model
    paraphrase. It still uses real Codex auth/network, but it does not require
-   xAI, Claude, Anthropic, OpenAI, Groq, Ollama, or LM Studio credentials.
+   xAI, Claude, Anthropic, OpenAI, Groq, or Ollama credentials.
 4. **Real Codex personality routing canary:**
    `scripts/codex-personality-routing-canary.sh` runs the production
    conversation prompt and CLI tool bridge against the real Codex personality

@@ -82,7 +82,7 @@ public final class CardStore: @unchecked Sendable {
     }
 
     public static func defaultStore() throws -> CardStore {
-        try CardStore(databaseURL: CompanionAppSupport.databaseURL())
+        try CardStore(databaseURL: AttacheAppSupport.databaseURL())
     }
 
     public var databasePath: String { databaseURL.path }

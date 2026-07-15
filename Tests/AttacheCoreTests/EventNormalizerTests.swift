@@ -46,14 +46,14 @@ final class EventNormalizerTests: XCTestCase {
             text: "First sentence only. Second sentence should still be available for speech.",
             metadata: [
                 "companion_summary": "Short card summary",
-                "companion_spoken_text": "Full companion spoken update with the second sentence preserved."
+                "companion_spoken_text": "Full attache spoken update with the second sentence preserved."
             ]
         )
 
         XCTAssertEqual(EventNormalizer.storedSummary(for: event), "Short card summary")
         XCTAssertEqual(
             EventNormalizer.storedSpokenText(for: event, summary: "Short card summary"),
-            "Full companion spoken update with the second sentence preserved."
+            "Full attache spoken update with the second sentence preserved."
         )
     }
 }

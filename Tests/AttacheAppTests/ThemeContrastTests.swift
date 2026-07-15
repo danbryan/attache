@@ -8,7 +8,7 @@ import AttacheCore
 final class ThemeContrastTests: XCTestCase {
     func testAccentsHoldTheFloorOnTheirPlates() {
         // .macOS defers to the live system accent (Apple's contrast, not ours).
-        for theme in CompanionTheme.allCases where theme != .macOS {
+        for theme in AttacheTheme.allCases where theme != .macOS {
             for darkScheme in [true, false] {
                 let accent = theme.accentStop(darkScheme: darkScheme)
                 let plate: Double = darkScheme ? 0 : 1
@@ -24,7 +24,7 @@ final class ThemeContrastTests: XCTestCase {
 
     func testHighContrastTargetsAAA() {
         for darkScheme in [true, false] {
-            let accent = CompanionTheme.highContrast.accentStop(darkScheme: darkScheme)
+            let accent = AttacheTheme.highContrast.accentStop(darkScheme: darkScheme)
             let plate: Double = darkScheme ? 0 : 1
             let ratio = WCAGContrast.ratio(
                 red1: accent.red, green1: accent.green, blue1: accent.blue,

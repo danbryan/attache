@@ -8,12 +8,12 @@ private final class SettingsWindow: NSWindow {
 }
 
 /// Hosts the dedicated Settings window (opened with Cmd-comma). Separate from the
-/// live companion window so Attaché surface is never disturbed.
+/// live Attaché window so the main surface is never disturbed.
 final class SettingsWindowController: NSWindowController {
     init(model: AppModel) {
         let hosting = NSHostingController(rootView: SettingsView(model: model))
         let window = SettingsWindow(contentViewController: hosting)
-        window.title = "\(CompanionAppSupport.appDisplayName) Settings"
+        window.title = "\(AttacheAppSupport.appDisplayName) Settings"
         window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         window.setContentSize(NSSize(width: 840, height: 580))
         window.isReleasedWhenClosed = false

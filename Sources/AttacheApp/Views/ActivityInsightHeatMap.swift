@@ -5,7 +5,7 @@ import SwiftUI
 
 struct ActivityInsightHeatMap: View {
     var phrases: [AgentActivityPhrase]
-    var theme: CompanionTheme
+    var theme: AttacheTheme
 
     private let anchors: [(x: CGFloat, y: CGFloat, width: CGFloat)] = [
         (0.50, 0.24, 0.28),

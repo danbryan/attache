@@ -23,7 +23,7 @@ final class MicTranscriptController: NSObject, ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognizer: SFSpeechRecognizer?
-    private var language = CompanionCaptionLanguage.named("en")
+    private var language = AttacheCaptionLanguage.named("en")
     private var onDeviceOnly = false
     private var lowLatency = true
     private var preferredDeviceID = ""
@@ -35,7 +35,7 @@ final class MicTranscriptController: NSObject, ObservableObject {
     private var deliveryTimer: Timer?
 
     func configure(languageID: String, onDeviceOnly: Bool, lowLatency: Bool, preferredDeviceID: String) {
-        language = CompanionCaptionLanguage.named(languageID)
+        language = AttacheCaptionLanguage.named(languageID)
         self.onDeviceOnly = onDeviceOnly
         self.lowLatency = lowLatency
         self.preferredDeviceID = preferredDeviceID

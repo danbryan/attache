@@ -113,7 +113,7 @@ enum VoicemailInboxScope: String, CaseIterable, Identifiable {
     }
 }
 
-enum CompanionHistoryScope: String, CaseIterable, Identifiable {
+enum AttacheHistoryScope: String, CaseIterable, Identifiable {
     case focused
     case watched
     case all
@@ -210,14 +210,14 @@ final class AppModel: ObservableObject {
     // advance/sticky rules this only ever calls into.
     @Published var conversationFallbackChainEnabled: Bool = false {
         didSet {
-            defaults.set(conversationFallbackChainEnabled, forKey: CompanionPreferenceKey.conversationFallbackChainEnabled)
+            defaults.set(conversationFallbackChainEnabled, forKey: AttachePreferenceKey.conversationFallbackChainEnabled)
         }
     }
-    @Published var conversationFallbackChain: [CompanionPresentationProvider] = [] {
+    @Published var conversationFallbackChain: [AttachePresentationProvider] = [] {
         didSet {
             defaults.set(
                 conversationFallbackChain.map(\.rawValue),
-                forKey: CompanionPreferenceKey.conversationFallbackChainProviders
+                forKey: AttachePreferenceKey.conversationFallbackChainProviders
             )
         }
     }
@@ -236,24 +236,24 @@ final class AppModel: ObservableObject {
     /// duration, cleared the moment the delayed retry actually starts.
     @Published private(set) var conversationFallbackAnnouncement: String?
 
-    @Published var voiceInputMode: CompanionVoiceInputMode = .pushToTalk {
+    @Published var voiceInputMode: AttacheVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
-            defaults.set(voiceInputMode.rawValue, forKey: CompanionPreferenceKey.voiceInputMode)
+            defaults.set(voiceInputMode.rawValue, forKey: AttachePreferenceKey.voiceInputMode)
             applyVoiceInputMode()
         }
     }
-    @Published var narrationDetail: CompanionNarrationDetail = .milestones {
+    @Published var narrationDetail: AttacheNarrationDetail = .milestones {
         didSet {
             guard narrationDetail != oldValue else { return }
-            defaults.set(narrationDetail.rawValue, forKey: CompanionPreferenceKey.narrationDetail)
+            defaults.set(narrationDetail.rawValue, forKey: AttachePreferenceKey.narrationDetail)
             codexSessionWatcher.quietPolls = narrationDetail.coalescerQuietPolls
         }
     }
     @Published var microphoneDeviceID: String = "" {
         didSet {
             guard microphoneDeviceID != oldValue else { return }
-            defaults.set(microphoneDeviceID, forKey: CompanionPreferenceKey.microphoneDeviceID)
+            defaults.set(microphoneDeviceID, forKey: AttachePreferenceKey.microphoneDeviceID)
             applyMicConfiguration()
         }
     }
@@ -267,9 +267,9 @@ final class AppModel: ObservableObject {
         didSet {
             guard attachedCodexSessionID != oldValue else { return }
             if let attachedCodexSessionID {
-                defaults.set(attachedCodexSessionID, forKey: CompanionPreferenceKey.attachedCodexSessionID)
+                defaults.set(attachedCodexSessionID, forKey: AttachePreferenceKey.attachedCodexSessionID)
             } else {
-                defaults.removeObject(forKey: CompanionPreferenceKey.attachedCodexSessionID)
+                defaults.removeObject(forKey: AttachePreferenceKey.attachedCodexSessionID)
             }
             // Drop any queued live updates from the previous focus so they don't
             // play against the newly attached session.
@@ -279,96 +279,57 @@ final class AppModel: ObservableObject {
     }
     @Published private(set) var attachedSessionHistory: [VoicemailCard] = []
     @Published private(set) var selectedStartProgress: Double = 0
-    @Published var visualMode: CompanionVisualMode = .combined {
-        didSet { defaults.set(visualMode.rawValue, forKey: CompanionPreferenceKey.visualMode) }
+    @Published var visualMode: AttacheVisualMode = .character {
+        didSet { defaults.set(visualMode.rawValue, forKey: AttachePreferenceKey.visualMode) }
     }
-    /// The desktop mini companion window (INF-272).
-    @Published var miniCompanionEnabled: Bool = false {
-        didSet { defaults.set(miniCompanionEnabled, forKey: CompanionPreferenceKey.miniCompanion) }
+    /// The desktop mini attache window (INF-272).
+    @Published var miniAttacheEnabled: Bool = false {
+        didSet { defaults.set(miniAttacheEnabled, forKey: AttachePreferenceKey.miniAttache) }
     }
-    @Published var miniCompanionClickThrough: Bool = false {
-        didSet { defaults.set(miniCompanionClickThrough, forKey: CompanionPreferenceKey.miniCompanionClickThrough) }
+    @Published var miniAttacheClickThrough: Bool = false {
+        didSet { defaults.set(miniAttacheClickThrough, forKey: AttachePreferenceKey.miniAttacheClickThrough) }
     }
-    /// Install Claude Code's Notification and Stop hooks so the pet's status is
+    /// Install Claude Code's Notification and Stop hooks so the character's status is
     /// exact (needs-you and done come from Claude Code itself, not a transcript
     /// guess). On by default; toggling off removes only Attaché's hook entries.
     @Published var installClaudeHooks: Bool = true {
         didSet {
-            defaults.set(installClaudeHooks, forKey: CompanionPreferenceKey.installClaudeHooks)
+            defaults.set(installClaudeHooks, forKey: AttachePreferenceKey.installClaudeHooks)
             applyClaudeHooks()
         }
     }
-    /// Pet delights (INF-273): types-along ships on, the rest are opt-in.
-    @Published var petTypesAlong: Bool = true {
-        didSet { defaults.set(petTypesAlong, forKey: CompanionPreferenceKey.petTypesAlong) }
-    }
-    @Published var petRareIdles: Bool = false {
-        didSet { defaults.set(petRareIdles, forKey: CompanionPreferenceKey.petRareIdles) }
-    }
-    @Published var petHoverReaction: Bool = false {
-        didSet { defaults.set(petHoverReaction, forKey: CompanionPreferenceKey.petHoverReaction) }
-    }
     /// Where the user last parked the focused mote on the session ring
     /// (INF-280); only dragging it writes a new angle.
-    @Published var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle {
-        didSet { defaults.set(petFocusAngle, forKey: CompanionPreferenceKey.petFocusAngle) }
+    @Published var characterFocusAngle: Double = AttacheCharacterChoreography.defaultFocusAngle {
+        didSet { defaults.set(characterFocusAngle, forKey: AttachePreferenceKey.characterFocusAngle) }
     }
     /// The character in the middle of the ring (INF-283). Volt is the
     /// default (INF-286): it pairs with the robotic default system voice a
     /// fresh install speaks with.
-    @Published var petCharacter: BubblesPetCharacter = .robot {
-        didSet { defaults.set(petCharacter.rawValue, forKey: CompanionPreferenceKey.petCharacter) }
+    @Published var character: AttacheCharacter = .robot {
+        didSet { defaults.set(character.rawValue, forKey: AttachePreferenceKey.character) }
     }
     /// The shiny easter egg (INF-273): a one-time random roll persisted per
-    /// profile, so roughly 1 in 20 installs gets a golden-arc Bubbles. Zero
+    /// profile, so roughly 1 in 20 installs gets a golden-arc Attache. Zero
     /// configuration on purpose; discovery is the point.
-    lazy var petShiny: Bool = {
-        if defaults.object(forKey: CompanionPreferenceKey.petShinySeed) == nil {
-            defaults.set(Int.random(in: 0..<20), forKey: CompanionPreferenceKey.petShinySeed)
+    lazy var characterShiny: Bool = {
+        if defaults.object(forKey: AttachePreferenceKey.characterShinySeed) == nil {
+            defaults.set(Int.random(in: 0..<20), forKey: AttachePreferenceKey.characterShinySeed)
         }
-        return defaults.integer(forKey: CompanionPreferenceKey.petShinySeed) == 0
+        return defaults.integer(forKey: AttachePreferenceKey.characterShinySeed) == 0
     }()
-    @Published var visualSymmetry: CompanionVisualSymmetry = .mirrored {
-        didSet { defaults.set(visualSymmetry.rawValue, forKey: CompanionPreferenceKey.visualSymmetry) }
+    @Published var theme: AttacheTheme = .macOS {
+        didSet { defaults.set(theme.rawValue, forKey: AttachePreferenceKey.theme) }
     }
-    @Published var idleBrand: CompanionIdleBrand = .monogram {
-        didSet { defaults.set(idleBrand.rawValue, forKey: CompanionPreferenceKey.idleBrand) }
-    }
-    @Published var idleCustomText: String = "" {
-        didSet { defaults.set(idleCustomText, forKey: CompanionPreferenceKey.idleCustomText) }
-    }
-    @Published var idleImage: NSImage?
-
-    private static var idleImageURL: URL {
-        CompanionAppSupport.supportDirectory().appendingPathComponent("idle-image")
-    }
-
-    /// Copies the picked image into app support so the idle screen survives
-    /// the original file moving, then loads it.
-    func setIdleImage(from url: URL) {
-        guard let data = try? Data(contentsOf: url), NSImage(data: data) != nil else { return }
-        try? data.write(to: Self.idleImageURL, options: .atomic)
-        idleImage = NSImage(data: data)
-        idleBrand = .customImage
-    }
-
-    func loadIdleImageIfNeeded() {
-        guard idleImage == nil,
-              let data = try? Data(contentsOf: Self.idleImageURL) else { return }
-        idleImage = NSImage(data: data)
-    }
-    @Published var theme: CompanionTheme = .macOS {
-        didSet { defaults.set(theme.rawValue, forKey: CompanionPreferenceKey.theme) }
-    }
-    @Published var appearanceMode: CompanionAppearanceMode = .system {
+    @Published var appearanceMode: AttacheAppearanceMode = .system {
         didSet {
-            defaults.set(appearanceMode.rawValue, forKey: CompanionPreferenceKey.appearanceMode)
+            defaults.set(appearanceMode.rawValue, forKey: AttachePreferenceKey.appearanceMode)
             applyAppearance()
         }
     }
-    @Published var customThemes: [CompanionThemeSpec] = []
+    @Published var customThemes: [AttacheThemeSpec] = []
     @Published var activeCustomThemeID: String? {
-        didSet { defaults.set(activeCustomThemeID, forKey: CompanionPreferenceKey.customThemeID) }
+        didSet { defaults.set(activeCustomThemeID, forKey: AttachePreferenceKey.customThemeID) }
     }
     private var customThemePersistWork: DispatchWorkItem?
     @Published var surfaceOpacity: Double = 1.0 {
@@ -378,11 +339,8 @@ final class AppModel: ObservableObject {
                 surfaceOpacity = clamped
                 return
             }
-            defaults.set(surfaceOpacity, forKey: CompanionPreferenceKey.surfaceOpacity)
+            defaults.set(surfaceOpacity, forKey: AttachePreferenceKey.surfaceOpacity)
         }
-    }
-    @Published var brightnessLevel: Int = 1 {
-        didSet { defaults.set(brightnessLevel, forKey: CompanionPreferenceKey.brightnessLevel) }
     }
     @Published var showOnboarding: Bool = false
     private var inboxCatchUpQueue: [String] = []
@@ -393,11 +351,8 @@ final class AppModel: ObservableObject {
                 uiTextScale = clamped
                 return
             }
-            defaults.set(uiTextScale, forKey: CompanionPreferenceKey.uiTextScale)
+            defaults.set(uiTextScale, forKey: AttachePreferenceKey.uiTextScale)
         }
-    }
-    @Published var visualIntensity: Double = 1.0 {
-        didSet { defaults.set(visualIntensity, forKey: CompanionPreferenceKey.visualIntensity) }
     }
     @Published var seekStepSeconds: Int = 5 {
         didSet {
@@ -406,12 +361,12 @@ final class AppModel: ObservableObject {
                 seekStepSeconds = clamped
                 return
             }
-            defaults.set(seekStepSeconds, forKey: CompanionPreferenceKey.seekStepSeconds)
+            defaults.set(seekStepSeconds, forKey: AttachePreferenceKey.seekStepSeconds)
             mediaRemote.setSkipInterval(seconds: seekStepSeconds)
         }
     }
     @Published var captionsEnabled: Bool = true {
-        didSet { defaults.set(captionsEnabled, forKey: CompanionPreferenceKey.captionsEnabled) }
+        didSet { defaults.set(captionsEnabled, forKey: AttachePreferenceKey.captionsEnabled) }
     }
     static let captionLineRange = 1...5
     static let captionFontRange: ClosedRange<Double> = 18...34
@@ -422,7 +377,7 @@ final class AppModel: ObservableObject {
                 captionFontSize = clamped
                 return
             }
-            defaults.set(captionFontSize, forKey: CompanionPreferenceKey.captionFontSize)
+            defaults.set(captionFontSize, forKey: AttachePreferenceKey.captionFontSize)
         }
     }
     @Published var captionLineCount: Int = 2 {
@@ -432,7 +387,7 @@ final class AppModel: ObservableObject {
                 captionLineCount = clamped
                 return
             }
-            defaults.set(captionLineCount, forKey: CompanionPreferenceKey.captionLineCount)
+            defaults.set(captionLineCount, forKey: AttachePreferenceKey.captionLineCount)
         }
     }
     @Published var audioCacheRetentionMinutes: Int = 24 * 60 {
@@ -442,7 +397,7 @@ final class AppModel: ObservableObject {
                 audioCacheRetentionMinutes = preset
                 return
             }
-            defaults.set(audioCacheRetentionMinutes, forKey: CompanionPreferenceKey.audioCacheRetentionMinutes)
+            defaults.set(audioCacheRetentionMinutes, forKey: AttachePreferenceKey.audioCacheRetentionMinutes)
             playback.setAudioCacheRetention(minutes: audioCacheRetentionMinutes)
         }
     }
@@ -463,21 +418,9 @@ final class AppModel: ObservableObject {
         audioCacheRetentionOptions.min { abs($0.minutes - minutes) < abs($1.minutes - minutes) }
             ?? ("1 day", 24 * 60)
     }
-    @Published var lowLatencyCaptions: Bool = true {
-        didSet {
-            defaults.set(lowLatencyCaptions, forKey: CompanionPreferenceKey.lowLatencyCaptions)
-            applyMicConfiguration()
-        }
-    }
     @Published var spokenLanguage: String = "en" {
         didSet {
-            defaults.set(spokenLanguage, forKey: CompanionPreferenceKey.spokenLanguage)
-            applyMicConfiguration()
-        }
-    }
-    @Published var onDeviceOnly: Bool = false {
-        didSet {
-            defaults.set(onDeviceOnly, forKey: CompanionPreferenceKey.onDeviceOnly)
+            defaults.set(spokenLanguage, forKey: AttachePreferenceKey.spokenLanguage)
             applyMicConfiguration()
         }
     }
@@ -486,45 +429,50 @@ final class AppModel: ObservableObject {
     @Published var voicemailMode: Bool = true {
         didSet {
             guard voicemailMode != oldValue else { return }
-            defaults.set(voicemailMode, forKey: CompanionPreferenceKey.voicemailMode)
+            defaults.set(voicemailMode, forKey: AttachePreferenceKey.voicemailMode)
             if voicemailMode {
-                CompanionNotifier.shared.requestAuthorizationIfUndetermined()
+                AttacheNotifier.shared.requestAuthorizationIfUndetermined()
             }
         }
     }
     /// Ambient home: when on, the chrome (dock, banner, history) fades while the
     /// pointer is still and wakes on movement. Off keeps everything always visible.
     @Published var autoHideControls: Bool = true {
-        didSet { defaults.set(autoHideControls, forKey: CompanionPreferenceKey.autoHideControls) }
+        didSet { defaults.set(autoHideControls, forKey: AttachePreferenceKey.autoHideControls) }
     }
     @Published var autoHideDelaySeconds: Double = 2.5 {
-        didSet { defaults.set(autoHideDelaySeconds, forKey: CompanionPreferenceKey.autoHideDelaySeconds) }
+        didSet { defaults.set(autoHideDelaySeconds, forKey: AttachePreferenceKey.autoHideDelaySeconds) }
     }
     @Published var showPersonalitySwitcher: Bool = true {
-        didSet { defaults.set(showPersonalitySwitcher, forKey: CompanionPreferenceKey.showPersonalitySwitcher) }
+        didSet { defaults.set(showPersonalitySwitcher, forKey: AttachePreferenceKey.showPersonalitySwitcher) }
     }
     @Published var showPersonalityNameInDock: Bool = false {
-        didSet { defaults.set(showPersonalityNameInDock, forKey: CompanionPreferenceKey.showPersonalityNameInDock) }
+        didSet { defaults.set(showPersonalityNameInDock, forKey: AttachePreferenceKey.showPersonalityNameInDock) }
     }
     /// Attention state per watched session (INF-179). Only sessions with
     /// something notable appear; quiet sessions are absent.
     @Published var sessionAttention: [String: SessionAttentionState] = [:]
-    @Published var notifyScope: CompanionNotifyScope = .allUpdates {
-        didSet { defaults.set(notifyScope.rawValue, forKey: CompanionPreferenceKey.notifyScope) }
+    @Published var notifyScope: AttacheNotifyScope = .allUpdates {
+        didSet { defaults.set(notifyScope.rawValue, forKey: AttachePreferenceKey.notifyScope) }
     }
     @Published var showInMenuBar: Bool = true {
-        didSet { defaults.set(showInMenuBar, forKey: CompanionPreferenceKey.showInMenuBar) }
+        didSet { defaults.set(showInMenuBar, forKey: AttachePreferenceKey.showInMenuBar) }
     }
     @Published var showTips: Bool = true {
-        didSet { defaults.set(showTips, forKey: CompanionPreferenceKey.showTips) }
+        didSet { defaults.set(showTips, forKey: AttachePreferenceKey.showTips) }
     }
-    private let tipEngine = CompanionTipEngine()
+    private let tipEngine = AttacheTipEngine()
     @Published var playbackSpeed: Double = 1.0 {
         didSet {
             let clamped = min(1.6, max(0.8, playbackSpeed))
             if clamped != playbackSpeed { playbackSpeed = clamped; return }
-            defaults.set(clamped, forKey: CompanionPreferenceKey.playbackSpeed)
+            defaults.set(clamped, forKey: AttachePreferenceKey.playbackSpeed)
             playback.playbackRate = Float(clamped)
+            if let index = personalities.firstIndex(where: { $0.id == activePersonalityID }),
+               abs((personalities[index].playbackSpeed ?? 1.0) - clamped) > 0.001 {
+                personalities[index].playbackSpeed = clamped
+                personalityStore.save(personalities, activeID: activePersonalityID)
+            }
         }
     }
 
@@ -543,7 +491,7 @@ final class AppModel: ObservableObject {
     // still wins on load, so anyone who turned them off stays off.
     @Published var showActivityInsights: Bool = true {
         didSet {
-            defaults.set(showActivityInsights, forKey: CompanionPreferenceKey.showActivityInsights)
+            defaults.set(showActivityInsights, forKey: AttachePreferenceKey.showActivityInsights)
             updateCodexWatcher()
         }
     }
@@ -574,11 +522,15 @@ final class AppModel: ObservableObject {
         )
     }
     @Published var captionSyncOffsetMs: Int = 0 {
-        didSet { defaults.set(captionSyncOffsetMs, forKey: CompanionPreferenceKey.captionSyncOffsetMs) }
+        didSet { defaults.set(captionSyncOffsetMs, forKey: AttachePreferenceKey.captionSyncOffsetMs) }
     }
     @Published var presentationLLMEnabled: Bool = true {
         didSet {
-            defaults.set(presentationLLMEnabled, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+            if !presentationLLMEnabled {
+                presentationLLMEnabled = true
+                return
+            }
+            defaults.set(presentationLLMEnabled, forKey: AttachePreferenceKey.presentationLLMEnabled)
             refreshPresentationStatus()
         }
     }
@@ -592,38 +544,38 @@ final class AppModel: ObservableObject {
     /// updates normally either way, so the Settings > Model page and the
     /// recovery menu keep reflecting the current selection.
     private var isApplyingConversationRecoveryOverride = false
-    @Published var presentationProvider: CompanionPresentationProvider = .ollama {
+    @Published var presentationProvider: AttachePresentationProvider = .ollama {
         didSet {
             let key = isApplyingConversationRecoveryOverride
-                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .provider)
-                : CompanionPreferenceKey.presentationLLMProvider
+                ? AttachePreferenceKey.presentationLLMRoleKey(.conversation, .provider)
+                : AttachePreferenceKey.presentationLLMProvider
             defaults.set(presentationProvider.rawValue, forKey: key)
             refreshPresentationStatus()
         }
     }
-    @Published var presentationBaseURL: String = CompanionPresentationProvider.ollama.defaultBaseURL {
+    @Published var presentationBaseURL: String = AttachePresentationProvider.ollama.defaultBaseURL {
         didSet {
             let key = isApplyingConversationRecoveryOverride
-                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .baseURL)
-                : CompanionPreferenceKey.presentationLLMBaseURL
+                ? AttachePreferenceKey.presentationLLMRoleKey(.conversation, .baseURL)
+                : AttachePreferenceKey.presentationLLMBaseURL
             defaults.set(presentationBaseURL, forKey: key)
             refreshPresentationStatus()
         }
     }
-    @Published var presentationModel: String = CompanionPresentationProvider.ollama.defaultModel {
+    @Published var presentationModel: String = AttachePresentationProvider.ollama.defaultModel {
         didSet {
             let key = isApplyingConversationRecoveryOverride
-                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .model)
-                : CompanionPreferenceKey.presentationLLMModel
+                ? AttachePreferenceKey.presentationLLMRoleKey(.conversation, .model)
+                : AttachePreferenceKey.presentationLLMModel
             defaults.set(presentationModel, forKey: key)
             refreshPresentationStatus()
         }
     }
-    @Published var presentationReasoningEffort: String = CompanionPresentationProvider.ollama.defaultReasoningEffort {
+    @Published var presentationReasoningEffort: String = AttachePresentationProvider.ollama.defaultReasoningEffort {
         didSet {
             let key = isApplyingConversationRecoveryOverride
-                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .reasoningEffort)
-                : CompanionPreferenceKey.presentationReasoningEffort
+                ? AttachePreferenceKey.presentationLLMRoleKey(.conversation, .reasoningEffort)
+                : AttachePreferenceKey.presentationReasoningEffort
             defaults.set(presentationReasoningEffort, forKey: key)
             refreshPresentationStatus()
         }
@@ -631,8 +583,8 @@ final class AppModel: ObservableObject {
     @Published var presentationServiceTier: String = "default" {
         didSet {
             let key = isApplyingConversationRecoveryOverride
-                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .serviceTier)
-                : CompanionPreferenceKey.presentationServiceTier
+                ? AttachePreferenceKey.presentationLLMRoleKey(.conversation, .serviceTier)
+                : AttachePreferenceKey.presentationServiceTier
             defaults.set(presentationServiceTier, forKey: key)
             refreshPresentationStatus()
         }
@@ -641,49 +593,49 @@ final class AppModel: ObservableObject {
     @Published var presentationAPIKeySecretRef: String = "" {
         didSet {
             let key = isApplyingConversationRecoveryOverride
-                ? CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .apiKeySecretRef)
-                : CompanionPreferenceKey.presentationLLMAPIKeySecretRef
+                ? AttachePreferenceKey.presentationLLMRoleKey(.conversation, .apiKeySecretRef)
+                : AttachePreferenceKey.presentationLLMAPIKeySecretRef
             defaults.set(presentationAPIKeySecretRef, forKey: key)
             refreshPresentationStatus()
         }
     }
-    @Published private(set) var presentationModelOptions: [CompanionPresentationModelOption] = []
+    @Published private(set) var presentationModelOptions: [AttachePresentationModelOption] = []
     @Published private(set) var presentationModelDiscoveryStatus: String = "Model discovery not checked"
     @Published private(set) var presentationStatus: String = "Presentation LLM not checked"
     // MARK: Per-role model overrides (Settings > Model > Advanced disclosure, INF-253/D3)
     //
     // A role missing from `roleModelProvider` means "Use main model": it falls
     // back to the main provider/model above, exactly like
-    // `CompanionPresentationSettings.load(role:)` already resolves an unset
+    // `AttachePresentationSettings.load(role:)` already resolves an unset
     // per-role key (D2/INF-247). Populated once at launch by
     // `loadRoleModelOverrides()` and mutated only through `selectRoleProvider`,
     // `selectRoleModel`/`selectRoleModelID`, and `setRoleReasoningEffort`/
     // `setRoleServiceTier` below, which keep these dictionaries and the
     // matching `presentationLLMRoleKey` defaults entries in sync.
-    @Published private(set) var roleModelProvider: [ModelRole: CompanionPresentationProvider] = [:]
+    @Published private(set) var roleModelProvider: [ModelRole: AttachePresentationProvider] = [:]
     @Published private(set) var roleModelID: [ModelRole: String] = [:]
     @Published private(set) var roleReasoningEffort: [ModelRole: String] = [:]
     @Published private(set) var roleServiceTier: [ModelRole: String] = [:]
-    @Published private(set) var roleModelOptions: [ModelRole: [CompanionPresentationModelOption]] = [:]
+    @Published private(set) var roleModelOptions: [ModelRole: [AttachePresentationModelOption]] = [:]
     @Published private(set) var roleModelDiscoveryStatus: [ModelRole: String] = [:]
-    @Published private(set) var companionMemoryStatus: String = "Memory not checked"
-    @Published private(set) var speechVoiceOptions: [CompanionVoiceOption] = []
+    @Published private(set) var attacheMemoryStatus: String = "Memory not checked"
+    @Published private(set) var speechVoiceOptions: [AttacheVoiceOption] = []
     @Published private(set) var elevenLabsVoiceOptions: [RemoteVoiceOption] = []
     @Published private(set) var xaiVoiceOptions: [RemoteVoiceOption] = []
     @Published private(set) var openaiVoiceOptions: [RemoteVoiceOption] = []
     @Published private(set) var voiceProviderStatus: String = "Voice provider not checked"
-    @Published var speechProvider: CompanionSpeechProvider = .system {
+    @Published var speechProvider: AttacheSpeechProvider = .system {
         didSet {
-            defaults.set(speechProvider.rawValue, forKey: CompanionPreferenceKey.speechProvider)
+            defaults.set(speechProvider.rawValue, forKey: AttachePreferenceKey.speechProvider)
             applySpeechConfiguration()
         }
     }
     @Published var speechVoiceIdentifier: String? {
         didSet {
             if let speechVoiceIdentifier {
-                defaults.set(speechVoiceIdentifier, forKey: CompanionPreferenceKey.speechVoiceIdentifier)
+                defaults.set(speechVoiceIdentifier, forKey: AttachePreferenceKey.speechVoiceIdentifier)
             } else {
-                defaults.set(Self.systemVoicePreference, forKey: CompanionPreferenceKey.speechVoiceIdentifier)
+                defaults.set(Self.systemVoicePreference, forKey: AttachePreferenceKey.speechVoiceIdentifier)
             }
             applySpeechConfiguration()
         }
@@ -693,22 +645,22 @@ final class AppModel: ObservableObject {
     }
     @Published var elevenLabsVoiceID: String = "" {
         didSet {
-            defaults.set(elevenLabsVoiceID, forKey: CompanionPreferenceKey.elevenLabsVoiceID)
+            defaults.set(elevenLabsVoiceID, forKey: AttachePreferenceKey.elevenLabsVoiceID)
             applySpeechConfiguration()
         }
     }
     @Published var elevenLabsVoiceName: String = "" {
-        didSet { defaults.set(elevenLabsVoiceName, forKey: CompanionPreferenceKey.elevenLabsVoiceName) }
+        didSet { defaults.set(elevenLabsVoiceName, forKey: AttachePreferenceKey.elevenLabsVoiceName) }
     }
     @Published var elevenLabsModelID: String = "eleven_flash_v2_5" {
         didSet {
-            defaults.set(elevenLabsModelID, forKey: CompanionPreferenceKey.elevenLabsModelID)
+            defaults.set(elevenLabsModelID, forKey: AttachePreferenceKey.elevenLabsModelID)
             applySpeechConfiguration()
         }
     }
     @Published var elevenLabsOutputFormat: String = "mp3_44100_128" {
         didSet {
-            defaults.set(elevenLabsOutputFormat, forKey: CompanionPreferenceKey.elevenLabsOutputFormat)
+            defaults.set(elevenLabsOutputFormat, forKey: AttachePreferenceKey.elevenLabsOutputFormat)
             applySpeechConfiguration()
         }
     }
@@ -717,22 +669,22 @@ final class AppModel: ObservableObject {
     }
     @Published var xaiVoiceID: String = "" {
         didSet {
-            defaults.set(xaiVoiceID, forKey: CompanionPreferenceKey.xaiVoiceID)
+            defaults.set(xaiVoiceID, forKey: AttachePreferenceKey.xaiVoiceID)
             applySpeechConfiguration()
         }
     }
     @Published var xaiVoiceName: String = "" {
-        didSet { defaults.set(xaiVoiceName, forKey: CompanionPreferenceKey.xaiVoiceName) }
+        didSet { defaults.set(xaiVoiceName, forKey: AttachePreferenceKey.xaiVoiceName) }
     }
     @Published var xaiBaseURL: String = "https://api.x.ai/v1" {
         didSet {
-            defaults.set(xaiBaseURL, forKey: CompanionPreferenceKey.xaiBaseURL)
+            defaults.set(xaiBaseURL, forKey: AttachePreferenceKey.xaiBaseURL)
             applySpeechConfiguration()
         }
     }
     @Published var xaiLanguage: String = "en" {
         didSet {
-            defaults.set(xaiLanguage, forKey: CompanionPreferenceKey.xaiLanguage)
+            defaults.set(xaiLanguage, forKey: AttachePreferenceKey.xaiLanguage)
             applySpeechConfiguration()
         }
     }
@@ -741,12 +693,12 @@ final class AppModel: ObservableObject {
     }
     @Published var openaiVoiceID: String = "" {
         didSet {
-            defaults.set(openaiVoiceID, forKey: CompanionPreferenceKey.openaiVoiceID)
+            defaults.set(openaiVoiceID, forKey: AttachePreferenceKey.openaiVoiceID)
             applySpeechConfiguration()
         }
     }
     @Published var openaiVoiceName: String = "" {
-        didSet { defaults.set(openaiVoiceName, forKey: CompanionPreferenceKey.openaiVoiceName) }
+        didSet { defaults.set(openaiVoiceName, forKey: AttachePreferenceKey.openaiVoiceName) }
     }
 
     let playback = SpeechPlaybackController()
@@ -764,6 +716,13 @@ final class AppModel: ObservableObject {
     private var revealTimer: Timer?
     private var conversationWaitTimer: Timer?
     private var conversationWaitStartedAt: Date?
+    /// One hard deadline and identity per live personality request. Hanging up
+    /// invalidates the identity immediately, so a late HTTP or CLI completion
+    /// can never speak after the call has ended or leak into the next call.
+    private var conversationRequestTimeoutTimer: Timer?
+    private var activeConversationRequestID: UUID?
+    private var activeConversationID: UUID?
+    private static let conversationRequestTimeoutSeconds: TimeInterval = 90
     // @Published (rather than a plain var) so refreshCallPhase()'s Combine
     // subscription (setupConversationObservers()) picks up every transition,
     // including the ones driven from playback callbacks in init rather than
@@ -771,14 +730,14 @@ final class AppModel: ObservableObject {
     @Published private var expectingReplyAudio = false
     /// Tokens for in-flight narration composition (INF-264 follow-up): the
     /// LLM call that writes a watched session's spoken recap
-    /// (`prepareAndPersist`, `CompanionPresentationService.prepare`) runs
+    /// (`prepareAndPersist`, `AttachePresentationService.prepare`) runs
     /// entirely before `playback.isBusy` ever goes true, so without a signal
     /// of its own, a Tell Agent reply's recap-composing window had nothing
     /// to show once `.sendDelivered` moved past its own emphasis window.
     /// Keyed tokens rather than a plain counter or a single session ID so
     /// overlapping compositions across different watched sessions can't
     /// clobber each other's start/end bookkeeping; the value is the event's
-    /// source raw value so `companionActivity` can attribute the responding
+    /// source raw value so `attacheActivity` can attribute the responding
     /// agent (INF-268).
     @Published private var composingNarrationTokens: [UUID: String] = [:]
     /// When the current "preparing a recap / its audio" burst began, for the
@@ -794,15 +753,15 @@ final class AppModel: ObservableObject {
     /// in the call composer. Memory-only on purpose; a relaunch re-surfaces
     /// an unresolved failure once, which is the right amount of nagging.
     private var acknowledgedFailedSendIDs: Set<String> = []
-    /// The one semantic state every companion renderer consumes (INF-268).
-    /// Refreshed at semantic rate through `refreshCompanionActivity()`'s
+    /// The one semantic state every attache renderer consumes (INF-268).
+    /// Refreshed at semantic rate through `refreshAttacheActivity()`'s
     /// choke point; renderers compose live audio per frame via
     /// `with(audio:)` from the `PlaybackTimeline` they already observe.
-    @Published private(set) var companionActivity: CompanionActivityState = .initial
+    @Published private(set) var attacheActivity: AttacheActivityState = .initial
     /// Debug override driven by the activity simulator panel
     /// (`ATTACHE_ACTIVITY_SIMULATOR=1`); nil means live derivation.
-    @Published var simulatedActivity: CompanionActivityState? {
-        didSet { refreshCompanionActivity() }
+    @Published var simulatedActivity: AttacheActivityState? {
+        didSet { refreshAttacheActivity() }
     }
     /// The user is typing in the app right now (occurrence only, no content;
     /// see `TypingActivityMonitor`).
@@ -813,7 +772,7 @@ final class AppModel: ObservableObject {
     /// held phase flips once its dwell elapses on the next refresh; the
     /// choke point's sources tick at least every 2 s, so the flip lands
     /// promptly without a dedicated timer.
-    private let activityDamper = CompanionActivityDamper()
+    private let activityDamper = AttacheActivityDamper()
     /// When each watched session's attention last changed, so multi-session
     /// priority can prefer the most recent activity (INF-271).
     private var attentionChangedAt: [String: Date] = [:]
@@ -824,7 +783,7 @@ final class AppModel: ObservableObject {
     /// a guessed state never flips an exact one to a finished check.
     private var hookAttention: [String: (state: SessionAttentionState, firedAt: Date)] = [:]
     /// When each session began compacting its context (PreCompact), cleared on
-    /// PostCompact. Only the focused session's value drives the pet's squish.
+    /// PostCompact. Only the focused session's value drives the character's squish.
     private var compactingSince: [String: Date] = [:]
     /// Live sub-agent counts per watched session (INF-275), from the
     /// watcher's transcript assessment.
@@ -832,10 +791,10 @@ final class AppModel: ObservableObject {
     /// The latest one-shot beat for renderers (celebrate, card pop, drowsy).
     /// Renderers queue and play these; publishing the next one never cancels
     /// an animation already running.
-    @Published private(set) var companionMoment: CompanionActivityMoment?
+    @Published private(set) var attacheMoment: AttacheActivityMoment?
     /// How long a watcher phrase stays "fresh" enough to read as live tool
     /// activity. Tighter than the phrase's own 36s display lifetime so the
-    /// pet stops miming tools soon after the burst ends; INF-271 tunes this.
+    /// character stops miming tools soon after the burst ends; INF-271 tunes this.
     private static let toolActivityDwell: TimeInterval = 10
     var activitySimulatorEnabled: Bool {
         ["1", "cycle"].contains(ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"])
@@ -846,7 +805,7 @@ final class AppModel: ObservableObject {
     var activitySimulatorAutoCycles: Bool {
         ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"] == "cycle"
     }
-    private static let sessionIndexURL = CompanionAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
+    private static let sessionIndexURL = AttacheAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
     private var sessionIndexer = SessionIndexer(cacheURL: AppModel.sessionIndexURL, scanners: [])
     private let sessionIndexQueue = DispatchQueue(label: "com.bryanlabs.attache.sessionindex")
     @Published private(set) var sessionRecords: [SessionRecord] = []
@@ -875,7 +834,7 @@ final class AppModel: ObservableObject {
     /// The instruction the user is currently confirming before it sends, if any.
     @Published var pendingInstruction: Instruction?
     @Published var agentInstructionSendPolicy: AgentInstructionSendPolicy = .defaultValue {
-        didSet { defaults.set(agentInstructionSendPolicy.rawValue, forKey: CompanionPreferenceKey.agentInstructionSendPolicy) }
+        didSet { defaults.set(agentInstructionSendPolicy.rawValue, forKey: AttachePreferenceKey.agentInstructionSendPolicy) }
     }
     var directAgentSendEnabled: Bool {
         get { agentInstructionSendPolicy.sendsDirectlyAfterSessionEnable }
@@ -887,12 +846,13 @@ final class AppModel: ObservableObject {
     private let codexSessionWatcher = CodexSessionWatcher()
     private let sessionActivityWatcher = SessionActivityWatcher()
     private let presentationEnvironment: [String: String]
-    private let presentationService: CompanionPresentationService
-    private let companionPersonaStore: CompanionPersonaStore
-    private let companionMemoryStore: CompanionMemoryStore
+    private let presentationService: AttachePresentationService
+    private let attachePersonaStore: AttachePersonaStore
+    private let attacheMemoryStore: AttacheMemoryStore
     private var codexSessionRefreshTimer: Timer?
     private var followUpAnswerRequestID: UUID?
     private var liveFollowUpAnswerRequestID: UUID?
+    private var personalityPreviewRequestID: UUID?
     private static let systemVoicePreference = "system"
     private static let legacyAutoSelectedSamanthaVoiceID = "com.apple.voice.compact.en-US.Samantha"
     private static let elevenLabsDevelopmentSecretAccount = "elevenlabs-api-key"
@@ -911,15 +871,12 @@ final class AppModel: ObservableObject {
     @Published var integrationHealth: [String: IntegrationHealth] = [:]
     @Published var integrationFocusProviderID: String?
     private var integrationLastChecked: [String: Date] = [:]
-    @Published var ollamaBaseURL: String = CompanionPresentationProvider.ollama.defaultBaseURL {
-        didSet { defaults.set(ollamaBaseURL, forKey: CompanionPreferenceKey.ollamaBaseURL) }
+    @Published var ollamaBaseURL: String = AttachePresentationProvider.ollama.defaultBaseURL {
+        didSet { defaults.set(ollamaBaseURL, forKey: AttachePreferenceKey.ollamaBaseURL) }
     }
-    @Published var lmStudioBaseURL: String = CompanionPresentationProvider.lmStudio.defaultBaseURL {
-        didSet { defaults.set(lmStudioBaseURL, forKey: CompanionPreferenceKey.lmStudioBaseURL) }
-    }
-    @Published var customBaseURL: String = CompanionPresentationProvider.custom.defaultBaseURL {
+    @Published var customBaseURL: String = AttachePresentationProvider.custom.defaultBaseURL {
         didSet {
-            defaults.set(customBaseURL, forKey: CompanionPreferenceKey.customBaseURL)
+            defaults.set(customBaseURL, forKey: AttachePreferenceKey.customBaseURL)
             applySpeechConfiguration()
         }
     }
@@ -927,9 +884,9 @@ final class AppModel: ObservableObject {
     init(store: CardStore? = nil) {
         let environment = ProcessInfo.processInfo.environment
         presentationEnvironment = environment
-        presentationService = CompanionPresentationService(environment: environment)
-        companionPersonaStore = CompanionPersonaStore(environment: environment)
-        companionMemoryStore = CompanionMemoryStore(environment: environment)
+        presentationService = AttachePresentationService(environment: environment)
+        attachePersonaStore = AttachePersonaStore(environment: environment)
+        attacheMemoryStore = AttacheMemoryStore(environment: environment)
 
         do {
             if let store {
@@ -951,12 +908,12 @@ final class AppModel: ObservableObject {
             _ = try? self.store.pruneArchivedCards()   // bound growth on launch (INF-170)
             reloadCards()
         } catch {
-            fatalError("Unable to open \(CompanionAppSupport.appDisplayName) store: \(error.localizedDescription)")
+            fatalError("Unable to open \(AttacheAppSupport.appDisplayName) store: \(error.localizedDescription)")
         }
 
         twoWay = TwoWayCoordinator(
             store: self.store,
-            locateSessionFile: { CompanionSessionReader.sessionFileURL(forSessionID: $0) },
+            locateSessionFile: { AttacheSessionReader.sessionFileURL(forSessionID: $0) },
             expiryWindow: InstructionReplyEngine.expiryWindow(fromEnvironment: environment)
         )
         if let recoveryMessage = twoWay.startupRecoveryMessage {
@@ -989,7 +946,7 @@ final class AppModel: ObservableObject {
         }
         setupMediaRemote()
         setupConversationObservers()
-        setupCompanionActivityObservers()
+        setupAttacheActivityObservers()
         // Screenshot-matrix pose support (INF-244): inert unless
         // ATTACHE_UI_TEST_FORCE_LISTENING=1 rides alongside ATTACHE_UI_TEST=1
         // (see MicTranscriptController.shouldForceListeningForPose). Applied
@@ -1059,6 +1016,7 @@ final class AppModel: ObservableObject {
 
     deinit {
         codexSessionRefreshTimer?.invalidate()
+        conversationRequestTimeoutTimer?.invalidate()
         sessionActivityWatcher.stop()
         typingMonitor.stop()
         modelDiscoveryTask?.cancel()
@@ -1178,7 +1136,7 @@ final class AppModel: ObservableObject {
 
     /// The session a free-form "Talk" conversation is about: the locked session
     /// if any, otherwise the most recent active session. Lets you talk to the
-    /// companion any time, not only when locked on.
+    /// attache any time, not only when locked on.
     var talkContextSession: CodexSessionTarget? {
         if let attached = attachedCodexSession { return attached }
         if let codex = codexSessions.first { return codex }
@@ -1235,7 +1193,7 @@ final class AppModel: ObservableObject {
                let option = speechVoiceOptions.first(where: { $0.id == speechVoiceIdentifier }) {
                 return "On-device \(option.title)"
             }
-            if let fallbackIdentifier = CompanionVoiceCatalog.fileExportFallbackVoiceID(),
+            if let fallbackIdentifier = AttacheVoiceCatalog.fileExportFallbackVoiceID(),
                let option = speechVoiceOptions.first(where: { $0.id == fallbackIdentifier }) {
                 return "On-device \(option.title)"
             } else {
@@ -1267,7 +1225,7 @@ final class AppModel: ObservableObject {
         if let option = presentationModelOptions.first(where: { $0.id == presentationModel }) {
             return option.reasoningEfforts
         }
-        return CompanionPresentationModelService.fallbackReasoningEfforts(
+        return AttachePresentationModelService.fallbackReasoningEfforts(
             provider: presentationProvider,
             modelID: presentationModel
         )
@@ -1293,12 +1251,12 @@ final class AppModel: ObservableObject {
         return option.reasoningEfforts.isEmpty
     }
 
-    var selectedPresentationServiceTierOptions: [CompanionPresentationServiceTierOption] {
-        let options: [CompanionPresentationServiceTierOption]
+    var selectedPresentationServiceTierOptions: [AttachePresentationServiceTierOption] {
+        let options: [AttachePresentationServiceTierOption]
         if let option = presentationModelOptions.first(where: { $0.id == presentationModel }) {
             options = option.serviceTiers
         } else {
-            options = CompanionPresentationModelService.fallbackServiceTierOptions(
+            options = AttachePresentationModelService.fallbackServiceTierOptions(
                 provider: presentationProvider,
                 modelID: presentationModel
             )
@@ -1307,7 +1265,7 @@ final class AppModel: ObservableObject {
         if options.contains(where: { $0.id == "default" }) {
             return options
         }
-        return [CompanionPresentationServiceTierOption(
+        return [AttachePresentationServiceTierOption(
             id: "default",
             title: "Default",
             detail: "Use the provider default"
@@ -1377,7 +1335,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    @Published var newlyDownloadedVoice: CompanionVoiceOption?
+    @Published var newlyDownloadedVoice: AttacheVoiceOption?
 
     func startOnboarding() {
         showOnboarding = true
@@ -1391,9 +1349,9 @@ final class AppModel: ObservableObject {
         guard showOnboarding, newlyDownloadedVoice == nil else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self,
-                  let fresh = CompanionVoiceCatalog.freshOptions() else { return }
+                  let fresh = AttacheVoiceCatalog.freshOptions() else { return }
             DispatchQueue.main.async {
-                self.newlyDownloadedVoice = CompanionVoiceCatalog.newlyAvailableVoice(
+                self.newlyDownloadedVoice = AttacheVoiceCatalog.newlyAvailableVoice(
                     fresh: fresh, current: self.speechVoiceOptions)
             }
         }
@@ -1405,7 +1363,7 @@ final class AppModel: ObservableObject {
         if let voice = newlyDownloadedVoice {
             speechVoiceIdentifier = voice.id
         }
-        defaults.set(resumeStep, forKey: CompanionPreferenceKey.onboardingResumeStep)
+        defaults.set(resumeStep, forKey: AttachePreferenceKey.onboardingResumeStep)
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, _ in
@@ -1415,14 +1373,14 @@ final class AppModel: ObservableObject {
 
     /// The persisted resume step, cleared on read.
     func takeOnboardingResumeStep() -> Int? {
-        guard defaults.object(forKey: CompanionPreferenceKey.onboardingResumeStep) != nil else { return nil }
-        let step = defaults.integer(forKey: CompanionPreferenceKey.onboardingResumeStep)
-        defaults.removeObject(forKey: CompanionPreferenceKey.onboardingResumeStep)
+        guard defaults.object(forKey: AttachePreferenceKey.onboardingResumeStep) != nil else { return nil }
+        let step = defaults.integer(forKey: AttachePreferenceKey.onboardingResumeStep)
+        defaults.removeObject(forKey: AttachePreferenceKey.onboardingResumeStep)
         return step
     }
 
     func completeOnboarding() {
-        defaults.set(true, forKey: CompanionPreferenceKey.onboardingCompleted)
+        defaults.set(true, forKey: AttachePreferenceKey.onboardingCompleted)
         showOnboarding = false
     }
 
@@ -1480,7 +1438,7 @@ final class AppModel: ObservableObject {
                 sessionAttention[sessionID] = .awaitingAnswer
                 attentionChangedAt[sessionID] = Date()
                 if !wasNeeding {
-                    companionMoment = CompanionActivityMoment(
+                    attacheMoment = AttacheActivityMoment(
                         kind: .needsYou, agent: agentIdentity(forSessionID: sessionID), at: Date()
                     )
                 }
@@ -1488,7 +1446,7 @@ final class AppModel: ObservableObject {
             persistNeedsYouNotice(event: notice, line: event.text)
             return
         }
-        // Exact turn completion from Claude Code's Stop hook. The pet's finished
+        // Exact turn completion from Claude Code's Stop hook. The character's finished
         // check comes only from this, never from a transcript quiet-gap guess.
         if event.eventType == "turn_complete" {
             if let sessionID = event.externalSessionID {
@@ -1509,22 +1467,22 @@ final class AppModel: ObservableObject {
         if event.eventType == "compact_start" {
             if let sid = event.externalSessionID {
                 compactingSince[sid] = Date()
-                refreshCompanionActivity()
+                refreshAttacheActivity()
             }
             return
         }
         if event.eventType == "compact_end" {
             if let sid = event.externalSessionID {
                 compactingSince.removeValue(forKey: sid)
-                refreshCompanionActivity()
+                refreshAttacheActivity()
             }
             return
         }
-        // One-shot pet moments from the other lifecycle hooks (errored, greet,
+        // One-shot character moments from the other lifecycle hooks (errored, greet,
         // farewell, configuring).
         if let momentKind = Self.momentKind(forEventType: event.eventType) {
             let agent = event.externalSessionID.map { agentIdentity(forSessionID: $0) } ?? .none
-            companionMoment = CompanionActivityMoment(kind: momentKind, agent: agent, at: Date())
+            attacheMoment = AttacheActivityMoment(kind: momentKind, agent: agent, at: Date())
             return
         }
         intakeStatus = event.source == SourceKind.codex.rawValue
@@ -1579,26 +1537,26 @@ final class AppModel: ObservableObject {
         let wasNeeding = previous?.needsUser ?? false
         if state.needsUser, !wasNeeding {
             fileNeedsYouNotice(sessionID: sessionID, state: state)
-            companionMoment = CompanionActivityMoment(
+            attacheMoment = AttacheActivityMoment(
                 kind: .needsYou, agent: agentIdentity(forSessionID: sessionID), at: Date()
             )
         } else if !state.needsUser, wasNeeding {
             resolveNeedsYouNotices(sessionID: sessionID)
         }
-        // One-shot beats for the pet (INF-271): a finished turn celebrates,
+        // One-shot beats for the character (INF-271): a finished turn celebrates,
         // a still-pinned session going stale yawns. Transitions only, so a
         // first classification after attach never fires a stale celebration.
         if previous == .active, state == .turnComplete {
-            companionMoment = CompanionActivityMoment(
+            attacheMoment = AttacheActivityMoment(
                 kind: .celebrate, agent: agentIdentity(forSessionID: sessionID), at: Date()
             )
         } else if state == .quiet, previous != nil, attachedTargets[sessionID] != nil {
-            companionMoment = CompanionActivityMoment(
+            attacheMoment = AttacheActivityMoment(
                 kind: .drowsy, agent: agentIdentity(forSessionID: sessionID), at: Date()
             )
         }
-        if let moment = companionMoment, moment.at.timeIntervalSinceNow > -1 {
-            AttacheLog.watcher.info("companion moment \(moment.kind.rawValue, privacy: .public) for \(moment.agent.rawValue, privacy: .public) (attention \(String(describing: previous), privacy: .public) -> \(String(describing: state), privacy: .public))")
+        if let moment = attacheMoment, moment.at.timeIntervalSinceNow > -1 {
+            AttacheLog.watcher.info("attache moment \(moment.kind.rawValue, privacy: .public) for \(moment.agent.rawValue, privacy: .public) (attention \(String(describing: previous), privacy: .public) -> \(String(describing: state), privacy: .public))")
         }
     }
 
@@ -1654,7 +1612,7 @@ final class AppModel: ObservableObject {
             // announcement follow the user's macOS notification settings
             // (Announce Notifications), never a voice of our own.
             if notifyScope.allowsNeedsYou {
-                CompanionNotifier.shared.post(card: card, kind: .needsYou)
+                AttacheNotifier.shared.post(card: card, kind: .needsYou)
             }
         } catch {
             intakeStatus = "Could not file a needs-you notice."
@@ -1683,7 +1641,7 @@ final class AppModel: ObservableObject {
 
     private func offerTipIfAppropriate() {
         guard showTips,
-              defaults.bool(forKey: CompanionPreferenceKey.onboardingCompleted),
+              defaults.bool(forKey: AttachePreferenceKey.onboardingCompleted),
               !onCall,
               !playback.isBusy,
               ProcessInfo.processInfo.environment["ATTACHE_UI_TEST"] == nil,
@@ -1767,13 +1725,13 @@ final class AppModel: ObservableObject {
                     reloadCards()
                 }
                 intakeStatus = "Queued \(card.sourceDisplayName) update in voicemail for \(card.projectPath ?? "unknown project")."
-                companionMoment = CompanionActivityMoment(
+                attacheMoment = AttacheActivityMoment(
                     kind: .cardArrived,
-                    agent: CompanionAgentIdentity(sourceKindRawValue: card.sourceKind),
+                    agent: AttacheAgentIdentity(sourceKindRawValue: card.sourceKind),
                     at: Date()
                 )
                 if voicemailMode, notifyScope.allowsRecaps {
-                    CompanionNotifier.shared.post(card: card, kind: .recap)
+                    AttacheNotifier.shared.post(card: card, kind: .recap)
                 }
                 postHomeNotice(
                     "New voicemail\(card.sessionTitle.map { " · \($0)" } ?? "")",
@@ -1786,7 +1744,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Right-click affordance on the mini companion (INF-272): replay the
+    /// Right-click affordance on the mini attache (INF-272): replay the
     /// newest update without opening the main window.
     func replayLastUpdate() {
         guard let card = cards.max(by: { $0.createdAt < $1.createdAt }) else { return }
@@ -1794,10 +1752,15 @@ final class AppModel: ObservableObject {
     }
 
     /// Hear an "another take" of a card in a different personality's voice
-    /// (INF-299). Switches to the target personality (its voice and pet, with a
-    /// greeting), asks the model for its own spin on the original, then files and
-    /// plays a new card linked back to the original.
-    func anotherTake(card: VoicemailCard, targetPersonalityID: String) {
+    /// (INF-299). Switches to the target personality, asks the model for its own
+    /// spin on the original, then files and plays a linked card. A live-call
+    /// clarification carries the call id that requested it; hanging up makes a
+    /// late result inert. Explicit off-call Another Take actions pass no call id.
+    func anotherTake(
+        card: VoicemailCard,
+        targetPersonalityID: String,
+        requiredCallID: UUID? = nil
+    ) {
         guard let target = personalities.first(where: { $0.id == targetPersonalityID }) else { return }
         let priorName = card.producedByPersonalityName ?? activePersonality?.name ?? "Attaché"
         selectPersonality(targetPersonalityID)
@@ -1808,6 +1771,9 @@ final class AppModel: ObservableObject {
             priorPersonalityName: priorName
         ) { [weak self] presented in
             guard let self else { return }
+            if let requiredCallID {
+                guard self.conversationActive, self.activeConversationID == requiredCallID else { return }
+            }
             guard let presented else {
                 self.intakeStatus = "Another take needs a presentation model. Set one up in Settings."
                 return
@@ -1858,7 +1824,7 @@ final class AppModel: ObservableObject {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
-    func historyCards(for scope: CompanionHistoryScope) -> [VoicemailCard] {
+    func historyCards(for scope: AttacheHistoryScope) -> [VoicemailCard] {
         switch scope {
         case .focused:
             guard let attachedCodexSessionID else { return [] }
@@ -1875,7 +1841,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func historyCount(for scope: CompanionHistoryScope) -> Int {
+    func historyCount(for scope: AttacheHistoryScope) -> Int {
         historyCards(for: scope).count
     }
 
@@ -1883,7 +1849,7 @@ final class AppModel: ObservableObject {
     /// Sent tab. Backed by `TwoWayCoordinator.log`, which already mirrors
     /// `InstructionReplyEngine`'s persisted audit log after every state
     /// transition, so no separate storage or refresh path is needed here.
-    func sentInstructions(for scope: CompanionHistoryScope) -> [Instruction] {
+    func sentInstructions(for scope: AttacheHistoryScope) -> [Instruction] {
         let all = twoWay.log
         switch scope {
         case .focused:
@@ -1898,7 +1864,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func sentInstructionsCount(for scope: CompanionHistoryScope) -> Int {
+    func sentInstructionsCount(for scope: AttacheHistoryScope) -> Int {
         sentInstructions(for: scope).count
     }
 
@@ -2001,12 +1967,12 @@ final class AppModel: ObservableObject {
         let personality = activePersonality
         let profilePrompt = firstNonEmptyPrompt(
             personality?.prompt,
-            companionPersonaStore.loadSnapshot().prompt,
-            CompanionPersonality.defaultProfilePrompt
+            attachePersonaStore.loadSnapshot().prompt,
+            AttachePersonality.defaultProfilePrompt
         )
-        let memoryContext = companionMemoryStore.loadSnapshot().context
-        let spokenLanguageName = CompanionPresentationService.spokenLanguageName(defaults: defaults)
-        let prompt = CompanionPersonality.recapPrompt(
+        let memoryContext = attacheMemoryStore.loadSnapshot().context
+        let spokenLanguageName = AttachePresentationService.spokenLanguageName(defaults: defaults)
+        let prompt = AttachePersonality.recapPrompt(
             items: summarized.map { recapItem(for: $0) },
             profilePrompt: profilePrompt,
             memoryContext: memoryContext,
@@ -2025,7 +1991,7 @@ final class AppModel: ObservableObject {
                 // to the main actor before touching either (mutating observed
                 // state off-main re-enters SwiftUI's body and overflows the stack).
                 await MainActor.run {
-                    let trimmed = CompanionPersonality.stripDashes(recapText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+                    let trimmed = AttachePersonality.stripDashes(recapText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
                     guard !trimmed.isEmpty else {
                         // The LLM was configured but returned nothing usable: fall
                         // back to the deterministic digest and leave the inbox as
@@ -2044,7 +2010,7 @@ final class AppModel: ObservableObject {
                 await MainActor.run {
                     self.playback.preview(self.inboxDigestText(for: summarized))
                     self.intakeStatus = "Recap unavailable; played the quick digest instead."
-                    let presentationError = error as? CompanionPresentationError
+                    let presentationError = error as? AttachePresentationError
                     let recovery = ConversationRecovery.classify(
                         errorMessage: error.localizedDescription,
                         failedPrompt: "",
@@ -2073,11 +2039,11 @@ final class AppModel: ObservableObject {
         personality: Personality?
     ) {
         var metadata: [String: String] = [
-            "attache_recap": "1",
+            "companion_recap": "1",
             "companion_history_kind": "recap",
             "companion_summary": Self.conversationReplySummary(from: recapText),
             "companion_spoken_text": recapText,
-            "companion_presentation_strategy": "companion-inbox-recap"
+            "companion_presentation_strategy": "attache-inbox-recap"
         ]
         if let personality {
             metadata["companion_personality_id"] = personality.id
@@ -2096,7 +2062,7 @@ final class AppModel: ObservableObject {
 
         let event = NormalizedEvent(
             source: source,
-            eventType: "companion.inbox.recap",
+            eventType: "attache.inbox.recap",
             externalSessionID: sessionID,
             projectPath: nil,
             title: "Recap",
@@ -2124,8 +2090,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func recapItem(for card: VoicemailCard) -> CompanionPersonality.RecapItem {
-        CompanionPersonality.RecapItem(
+    private func recapItem(for card: VoicemailCard) -> AttachePersonality.RecapItem {
+        AttachePersonality.RecapItem(
             sessionTitle: displaySessionTitle(forCard: card) ?? card.sourceDisplayName,
             summary: card.summary,
             spokenText: card.spokenText,
@@ -2138,7 +2104,7 @@ final class AppModel: ObservableObject {
             let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !trimmed.isEmpty { return trimmed }
         }
-        return CompanionPersonality.defaultProfilePrompt
+        return AttachePersonality.defaultProfilePrompt
     }
 
     /// Catch-me-up: play every waiting card oldest-first, auto-advancing.
@@ -2233,6 +2199,7 @@ final class AppModel: ObservableObject {
     func startConversation() {
         let wasActive = conversationActive
         if !wasActive {
+            activeConversationID = UUID()
             conversationDestination = .attache
             conversationTargetSnapshot = captureConversationTargetSnapshot()
             // The auto-fallback chain is sticky for a call, never across
@@ -2253,11 +2220,24 @@ final class AppModel: ObservableObject {
 
     func endConversation() {
         conversationActive = false
+        activeConversationID = nil
+        activeConversationRequestID = nil
+        conversationRequestTimeoutTimer?.invalidate()
+        conversationRequestTimeoutTimer = nil
+        isConversing = false
         silenceTimer?.invalidate(); silenceTimer = nil
+        revealTimer?.invalidate(); revealTimer = nil
         endConversationWait()
         conversationFallbackRetryTimer?.invalidate()
         conversationFallbackRetryTimer = nil
         conversationFallbackAnnouncement = nil
+        pendingAssistantReply = nil
+        expectingReplyAudio = false
+        conversationRecovery = nil
+        conversationRecoveryConfirmation = nil
+        conversationStatus = ""
+        conversationDestination = .attache
+        conversationTargetSnapshot = nil
         micTranscript.stop(status: "")
         // Hanging up silences live narration immediately: stop what's speaking and
         // drop the queued backlog so it doesn't keep talking. The rest stays in the
@@ -2351,7 +2331,7 @@ final class AppModel: ObservableObject {
 
     func sendConversationMessage(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isAwaitingReply else { return }
+        guard conversationActive, !trimmed.isEmpty, !isAwaitingReply else { return }
 
         conversationFallbackRetryTimer?.invalidate()
         conversationFallbackRetryTimer = nil
@@ -2390,6 +2370,11 @@ final class AppModel: ObservableObject {
     /// turn; `announceConversationFallback` below calls it again, with the
     /// same `trimmed` text, once a fallback provider has been chosen.
     private func performConversationRequest(_ trimmed: String) {
+        guard conversationActive, activeConversationID != nil else {
+            isConversing = false
+            endConversationWait()
+            return
+        }
         let context = conversationTargetSnapshot
         let messages = buildConversationMessages(context: context)
         let sessionID = context?.target.id
@@ -2402,6 +2387,13 @@ final class AppModel: ObservableObject {
         let fallbackProvider = conversationFallbackState.activeProvider
         let attemptedProvider = fallbackProvider ?? effectiveRecoveryProvider(for: .conversation)
         let settingsOverride = fallbackProvider.map(conversationFallbackSettings(for:))
+        let requestID = UUID()
+        activeConversationRequestID = requestID
+        beginConversationRequestDeadline(
+            requestID: requestID,
+            prompt: trimmed,
+            attemptedProvider: attemptedProvider
+        )
 
         presentationService.converse(
             messages: messages,
@@ -2428,7 +2420,12 @@ final class AppModel: ObservableObject {
                 )
             },
             completion: { [weak self] result in
-                guard let self else { return }
+                guard let self,
+                      self.conversationActive,
+                      self.activeConversationRequestID == requestID else { return }
+                self.activeConversationRequestID = nil
+                self.conversationRequestTimeoutTimer?.invalidate()
+                self.conversationRequestTimeoutTimer = nil
                 self.isConversing = false
                 self.endConversationWait()
                 switch result {
@@ -2441,6 +2438,36 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// A live voice turn should feel conversational, not like an unbounded job.
+    /// The model operation may still unwind in the background, but its request id
+    /// is invalidated here so it cannot mutate UI or play audio when it eventually
+    /// returns. CLI subprocesses have a matching hard process timeout.
+    private func beginConversationRequestDeadline(
+        requestID: UUID,
+        prompt: String,
+        attemptedProvider: AttachePresentationProvider
+    ) {
+        conversationRequestTimeoutTimer?.invalidate()
+        let configured = presentationEnvironment["ATTACHE_CONVERSATION_TIMEOUT_SECONDS"]
+            .flatMap(TimeInterval.init)
+            .flatMap { $0 > 0 ? $0 : nil }
+        let timeout = configured ?? Self.conversationRequestTimeoutSeconds
+        conversationRequestTimeoutTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+            guard let self,
+                  self.conversationActive,
+                  self.activeConversationRequestID == requestID else { return }
+            self.activeConversationRequestID = nil
+            self.conversationRequestTimeoutTimer = nil
+            self.isConversing = false
+            self.endConversationWait()
+            self.handleConversationFailure(
+                AttachePresentationError.transport(URLError(.timedOut)),
+                failedPrompt: prompt,
+                attemptedProvider: attemptedProvider
+            )
+        }
+    }
+
     /// Classifies a failed conversation attempt and either (a) transparently
     /// retries on the next configured-and-consented fallback provider
     /// (INF-258/D5, only while the toggle is on and no fallback is active yet
@@ -2449,10 +2476,10 @@ final class AppModel: ObservableObject {
     private func handleConversationFailure(
         _ error: Error,
         failedPrompt: String,
-        attemptedProvider: CompanionPresentationProvider
+        attemptedProvider: AttachePresentationProvider
     ) {
         let errorMessage = error.localizedDescription
-        let presentationError = error as? CompanionPresentationError
+        let presentationError = error as? AttachePresentationError
         let httpStatus = presentationError?.httpStatus
         let urlErrorCode = presentationError?.urlErrorCode ?? (error as? URLError)?.code
         let recovery = ConversationRecovery.classify(
@@ -2503,10 +2530,11 @@ final class AppModel: ObservableObject {
     /// retry's own reply audio doesn't immediately cut it off.
     private func announceConversationFallback(
         category: ConversationFailureCategory,
-        from failedProvider: CompanionPresentationProvider,
-        to fallback: CompanionPresentationProvider,
+        from failedProvider: AttachePresentationProvider,
+        to fallback: AttachePresentationProvider,
         retryPrompt: String
     ) {
+        guard conversationActive else { return }
         let announcement = ConversationFallbackChain.announcement(
             category: category,
             failedProviderTitle: failedProvider.title,
@@ -2527,7 +2555,7 @@ final class AppModel: ObservableObject {
         let delaySeconds = Double(CaptionAlignmentBuilder.estimatedDurationMs(for: announcement)) / 1000.0 + 0.2
         conversationFallbackRetryTimer?.invalidate()
         conversationFallbackRetryTimer = Timer.scheduledTimer(withTimeInterval: delaySeconds, repeats: false) { [weak self] _ in
-            guard let self else { return }
+            guard let self, self.conversationActive else { return }
             self.conversationFallbackRetryTimer = nil
             self.conversationFallbackAnnouncement = nil
             self.isConversing = true
@@ -2540,23 +2568,23 @@ final class AppModel: ObservableObject {
     /// bypassing every per-role persisted override: the auto-fallback chain
     /// must not touch Settings, only this call. Reuses the exact helpers
     /// Settings itself uses to resolve a provider's endpoint and credentials.
-    private func conversationFallbackSettings(for provider: CompanionPresentationProvider) -> CompanionPresentationSettings {
-        CompanionPresentationSettings.forFallback(
+    private func conversationFallbackSettings(for provider: AttachePresentationProvider) -> AttachePresentationSettings {
+        AttachePresentationSettings.forFallback(
             provider: provider,
             baseURLText: endpointForIntegration(provider),
             apiKey: readConfiguredSecret(account: provider.developmentSecretAccount) ?? "",
-            profilePrompt: defaults.string(forKey: CompanionPreferenceKey.personalityPrompt) ?? ""
+            profilePrompt: defaults.string(forKey: AttachePreferenceKey.personalityPrompt) ?? ""
         )
     }
 
-    // MARK: Fallback chain settings (Model pane, INF-258/D5)
+    // MARK: Per-character fallback chain runtime (INF-258/D5)
 
-    func addConversationFallbackChainProvider(_ provider: CompanionPresentationProvider) {
+    func addConversationFallbackChainProvider(_ provider: AttachePresentationProvider) {
         guard !conversationFallbackChain.contains(provider) else { return }
         conversationFallbackChain.append(provider)
     }
 
-    func removeConversationFallbackChainProvider(_ provider: CompanionPresentationProvider) {
+    func removeConversationFallbackChainProvider(_ provider: AttachePresentationProvider) {
         conversationFallbackChain.removeAll { $0 == provider }
     }
 
@@ -2567,17 +2595,17 @@ final class AppModel: ObservableObject {
         conversationFallbackChain.swapAt(index, targetIndex)
     }
 
-    var conversationRecoveryProviders: [CompanionPresentationProvider] {
+    var conversationRecoveryProviders: [AttachePresentationProvider] {
         connectedTextProviders.filter { $0 != presentationProvider }
     }
 
-    var conversationRecoveryModels: [CompanionPresentationModelOption] {
+    var conversationRecoveryModels: [AttachePresentationModelOption] {
         var options = presentationModelOptions.filter { $0.id != presentationModel }
         if presentationModel != "default", !options.contains(where: { $0.id == "default" }) {
-            options.insert(CompanionPresentationModelOption(
+            options.insert(AttachePresentationModelOption(
                 id: "default",
                 detail: "use \(presentationProvider.title)'s configured model",
-                reasoningEfforts: CompanionPresentationModelService.fallbackReasoningEfforts(
+                reasoningEfforts: AttachePresentationModelService.fallbackReasoningEfforts(
                     provider: presentationProvider,
                     modelID: "default"
                 )
@@ -2591,7 +2619,7 @@ final class AppModel: ObservableObject {
         return !conversationDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func selectConversationRecoveryModel(_ option: CompanionPresentationModelOption) {
+    func selectConversationRecoveryModel(_ option: AttachePresentationModelOption) {
         // An explicit manual choice always wins over the sticky auto-fallback
         // (INF-258/D5): the user is picking a specific brain, so the rest of
         // this call should use exactly that, not silently keep redirecting to
@@ -2606,7 +2634,7 @@ final class AppModel: ObservableObject {
         conversationRecoveryConfirmation = confirmation
     }
 
-    func selectConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
+    func selectConversationRecoveryProvider(_ provider: AttachePresentationProvider) {
         conversationFallbackState.reset()
         isApplyingConversationRecoveryOverride = true
         selectPresentationProvider(provider)
@@ -2644,8 +2672,8 @@ final class AppModel: ObservableObject {
 
     /// The provider a role is currently using: its own override if one is
     /// set, else the main model row, mirroring
-    /// `CompanionPresentationSettings.load(role:)`'s own fallback.
-    private func effectiveRecoveryProvider(for role: ModelRole) -> CompanionPresentationProvider {
+    /// `AttachePresentationSettings.load(role:)`'s own fallback.
+    private func effectiveRecoveryProvider(for role: ModelRole) -> AttachePresentationProvider {
         roleModelProvider[role] ?? presentationProvider
     }
 
@@ -2653,11 +2681,11 @@ final class AppModel: ObservableObject {
         roleModelID[role] ?? presentationModel
     }
 
-    private func recoveryProviders(for role: ModelRole) -> [CompanionPresentationProvider] {
+    private func recoveryProviders(for role: ModelRole) -> [AttachePresentationProvider] {
         connectedTextProviders.filter { $0 != effectiveRecoveryProvider(for: role) }
     }
 
-    private func recoveryModelOptions(for role: ModelRole) -> [CompanionPresentationModelOption] {
+    private func recoveryModelOptions(for role: ModelRole) -> [AttachePresentationModelOption] {
         let currentModelID = effectiveRecoveryModelID(for: role)
         // No override yet: the role is using the main row, so its discovered
         // models are the main row's (`presentationModelOptions`), exactly what
@@ -2666,10 +2694,10 @@ final class AppModel: ObservableObject {
         var options = source.filter { $0.id != currentModelID }
         if currentModelID != "default", !options.contains(where: { $0.id == "default" }) {
             let provider = effectiveRecoveryProvider(for: role)
-            options.insert(CompanionPresentationModelOption(
+            options.insert(AttachePresentationModelOption(
                 id: "default",
                 detail: "use \(provider.title)'s configured model",
-                reasoningEfforts: CompanionPresentationModelService.fallbackReasoningEfforts(provider: provider, modelID: "default")
+                reasoningEfforts: AttachePresentationModelService.fallbackReasoningEfforts(provider: provider, modelID: "default")
             ), at: 0)
         }
         return options
@@ -2677,7 +2705,7 @@ final class AppModel: ObservableObject {
 
     /// Switches one role's override to a new provider (never the global
     /// fallback other roles read) and starts model discovery for it.
-    private func selectRoleRecoveryProvider(_ provider: CompanionPresentationProvider, for role: ModelRole) {
+    private func selectRoleRecoveryProvider(_ provider: AttachePresentationProvider, for role: ModelRole) {
         selectRoleProvider(provider, for: role)
         loadRoleModels(for: role)
     }
@@ -2686,31 +2714,31 @@ final class AppModel: ObservableObject {
     /// explicit override for that provider first if the role was still on
     /// "Use main model" (a mere failure never seeds one on its own; only this
     /// explicit user action does).
-    private func selectRoleRecoveryModel(_ option: CompanionPresentationModelOption, for role: ModelRole) {
+    private func selectRoleRecoveryModel(_ option: AttachePresentationModelOption, for role: ModelRole) {
         if roleModelProvider[role] == nil {
             selectRoleProvider(effectiveRecoveryProvider(for: role), for: role)
         }
         selectRoleModel(option, for: role)
     }
 
-    var recapEffectiveProvider: CompanionPresentationProvider { effectiveRecoveryProvider(for: .recap) }
+    var recapEffectiveProvider: AttachePresentationProvider { effectiveRecoveryProvider(for: .recap) }
     /// Both follow-up surfaces (card-based and live/session-based) ride the
     /// `.conversation` role (see `ModelRole`'s doc), so they share this one
     /// "which provider is follow-up currently using" reading.
-    var followUpEffectiveProvider: CompanionPresentationProvider { effectiveRecoveryProvider(for: .conversation) }
-    var recapRecoveryProviders: [CompanionPresentationProvider] { recoveryProviders(for: .recap) }
-    var recapRecoveryModels: [CompanionPresentationModelOption] { recoveryModelOptions(for: .recap) }
+    var followUpEffectiveProvider: AttachePresentationProvider { effectiveRecoveryProvider(for: .conversation) }
+    var recapRecoveryProviders: [AttachePresentationProvider] { recoveryProviders(for: .recap) }
+    var recapRecoveryModels: [AttachePresentationModelOption] { recoveryModelOptions(for: .recap) }
 
     var canRetryRecapFailure: Bool {
         recapRecovery?.offersModelSwitch == true && !recapRetryCards.isEmpty
     }
 
-    func selectRecapRecoveryProvider(_ provider: CompanionPresentationProvider) {
+    func selectRecapRecoveryProvider(_ provider: AttachePresentationProvider) {
         selectRoleRecoveryProvider(provider, for: .recap)
         recapRecoveryConfirmation = "Switched recap to \(provider.title). Retry the recap when ready."
     }
 
-    func selectRecapRecoveryModel(_ option: CompanionPresentationModelOption) {
+    func selectRecapRecoveryModel(_ option: AttachePresentationModelOption) {
         selectRoleRecoveryModel(option, for: .recap)
         recapRecoveryConfirmation = "Switched recap to \(recapEffectiveProvider.title) \(option.id). Retry the recap when ready."
     }
@@ -2724,8 +2752,8 @@ final class AppModel: ObservableObject {
         playInboxRecap(for: cards)
     }
 
-    var followUpRecoveryProviders: [CompanionPresentationProvider] { recoveryProviders(for: .conversation) }
-    var followUpRecoveryModels: [CompanionPresentationModelOption] { recoveryModelOptions(for: .conversation) }
+    var followUpRecoveryProviders: [AttachePresentationProvider] { recoveryProviders(for: .conversation) }
+    var followUpRecoveryModels: [AttachePresentationModelOption] { recoveryModelOptions(for: .conversation) }
 
     var canRetryFollowUpFailure: Bool {
         followUpRecovery?.offersModelSwitch == true
@@ -2733,12 +2761,12 @@ final class AppModel: ObservableObject {
             && !followUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func selectFollowUpRecoveryProvider(_ provider: CompanionPresentationProvider) {
+    func selectFollowUpRecoveryProvider(_ provider: AttachePresentationProvider) {
         selectRoleRecoveryProvider(provider, for: .conversation)
         followUpStatus = "Switched to \(provider.title). Ask Attaché again to retry."
     }
 
-    func selectFollowUpRecoveryModel(_ option: CompanionPresentationModelOption) {
+    func selectFollowUpRecoveryModel(_ option: AttachePresentationModelOption) {
         selectRoleRecoveryModel(option, for: .conversation)
         followUpStatus = "Switched to \(effectiveRecoveryProvider(for: .conversation).title) \(option.id). Ask Attaché again to retry."
     }
@@ -2749,8 +2777,8 @@ final class AppModel: ObservableObject {
         createFollowUpAnswer()
     }
 
-    var liveFollowUpRecoveryProviders: [CompanionPresentationProvider] { recoveryProviders(for: .conversation) }
-    var liveFollowUpRecoveryModels: [CompanionPresentationModelOption] { recoveryModelOptions(for: .conversation) }
+    var liveFollowUpRecoveryProviders: [AttachePresentationProvider] { recoveryProviders(for: .conversation) }
+    var liveFollowUpRecoveryModels: [AttachePresentationModelOption] { recoveryModelOptions(for: .conversation) }
 
     var canRetryLiveFollowUpFailure: Bool {
         liveFollowUpRecovery?.offersModelSwitch == true
@@ -2758,12 +2786,12 @@ final class AppModel: ObservableObject {
             && !liveFollowUpText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func selectLiveFollowUpRecoveryProvider(_ provider: CompanionPresentationProvider) {
+    func selectLiveFollowUpRecoveryProvider(_ provider: AttachePresentationProvider) {
         selectRoleRecoveryProvider(provider, for: .conversation)
         liveFollowUpStatus = "Switched to \(provider.title). Ask Attaché again to retry."
     }
 
-    func selectLiveFollowUpRecoveryModel(_ option: CompanionPresentationModelOption) {
+    func selectLiveFollowUpRecoveryModel(_ option: AttachePresentationModelOption) {
         selectRoleRecoveryModel(option, for: .conversation)
         liveFollowUpStatus = "Switched to \(effectiveRecoveryProvider(for: .conversation).title) \(option.id). Ask Attaché again to retry."
     }
@@ -2778,7 +2806,7 @@ final class AppModel: ObservableObject {
     /// the LLM-error fallback strategy; `nil` for every other strategy
     /// (including the deliberate "not configured" fallback, which is not a
     /// failure) or when the classification isn't recoverable.
-    private func classifyFollowUpRecovery(_ answer: CompanionFollowUpAnswerResult) -> ConversationRecovery? {
+    private func classifyFollowUpRecovery(_ answer: AttacheFollowUpAnswerResult) -> ConversationRecovery? {
         guard answer.strategy == "deterministic-follow-up-fallback-after-llm-error",
               let errorDescription = answer.errorDescription else { return nil }
         let recovery = ConversationRecovery.classify(
@@ -2806,7 +2834,7 @@ final class AppModel: ObservableObject {
 
     private func surfaceConversationReply(_ reply: String, toolCallLost: Bool = false) {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard conversationActive, !trimmed.isEmpty else { return }
         // Keep the HUD in an audio-prep state until the normal delivery path,
         // captions and a replayable card, is ready.
         conversationStatus = "Preparing audio…"
@@ -2835,7 +2863,7 @@ final class AppModel: ObservableObject {
             "companion_history_kind": "direct_reply",
             "companion_summary": Self.conversationReplySummary(from: trimmed),
             "companion_spoken_text": trimmed,
-            "companion_presentation_strategy": "companion-direct-chat",
+            "companion_presentation_strategy": "attache-direct-chat",
             "companion_direct_reply": "true"
         ]
         // INF-243: a CLI personality attempted a tool call that never
@@ -2855,7 +2883,7 @@ final class AppModel: ObservableObject {
 
         let event = NormalizedEvent(
             source: session?.sourceKind.rawValue ?? SourceKind.generic.rawValue,
-            eventType: "companion.conversation.reply",
+            eventType: "attache.conversation.reply",
             externalSessionID: session?.id,
             projectPath: conversationWorkingDirectory,
             title: session?.displayTitle ?? "Attaché reply",
@@ -3214,13 +3242,13 @@ final class AppModel: ObservableObject {
         try? twoWay.cancel(id: id)
     }
 
-    private func buildConversationMessages(context: ConversationTargetSnapshot?) -> [CompanionChatMessage] {
-        let memorySnapshot = companionMemoryStore.loadSnapshot()
-        let personaSnapshot = companionPersonaStore.loadSnapshot()
+    private func buildConversationMessages(context: ConversationTargetSnapshot?) -> [AttacheChatMessage] {
+        let memorySnapshot = attacheMemoryStore.loadSnapshot()
+        let personaSnapshot = attachePersonaStore.loadSnapshot()
         let profilePrompt = personaSnapshot.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? CompanionPersonality.defaultProfilePrompt
+            ? AttachePersonality.defaultProfilePrompt
             : personaSnapshot.prompt
-        let system = CompanionPersonality.conversationSystemPrompt(
+        let system = AttachePersonality.conversationSystemPrompt(
             profilePrompt: profilePrompt,
             memoryContext: memorySnapshot.context,
             sessionTitle: context?.target.displayTitle,
@@ -3231,12 +3259,12 @@ final class AppModel: ObservableObject {
             canStageAgentInstruction: context?.agentSendTarget != nil,
             watchedSessions: watchedSessionSummaries(context: context)
         )
-        var messages = [CompanionChatMessage(role: "system", content: system)]
+        var messages = [AttacheChatMessage(role: "system", content: system)]
         // Cap the in-RAM transcript sent per turn so a long multi-call conversation
         // doesn't grow the request unbounded; durable memory is the persistence
         // surface, not this transcript (INF-170).
         for turn in conversationMessages.suffix(Self.maxConversationTurnsPerRequest) {
-            messages.append(CompanionChatMessage(role: turn.role == .user ? "user" : "assistant", content: turn.text))
+            messages.append(AttacheChatMessage(role: turn.role == .user ? "user" : "assistant", content: turn.text))
         }
         return messages
     }
@@ -3248,11 +3276,11 @@ final class AppModel: ObservableObject {
     /// context for the model to read and mention, not a routing input, per
     /// AGENTS.md's "no hidden phrase routing" decision: the frozen send
     /// destination is unaffected by anything built here.
-    private func watchedSessionSummaries(context: ConversationTargetSnapshot?) -> [CompanionPersonality.WatchedSessionSummary] {
+    private func watchedSessionSummaries(context: ConversationTargetSnapshot?) -> [AttachePersonality.WatchedSessionSummary] {
         let focusedSessionID = (context?.isExplicitlyFocused == true) ? context?.target.id : nil
-        var summaries = attachedTargets.values.map { target -> CompanionPersonality.WatchedSessionSummary in
+        var summaries = attachedTargets.values.map { target -> AttachePersonality.WatchedSessionSummary in
             let isFocused = focusedSessionID != nil && target.id == focusedSessionID
-            return CompanionPersonality.WatchedSessionSummary(
+            return AttachePersonality.WatchedSessionSummary(
                 sourceName: target.sourceKind.displayName,
                 title: target.displayTitle,
                 updatedAt: target.updatedAt,
@@ -3264,7 +3292,7 @@ final class AppModel: ObservableObject {
         // yet (e.g. mid-restore), still surface it so the block never omits
         // the one session the model is otherwise told is focused.
         if let focusedSessionID, let context, !summaries.contains(where: { $0.isFocused }) {
-            summaries.append(CompanionPersonality.WatchedSessionSummary(
+            summaries.append(AttachePersonality.WatchedSessionSummary(
                 sourceName: context.target.sourceKind.displayName,
                 title: context.target.displayTitle,
                 updatedAt: context.target.updatedAt,
@@ -3340,25 +3368,25 @@ final class AppModel: ObservableObject {
             let args = (try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any]
             if let startTurn = (args?["start_turn"] as? Int) ?? (args?["start_turn"] as? NSNumber)?.intValue {
                 let maxChars = (args?["max_chars"] as? Int) ?? (args?["max_chars"] as? NSNumber)?.intValue ?? 12_000
-                guard let page = CompanionSessionReader.transcriptPage(forSessionID: sessionID, startTurn: startTurn, maxChars: maxChars) else {
+                guard let page = AttacheSessionReader.transcriptPage(forSessionID: sessionID, startTurn: startTurn, maxChars: maxChars) else {
                     return "No earlier transcript is available for this session."
                 }
                 return page
             }
-            guard let transcript = CompanionSessionReader.transcript(forSessionID: sessionID) else {
+            guard let transcript = AttacheSessionReader.transcript(forSessionID: sessionID) else {
                 return "No earlier transcript is available for this session."
             }
             return transcript
         case "search_session_transcript":
             guard let sessionID else { return "No transcript is available for this session." }
             let query = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["query"] as? String ?? ""
-            guard let result = CompanionSessionReader.searchTranscript(forSessionID: sessionID, query: query) else {
+            guard let result = AttacheSessionReader.searchTranscript(forSessionID: sessionID, query: query) else {
                 return "No transcript is available for this session."
             }
             return result
         case "list_working_directory":
             guard let workingDirectory,
-                  let listing = CompanionSessionReader.workingDirectoryListing(path: workingDirectory) else {
+                  let listing = AttacheSessionReader.workingDirectoryListing(path: workingDirectory) else {
                 return "No working directory is available for this session."
             }
             return listing
@@ -3366,7 +3394,7 @@ final class AppModel: ObservableObject {
             guard let workingDirectory else { return "No working directory is available for this session." }
             let path = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["path"] as? String ?? ""
             guard !path.isEmpty,
-                  let content = CompanionSessionReader.readFile(path: path, within: workingDirectory) else {
+                  let content = AttacheSessionReader.readFile(path: path, within: workingDirectory) else {
                 return "Could not read that file. It may be outside the project, missing, or not text."
             }
             return content
@@ -3502,20 +3530,20 @@ final class AppModel: ObservableObject {
 
     /// Pure-reducer wiring (INF-237): snapshot today's scattered call signals
     /// into `CallSignals` and let `CallPhase.derive(from:)` decide the phase.
-    /// No UI reads `callPhase` yet; CallHUD/CompanionRootView still derive
+    /// No UI reads `callPhase` yet; CallHUD/AttacheRootView still derive
     /// their own status text and error styling exactly as before (A2 wires
     /// the views to this).
     private func refreshCallPhase() {
         callPhase = CallPhase.derive(from: currentCallSignals())
     }
 
-    /// Same choke-point pattern as `refreshCallPhase()` for the companion
-    /// contract (INF-268): everything `CompanionActivitySignals` reads funnels
-    /// through one subscription, so `companionActivity` stays current without
+    /// Same choke-point pattern as `refreshCallPhase()` for the attache
+    /// contract (INF-268): everything `AttacheActivitySignals` reads funnels
+    /// through one subscription, so `attacheActivity` stays current without
     /// refresh calls scattered across mutation sites. Attention transitions
     /// and watcher phrases arrive on their own poll cadence (2s / 1.5s), which
     /// also ages fresh tool signals out of `toolRunning` without a timer.
-    private func setupCompanionActivityObservers() {
+    private func setupAttacheActivityObservers() {
         typingMonitor.onChange = { [weak self] typing in
             DispatchQueue.main.async { self?.userTyping = typing }
         }
@@ -3537,27 +3565,27 @@ final class AppModel: ObservableObject {
             $attachedCodexSessionID.map { _ in () }.eraseToAnyPublisher()
         )
         .receive(on: DispatchQueue.main)
-        .sink { [weak self] in self?.refreshCompanionActivity() }
+        .sink { [weak self] in self?.refreshAttacheActivity() }
         .store(in: &cancellables)
     }
 
     /// The per-session fleet for renderers (INF-275): every watched session,
     /// its mote state from the attention map, the focused flag, and the live
     /// sub-agent count. Sorted stably so mote layouts never shuffle.
-    private func currentFleet() -> [CompanionFleetSession] {
+    private func currentFleet() -> [AttacheFleetSession] {
         attachedTargets.values
             .sorted { $0.id < $1.id }
             .map { target in
-                let state: CompanionFleetSession.State
+                let state: AttacheFleetSession.State
                 switch sessionAttention[target.id] {
                 case .active: state = .working
                 case .awaitingAnswer, .possiblyWaiting: state = .blocked
                 case .turnComplete: state = .finished
                 case .erroredRecently, .quiet, nil: state = .quiet
                 }
-                return CompanionFleetSession(
+                return AttacheFleetSession(
                     id: target.id,
-                    agent: CompanionAgentIdentity(sourceKindRawValue: target.sourceKind.rawValue),
+                    agent: AttacheAgentIdentity(sourceKindRawValue: target.sourceKind.rawValue),
                     state: state,
                     isFocused: target.id == attachedCodexSessionID,
                     activeSubAgents: subAgentCounts[target.id] ?? 0,
@@ -3566,12 +3594,12 @@ final class AppModel: ObservableObject {
             }
     }
 
-    private func refreshCompanionActivity() {
-        var next: CompanionActivityState
+    private func refreshAttacheActivity() {
+        var next: AttacheActivityState
         if let simulatedActivity {
             next = simulatedActivity
         } else {
-            let derived = CompanionActivityState.derive(
+            let derived = AttacheActivityState.derive(
                 from: currentActivitySignals(),
                 audio: playback.clock.renderState
             )
@@ -3580,19 +3608,19 @@ final class AppModel: ObservableObject {
             // drives the squish, so switching focus releases it.
             next.compactingSince = attachedCodexSessionID.flatMap { compactingSince[$0] }
         }
-        if next != companionActivity {
-            companionActivity = next
+        if next != attacheActivity {
+            attacheActivity = next
         }
     }
 
     /// Debug hook for the activity simulator panel: fires a one-shot moment
     /// through the same publisher real transitions use.
-    func triggerMoment(_ kind: CompanionActivityMoment.Kind, agent: CompanionAgentIdentity) {
-        companionMoment = CompanionActivityMoment(kind: kind, agent: agent, at: Date())
+    func triggerMoment(_ kind: AttacheActivityMoment.Kind, agent: AttacheAgentIdentity) {
+        attacheMoment = AttacheActivityMoment(kind: kind, agent: agent, at: Date())
     }
 
-    /// Maps a lifecycle-hook event type to the one-shot pet moment it plays.
-    private static func momentKind(forEventType type: String) -> CompanionActivityMoment.Kind? {
+    /// Maps a lifecycle-hook event type to the one-shot character moment it plays.
+    private static func momentKind(forEventType type: String) -> AttacheActivityMoment.Kind? {
         switch type {
         case "turn_failed": return .errored
         case "session_start": return .greet
@@ -3605,23 +3633,23 @@ final class AppModel: ObservableObject {
     }
 
     /// Maps a watched session to the bubble identity its events light up.
-    private func agentIdentity(forSessionID sessionID: String) -> CompanionAgentIdentity {
+    private func agentIdentity(forSessionID sessionID: String) -> AttacheAgentIdentity {
         if let target = attachedTargets[sessionID] {
-            return CompanionAgentIdentity(sourceKindRawValue: target.sourceKind.rawValue)
+            return AttacheAgentIdentity(sourceKindRawValue: target.sourceKind.rawValue)
         }
         if let record = sessionRecords.first(where: { $0.id == sessionID }) {
-            return CompanionAgentIdentity(sourceKindRawValue: record.sourceKind.rawValue)
+            return AttacheAgentIdentity(sourceKindRawValue: record.sourceKind.rawValue)
         }
         return .none
     }
 
-    private func currentActivitySignals() -> CompanionActivitySignals {
+    private func currentActivitySignals() -> AttacheActivitySignals {
         // Multi-session priority (INF-271): an exact ask beats a soft
         // possibly-waiting, and within a tier the most recent transition
-        // wins, so the bubble always shows whose event the pet is reacting to.
-        var blockedCandidates: [(exact: Bool, when: Date, agent: CompanionAgentIdentity)] = []
-        var errored: (when: Date, agent: CompanionAgentIdentity)?
-        var working: (when: Date, agent: CompanionAgentIdentity)?
+        // wins, so the bubble always shows whose event the character is reacting to.
+        var blockedCandidates: [(exact: Bool, when: Date, agent: AttacheAgentIdentity)] = []
+        var errored: (when: Date, agent: AttacheAgentIdentity)?
+        var working: (when: Date, agent: AttacheAgentIdentity)?
         for (sessionID, state) in sessionAttention {
             let when = attentionChangedAt[sessionID] ?? .distantPast
             switch state {
@@ -3654,8 +3682,8 @@ final class AppModel: ObservableObject {
             .filter { Date().timeIntervalSince($0.lastSeen) <= Self.toolActivityDwell }
             .max { $0.lastSeen < $1.lastSeen }
 
-        let speakingAgent: CompanionAgentIdentity? = playback.currentCardID.flatMap { id in
-            cards.first { $0.id == id }.map { CompanionAgentIdentity(sourceKindRawValue: $0.sourceKind) }
+        let speakingAgent: AttacheAgentIdentity? = playback.currentCardID.flatMap { id in
+            cards.first { $0.id == id }.map { AttacheAgentIdentity(sourceKindRawValue: $0.sourceKind) }
         }
 
         // The "preparing" clock (agentResponding) is driven by composing a
@@ -3672,23 +3700,23 @@ final class AppModel: ObservableObject {
         } else {
             respondingBurstStartedAt = nil
         }
-        let respondingAgent: CompanionAgentIdentity? = {
+        let respondingAgent: AttacheAgentIdentity? = {
             guard isPreparing else { return nil }
             if let started = respondingBurstStartedAt,
                Date().timeIntervalSince(started) > Self.respondingSelfHealSeconds {
                 return nil
             }
-            if let composeSource { return CompanionAgentIdentity(sourceKindRawValue: composeSource) }
+            if let composeSource { return AttacheAgentIdentity(sourceKindRawValue: composeSource) }
             return speakingAgent ?? .none
         }()
 
-        return CompanionActivitySignals(
+        return AttacheActivitySignals(
             hasPinnedSessions: !attachedTargets.isEmpty,
             blockedAgent: blockedAgent,
             erroredAgent: erroredAgent,
             workingAgent: workingAgent,
             respondingAgent: respondingAgent,
-            toolAgent: freshTool.map { CompanionAgentIdentity(sourceKindRawValue: $0.agentKind.rawValue) },
+            toolAgent: freshTool.map { AttacheAgentIdentity(sourceKindRawValue: $0.agentKind.rawValue) },
             toolKind: freshTool?.toolKind,
             playbackIsPlaying: playback.isPlaying,
             playbackIsPaused: playback.isPaused,
@@ -3766,7 +3794,7 @@ final class AppModel: ObservableObject {
         let duration = playback.durationMs > 0 ? playback.durationMs : (selectedCard?.durationMs ?? 0)
         mediaRemote.updateNowPlaying(
             title: title,
-            artist: CompanionAppSupport.appDisplayName,
+            artist: AttacheAppSupport.appDisplayName,
             durationMs: duration,
             elapsedMs: playback.clock.currentTimeMs,
             playing: playback.isPlaying && !playback.isPaused
@@ -3849,13 +3877,13 @@ final class AppModel: ObservableObject {
         presentationStatus = "Presentation LLM: \(provider.title) / \(presentationModel)"
     }
 
-    func openCompanionMemoryFile() {
+    func openAttacheMemoryFile() {
         do {
-            let url = try companionMemoryStore.ensureMemoryFile()
+            let url = try attacheMemoryStore.ensureMemoryFile()
             NSWorkspace.shared.open(url)
-            companionMemoryStatus = "Opened memory."
+            attacheMemoryStatus = "Opened memory."
         } catch {
-            companionMemoryStatus = "Memory unavailable: \(error.localizedDescription)"
+            attacheMemoryStatus = "Memory unavailable: \(error.localizedDescription)"
         }
     }
 
@@ -3866,7 +3894,7 @@ final class AppModel: ObservableObject {
     /// under your existing login and expose no Attaché-chosen endpoint, so they
     /// don't trip the consent moment; HTTP providers do when their base URL is
     /// non-loopback (so a Custom endpoint pointed at localhost stays local).
-    func presentationProviderSendsToCloud(_ provider: CompanionPresentationProvider) -> Bool {
+    func presentationProviderSendsToCloud(_ provider: AttachePresentationProvider) -> Bool {
         if provider.isCLI { return false }
         return NetworkSecurity.isCloudEndpoint(endpointForIntegration(provider))
     }
@@ -3874,7 +3902,7 @@ final class AppModel: ObservableObject {
     var presentationSendsToCloud: Bool { presentationProviderSendsToCloud(presentationProvider) }
     var voiceSendsToCloud: Bool { effectiveSpeechProvider.sendsToCloud }
 
-    private var effectiveSpeechProvider: CompanionSpeechProvider {
+    private var effectiveSpeechProvider: AttacheSpeechProvider {
         selectedSpeechConfiguration.resolvedForPlayback(
             systemVoiceIdentifier: speechVoiceIdentifier
         ).provider
@@ -3886,18 +3914,18 @@ final class AppModel: ObservableObject {
     /// asked before a different role starts sending data to a different
     /// cloud provider. Migrated once from the legacy single
     /// `cloudConsentPresentation` flag; see `migrateCloudConsentToPerProvider`.
-    func cloudConsentAcknowledged(for provider: CompanionPresentationProvider) -> Bool {
+    func cloudConsentAcknowledged(for provider: AttachePresentationProvider) -> Bool {
         consentedCloudPresentationProviders().contains(provider.rawValue)
     }
 
-    func acknowledgeCloudConsent(for provider: CompanionPresentationProvider) {
+    func acknowledgeCloudConsent(for provider: AttachePresentationProvider) {
         var providers = consentedCloudPresentationProviders()
         guard providers.insert(provider.rawValue).inserted else { return }
-        defaults.set(Array(providers).sorted(), forKey: CompanionPreferenceKey.cloudConsentPresentationProviders)
+        defaults.set(Array(providers).sorted(), forKey: AttachePreferenceKey.cloudConsentPresentationProviders)
     }
 
     private func consentedCloudPresentationProviders() -> Set<String> {
-        Set(defaults.array(forKey: CompanionPreferenceKey.cloudConsentPresentationProviders) as? [String] ?? [])
+        Set(defaults.array(forKey: AttachePreferenceKey.cloudConsentPresentationProviders) as? [String] ?? [])
     }
 
     /// Runs once, gated by `cloudConsentPresentationMigrationDone`: if the
@@ -3910,22 +3938,22 @@ final class AppModel: ObservableObject {
     /// migration flag is set, this is a no-op forever after, so a later
     /// per-provider revocation is never re-populated from the stale legacy flag.
     private func migrateCloudConsentToPerProvider() {
-        guard !defaults.bool(forKey: CompanionPreferenceKey.cloudConsentPresentationMigrationDone) else { return }
-        if defaults.bool(forKey: CompanionPreferenceKey.cloudConsentPresentation) {
+        guard !defaults.bool(forKey: AttachePreferenceKey.cloudConsentPresentationMigrationDone) else { return }
+        if defaults.bool(forKey: AttachePreferenceKey.cloudConsentPresentation) {
             acknowledgeCloudConsent(for: presentationProvider)
         }
-        defaults.set(true, forKey: CompanionPreferenceKey.cloudConsentPresentationMigrationDone)
+        defaults.set(true, forKey: AttachePreferenceKey.cloudConsentPresentationMigrationDone)
     }
 
     var cloudConsentVoiceAcknowledged: Bool {
-        get { defaults.bool(forKey: CompanionPreferenceKey.cloudConsentVoice) }
-        set { defaults.set(newValue, forKey: CompanionPreferenceKey.cloudConsentVoice) }
+        get { defaults.bool(forKey: AttachePreferenceKey.cloudConsentVoice) }
+        set { defaults.set(newValue, forKey: AttachePreferenceKey.cloudConsentVoice) }
     }
 
-    func selectPresentationProvider(_ provider: CompanionPresentationProvider) {
+    func selectPresentationProvider(_ provider: AttachePresentationProvider) {
         let previousProvider = presentationProvider
         let existingModel = presentationModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultModels = CompanionPresentationProvider.allCases.map(\.defaultModel)
+        let defaultModels = AttachePresentationProvider.allCases.map(\.defaultModel)
 
         presentationProvider = provider
         if provider != previousProvider {
@@ -3953,31 +3981,30 @@ final class AppModel: ObservableObject {
 
     // MARK: Integrations
 
-    func endpointForIntegration(_ provider: CompanionPresentationProvider) -> String {
+    func endpointForIntegration(_ provider: AttachePresentationProvider) -> String {
         switch provider {
         case .ollama: return ollamaBaseURL
-        case .lmStudio: return lmStudioBaseURL
         case .custom: return customBaseURL
         case .xai, .groq: return provider.defaultBaseURL
         case .claudeCLI, .codexCLI: return ""
         }
     }
 
-    var connectedTextProviders: [CompanionPresentationProvider] {
-        CompanionPresentationProvider.allCases.filter { provider in
+    var connectedTextProviders: [AttachePresentationProvider] {
+        AttachePresentationProvider.allCases.filter { provider in
             switch provider {
             case .xai: return !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .groq: return !groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .custom: return !customAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .ollama, .lmStudio: return true
+            case .ollama: return true
             case .claudeCLI: return CLILanguageModel.isLikelyInstalled(.claude)
             case .codexCLI: return CLILanguageModel.isLikelyInstalled(.codex)
             }
         }
     }
 
-    var connectedVoiceEngines: [CompanionSpeechProvider] {
-        var engines: [CompanionSpeechProvider] = [.system]
+    var connectedVoiceEngines: [AttacheSpeechProvider] {
+        var engines: [AttacheSpeechProvider] = [.system]
         if !elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { engines.append(.elevenLabs) }
         if !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { engines.append(.xai) }
         if !effectiveOpenAIVoiceKey.isEmpty { engines.append(.openai) }
@@ -3991,7 +4018,7 @@ final class AppModel: ObservableObject {
         let dedicated = openaiVoiceAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !dedicated.isEmpty { return dedicated }
         let customKey = customAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = (customBaseURL.isEmpty ? CompanionPresentationProvider.custom.defaultBaseURL : customBaseURL).lowercased()
+        let base = (customBaseURL.isEmpty ? AttachePresentationProvider.custom.defaultBaseURL : customBaseURL).lowercased()
         return (!customKey.isEmpty && base.contains("api.openai.com")) ? customKey : ""
     }
 
@@ -4004,10 +4031,10 @@ final class AppModel: ObservableObject {
     func saveGroqIntegration() { saveIntegrationTextKey(groqAPIKey, provider: .groq) }
     func saveCustomIntegration() { saveIntegrationTextKey(customAPIKey, provider: .custom) }
 
-    private func saveIntegrationTextKey(_ key: String, provider: CompanionPresentationProvider) {
+    private func saveIntegrationTextKey(_ key: String, provider: AttachePresentationProvider) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            try CompanionSecretVault.save(trimmed, account: provider.developmentSecretAccount)
+            try AttacheSecretVault.save(trimmed, account: provider.developmentSecretAccount)
             setSecretAccountConfigured(provider.developmentSecretAccount, configured: !trimmed.isEmpty)
             if presentationProvider == provider {
                 presentationAPIKey = trimmed
@@ -4023,15 +4050,15 @@ final class AppModel: ObservableObject {
     }
 
     private func migrateLegacyPresentationKeys() {
-        for provider in CompanionPresentationProvider.allCases where provider.requiresAPIKey {
+        for provider in AttachePresentationProvider.allCases where provider.requiresAPIKey {
             let newAccount = provider.developmentSecretAccount
             let legacyAccount = "presentation-llm-\(provider.rawValue)-api-key"
             let hasNew = !(readConfiguredSecret(account: newAccount) ?? "").isEmpty
             if !hasNew,
                isSecretAccountConfigured(legacyAccount),
-               let legacy = CompanionSecretVault.read(account: legacyAccount),
+               let legacy = AttacheSecretVault.read(account: legacyAccount),
                !legacy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                try? CompanionSecretVault.save(legacy, account: newAccount)
+                try? AttacheSecretVault.save(legacy, account: newAccount)
                 setSecretAccountConfigured(newAccount, configured: true)
             }
         }
@@ -4043,7 +4070,7 @@ final class AppModel: ObservableObject {
 
     func checkAllIntegrations() {
         let now = Date()
-        for id in ["xai", "elevenlabs", "openai", "groq", "ollama", "lmstudio", "custom", "ondevice"] {
+        for id in ["xai", "elevenlabs", "openai", "groq", "ollama", "custom", "codex", "claude", "ondevice"] {
             if case .checking = healthStatus(id) { continue }
             if case .healthy = healthStatus(id),
                let last = integrationLastChecked[id], now.timeIntervalSince(last) < 60 {
@@ -4057,41 +4084,75 @@ final class AppModel: ObservableObject {
         switch id {
         case "ondevice":
             integrationHealth[id] = .healthy
+        case "codex":
+            integrationHealth[id] = CLILanguageModel.locate("codex") == nil ? .unconfigured : .healthy
+        case "claude":
+            integrationHealth[id] = CLILanguageModel.locate("claude") == nil ? .unconfigured : .healthy
         case "xai":
             runHealthCheck(id, configured: isSet(xaiAPIKey)) {
-                _ = try await CompanionPresentationModelService.fetchModels(
-                    provider: .xai, baseURLText: CompanionPresentationProvider.xai.defaultBaseURL, apiKey: self.xaiAPIKey)
+                _ = try await AttachePresentationModelService.fetchModels(
+                    provider: .xai, baseURLText: AttachePresentationProvider.xai.defaultBaseURL, apiKey: self.xaiAPIKey)
             }
         case "groq":
             runHealthCheck(id, configured: isSet(groqAPIKey)) {
-                _ = try await CompanionPresentationModelService.fetchModels(
-                    provider: .groq, baseURLText: CompanionPresentationProvider.groq.defaultBaseURL, apiKey: self.groqAPIKey)
+                _ = try await AttachePresentationModelService.fetchModels(
+                    provider: .groq, baseURLText: AttachePresentationProvider.groq.defaultBaseURL, apiKey: self.groqAPIKey)
             }
         case "custom":
             runHealthCheck(id, configured: isSet(customAPIKey)) {
-                _ = try await CompanionPresentationModelService.fetchModels(
+                _ = try await AttachePresentationModelService.fetchModels(
                     provider: .custom, baseURLText: self.customBaseURL, apiKey: self.customAPIKey)
             }
         case "ollama":
             runHealthCheck(id, configured: true) {
-                _ = try await CompanionPresentationModelService.fetchModels(
+                _ = try await AttachePresentationModelService.fetchModels(
                     provider: .ollama, baseURLText: self.ollamaBaseURL, apiKey: "")
-            }
-        case "lmstudio":
-            runHealthCheck(id, configured: true) {
-                _ = try await CompanionPresentationModelService.fetchModels(
-                    provider: .lmStudio, baseURLText: self.lmStudioBaseURL, apiKey: "")
             }
         case "elevenlabs":
             runHealthCheck(id, configured: isSet(elevenLabsAPIKey)) {
-                _ = try await CompanionRemoteVoiceService.fetchElevenLabsVoices(apiKey: self.elevenLabsAPIKey)
+                _ = try await AttacheRemoteVoiceService.fetchElevenLabsVoices(apiKey: self.elevenLabsAPIKey)
             }
         case "openai":
             runHealthCheck(id, configured: isSet(effectiveOpenAIVoiceKey)) {
-                try await CompanionRemoteVoiceService.verifyOpenAIKey(apiKey: self.effectiveOpenAIVoiceKey)
+                try await AttacheRemoteVoiceService.verifyOpenAIKey(apiKey: self.effectiveOpenAIVoiceKey)
             }
         default:
             break
+        }
+    }
+
+    func integrationID(for provider: AttachePresentationProvider) -> String {
+        switch provider {
+        case .xai: return "xai"
+        case .ollama: return "ollama"
+        case .groq: return "groq"
+        case .custom: return "custom"
+        case .codexCLI: return "codex"
+        case .claudeCLI: return "claude"
+        }
+    }
+
+    var healthyModelProviders: [AttachePresentationProvider] {
+        AttachePresentationProvider.allCases.filter {
+            if case .healthy = healthStatus(integrationID(for: $0)) { return true }
+            return false
+        }
+    }
+
+    var onboardingModelReady: Bool {
+        guard healthyModelProviders.contains(presentationProvider) else { return false }
+        if presentationProvider.isCLI { return true }
+        return !presentationModelOptions.isEmpty
+            && presentationModelOptions.contains { $0.id == presentationModel }
+    }
+
+    func useHealthyModelProviderForOnboarding(_ provider: AttachePresentationProvider) {
+        guard healthyModelProviders.contains(provider) else { return }
+        selectPresentationProvider(provider)
+        if provider.isCLI {
+            selectPresentationModelID(provider.defaultModel)
+        } else {
+            loadPresentationModels()
         }
     }
 
@@ -4100,7 +4161,7 @@ final class AppModel: ObservableObject {
     }
 
     private func configuredSecretAccounts() -> Set<String> {
-        Set(defaults.array(forKey: CompanionPreferenceKey.configuredSecretAccounts) as? [String] ?? [])
+        Set(defaults.array(forKey: AttachePreferenceKey.configuredSecretAccounts) as? [String] ?? [])
     }
 
     private func isSecretAccountConfigured(_ account: String) -> Bool {
@@ -4109,7 +4170,7 @@ final class AppModel: ObservableObject {
 
     private func readConfiguredSecret(account: String) -> String? {
         guard isSecretAccountConfigured(account) else { return nil }
-        return CompanionSecretVault.read(account: account)
+        return AttacheSecretVault.read(account: account)
     }
 
     private func setSecretAccountConfigured(_ account: String, configured: Bool) {
@@ -4119,7 +4180,7 @@ final class AppModel: ObservableObject {
         } else {
             accounts.remove(account)
         }
-        defaults.set(Array(accounts).sorted(), forKey: CompanionPreferenceKey.configuredSecretAccounts)
+        defaults.set(Array(accounts).sorted(), forKey: AttachePreferenceKey.configuredSecretAccounts)
     }
 
     private func runHealthCheck(_ id: String, configured: Bool, _ work: @escaping () async throws -> Void) {
@@ -4178,7 +4239,7 @@ final class AppModel: ObservableObject {
                     // per-role override (see roleModelProvider/D3) falls back
                     // to; .conversation is the reasonable placeholder role for
                     // that row.
-                    let settings = CompanionPresentationSettings.load(
+                    let settings = AttachePresentationSettings.load(
                         role: .conversation,
                         defaults: self.defaults,
                         environment: self.presentationEnvironment,
@@ -4186,7 +4247,7 @@ final class AppModel: ObservableObject {
                     )
                     key = settings.apiKey
                 }
-                let models = try await CompanionPresentationModelService.fetchModels(
+                let models = try await AttachePresentationModelService.fetchModels(
                     provider: provider,
                     baseURLText: baseURL,
                     apiKey: key
@@ -4229,7 +4290,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func selectPresentationModel(_ option: CompanionPresentationModelOption) {
+    func selectPresentationModel(_ option: AttachePresentationModelOption) {
         presentationModel = option.id
         applyCurrentPresentationModelCapabilities()
         refreshPresentationStatus()
@@ -4249,15 +4310,25 @@ final class AppModel: ObservableObject {
     /// as "Use main model".
     private func loadRoleModelOverrides() {
         for role in ModelRole.allCases {
-            guard let rawProvider = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .provider)),
-                  let provider = CompanionPresentationProvider(rawValue: rawProvider) else { continue }
+            guard let rawProvider = defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .provider)) else { continue }
+            let legacyLMStudio = AttachePresentationProvider.isLegacyLMStudio(
+                explicitValue: rawProvider,
+                baseURLText: defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .baseURL))
+            )
+            guard let provider = legacyLMStudio ? .ollama : AttachePresentationProvider(rawValue: rawProvider) else { continue }
             roleModelProvider[role] = provider
-            roleModelID[role] = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
-                ?? provider.defaultModel
-            roleReasoningEffort[role] = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+            roleModelID[role] = legacyLMStudio
+                ? provider.defaultModel
+                : (defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model)) ?? provider.defaultModel)
+            roleReasoningEffort[role] = defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
                 ?? provider.defaultReasoningEffort
-            roleServiceTier[role] = defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+            roleServiceTier[role] = defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .serviceTier))
                 ?? provider.defaultServiceTier
+            if legacyLMStudio {
+                defaults.set(provider.rawValue, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .provider))
+                defaults.set(provider.defaultModel, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model))
+                defaults.removeObject(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .baseURL))
+            }
         }
     }
 
@@ -4271,36 +4342,41 @@ final class AppModel: ObservableObject {
         if let option = (roleModelOptions[role] ?? []).first(where: { $0.id == modelID }) {
             return option.reasoningEfforts
         }
-        return CompanionPresentationModelService.fallbackReasoningEfforts(provider: provider, modelID: modelID)
+        return AttachePresentationModelService.fallbackReasoningEfforts(provider: provider, modelID: modelID)
     }
 
     /// Same idea as `selectedPresentationServiceTierOptions`, scoped to one role.
-    func roleServiceTierOptions(for role: ModelRole) -> [CompanionPresentationServiceTierOption] {
+    func roleServiceTierOptions(for role: ModelRole) -> [AttachePresentationServiceTierOption] {
         guard let provider = roleModelProvider[role] else { return [] }
         let modelID = roleModelID[role] ?? provider.defaultModel
-        let options: [CompanionPresentationServiceTierOption]
+        let options: [AttachePresentationServiceTierOption]
         if let option = (roleModelOptions[role] ?? []).first(where: { $0.id == modelID }) {
             options = option.serviceTiers
         } else {
-            options = CompanionPresentationModelService.fallbackServiceTierOptions(provider: provider, modelID: modelID)
+            options = AttachePresentationModelService.fallbackServiceTierOptions(provider: provider, modelID: modelID)
         }
         guard !options.isEmpty else { return [] }
         if options.contains(where: { $0.id == "default" }) { return options }
-        return [CompanionPresentationServiceTierOption(id: "default", title: "Default", detail: "Use the provider's default tier")] + options
+        return [AttachePresentationServiceTierOption(id: "default", title: "Default", detail: "Use the provider's default tier")] + options
     }
 
     /// Clamps a role's stored reasoning-effort/service-tier choice to what its
     /// current provider/model actually supports, the same guard the main row
     /// applies in `applyCapabilitiesForSelectedModel`/`applyFallbackCapabilitiesForCurrentModel`.
     private func clampRoleCapabilities(for role: ModelRole) {
+        guard let provider = roleModelProvider[role] else { return }
         let reasoningOptions = roleReasoningOptions(for: role)
         let currentReasoning = (roleReasoningEffort[role] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if reasoningOptions.isEmpty {
             roleReasoningEffort[role] = "none"
-        } else if currentReasoning.isEmpty || currentReasoning == "none" || (currentReasoning != "default" && !reasoningOptions.contains(currentReasoning)) {
-            roleReasoningEffort[role] = "default"
+        } else if !reasoningOptions.contains(currentReasoning) {
+            roleReasoningEffort[role] = AttachePresentationModelService.preferredReasoningEffort(
+                provider: provider,
+                modelID: roleModelID[role] ?? provider.defaultModel,
+                supported: reasoningOptions
+            )
         }
-        defaults.set(roleReasoningEffort[role], forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+        defaults.set(roleReasoningEffort[role], forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
 
         let serviceOptions = roleServiceTierOptions(for: role).map(\.id)
         let currentService = (roleServiceTier[role] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4309,15 +4385,15 @@ final class AppModel: ObservableObject {
         } else if currentService.isEmpty || !serviceOptions.contains(currentService) {
             roleServiceTier[role] = "default"
         }
-        defaults.set(roleServiceTier[role], forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+        defaults.set(roleServiceTier[role], forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .serviceTier))
     }
 
     /// Sets, or clears when `provider` is nil ("Use main model"), the role's
     /// provider override. Clearing removes every per-role key for that role
-    /// so `CompanionPresentationSettings.load(role:)` falls all the way back
+    /// so `AttachePresentationSettings.load(role:)` falls all the way back
     /// to the global `presentationLLM*` keys instead of leaving a stale but
     /// coincidentally-matching per-role value behind.
-    func selectRoleProvider(_ provider: CompanionPresentationProvider?, for role: ModelRole) {
+    func selectRoleProvider(_ provider: AttachePresentationProvider?, for role: ModelRole) {
         guard let provider else {
             roleModelProvider.removeValue(forKey: role)
             roleModelID.removeValue(forKey: role)
@@ -4325,52 +4401,52 @@ final class AppModel: ObservableObject {
             roleServiceTier.removeValue(forKey: role)
             roleModelOptions.removeValue(forKey: role)
             roleModelDiscoveryStatus.removeValue(forKey: role)
-            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .provider))
-            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
-            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
-            defaults.removeObject(forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+            defaults.removeObject(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .provider))
+            defaults.removeObject(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model))
+            defaults.removeObject(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+            defaults.removeObject(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .serviceTier))
             return
         }
         roleModelProvider[role] = provider
         roleModelID[role] = provider.defaultModel
         roleModelOptions[role] = []
         roleModelDiscoveryStatus[role] = "Model discovery not checked"
-        defaults.set(provider.rawValue, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .provider))
-        defaults.set(provider.defaultModel, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+        defaults.set(provider.rawValue, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .provider))
+        defaults.set(provider.defaultModel, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model))
         clampRoleCapabilities(for: role)
     }
 
-    func selectRoleModel(_ option: CompanionPresentationModelOption, for role: ModelRole) {
+    func selectRoleModel(_ option: AttachePresentationModelOption, for role: ModelRole) {
         guard roleModelProvider[role] != nil else { return }
         roleModelID[role] = option.id
-        defaults.set(option.id, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+        defaults.set(option.id, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model))
         clampRoleCapabilities(for: role)
     }
 
     func selectRoleModelID(_ id: String, for role: ModelRole) {
         guard roleModelProvider[role] != nil else { return }
         roleModelID[role] = id
-        defaults.set(id, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .model))
+        defaults.set(id, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model))
         clampRoleCapabilities(for: role)
     }
 
     func setRoleReasoningEffort(_ value: String, for role: ModelRole) {
         guard roleModelProvider[role] != nil else { return }
         roleReasoningEffort[role] = value
-        defaults.set(value, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
+        defaults.set(value, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .reasoningEffort))
     }
 
     func setRoleServiceTier(_ value: String, for role: ModelRole) {
         guard roleModelProvider[role] != nil else { return }
         roleServiceTier[role] = value
-        defaults.set(value, forKey: CompanionPreferenceKey.presentationLLMRoleKey(role, .serviceTier))
+        defaults.set(value, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .serviceTier))
     }
 
     /// Model discovery for one role's override, scoped to that role's own
     /// provider. Unlike `loadPresentationModels` (which discovers for the
     /// single main-model row this pane also shows), this fetches for
     /// whichever provider a role currently points at. It reuses the exact
-    /// same underlying network call (`CompanionPresentationModelService.fetchModels`)
+    /// same underlying network call (`AttachePresentationModelService.fetchModels`)
     /// and the same stored Integrations key per provider; no second discovery
     /// mechanism, just a per-role wrapper around the same service.
     func loadRoleModels(for role: ModelRole) {
@@ -4385,7 +4461,7 @@ final class AppModel: ObservableObject {
         roleModelDiscoveryStatus[role] = "Loading \(provider.title) models..."
         Task {
             do {
-                let models = try await CompanionPresentationModelService.fetchModels(
+                let models = try await AttachePresentationModelService.fetchModels(
                     provider: provider,
                     baseURLText: baseURL,
                     apiKey: apiKey
@@ -4414,12 +4490,11 @@ final class AppModel: ObservableObject {
 
     /// Jumps Integrations to `provider`'s row, e.g. from the "needs a key"
     /// notice on a per-role Advanced row. Mirrors the
-    /// `CompanionSpeechProvider` overload above.
-    func focusIntegration(for provider: CompanionPresentationProvider) {
+    /// `AttacheSpeechProvider` overload above.
+    func focusIntegration(for provider: AttachePresentationProvider) {
         switch provider {
         case .xai: integrationFocusProviderID = "xai"
         case .ollama: integrationFocusProviderID = "ollama"
-        case .lmStudio: integrationFocusProviderID = "lmstudio"
         case .groq: integrationFocusProviderID = "groq"
         case .custom: integrationFocusProviderID = "custom"
         case .claudeCLI, .codexCLI: integrationFocusProviderID = nil
@@ -4432,30 +4507,83 @@ final class AppModel: ObservableObject {
         personalities.first { $0.id == activePersonalityID }
     }
 
+    func personalityVoiceName(_ personality: Personality) -> String {
+        guard let voice = personality.voiceRef else { return "Voice not set" }
+        switch voice.provider {
+        case .system:
+            if let id = voice.systemVoiceIdentifier,
+               let option = speechVoiceOptions.first(where: { $0.id == id }) {
+                return option.title
+            }
+            return "System default"
+        case .elevenLabs:
+            return voice.elevenLabsVoiceName ?? voice.elevenLabsVoiceID ?? "Voice not set"
+        case .xai:
+            return voice.xaiVoiceName ?? voice.xaiVoiceID ?? "Voice not set"
+        case .openai:
+            return voice.openaiVoiceName ?? voice.openaiVoiceID ?? "Voice not set"
+        }
+    }
+
+    /// Snapshot helpers for the creator. They copy the current configured
+    /// choices without changing the live app while someone experiments in the
+    /// studio.
+    var currentPersonalityVoiceRef: PersonalityVoiceRef {
+        PersonalityVoiceRef.capture(from: defaults)
+    }
+
+    var currentPersonalityModelRef: PersonalityModelRef {
+        PersonalityModelRef(
+            provider: presentationProvider,
+            model: presentationModel,
+            reasoningEffort: presentationReasoningEffort,
+            serviceTier: presentationServiceTier,
+            fallbackProviders: conversationFallbackChainEnabled ? conversationFallbackChain : []
+        )
+    }
+
     func loadPersonalities() {
         let loaded = personalityStore.load()
         personalities = loaded.personalities
         activePersonalityID = loaded.activeID
         writeActivePersonalityToDefaults()
+        // Voice and model selections already live in their established defaults
+        // at launch (and cloud secrets may still be loading). Presence is cheap
+        // and secret-free, so make the active character visually coherent now.
+        if let active = activePersonality {
+            if let visualMode = active.visualMode { self.visualMode = visualMode }
+            character = active.character ?? .robot
+            playbackSpeed = active.playbackSpeed ?? 1.0
+            conversationFallbackChain = active.modelRef?.fallbackProviders ?? []
+            conversationFallbackChainEnabled = !conversationFallbackChain.isEmpty
+        }
     }
 
     func selectPersonality(_ id: String) {
         guard personalities.contains(where: { $0.id == id }) else { return }
-        let changed = id != activePersonalityID
         activePersonalityID = id
         personalityStore.save(personalities, activeID: id)
         writeActivePersonalityToDefaults()
         refreshPresentationStatus()
-        intakeStatus = "Personality set to \(activePersonality?.name ?? "Attaché")."
-        // Apply after the base status so a missing-key fallback hint wins.
         if let personality = activePersonality {
-            applyPersonalityVoiceAndPet(personality)
+            let issue = applyPersonalityConfiguration(personality)
+            intakeStatus = issue ?? "Personality set to \(personality.name)."
         }
-        // A brief wave when the character actually changes, then the pet resumes
-        // its normal activity (INF-298).
-        if changed {
-            triggerMoment(.greet, agent: .none)
-        }
+    }
+
+    /// The welcome flow asks for a voice before it asks for a character. Carry
+    /// that deliberate choice, plus the current model, onto the character the
+    /// user picks instead of letting a built-in default silently replace it.
+    func selectOnboardingPersonality(_ id: String) {
+        let chosenVoice = currentPersonalityVoiceRef
+        let chosenModel = currentPersonalityModelRef
+        let chosenSpeed = playbackSpeed
+        guard let index = personalities.firstIndex(where: { $0.id == id }) else { return }
+        personalities[index].voiceRef = chosenVoice
+        personalities[index].modelRef = chosenModel
+        personalities[index].playbackSpeed = chosenSpeed
+        personalityStore.save(personalities, activeID: id)
+        selectPersonality(id)
     }
 
     @discardableResult
@@ -4464,7 +4592,12 @@ final class AppModel: ObservableObject {
         let new = Personality(
             id: "custom.\(UUID().uuidString)",
             name: trimmedName.isEmpty ? "My Personality" : trimmedName,
-            prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+            voiceRef: currentPersonalityVoiceRef,
+            character: character,
+            visualMode: visualMode,
+            modelRef: currentPersonalityModelRef,
+            playbackSpeed: playbackSpeed
         )
         personalities.append(new)
         selectPersonality(new.id)
@@ -4481,7 +4614,7 @@ final class AppModel: ObservableObject {
     /// True while a live voice conversation is in progress (its frozen target is
     /// captured). Used to decide whether a personality switch also clarifies the
     /// last turn (INF-301).
-    var isLiveCallActive: Bool { conversationTargetSnapshot != nil }
+    var isLiveCallActive: Bool { conversationActive && activeConversationID != nil }
 
     /// The user-facing personality switch from the dock or the ⌘[ / ⌘] shortcut.
     /// In a live call it clarifies the last turn in the new personality's voice;
@@ -4497,11 +4630,13 @@ final class AppModel: ObservableObject {
 
     /// Live "clarify with a different personality" (INF-301): the new personality
     /// reacts to the most recent update and gives its own take in its voice and
-    /// pet, then listening resumes under it. Narration only, so it never changes
+    /// character, then listening resumes under it. Narration only, so it never changes
     /// the frozen agent-send target or the Ask Attaché / Tell Agent routing.
     func clarifyWithPersonality(_ id: String) {
-        if let last = cards.max(by: { $0.createdAt < $1.createdAt }) {
-            anotherTake(card: last, targetPersonalityID: id)
+        if let last = cards.max(by: { $0.createdAt < $1.createdAt }),
+           let callID = activeConversationID,
+           conversationActive {
+            anotherTake(card: last, targetPersonalityID: id, requiredCallID: callID)
         } else {
             selectPersonality(id)
         }
@@ -4511,10 +4646,50 @@ final class AppModel: ObservableObject {
         let new = Personality(
             id: "custom.\(UUID().uuidString)",
             name: "New Personality",
-            prompt: Personality.newTemplate
+            prompt: Personality.newTemplate,
+            voiceRef: currentPersonalityVoiceRef,
+            character: .robot,
+            visualMode: .character,
+            modelRef: currentPersonalityModelRef,
+            playbackSpeed: playbackSpeed
         )
         personalities.append(new)
         selectPersonality(new.id)
+    }
+
+    /// Commit a creator draft in one operation. Built-ins are never overwritten:
+    /// choosing Customize for one creates a new owned character. Existing custom
+    /// personalities keep their stable id so old voicemail markers still resolve.
+    @discardableResult
+    func savePersonality(_ draft: Personality, replacingID: String?) -> String {
+        var saved = draft
+        saved.name = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if saved.name.isEmpty { saved.name = "My Personality" }
+        saved.prompt = saved.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if saved.prompt.isEmpty { saved.prompt = AttachePersonality.defaultProfilePrompt }
+        if saved.voiceRef == nil { saved.voiceRef = currentPersonalityVoiceRef }
+        if var voice = saved.voiceRef,
+           voice.provider == .system,
+           voice.systemVoiceIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            voice.systemVoiceIdentifier = speechVoiceOptions.first?.id ?? Personality.defaultPreferredVoiceID
+            saved.voiceRef = voice
+        }
+        if saved.modelRef == nil { saved.modelRef = currentPersonalityModelRef }
+        if saved.playbackSpeed == nil { saved.playbackSpeed = playbackSpeed }
+        saved.isBuiltIn = false
+
+        if let replacingID,
+           let index = personalities.firstIndex(where: { $0.id == replacingID }),
+           !personalities[index].isBuiltIn {
+            saved.id = replacingID
+            personalities[index] = saved
+        } else {
+            saved.id = "custom.\(UUID().uuidString)"
+            personalities.append(saved)
+        }
+
+        selectPersonality(saved.id)
+        return saved.id
     }
 
     func duplicatePersonality(id: String) {
@@ -4524,7 +4699,10 @@ final class AppModel: ObservableObject {
             name: "\(source.name) Copy",
             prompt: source.prompt,
             voiceRef: source.voiceRef,
-            petCharacter: source.petCharacter,
+            character: source.character,
+            visualMode: source.visualMode,
+            modelRef: source.modelRef,
+            playbackSpeed: source.playbackSpeed,
             accentColorHex: source.accentColorHex
         )
         if let index = personalities.firstIndex(where: { $0.id == id }) {
@@ -4535,15 +4713,129 @@ final class AppModel: ObservableObject {
         selectPersonality(copy.id)
     }
 
-    /// Apply a personality's bundled voice and pet so a switch changes brain,
-    /// voice, and pet as one unit (INF-296). A nil voiceRef means "inherit the
-    /// current voice", so switching among voice-agnostic personalities leaves the
-    /// user's chosen voice alone. A cloud voice whose API key is missing falls
-    /// back to the on-device engine with a hint instead of failing the switch.
-    private func applyPersonalityVoiceAndPet(_ personality: Personality) {
-        petCharacter = personality.petCharacter ?? .robot
+    /// Model discovery for the creator without mutating the app's active model.
+    /// It shares the same endpoints and credentials as Settings > Model.
+    func personalityModelOptions(for provider: AttachePresentationProvider) async throws -> [AttachePresentationModelOption] {
+        let baseURL = endpointForIntegration(provider)
+        let apiKey = readConfiguredSecret(account: provider.developmentSecretAccount) ?? ""
+        if provider.requiresAPIKey, apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw AttachePresentationError.notConfigured
+        }
+        return try await AttachePresentationModelService.fetchModels(
+            provider: provider,
+            baseURLText: baseURL,
+            apiKey: apiKey
+        )
+    }
+
+    /// Explicit creator audition. The prompt asks for one tiny greeting, then the
+    /// draft's own voice configuration speaks it without saving or changing the
+    /// live character. If no model is available, the visible fallback still lets
+    /// the user audition the voice.
+    func previewPersonality(_ personality: Personality, completion: @escaping (String) -> Void = { _ in }) {
+        let requestID = UUID()
+        personalityPreviewRequestID = requestID
+        let fallback = "Hi, I'm \(personality.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Attaché" : personality.name). Ready when you are."
+        let system = """
+        \(personality.prompt)
+
+        This is a character-creator audition. Say one casual first-person hello in
+        this personality, between five and twelve words. Output only the greeting.
+        Do not use stage directions, quotation marks, or em dashes.
+        """
+        let settings = personalityPreviewSettings(for: personality)
+        let voice = speechConfiguration(for: personality.voiceRef)
+        voiceProviderStatus = "Preparing personality preview."
+
+        Task {
+            let generated: String
+            do {
+                let result = try await presentationService.complete(
+                    system: system,
+                    user: "Give me the quick hello now.",
+                    role: .conversation,
+                    settingsOverride: settings
+                )
+                generated = Self.shortPersonalityGreeting(result, fallback: fallback)
+            } catch {
+                generated = fallback
+            }
+            await MainActor.run {
+                guard self.personalityPreviewRequestID == requestID else { return }
+                self.personalityPreviewRequestID = nil
+                self.voiceProviderStatus = "Previewing \(personality.name)."
+                self.playback.preview(generated, configuration: voice)
+                completion(generated)
+            }
+        }
+    }
+
+    func cancelPersonalityPreview() {
+        personalityPreviewRequestID = nil
+    }
+
+    private func personalityPreviewSettings(for personality: Personality) -> AttachePresentationSettings? {
+        guard let ref = personality.modelRef,
+              connectedTextProviders.contains(ref.provider),
+              !presentationProviderSendsToCloud(ref.provider) || cloudConsentAcknowledged(for: ref.provider) else {
+            return nil
+        }
+        var settings = AttachePresentationSettings.forFallback(
+            provider: ref.provider,
+            baseURLText: endpointForIntegration(ref.provider),
+            apiKey: readConfiguredSecret(account: ref.provider.developmentSecretAccount) ?? "",
+            profilePrompt: personality.prompt
+        )
+        let model = ref.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.model = model.isEmpty ? ref.provider.defaultModel : model
+        settings.reasoningEffort = ref.reasoningEffort ?? settings.reasoningEffort
+        settings.serviceTier = ref.serviceTier ?? settings.serviceTier
+        return settings
+    }
+
+    private func speechConfiguration(for ref: PersonalityVoiceRef?) -> AttacheSpeechConfiguration {
+        guard let ref = ref?.resolved(availableSystemVoiceIDs: installedSystemVoiceIDs()) else {
+            return selectedSpeechConfiguration.resolvedForPlayback(systemVoiceIdentifier: speechVoiceIdentifier)
+        }
+        var configuration = selectedSpeechConfiguration
+        configuration.provider = ref.provider
+        configuration.systemVoiceIdentifier = ref.systemVoiceIdentifier
+        if let value = ref.elevenLabsVoiceID { configuration.elevenLabsVoiceID = value }
+        if let value = ref.elevenLabsModelID { configuration.elevenLabsModelID = value }
+        if let value = ref.elevenLabsOutputFormat { configuration.elevenLabsOutputFormat = value }
+        if let value = ref.xaiVoiceID { configuration.xaiVoiceID = value }
+        if let value = ref.xaiBaseURL { configuration.xaiBaseURL = value }
+        if let value = ref.xaiLanguage { configuration.xaiLanguage = value }
+        if let value = ref.openaiVoiceID { configuration.openaiVoiceID = value }
+        return configuration.resolvedForPlayback(systemVoiceIdentifier: speechVoiceIdentifier)
+    }
+
+    private static func shortPersonalityGreeting(_ text: String?, fallback: String) -> String {
+        let cleaned = AttachePersonality.stripDashes(text ?? "")
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”")))
+        guard !cleaned.isEmpty else { return fallback }
+        let words = cleaned.split(whereSeparator: \.isWhitespace)
+        guard words.count > 12 else { return cleaned }
+        return words.prefix(12).joined(separator: " ") + "."
+    }
+
+    /// Apply the character as one unit. Persistence migration has already filled
+    /// legacy voice/model gaps, so every normal personality switch is explicit.
+    private func applyPersonalityConfiguration(_ personality: Personality) -> String? {
+        if let visualMode = personality.visualMode {
+            self.visualMode = visualMode
+        }
+        character = personality.character ?? .robot
+        playbackSpeed = personality.playbackSpeed ?? 1.0
+
+        let voiceIssue = applyPersonalityVoice(personality)
+        let modelIssue = applyPersonalityModel(personality.modelRef)
+        return voiceIssue ?? modelIssue
+    }
+
+    private func applyPersonalityVoice(_ personality: Personality) -> String? {
         guard let ref = personality.voiceRef?.resolved(availableSystemVoiceIDs: installedSystemVoiceIDs()) else {
-            return
+            return nil
         }
         switch ref.provider {
         case .system:
@@ -4569,13 +4861,42 @@ final class AppModel: ObservableObject {
             if let value = ref.openaiVoiceName { openaiVoiceName = value }
             speechProvider = .openai
         }
+        return nil
+    }
+
+    /// A personality applies its preferred model and ordered recovery providers
+    /// together. Advanced per-task overrides remain authoritative for their role.
+    private func applyPersonalityModel(_ ref: PersonalityModelRef?) -> String? {
+        guard let ref else { return nil }
+        conversationFallbackChain = ref.fallbackProviders.filter { $0 != ref.provider }
+        conversationFallbackChainEnabled = !conversationFallbackChain.isEmpty
+        guard connectedTextProviders.contains(ref.provider) else {
+            return "\(ref.provider.title) is not configured, so \(activePersonality?.name ?? "this personality") is using the current app model."
+        }
+        if presentationProviderSendsToCloud(ref.provider),
+           !cloudConsentAcknowledged(for: ref.provider) {
+            return "\(ref.provider.title) needs cloud approval, so \(activePersonality?.name ?? "this personality") is using the current app model."
+        }
+
+        selectPresentationProvider(ref.provider)
+        let model = ref.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        presentationModel = model.isEmpty ? ref.provider.defaultModel : model
+        if let reasoning = ref.reasoningEffort, !reasoning.isEmpty {
+            presentationReasoningEffort = reasoning
+        }
+        if let tier = ref.serviceTier, !tier.isEmpty {
+            presentationServiceTier = tier
+        }
+        applyCurrentPresentationModelCapabilities()
+        refreshPresentationStatus()
+        return nil
     }
 
     private func installedSystemVoiceIDs() -> Set<String> {
         Set(speechVoiceOptions.map { $0.id })
     }
 
-    private func hasSpeechAPIKey(for provider: CompanionSpeechProvider) -> Bool {
+    private func hasSpeechAPIKey(for provider: AttacheSpeechProvider) -> Bool {
         switch provider {
         case .system: return true
         case .elevenLabs: return !elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -4584,16 +4905,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func fallBackToSystemVoice(missing provider: String) {
+    private func fallBackToSystemVoice(missing provider: String) -> String {
         speechProvider = .system
-        intakeStatus = "\(provider) needs an API key, so this personality is using the on-device voice for now."
+        return "\(provider) needs an API key, so this personality is using the on-device voice for now."
     }
 
-    /// Change the pet as a user action, keeping it in sync with the active
-    /// personality. Programmatic switches set `petCharacter` directly instead.
-    func selectPetCharacter(_ character: BubblesPetCharacter) {
-        petCharacter = character
-        capturePetIntoActivePersonality()
+    /// Change the character as a user action, keeping it in sync with the active
+    /// personality. Programmatic switches set `character` directly instead.
+    func selectCharacter(_ character: AttacheCharacter) {
+        self.character = character
+        captureCharacterIntoActivePersonality()
     }
 
     /// Fold the current voice selection onto the active personality, so a voice
@@ -4604,10 +4925,18 @@ final class AppModel: ObservableObject {
         personalityStore.save(personalities, activeID: activePersonalityID)
     }
 
-    /// Fold the current pet onto the active personality (INF-296).
-    func capturePetIntoActivePersonality() {
+    /// Fold the current main model and fallback order onto the active personality.
+    /// Per-task Advanced overrides remain app-wide policy.
+    func captureCurrentModelIntoActivePersonality() {
         guard let index = personalities.firstIndex(where: { $0.id == activePersonalityID }) else { return }
-        personalities[index].petCharacter = petCharacter
+        personalities[index].modelRef = currentPersonalityModelRef
+        personalityStore.save(personalities, activeID: activePersonalityID)
+    }
+
+    /// Fold the current character onto the active personality (INF-296).
+    func captureCharacterIntoActivePersonality() {
+        guard let index = personalities.firstIndex(where: { $0.id == activePersonalityID }) else { return }
+        personalities[index].character = character
         personalityStore.save(personalities, activeID: activePersonalityID)
     }
 
@@ -4621,10 +4950,19 @@ final class AppModel: ObservableObject {
     /// Import a personality from JSON, giving it a fresh identity so it never
     /// clobbers an existing one, then make it active (INF-295).
     func importPersonality(from data: Data) {
-        guard let imported = try? PersonalityStore.importPersonality(from: data) else {
+        guard var imported = try? PersonalityStore.importPersonality(from: data) else {
             intakeStatus = "Could not import that personality file."
             return
         }
+        if imported.voiceRef == nil { imported.voiceRef = currentPersonalityVoiceRef }
+        if var voice = imported.voiceRef,
+           voice.provider == .system,
+           voice.systemVoiceIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            voice.systemVoiceIdentifier = speechVoiceOptions.first?.id ?? Personality.defaultPreferredVoiceID
+            imported.voiceRef = voice
+        }
+        if imported.modelRef == nil { imported.modelRef = currentPersonalityModelRef }
+        if imported.playbackSpeed == nil { imported.playbackSpeed = playbackSpeed }
         personalities.append(imported)
         selectPersonality(imported.id)
         intakeStatus = "Imported \"\(imported.name)\"."
@@ -4694,18 +5032,22 @@ final class AppModel: ObservableObject {
     }
 
     private func writeActivePersonalityToDefaults() {
-        let prompt = activePersonality?.prompt ?? CompanionPersonality.defaultProfilePrompt
-        defaults.set(prompt, forKey: CompanionPreferenceKey.personalityPrompt)
+        let prompt = activePersonality?.prompt ?? AttachePersonality.defaultProfilePrompt
+        defaults.set(prompt, forKey: AttachePreferenceKey.personalityPrompt)
     }
 
-    private func applyCapabilitiesForSelectedModel(_ option: CompanionPresentationModelOption) {
+    private func applyCapabilitiesForSelectedModel(_ option: AttachePresentationModelOption) {
         if option.reasoningEfforts.isEmpty {
             presentationReasoningEffort = "none"
         } else {
             let options = option.reasoningEfforts
             let current = presentationReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
-            if current.isEmpty || current == "none" || (current != "default" && !options.contains(current)) {
-                presentationReasoningEffort = "default"
+            if !options.contains(current) {
+                presentationReasoningEffort = AttachePresentationModelService.preferredReasoningEffort(
+                    provider: presentationProvider,
+                    modelID: option.id,
+                    supported: options
+                )
             }
         }
 
@@ -4734,8 +5076,12 @@ final class AppModel: ObservableObject {
             presentationReasoningEffort = "none"
         } else {
             let current = presentationReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
-            if current.isEmpty || current == "none" || (current != "default" && !reasoningOptions.contains(current)) {
-                presentationReasoningEffort = "default"
+            if !reasoningOptions.contains(current) {
+                presentationReasoningEffort = AttachePresentationModelService.preferredReasoningEffort(
+                    provider: presentationProvider,
+                    modelID: presentationModel,
+                    supported: reasoningOptions
+                )
             }
         }
 
@@ -4750,11 +5096,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func selectSpeechVoice(_ option: CompanionVoiceOption?) {
+    func selectSpeechVoice(_ option: AttacheVoiceOption?) {
         speechProvider = .system
         speechVoiceIdentifier = option?.id
         intakeStatus = option.map { "Assistant voice set to \($0.title)." } ?? "Assistant voice set to system default."
-        previewAssistantVoice()
         captureCurrentVoiceIntoActivePersonality()
     }
 
@@ -4763,7 +5108,6 @@ final class AppModel: ObservableObject {
         elevenLabsVoiceID = voice.id
         elevenLabsVoiceName = voice.name
         intakeStatus = "ElevenLabs voice set to \(voice.name)."
-        previewAssistantVoice()
         captureCurrentVoiceIntoActivePersonality()
     }
 
@@ -4772,7 +5116,6 @@ final class AppModel: ObservableObject {
         xaiVoiceID = voice.id
         xaiVoiceName = voice.name
         intakeStatus = "xAI voice set to \(voice.name)."
-        previewAssistantVoice()
         captureCurrentVoiceIntoActivePersonality()
     }
 
@@ -4781,14 +5124,13 @@ final class AppModel: ObservableObject {
         openaiVoiceID = voice.id
         openaiVoiceName = voice.name
         intakeStatus = "OpenAI voice set to \(voice.name)."
-        previewAssistantVoice()
         captureCurrentVoiceIntoActivePersonality()
     }
 
     func saveOpenAIVoiceIntegration() {
         let trimmed = openaiVoiceAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            try CompanionSecretVault.save(trimmed, account: Self.openaiDevelopmentSecretAccount)
+            try AttacheSecretVault.save(trimmed, account: Self.openaiDevelopmentSecretAccount)
             setSecretAccountConfigured(Self.openaiDevelopmentSecretAccount, configured: !trimmed.isEmpty)
             openaiVoiceAPIKey = trimmed
             if trimmed.isEmpty {
@@ -4813,7 +5155,7 @@ final class AppModel: ObservableObject {
     func saveElevenLabsKeyAndLoadVoices() {
         let trimmed = elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            try CompanionSecretVault.save(trimmed, account: Self.elevenLabsDevelopmentSecretAccount)
+            try AttacheSecretVault.save(trimmed, account: Self.elevenLabsDevelopmentSecretAccount)
             setSecretAccountConfigured(Self.elevenLabsDevelopmentSecretAccount, configured: !trimmed.isEmpty)
             elevenLabsAPIKey = trimmed
             loadElevenLabsVoices()
@@ -4825,7 +5167,7 @@ final class AppModel: ObservableObject {
     func saveXAIKeyAndLoadVoices() {
         let trimmed = xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            try CompanionSecretVault.save(trimmed, account: Self.xaiDevelopmentSecretAccount)
+            try AttacheSecretVault.save(trimmed, account: Self.xaiDevelopmentSecretAccount)
             setSecretAccountConfigured(Self.xaiDevelopmentSecretAccount, configured: !trimmed.isEmpty)
             xaiAPIKey = trimmed
             loadXAIVoices()
@@ -4843,7 +5185,7 @@ final class AppModel: ObservableObject {
         voiceProviderStatus = "Loading ElevenLabs voices..."
         Task {
             do {
-                let voices = try await CompanionRemoteVoiceService.fetchElevenLabsVoices(apiKey: key)
+                let voices = try await AttacheRemoteVoiceService.fetchElevenLabsVoices(apiKey: key)
                 await MainActor.run {
                     self.elevenLabsVoiceOptions = voices
                     self.voiceProviderStatus = "Loaded \(voices.count) ElevenLabs voices."
@@ -4872,7 +5214,7 @@ final class AppModel: ObservableObject {
         voiceProviderStatus = "Loading xAI voices..."
         Task {
             do {
-                let voices = try await CompanionRemoteVoiceService.fetchXAIVoices(apiKey: key, baseURL: xaiBaseURL)
+                let voices = try await AttacheRemoteVoiceService.fetchXAIVoices(apiKey: key, baseURL: xaiBaseURL)
                 await MainActor.run {
                     self.xaiVoiceOptions = voices
                     self.voiceProviderStatus = "Loaded \(self.xaiVoiceOptions.count) xAI voices."
@@ -4902,9 +5244,9 @@ final class AppModel: ObservableObject {
         voiceProviderStatus = "Checking OpenAI key..."
         Task {
             do {
-                try await CompanionRemoteVoiceService.verifyOpenAIKey(apiKey: key)
+                try await AttacheRemoteVoiceService.verifyOpenAIKey(apiKey: key)
                 await MainActor.run {
-                    self.openaiVoiceOptions = CompanionRemoteVoiceService.builtInOpenAIVoices
+                    self.openaiVoiceOptions = AttacheRemoteVoiceService.builtInOpenAIVoices
                     self.voiceProviderStatus = "Loaded \(self.openaiVoiceOptions.count) OpenAI voices."
                     if self.openaiVoiceID.isEmpty, let first = self.openaiVoiceOptions.first {
                         self.openaiVoiceID = first.id
@@ -5112,7 +5454,7 @@ final class AppModel: ObservableObject {
     func setCodexSourceEnabled(_ enabled: Bool) {
         guard codexSourceEnabled != enabled else { return }
         codexSourceEnabled = enabled
-        defaults.set(enabled, forKey: CompanionPreferenceKey.codexSourceEnabled)
+        defaults.set(enabled, forKey: AttachePreferenceKey.codexSourceEnabled)
 
         if !enabled {
             codexSessions = []
@@ -5133,7 +5475,7 @@ final class AppModel: ObservableObject {
     func setClaudeCodeSourceEnabled(_ enabled: Bool) {
         guard claudeCodeSourceEnabled != enabled else { return }
         claudeCodeSourceEnabled = enabled
-        defaults.set(enabled, forKey: CompanionPreferenceKey.claudeCodeSourceEnabled)
+        defaults.set(enabled, forKey: AttachePreferenceKey.claudeCodeSourceEnabled)
         if !enabled {
             // Mirror the Codex disable path: stop watching Claude sessions now
             // instead of only rebuilding the index (they'd keep producing
@@ -5148,7 +5490,7 @@ final class AppModel: ObservableObject {
         refreshSessionIndex()
     }
 
-    func focusIntegration(for provider: CompanionSpeechProvider) {
+    func focusIntegration(for provider: AttacheSpeechProvider) {
         switch provider {
         case .system:
             integrationFocusProviderID = nil
@@ -5208,7 +5550,7 @@ final class AppModel: ObservableObject {
         } else {
             sessionRenames[id] = trimmed
         }
-        defaults.set(sessionRenames, forKey: CompanionPreferenceKey.sessionRenames)
+        defaults.set(sessionRenames, forKey: AttachePreferenceKey.sessionRenames)
     }
 
     /// The curated Codex project (from .codex-global-state.json `project-order`)
@@ -5491,7 +5833,7 @@ final class AppModel: ObservableObject {
 
     private func followUpAnswerStatusText(
         target: String,
-        answer: CompanionFollowUpAnswerResult
+        answer: AttacheFollowUpAnswerResult
     ) -> String {
         let holdText = "Answered from observed context for \(target). Nothing was sent to Codex."
         var notes: [String] = [holdText]
@@ -5563,7 +5905,7 @@ final class AppModel: ObservableObject {
             status: .heard,
             createdAt: Date(),
             heardAt: nil,
-            metadataJSON: #"{"synthetic":"companion_follow_up_context"}"#,
+            metadataJSON: #"{"synthetic":"attache_follow_up_context"}"#,
             durationMs: 0,
             alignment: nil
         )
@@ -5686,6 +6028,10 @@ final class AppModel: ObservableObject {
 
     /// Resume the live queue after a conversation reply (a preview) finished.
     private func resumeLiveQueueAfterReply() {
+        guard onCall else {
+            livePlaybackQueue.reset()
+            return
+        }
         if let next = livePlaybackQueue.replyFinished() {
             playCardLive(cardID: next)
         }
@@ -5694,6 +6040,10 @@ final class AppModel: ObservableObject {
     /// Play a queued live update by id without marking it heard first; heard state
     /// is set in `finishPlayback` only after it actually plays.
     private func playCardLive(cardID: String) {
+        guard onCall else {
+            livePlaybackQueue.reset()
+            return
+        }
         reloadCards(select: cardID)
         guard let card = cards.first(where: { $0.id == cardID }) else {
             // The card vanished (archived/deleted); free the slot and move on.
@@ -5716,7 +6066,7 @@ final class AppModel: ObservableObject {
     /// Live-applies an edited spec (memory and views immediately, disk after a
     /// short debounce so a color-wheel drag does not write per tick). Accents
     /// are clamped to the contrast floor before anything is shown or saved.
-    func applyCustomThemeEdit(_ spec: CompanionThemeSpec) {
+    func applyCustomThemeEdit(_ spec: AttacheThemeSpec) {
         let enforced = spec.enforcingContrastFloor()
         if let index = customThemes.firstIndex(where: { $0.id == enforced.id }) {
             customThemes[index] = enforced
@@ -5736,9 +6086,9 @@ final class AppModel: ObservableObject {
     /// Starts a new custom theme seeded from whatever theme is active, so the
     /// editor opens with something recognizable instead of gray.
     @discardableResult
-    func createCustomTheme() -> CompanionThemeSpec {
+    func createCustomTheme() -> AttacheThemeSpec {
         let base = theme
-        let spec = CompanionThemeSpec(
+        let spec = AttacheThemeSpec(
             name: "My Theme",
             stops: base.stops,
             accentDark: base.accentStop(darkScheme: true),
@@ -5768,7 +6118,7 @@ final class AppModel: ObservableObject {
     }
 
     @discardableResult
-    func importCustomTheme(from url: URL) throws -> CompanionThemeSpec {
+    func importCustomTheme(from url: URL) throws -> AttacheThemeSpec {
         let data = try Data(contentsOf: url)
         var spec = try CustomThemeStore.decode(data).enforcingContrastFloor()
         // A fresh identity on import so a shared file never collides with or
@@ -5788,175 +6138,147 @@ final class AppModel: ObservableObject {
     }
 
     private func loadPreferences() {
-        if let value = defaults.string(forKey: CompanionPreferenceKey.visualMode),
-           let mode = CompanionVisualMode(rawValue: value) {
+        if let value = defaults.string(forKey: AttachePreferenceKey.visualMode),
+           let mode = AttacheVisualMode(persistedRawValue: value) {
             visualMode = mode
+            if value != mode.rawValue {
+                defaults.set(mode.rawValue, forKey: AttachePreferenceKey.visualMode)
+            }
         }
-        miniCompanionEnabled = defaults.bool(forKey: CompanionPreferenceKey.miniCompanion)
-        miniCompanionClickThrough = defaults.bool(forKey: CompanionPreferenceKey.miniCompanionClickThrough)
-        if defaults.object(forKey: CompanionPreferenceKey.petTypesAlong) != nil {
-            petTypesAlong = defaults.bool(forKey: CompanionPreferenceKey.petTypesAlong)
+        miniAttacheEnabled = defaults.bool(forKey: AttachePreferenceKey.miniAttache)
+        miniAttacheClickThrough = defaults.bool(forKey: AttachePreferenceKey.miniAttacheClickThrough)
+        if defaults.object(forKey: AttachePreferenceKey.characterFocusAngle) != nil {
+            characterFocusAngle = defaults.double(forKey: AttachePreferenceKey.characterFocusAngle)
         }
-        petRareIdles = defaults.bool(forKey: CompanionPreferenceKey.petRareIdles)
-        petHoverReaction = defaults.bool(forKey: CompanionPreferenceKey.petHoverReaction)
-        if defaults.object(forKey: CompanionPreferenceKey.petFocusAngle) != nil {
-            petFocusAngle = defaults.double(forKey: CompanionPreferenceKey.petFocusAngle)
-        }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.petCharacter),
-           let characterChoice = BubblesPetCharacter(rawValue: value) {
-            petCharacter = characterChoice
-        }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.visualSymmetry),
-           let symmetry = CompanionVisualSymmetry(rawValue: value) {
-            visualSymmetry = symmetry
-        }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.idleBrand),
-           let brand = CompanionIdleBrand(rawValue: value) {
-            idleBrand = brand
-        }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.idleCustomText) {
-            idleCustomText = value
-        }
-        if idleBrand == .customImage {
-            loadIdleImageIfNeeded()
+        if let value = defaults.string(forKey: AttachePreferenceKey.character),
+           let characterChoice = AttacheCharacter(rawValue: value) {
+            character = characterChoice
         }
         // Custom themes load before the theme selection so a persisted
         // "custom" choice resolves its colors instead of the fallback.
         customThemes = CustomThemeStore.load()
-        if let storedID = defaults.string(forKey: CompanionPreferenceKey.customThemeID) {
+        if let storedID = defaults.string(forKey: AttachePreferenceKey.customThemeID) {
             activeCustomThemeID = storedID
             CustomThemeStore.activeSpec = customThemes.first { $0.id == storedID }
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.theme),
-           let loadedTheme = CompanionTheme(rawValue: value) {
+        if let value = defaults.string(forKey: AttachePreferenceKey.theme),
+           let loadedTheme = AttacheTheme(rawValue: value) {
             theme = loadedTheme
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.appearanceMode),
-           let loadedMode = CompanionAppearanceMode(rawValue: value) {
+        if let value = defaults.string(forKey: AttachePreferenceKey.appearanceMode),
+           let loadedMode = AttacheAppearanceMode(rawValue: value) {
             appearanceMode = loadedMode
         } else {
             applyAppearance()
         }
-        if defaults.object(forKey: CompanionPreferenceKey.surfaceOpacity) != nil {
-            surfaceOpacity = min(1.0, max(0.35, defaults.double(forKey: CompanionPreferenceKey.surfaceOpacity)))
+        if defaults.object(forKey: AttachePreferenceKey.surfaceOpacity) != nil {
+            surfaceOpacity = min(1.0, max(0.35, defaults.double(forKey: AttachePreferenceKey.surfaceOpacity)))
         }
-        if defaults.object(forKey: CompanionPreferenceKey.brightnessLevel) != nil {
-            brightnessLevel = min(2, max(0, defaults.integer(forKey: CompanionPreferenceKey.brightnessLevel)))
+        if defaults.object(forKey: AttachePreferenceKey.seekStepSeconds) != nil {
+            seekStepSeconds = min(30, max(2, defaults.integer(forKey: AttachePreferenceKey.seekStepSeconds)))
         }
-        if defaults.object(forKey: CompanionPreferenceKey.visualIntensity) != nil {
-            visualIntensity = min(1.8, max(0.3, defaults.double(forKey: CompanionPreferenceKey.visualIntensity)))
+        if defaults.object(forKey: AttachePreferenceKey.captionFontSize) != nil {
+            captionFontSize = defaults.double(forKey: AttachePreferenceKey.captionFontSize)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.seekStepSeconds) != nil {
-            seekStepSeconds = min(30, max(2, defaults.integer(forKey: CompanionPreferenceKey.seekStepSeconds)))
+        if defaults.object(forKey: AttachePreferenceKey.captionLineCount) != nil {
+            captionLineCount = defaults.integer(forKey: AttachePreferenceKey.captionLineCount)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.captionFontSize) != nil {
-            captionFontSize = defaults.double(forKey: CompanionPreferenceKey.captionFontSize)
-        }
-        if defaults.object(forKey: CompanionPreferenceKey.captionLineCount) != nil {
-            captionLineCount = defaults.integer(forKey: CompanionPreferenceKey.captionLineCount)
-        }
-        if defaults.object(forKey: CompanionPreferenceKey.audioCacheRetentionMinutes) != nil {
-            audioCacheRetentionMinutes = defaults.integer(forKey: CompanionPreferenceKey.audioCacheRetentionMinutes)
+        if defaults.object(forKey: AttachePreferenceKey.audioCacheRetentionMinutes) != nil {
+            audioCacheRetentionMinutes = defaults.integer(forKey: AttachePreferenceKey.audioCacheRetentionMinutes)
         } else {
             playback.setAudioCacheRetention(minutes: audioCacheRetentionMinutes)
         }
-        if let voiceModeRaw = defaults.string(forKey: CompanionPreferenceKey.voiceInputMode),
-           let voiceMode = CompanionVoiceInputMode(rawValue: voiceModeRaw) {
+        if let voiceModeRaw = defaults.string(forKey: AttachePreferenceKey.voiceInputMode),
+           let voiceMode = AttacheVoiceInputMode(rawValue: voiceModeRaw) {
             voiceInputMode = voiceMode
         }
-        if let narrationRaw = defaults.string(forKey: CompanionPreferenceKey.narrationDetail),
-           let narration = CompanionNarrationDetail(rawValue: narrationRaw) {
+        if let narrationRaw = defaults.string(forKey: AttachePreferenceKey.narrationDetail),
+           let narration = AttacheNarrationDetail(rawValue: narrationRaw) {
             narrationDetail = narration
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.microphoneDeviceID) {
+        if let value = defaults.string(forKey: AttachePreferenceKey.microphoneDeviceID) {
             microphoneDeviceID = value
         }
-        if let renames = defaults.dictionary(forKey: CompanionPreferenceKey.sessionRenames) as? [String: String] {
+        if let renames = defaults.dictionary(forKey: AttachePreferenceKey.sessionRenames) as? [String: String] {
             sessionRenames = renames
         }
-        if defaults.object(forKey: CompanionPreferenceKey.codexSourceEnabled) != nil {
-            codexSourceEnabled = defaults.bool(forKey: CompanionPreferenceKey.codexSourceEnabled)
+        if defaults.object(forKey: AttachePreferenceKey.codexSourceEnabled) != nil {
+            codexSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.codexSourceEnabled)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.claudeCodeSourceEnabled) != nil {
-            claudeCodeSourceEnabled = defaults.bool(forKey: CompanionPreferenceKey.claudeCodeSourceEnabled)
+        if defaults.object(forKey: AttachePreferenceKey.claudeCodeSourceEnabled) != nil {
+            claudeCodeSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.claudeCodeSourceEnabled)
         }
-        if let raw = defaults.string(forKey: CompanionPreferenceKey.agentInstructionSendPolicy),
+        if let raw = defaults.string(forKey: AttachePreferenceKey.agentInstructionSendPolicy),
            let policy = AgentInstructionSendPolicy(rawValue: raw) {
             agentInstructionSendPolicy = policy
         }
         loadWatchedSessions()
-        if defaults.object(forKey: CompanionPreferenceKey.captionsEnabled) != nil {
-            captionsEnabled = defaults.bool(forKey: CompanionPreferenceKey.captionsEnabled)
+        if defaults.object(forKey: AttachePreferenceKey.captionsEnabled) != nil {
+            captionsEnabled = defaults.bool(forKey: AttachePreferenceKey.captionsEnabled)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.uiTextScale) != nil {
-            uiTextScale = AttacheTypeScale.clamp(defaults.double(forKey: CompanionPreferenceKey.uiTextScale))
+        if defaults.object(forKey: AttachePreferenceKey.uiTextScale) != nil {
+            uiTextScale = AttacheTypeScale.clamp(defaults.double(forKey: AttachePreferenceKey.uiTextScale))
         }
         // A pending resume step (set by the mid-onboarding voice relaunch)
         // reopens the sheet even when a previous run was completed, so the
         // Help-menu re-run path resumes too.
-        showOnboarding = !defaults.bool(forKey: CompanionPreferenceKey.onboardingCompleted)
-            || defaults.object(forKey: CompanionPreferenceKey.onboardingResumeStep) != nil
+        showOnboarding = !defaults.bool(forKey: AttachePreferenceKey.onboardingCompleted)
+            || defaults.object(forKey: AttachePreferenceKey.onboardingResumeStep) != nil
         NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             self?.detectNewlyDownloadedVoice()
         }
-        if defaults.object(forKey: CompanionPreferenceKey.lowLatencyCaptions) != nil {
-            lowLatencyCaptions = defaults.bool(forKey: CompanionPreferenceKey.lowLatencyCaptions)
+        if let value = defaults.string(forKey: AttachePreferenceKey.spokenLanguage) {
+            spokenLanguage = AttacheCaptionLanguage.named(value).id
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.spokenLanguage) {
-            spokenLanguage = CompanionCaptionLanguage.named(value).id
+        if defaults.object(forKey: AttachePreferenceKey.voicemailMode) != nil {
+            voicemailMode = defaults.bool(forKey: AttachePreferenceKey.voicemailMode)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.onDeviceOnly) != nil {
-            onDeviceOnly = defaults.bool(forKey: CompanionPreferenceKey.onDeviceOnly)
+        if defaults.object(forKey: AttachePreferenceKey.autoHideControls) != nil {
+            autoHideControls = defaults.bool(forKey: AttachePreferenceKey.autoHideControls)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.voicemailMode) != nil {
-            voicemailMode = defaults.bool(forKey: CompanionPreferenceKey.voicemailMode)
-        }
-        if defaults.object(forKey: CompanionPreferenceKey.autoHideControls) != nil {
-            autoHideControls = defaults.bool(forKey: CompanionPreferenceKey.autoHideControls)
-        }
-        if defaults.object(forKey: CompanionPreferenceKey.autoHideDelaySeconds) != nil {
-            let value = defaults.double(forKey: CompanionPreferenceKey.autoHideDelaySeconds)
+        if defaults.object(forKey: AttachePreferenceKey.autoHideDelaySeconds) != nil {
+            let value = defaults.double(forKey: AttachePreferenceKey.autoHideDelaySeconds)
             if value >= 1, value <= 8 { autoHideDelaySeconds = value }
         }
-        if defaults.object(forKey: CompanionPreferenceKey.showPersonalityNameInDock) != nil {
-            showPersonalityNameInDock = defaults.bool(forKey: CompanionPreferenceKey.showPersonalityNameInDock)
+        if defaults.object(forKey: AttachePreferenceKey.showPersonalityNameInDock) != nil {
+            showPersonalityNameInDock = defaults.bool(forKey: AttachePreferenceKey.showPersonalityNameInDock)
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.notifyScope),
-           let scope = CompanionNotifyScope(rawValue: value) {
+        if let value = defaults.string(forKey: AttachePreferenceKey.notifyScope),
+           let scope = AttacheNotifyScope(rawValue: value) {
             notifyScope = scope
         }
-        if defaults.object(forKey: CompanionPreferenceKey.showInMenuBar) != nil {
-            showInMenuBar = defaults.bool(forKey: CompanionPreferenceKey.showInMenuBar)
+        if defaults.object(forKey: AttachePreferenceKey.showInMenuBar) != nil {
+            showInMenuBar = defaults.bool(forKey: AttachePreferenceKey.showInMenuBar)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.playbackSpeed) != nil {
-            playbackSpeed = min(1.6, max(0.8, defaults.double(forKey: CompanionPreferenceKey.playbackSpeed)))
+        if defaults.object(forKey: AttachePreferenceKey.playbackSpeed) != nil {
+            playbackSpeed = min(1.6, max(0.8, defaults.double(forKey: AttachePreferenceKey.playbackSpeed)))
         }
-        if defaults.object(forKey: CompanionPreferenceKey.showTips) != nil {
-            showTips = defaults.bool(forKey: CompanionPreferenceKey.showTips)
+        if defaults.object(forKey: AttachePreferenceKey.showTips) != nil {
+            showTips = defaults.bool(forKey: AttachePreferenceKey.showTips)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.installClaudeHooks) != nil {
-            installClaudeHooks = defaults.bool(forKey: CompanionPreferenceKey.installClaudeHooks)
+        if defaults.object(forKey: AttachePreferenceKey.installClaudeHooks) != nil {
+            installClaudeHooks = defaults.bool(forKey: AttachePreferenceKey.installClaudeHooks)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.showPersonalitySwitcher) != nil {
-            showPersonalitySwitcher = defaults.bool(forKey: CompanionPreferenceKey.showPersonalitySwitcher)
+        if defaults.object(forKey: AttachePreferenceKey.showPersonalitySwitcher) != nil {
+            showPersonalitySwitcher = defaults.bool(forKey: AttachePreferenceKey.showPersonalitySwitcher)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.showActivityInsights) != nil {
-            showActivityInsights = defaults.bool(forKey: CompanionPreferenceKey.showActivityInsights)
+        if defaults.object(forKey: AttachePreferenceKey.showActivityInsights) != nil {
+            showActivityInsights = defaults.bool(forKey: AttachePreferenceKey.showActivityInsights)
         }
-        if defaults.object(forKey: CompanionPreferenceKey.captionSyncOffsetMs) != nil {
-            captionSyncOffsetMs = min(10_000, max(-2_000, defaults.integer(forKey: CompanionPreferenceKey.captionSyncOffsetMs)))
+        if defaults.object(forKey: AttachePreferenceKey.captionSyncOffsetMs) != nil {
+            captionSyncOffsetMs = min(10_000, max(-2_000, defaults.integer(forKey: AttachePreferenceKey.captionSyncOffsetMs)))
         }
         // The migration reads the keychain, and a keychain read can block on a
         // SecurityAgent authorization (first launch after the app bundle is
         // replaced). Running it inline here left the app alive with no window
         // until the dialog was answered, so it runs once, off the launch path.
-        if !defaults.bool(forKey: CompanionPreferenceKey.legacyKeyMigrationDone) {
+        if !defaults.bool(forKey: AttachePreferenceKey.legacyKeyMigrationDone) {
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 self?.migrateLegacyPresentationKeys()
                 DispatchQueue.main.async {
-                    self?.defaults.set(true, forKey: CompanionPreferenceKey.legacyKeyMigrationDone)
+                    self?.defaults.set(true, forKey: AttachePreferenceKey.legacyKeyMigrationDone)
                 }
             }
         }
@@ -5965,7 +6287,7 @@ final class AppModel: ObservableObject {
         // .conversation is the reasonable placeholder role for that row (see
         // the same call in loadPresentationModels, and roleModelProvider/D3
         // for the per-role overrides loaded just below).
-        let presentationSettings = CompanionPresentationSettings.load(
+        let presentationSettings = AttachePresentationSettings.load(
             role: .conversation,
             defaults: defaults,
             environment: presentationEnvironment,
@@ -5980,48 +6302,52 @@ final class AppModel: ObservableObject {
         presentationAPIKeySecretRef = presentationSettings.apiKeySecretRef
         applyFallbackCapabilitiesForCurrentModel()
         loadRoleModelOverrides()
-        if defaults.object(forKey: CompanionPreferenceKey.conversationFallbackChainEnabled) != nil {
-            conversationFallbackChainEnabled = defaults.bool(forKey: CompanionPreferenceKey.conversationFallbackChainEnabled)
+        if defaults.object(forKey: AttachePreferenceKey.conversationFallbackChainEnabled) != nil {
+            conversationFallbackChainEnabled = defaults.bool(forKey: AttachePreferenceKey.conversationFallbackChainEnabled)
         }
-        conversationFallbackChain = ((defaults.array(forKey: CompanionPreferenceKey.conversationFallbackChainProviders) as? [String]) ?? [])
-            .compactMap(CompanionPresentationProvider.init(rawValue:))
+        conversationFallbackChain = ((defaults.array(forKey: AttachePreferenceKey.conversationFallbackChainProviders) as? [String]) ?? [])
+            .reduce(into: [AttachePresentationProvider]()) { result, raw in
+                let provider = AttachePresentationProvider.isLegacyLMStudio(explicitValue: raw, baseURLText: nil)
+                    ? .ollama
+                    : AttachePresentationProvider(rawValue: raw)
+                if let provider, !result.contains(provider) { result.append(provider) }
+            }
         // Needs presentationProvider loaded above (it credits whatever
         // provider was configured at migration time); pure defaults
         // read/write, so unlike migrateLegacyPresentationKeys it's safe
         // inline on the launch path.
         migrateCloudConsentToPerProvider()
-        if let value = defaults.string(forKey: CompanionPreferenceKey.speechProvider),
-           let provider = CompanionSpeechProvider(rawValue: value) {
+        if let value = defaults.string(forKey: AttachePreferenceKey.speechProvider),
+           let provider = AttacheSpeechProvider(rawValue: value) {
             speechProvider = provider
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.ollamaBaseURL), !value.isEmpty { ollamaBaseURL = value }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.lmStudioBaseURL), !value.isEmpty { lmStudioBaseURL = value }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.customBaseURL), !value.isEmpty { customBaseURL = value }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.elevenLabsModelID),
+        if let value = defaults.string(forKey: AttachePreferenceKey.ollamaBaseURL), !value.isEmpty { ollamaBaseURL = value }
+        if let value = defaults.string(forKey: AttachePreferenceKey.customBaseURL), !value.isEmpty { customBaseURL = value }
+        if let value = defaults.string(forKey: AttachePreferenceKey.elevenLabsModelID),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             elevenLabsModelID = value
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.elevenLabsOutputFormat),
+        if let value = defaults.string(forKey: AttachePreferenceKey.elevenLabsOutputFormat),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             elevenLabsOutputFormat = value
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.xaiBaseURL),
+        if let value = defaults.string(forKey: AttachePreferenceKey.xaiBaseURL),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             xaiBaseURL = value
         }
-        if let value = defaults.string(forKey: CompanionPreferenceKey.xaiLanguage),
+        if let value = defaults.string(forKey: AttachePreferenceKey.xaiLanguage),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             xaiLanguage = value
         }
         loadStoredSecretsAsync(presentationAccount: presentationSettings.provider.developmentSecretAccount)
-        speechVoiceOptions = CompanionVoiceCatalog.options()
-        if let savedVoice = defaults.string(forKey: CompanionPreferenceKey.speechVoiceIdentifier) {
+        speechVoiceOptions = AttacheVoiceCatalog.options()
+        if let savedVoice = defaults.string(forKey: AttachePreferenceKey.speechVoiceIdentifier) {
             let trimmed = savedVoice.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed == Self.systemVoicePreference || trimmed.isEmpty {
                 speechVoiceIdentifier = nil
             } else if trimmed == Self.legacyAutoSelectedSamanthaVoiceID,
-                      !defaults.bool(forKey: CompanionPreferenceKey.legacySamanthaDefaultMigrated) {
-                defaults.set(true, forKey: CompanionPreferenceKey.legacySamanthaDefaultMigrated)
+                      !defaults.bool(forKey: AttachePreferenceKey.legacySamanthaDefaultMigrated) {
+                defaults.set(true, forKey: AttachePreferenceKey.legacySamanthaDefaultMigrated)
                 speechVoiceIdentifier = nil
             } else if speechVoiceOptions.contains(where: { $0.id == trimmed }) {
                 speechVoiceIdentifier = trimmed
@@ -6032,7 +6358,7 @@ final class AppModel: ObservableObject {
             speechVoiceIdentifier = nil
         }
         applySpeechConfiguration()
-        if let savedFocus = defaults.string(forKey: CompanionPreferenceKey.attachedCodexSessionID),
+        if let savedFocus = defaults.string(forKey: AttachePreferenceKey.attachedCodexSessionID),
            attachedTargets[savedFocus] != nil || codexSourceEnabled {
             attachedCodexSessionID = savedFocus
         } else {
@@ -6053,8 +6379,8 @@ final class AppModel: ObservableObject {
                 ?? self.environmentValue("COMPANION_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY")
                 ?? ""
             let xai = self.readConfiguredSecret(account: Self.xaiDevelopmentSecretAccount) ?? ""
-            let groq = self.readConfiguredSecret(account: CompanionPresentationProvider.groq.developmentSecretAccount) ?? ""
-            let custom = self.readConfiguredSecret(account: CompanionPresentationProvider.custom.developmentSecretAccount) ?? ""
+            let groq = self.readConfiguredSecret(account: AttachePresentationProvider.groq.developmentSecretAccount) ?? ""
+            let custom = self.readConfiguredSecret(account: AttachePresentationProvider.custom.developmentSecretAccount) ?? ""
             let openai = self.readConfiguredSecret(account: Self.openaiDevelopmentSecretAccount) ?? ""
             DispatchQueue.main.async {
                 self.presentationAPIKey = presentation
@@ -6075,25 +6401,25 @@ final class AppModel: ObservableObject {
         let hasXAIKey = !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasOpenAIKey = !effectiveOpenAIVoiceKey.isEmpty
 
-        if hasElevenLabsKey, let value = defaults.string(forKey: CompanionPreferenceKey.elevenLabsVoiceID) {
+        if hasElevenLabsKey, let value = defaults.string(forKey: AttachePreferenceKey.elevenLabsVoiceID) {
             elevenLabsVoiceID = value
         }
-        if hasElevenLabsKey, let value = defaults.string(forKey: CompanionPreferenceKey.elevenLabsVoiceName) {
+        if hasElevenLabsKey, let value = defaults.string(forKey: AttachePreferenceKey.elevenLabsVoiceName) {
             elevenLabsVoiceName = value
         }
-        if hasXAIKey, let value = defaults.string(forKey: CompanionPreferenceKey.xaiVoiceID),
+        if hasXAIKey, let value = defaults.string(forKey: AttachePreferenceKey.xaiVoiceID),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             xaiVoiceID = value
         }
-        if hasXAIKey, let value = defaults.string(forKey: CompanionPreferenceKey.xaiVoiceName),
+        if hasXAIKey, let value = defaults.string(forKey: AttachePreferenceKey.xaiVoiceName),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             xaiVoiceName = value
         }
-        if hasOpenAIKey, let value = defaults.string(forKey: CompanionPreferenceKey.openaiVoiceID),
+        if hasOpenAIKey, let value = defaults.string(forKey: AttachePreferenceKey.openaiVoiceID),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             openaiVoiceID = value
         }
-        if hasOpenAIKey, let value = defaults.string(forKey: CompanionPreferenceKey.openaiVoiceName),
+        if hasOpenAIKey, let value = defaults.string(forKey: AttachePreferenceKey.openaiVoiceName),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             openaiVoiceName = value
         }
@@ -6112,8 +6438,8 @@ final class AppModel: ObservableObject {
     private func applyMicConfiguration() {
         micTranscript.configure(
             languageID: spokenLanguage,
-            onDeviceOnly: onDeviceOnly,
-            lowLatency: lowLatencyCaptions,
+            onDeviceOnly: false,
+            lowLatency: true,
             preferredDeviceID: microphoneDeviceID
         )
     }
@@ -6138,8 +6464,8 @@ final class AppModel: ObservableObject {
         micTranscript.stopMicTest()
     }
 
-    private var selectedSpeechConfiguration: CompanionSpeechConfiguration {
-        CompanionSpeechConfiguration(
+    private var selectedSpeechConfiguration: AttacheSpeechConfiguration {
+        AttacheSpeechConfiguration(
             provider: speechProvider,
             systemVoiceIdentifier: speechVoiceIdentifier,
             elevenLabsAPIKey: elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : elevenLabsAPIKey,
@@ -6267,9 +6593,9 @@ final class AppModel: ObservableObject {
     /// user last clicked on the ring. Consumed by ActivitySimulatorPanel.
     @Published var simulatedFleetFocusID: String?
 
-    /// Mini companion size requests from its context menu (INF-286); the
+    /// Mini Window size requests from its context menu (INF-286); the
     /// window controller applies them, keeping frame persistence intact.
-    let miniCompanionResize = PassthroughSubject<NSSize, Never>()
+    let miniAttacheResize = PassthroughSubject<NSSize, Never>()
 
     /// Remove a session from the watch list (stop collecting its voicemail).
     func detachCodexSession(_ id: String) {
@@ -6281,11 +6607,11 @@ final class AppModel: ObservableObject {
     private func persistWatchedSessions() {
         let sessions = attachedSessionList
         guard let data = try? JSONEncoder().encode(sessions) else { return }
-        defaults.set(data, forKey: CompanionPreferenceKey.watchedSessions)
+        defaults.set(data, forKey: AttachePreferenceKey.watchedSessions)
     }
 
     private func loadWatchedSessions() {
-        guard let data = defaults.data(forKey: CompanionPreferenceKey.watchedSessions),
+        guard let data = defaults.data(forKey: AttachePreferenceKey.watchedSessions),
               let sessions = try? JSONDecoder().decode([CodexSessionTarget].self, from: data) else {
             return
         }

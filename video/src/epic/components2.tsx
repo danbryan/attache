@@ -457,12 +457,9 @@ export const typed = (text: string, frame: number, startFrame: number, durFrames
 };
 
 /**
- * The official Attaché mark (the "Bubbles" relay, locked 2026-07-11,
- * design/attache-logo.svg): a joyful hub speaking above its head, three
- * typing agents at hand and foot. Frame-driven where the SVG is static:
- * the bubbles' dots cycle like live typing indicators, and the voice arcs
- * pulse while `talking`. With `buildFrom`, the whole mark assembles as a
- * reveal: head, then limbs, then bubbles, then the voice.
+ * The official Attaché robot mark from design/attache-logo.svg. Frame-driven
+ * where the SVG is static: the LED eyes blink and the voice arcs pulse while
+ * `talking`. With `buildFrom`, the robot and its voice arcs assemble in place.
  */
 export const Mark2: React.FC<{
   size?: number;
@@ -485,9 +482,9 @@ export const Mark2: React.FC<{
   return (
     <svg width={size} height={size} viewBox="-6 -12 252 252" fill="none" style={{ display: "block" }}>
       {[
-        "M92 62 A 40 40 0 0 1 148 62",
-        "M76 40 A 66 66 0 0 1 164 40",
-        "M62 19 A 90 90 0 0 1 178 19",
+        "M93.235 59.274 A 40 40 0 0 1 146.765 59.274",
+        "M75.837 39.952 A 66 66 0 0 1 164.163 39.952",
+        "M59.778 22.117 A 90 90 0 0 1 180.222 22.117",
       ].map((d, i) => (
         <path key={i} d={d} stroke="#0A84FF" strokeWidth={9} strokeLinecap="round"
           opacity={arcBase[i] * arcPulse(i) * arcP[i]} />

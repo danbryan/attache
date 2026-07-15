@@ -1,7 +1,7 @@
 import AttacheCore
 import SwiftUI
 
-extension CompanionRootView {
+extension AttacheRootView {
     var voicemailModeOverlay: some View {
         GeometryReader { proxy in
             let compact = proxy.size.width < 920
@@ -403,7 +403,7 @@ extension CompanionRootView {
                         Button {
                             model.anotherTake(card: card, targetPersonalityID: personality.id)
                         } label: {
-                            Text("\(personality.petAvatarEmoji)  \(personality.name)")
+                            Text("\(personality.characterAvatarEmoji)  \(personality.name)")
                         }
                     }
                 } label: {
@@ -592,10 +592,10 @@ extension CompanionRootView {
         let metadata = metadataDictionary(for: card)
         let strategy = metadata["companion_presentation_strategy"] ?? ""
         switch strategy {
-        case "companion-personality-llm":
+        case "attache-personality-llm", "companion-personality-llm":
             return nil
         case "plain-readback":
-            return "Read the source output verbatim because personality summary is off."
+            return "Read the source output verbatim because personality presentation was unavailable."
         case "plain-readback-personality-unavailable":
             return "Read the source output verbatim because personality summary is not configured."
         case "plain-readback-after-llm-error":
@@ -674,7 +674,7 @@ extension CompanionRootView {
         }
     }
 
-    func voiceButton(_ voice: CompanionVoiceOption) -> some View {
+    func voiceButton(_ voice: AttacheVoiceOption) -> some View {
         Button {
             model.selectSpeechVoice(voice)
         } label: {
@@ -717,22 +717,6 @@ extension CompanionRootView {
             Label(title, systemImage: "checkmark")
         } else {
             Text(title)
-        }
-    }
-
-    func brightnessButton(_ title: String, level: Int) -> some View {
-        Button {
-            model.brightnessLevel = level
-        } label: {
-            selectedLabel(title, selected: model.brightnessLevel == level)
-        }
-    }
-
-    func intensityButton(_ title: String, value: Double) -> some View {
-        Button {
-            model.visualIntensity = value
-        } label: {
-            selectedLabel(title, selected: abs(model.visualIntensity - value) < 0.01)
         }
     }
 
@@ -782,13 +766,13 @@ enum RecoverySurface {
 struct PendingRecoveryProviderSwitch: Identifiable {
     let id = UUID()
     let surface: RecoverySurface
-    let provider: CompanionPresentationProvider
+    let provider: AttachePresentationProvider
 }
 
-extension CompanionRootView {
+extension AttacheRootView {
     /// Switches a recovery surface's provider, gating on cloud consent first
     /// exactly like the live call's `requestConversationRecoveryProvider`.
-    func requestRecoveryProvider(_ provider: CompanionPresentationProvider, surface: RecoverySurface) {
+    func requestRecoveryProvider(_ provider: AttachePresentationProvider, surface: RecoverySurface) {
         if model.presentationProviderSendsToCloud(provider), !model.cloudConsentAcknowledged(for: provider) {
             pendingRecoveryProviderSwitch = PendingRecoveryProviderSwitch(surface: surface, provider: provider)
         } else {
@@ -796,7 +780,7 @@ extension CompanionRootView {
         }
     }
 
-    func applyRecoveryProviderSwitch(_ provider: CompanionPresentationProvider, surface: RecoverySurface) {
+    func applyRecoveryProviderSwitch(_ provider: AttachePresentationProvider, surface: RecoverySurface) {
         switch surface {
         case .recap: model.selectRecapRecoveryProvider(provider)
         case .followUp: model.selectFollowUpRecoveryProvider(provider)

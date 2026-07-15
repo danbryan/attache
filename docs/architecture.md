@@ -39,7 +39,7 @@ agent activity
   NarrationCoalescer         collapse one multi-message agent turn into one turn
         │
         ▼
-  CompanionPresentationService  turn raw agent output into a short spoken update
+  AttachePresentationService  turn raw agent output into a short spoken update
         │                        in the active personality's voice (pluggable
         │                        provider: local CLI or HTTP)
         ▼
@@ -95,11 +95,11 @@ update is filed read instead of spoken as new.
 
 ### 3. Presentation model: pluggable providers
 
-`CompanionPresentationService` is the layer that rewrites raw agent output into a
+`AttachePresentationService` is the layer that rewrites raw agent output into a
 short spoken update in the active personality's voice. It builds a prompt from
 the active persona, a bounded durable-memory block, and the observed event, then
-calls a provider selected in Settings. The provider is pluggable
-(`CompanionPresentationProvider`):
+calls the provider owned by the active personality. The provider is pluggable
+(`AttachePresentationProvider`):
 
 - **Local CLI providers** run a coding agent you are already logged into, as a
   subprocess, with no API key: Claude subscription (`claude`) or Codex
@@ -108,16 +108,16 @@ calls a provider selected in Settings. The provider is pluggable
   path that is allowed to act.
 - **HTTP providers** call an OpenAI-compatible `chat/completions` endpoint: xAI
   (Grok), Groq, and any custom OpenAI-compatible base URL (for example OpenAI
-  itself), plus local servers Ollama and LM Studio. Ollama and LM Studio need no
-  key and default to loopback endpoints; the hosted providers read their key from
+  itself), plus the local server Ollama. Ollama needs no key and defaults to a
+  loopback endpoint; the hosted providers read their key from
   the shared secret vault. Reasoning effort and service tier are sent only for
   providers/models that advertise them.
 
-Provider selection is a presentation concern, separate from voice selection. The
-model's output becomes the spoken and captioned update; the raw agent output
-stays stored for inspection but is never the voice surface. If no provider is
-configured, the service falls back to a bounded plain read-back of the update
-rather than reading raw output verbatim.
+Each personality owns its provider, model, supported reasoning level, ordered
+live-call fallbacks, voice, and playback pace. The model's output becomes the
+spoken and captioned update; the raw agent output stays stored for inspection
+but is never the normal voice surface. A bounded deterministic read-back is the
+failure fallback when personality presentation cannot run.
 
 Durable memory and the persona prompt are editable local app-support files.
 Memory is used only for tone, routing, and preferences; it is never evidence that
@@ -139,7 +139,7 @@ timestamp. The Echoform visualizer consumes analysis frames from the audio asset
 being played and decays to near-still when idle.
 
 Secrets (LLM and voice provider keys) are read through a shared vault:
-`CompanionSecretVault` uses the login Keychain for signed builds and a 0600
+`AttacheSecretVault` uses the login Keychain for signed builds and a 0600
 `DevelopmentSecrets.json` fallback for unsigned development runs (Keychain ACLs do
 not survive ad-hoc rebuilds); the first signed access migrates the fallback into
 Keychain. Under `ATTACHE_UI_TEST=1` the vault never touches the real Keychain.
@@ -164,7 +164,7 @@ voicemail.
 waiting-on-you state (a `needs_attention` event from a Claude Code Notification
 hook, or the watcher classifying the transcript as awaiting an answer), Attaché
 files a priority notice immediately with no model pass and posts a local
-notification through `CompanionNotifier` at a time-sensitive interruption level.
+notification through `AttacheNotifier` at a time-sensitive interruption level.
 Delivery is entirely governed by macOS Focus and Do Not Disturb; the app builds
 no quiet-hours logic of its own and nothing is ever marked critical. The notice
 clears automatically once the session moves again. Everything that is not
@@ -175,7 +175,7 @@ needs-you just waits in the inbox.
 "Go live" (Command-L) is a two-way voice channel. It has two halves:
 
 - **Talk to Attaché.** A live voice conversation with the active personality
-  (`CompanionPresentationService.converse`) that can pull deeper context on demand
+  (`AttachePresentationService.converse`) that can pull deeper context on demand
   through session-reading tools (read/search the transcript, list the working
   directory, read a file, rename the session locally) and can request
   `stage_agent_instruction` when it decides the user wants the work agent
@@ -208,7 +208,7 @@ delivery; any mismatch fails closed.
 ## Live call UI: the composer and `CallPhase`
 
 The on-call composer is `onCallHUD` (`Sources/AttacheApp/Views/CallHUD.swift`,
-an extension on `CompanionRootView`): the destination picker (Ask Attaché /
+an extension on `AttacheRootView`): the destination picker (Ask Attaché /
 Tell Agent), one input row (AX label "Call message", the smoke harness's
 target), and a single status region. It is the one status home while on a
 call: nothing else duplicates it, other than the mic transcript overlay, which

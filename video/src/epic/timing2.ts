@@ -115,7 +115,7 @@ export const twoway = (() => {
   };
 })();
 
-// ---- 8: personalities — presets, write your own, or have fun -------------
+// ---- 8: character studio, a game-style loadout and live audition -----------
 export const personalities = (() => {
   const narrStart = 0.3;
   const presetsAt = 0.8;

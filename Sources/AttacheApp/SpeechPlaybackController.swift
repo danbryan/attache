@@ -85,7 +85,10 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     private var activeIsPreview = false
 
     private let speechFileSynthesizer = NSSpeechSynthesizer()
-    private var speechConfiguration = CompanionSpeechConfiguration.systemDefault
+    private var speechConfiguration = AttacheSpeechConfiguration.systemDefault
+    /// A creator audition can temporarily use a draft voice. The live app's
+    /// configuration is restored on every completion, failure, or cancellation.
+    private var previewRestoreConfiguration: AttacheSpeechConfiguration?
     /// Time-stretch applied at the player, so it works for every voice engine,
     /// costs no re-synthesis, and the caption clock (which reads the player's
     /// currentTime) stays in sync automatically. Applies live mid-playback.
@@ -134,7 +137,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     /// Persistent home for synthesized recap audio, so replaying a card reuses the
     /// clip instead of re-running the voice (no credits, no network wait).
     private lazy var audioCacheDirectory: URL? = {
-        let directory = CompanionAppSupport.supportDirectory()
+        let directory = AttacheAppSupport.supportDirectory()
             .appendingPathComponent("AudioCache", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -236,7 +239,12 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         }
     }
 
-    func configureVoice(configuration: CompanionSpeechConfiguration) {
+    func configureVoice(configuration: AttacheSpeechConfiguration) {
+        previewRestoreConfiguration = nil
+        applyVoiceConfiguration(configuration)
+    }
+
+    private func applyVoiceConfiguration(_ configuration: AttacheSpeechConfiguration) {
         speechConfiguration = configuration
         guard configuration.provider == .system else {
             voiceIdentifier = nil
@@ -253,7 +261,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             return
         }
 
-        if let fallbackIdentifier = CompanionVoiceCatalog.fileExportFallbackVoiceID(),
+        if let fallbackIdentifier = AttacheVoiceCatalog.fileExportFallbackVoiceID(),
            speechFileSynthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: fallbackIdentifier)) {
             voiceIdentifier = fallbackIdentifier
             return
@@ -384,7 +392,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         default:
             Task(priority: .utility) { [configuration, temporaryURL, cacheURL, cachePath, text = card.spokenText] in
                 do {
-                    try await CompanionRemoteVoiceService.synthesize(
+                    try await AttacheRemoteVoiceService.synthesize(
                         text: text,
                         configuration: configuration,
                         outputURL: temporaryURL
@@ -419,7 +427,20 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     }
 
     func preview(_ text: String) {
+        startPreview(text, configuration: nil)
+    }
+
+    func preview(_ text: String, configuration: AttacheSpeechConfiguration) {
+        startPreview(text, configuration: configuration)
+    }
+
+    private func startPreview(_ text: String, configuration: AttacheSpeechConfiguration?) {
         stop()
+        if let configuration {
+            let liveConfiguration = speechConfiguration
+            applyVoiceConfiguration(configuration)
+            previewRestoreConfiguration = liveConfiguration
+        }
         isBusy = true
         activeIsPreview = true
 
@@ -533,6 +554,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         playbackStartedAt = 0
         playbackStartOffset = 0
         playbackSeekCount = 0
+        restoreVoiceAfterPreviewIfNeeded()
     }
 
     func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
@@ -575,6 +597,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         cleanupGeneratedAudio()
 
         if wasPreview {
+            restoreVoiceAfterPreviewIfNeeded()
             onPreviewFinished?()
         } else if credibleCardFinish, let cardID {
             onFinished?(cardID, true)
@@ -696,7 +719,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                 // One retry on a transient synthesis failure so a single flaky
                 // request doesn't drop the recap to the plain fallback (INF-157).
                 try await retrying(attempts: 2) {
-                    try await CompanionRemoteVoiceService.synthesize(
+                    try await AttacheRemoteVoiceService.synthesize(
                         text: text,
                         configuration: configuration,
                         outputURL: audioURL
@@ -720,7 +743,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         audioFileExtension(for: speechConfiguration)
     }
 
-    private func audioFileExtension(for configuration: CompanionSpeechConfiguration) -> String {
+    private func audioFileExtension(for configuration: AttacheSpeechConfiguration) -> String {
         configuration.provider == .system ? "aiff" : "mp3"
     }
 
@@ -743,6 +766,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
 
         // Report the failure so the live queue can keep the card unread and advance.
         if wasPreview {
+            restoreVoiceAfterPreviewIfNeeded()
             onPreviewFinished?()
         } else if let cardID {
             onFinished?(cardID, false)
@@ -757,6 +781,12 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         if let timer {
             RunLoop.main.add(timer, forMode: .common)
         }
+    }
+
+    private func restoreVoiceAfterPreviewIfNeeded() {
+        guard let configuration = previewRestoreConfiguration else { return }
+        previewRestoreConfiguration = nil
+        applyVoiceConfiguration(configuration)
     }
 
     private func updateClock(forceEnd: Bool = false) {
@@ -896,13 +926,13 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
 
 private final class SpeechFileExportJob: NSObject, NSSpeechSynthesizerDelegate {
     private let synthesizer = NSSpeechSynthesizer()
-    private let configuration: CompanionSpeechConfiguration
+    private let configuration: AttacheSpeechConfiguration
     private let preferredVoiceIdentifier: String?
     private let outputURL: URL
     private let completion: (Bool) -> Void
 
     init(
-        configuration: CompanionSpeechConfiguration,
+        configuration: AttacheSpeechConfiguration,
         preferredVoiceIdentifier: String?,
         outputURL: URL,
         completion: @escaping (Bool) -> Void
@@ -938,7 +968,7 @@ private final class SpeechFileExportJob: NSObject, NSSpeechSynthesizerDelegate {
             return
         }
 
-        if let fallback = CompanionVoiceCatalog.fileExportFallbackVoiceID() {
+        if let fallback = AttacheVoiceCatalog.fileExportFallbackVoiceID() {
             _ = synthesizer.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: fallback))
         }
     }

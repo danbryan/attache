@@ -24,20 +24,19 @@ final class CloudConsentTests: XCTestCase {
 
     func testPresentationProvidersClassification() {
         // Fixed cloud endpoints require consent.
-        XCTAssertTrue(NetworkSecurity.isCloudEndpoint(CompanionPresentationProvider.xai.defaultBaseURL))
-        XCTAssertTrue(NetworkSecurity.isCloudEndpoint(CompanionPresentationProvider.groq.defaultBaseURL))
+        XCTAssertTrue(NetworkSecurity.isCloudEndpoint(AttachePresentationProvider.xai.defaultBaseURL))
+        XCTAssertTrue(NetworkSecurity.isCloudEndpoint(AttachePresentationProvider.groq.defaultBaseURL))
         // Local model servers do not.
-        XCTAssertFalse(NetworkSecurity.isCloudEndpoint(CompanionPresentationProvider.ollama.defaultBaseURL))
-        XCTAssertFalse(NetworkSecurity.isCloudEndpoint(CompanionPresentationProvider.lmStudio.defaultBaseURL))
+        XCTAssertFalse(NetworkSecurity.isCloudEndpoint(AttachePresentationProvider.ollama.defaultBaseURL))
         // CLI providers carry no Attaché endpoint.
-        XCTAssertTrue(CompanionPresentationProvider.claudeCLI.isCLI)
-        XCTAssertTrue(CompanionPresentationProvider.codexCLI.isCLI)
+        XCTAssertTrue(AttachePresentationProvider.claudeCLI.isCLI)
+        XCTAssertTrue(AttachePresentationProvider.codexCLI.isCLI)
     }
 
     func testVoiceEngineClassification() {
-        XCTAssertFalse(CompanionSpeechProvider.system.sendsToCloud)
-        XCTAssertTrue(CompanionSpeechProvider.elevenLabs.sendsToCloud)
-        XCTAssertTrue(CompanionSpeechProvider.xai.sendsToCloud)
-        XCTAssertTrue(CompanionSpeechProvider.openai.sendsToCloud)
+        XCTAssertFalse(AttacheSpeechProvider.system.sendsToCloud)
+        XCTAssertTrue(AttacheSpeechProvider.elevenLabs.sendsToCloud)
+        XCTAssertTrue(AttacheSpeechProvider.xai.sendsToCloud)
+        XCTAssertTrue(AttacheSpeechProvider.openai.sendsToCloud)
     }
 }

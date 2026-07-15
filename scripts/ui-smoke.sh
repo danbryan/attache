@@ -71,6 +71,7 @@ if [[ "${SMOKE_KEEP_STATE:-0}" != "1" ]]; then
 fi
 
 echo "==> Running UI smoke flows"
+export ATTACHE_UI_TEST_IMPORT_PERSONALITY_PATH="$ROOT/Tests/Fixtures/personality-import.json"
 # Any running Attaché owns the event-server port and would shadow the app
 # under test, so clear all instances, not just prior dist builds.
 pkill -f "Attache.app/Contents/MacOS/Attache" 2>/dev/null || true

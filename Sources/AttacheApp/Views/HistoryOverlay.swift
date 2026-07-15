@@ -11,7 +11,7 @@ struct HistoryOverlay: View {
     @Binding var isVisible: Bool
     @Environment(\.attacheTextScale) private var textScale
     @State private var query = ""
-    @State private var scope: CompanionHistoryScope = .focused
+    @State private var scope: AttacheHistoryScope = .focused
     @State private var kindFilter: HistoryKindFilter = .all
     @State private var selectedID: String?
     @State private var hoveredID: String?
@@ -54,7 +54,7 @@ struct HistoryOverlay: View {
     }
 
     private func isRecap(_ card: VoicemailCard) -> Bool {
-        model.metadataDictionary(for: card)["attache_recap"] == "1"
+        model.metadataDictionary(for: card)["companion_recap"] == "1"
     }
 
     private struct Group: Identifiable {
@@ -124,7 +124,7 @@ struct HistoryOverlay: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Picker("", selection: $scope) {
-                    ForEach(CompanionHistoryScope.allCases) { scope in
+                    ForEach(AttacheHistoryScope.allCases) { scope in
                         Text(scope.titleWithCount(model.historyCount(for: scope))).tag(scope)
                     }
                 }

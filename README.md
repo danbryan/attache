@@ -19,11 +19,11 @@
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/rPipWzOEQxA">
-    <img src="https://img.youtube.com/vi/rPipWzOEQxA/maxresdefault.jpg" width="720" alt="Watch the Attaché promo">
+  <a href="https://youtu.be/oIJSxE0BFHA">
+    <img src="https://img.youtube.com/vi/oIJSxE0BFHA/maxresdefault.jpg" width="720" alt="Watch the Attaché promo">
   </a>
   <br>
-  <b><a href="https://youtu.be/rPipWzOEQxA">▶ Watch the promo</a></b>
+  <b><a href="https://youtu.be/oIJSxE0BFHA">▶ Watch the promo</a></b>
 </p>
 
 ---
@@ -58,8 +58,8 @@ No Apple certificates needed.
 
 ## Quick start
 
-1. Finish the two-minute onboarding: pick a **voice**, a **personality**, a
-   **model**, and which agents it may watch.
+1. Finish the two-minute onboarding: choose a character, give it a personality,
+   voice, model, reasoning level, and which agents it may watch.
 2. Start a Codex or Claude Code session, press **⌘K**, and pin it.
 3. That's it. Every completed turn now arrives as a spoken card.
 
@@ -67,14 +67,18 @@ No Apple certificates needed.
   <img src="docs/assets/screenshot-onboarding.png" width="560" alt="Attaché first-run onboarding">
 </p>
 
-## The two settings that matter
+## Build your character
 
-- **Voice.** Grab a free macOS Premium voice (System Settings → Accessibility →
-  Spoken Content → Manage Voices, try Ava or Zoe), or paste an ElevenLabs / xAI
-  / OpenAI key for studio quality. Set it in **Settings → Voice & Captions**.
-- **Personality.** The text brain that re-narrates your agents. Run a **local
-  model free** with [Ollama](https://ollama.com), or plug in a cloud model. Then
-  pick a persona in **Settings → Personalities**, or write your own.
+Open **Settings → Personalities** to create the character you want to spend time
+with. Choose Attaché, Colt, or the Echo voice-bars presence, then give it a name,
+prompt, explicit voice, model, supported reasoning level, playback pace, and
+ordered fallbacks. Preview the result before you save it. Switching characters
+changes the whole loadout together.
+
+Grab a free macOS Premium voice in System Settings → Accessibility → Spoken
+Content → Manage Voices, or connect ElevenLabs, xAI, or OpenAI for studio-quality
+speech. Run the character's brain locally with [Ollama](https://ollama.com), or
+connect a frontier model.
 
 ## Bring your own brain and voice
 
@@ -82,12 +86,14 @@ Mix and match, per category:
 
 |          | Local (private)                    | Cloud (frontier)              |
 | -------- | ---------------------------------- | ----------------------------- |
-| **Model** | Ollama, LM Studio (qwen, llama, glm) | xAI, Groq, Claude, Codex, any OpenAI-compatible |
+| **Model** | Ollama (qwen, llama, glm, gpt-oss) | xAI, Groq, Claude, Codex, any OpenAI-compatible |
 | **Voice** | on-device macOS voices             | ElevenLabs, xAI, OpenAI       |
 
 Run a local model with an on-device voice and **nothing ever leaves your Mac**.
 Reach for the cloud when you want frontier quality on non-sensitive work. The
 first time you pick a cloud provider, Attaché tells you exactly what gets sent.
+Each character saves its own voice, model, supported reasoning level, playback
+pace, and ordered fallback providers.
 
 ## Shortcuts
 

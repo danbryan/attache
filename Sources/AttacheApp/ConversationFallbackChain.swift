@@ -3,8 +3,8 @@ import Foundation
 
 /// Opt-in auto-fallback chain for the live call's conversation model
 /// (INF-258/D5). Mirrors the shape of the existing deterministic voice
-/// playback fallback (`CompanionSpeechConfiguration.resolvedForPlayback`,
-/// `CompanionSpeechProvider.swift:82-117`): a reason the current choice can't
+/// playback fallback (`AttacheSpeechConfiguration.resolvedForPlayback`,
+/// `AttacheSpeechProvider.swift:82-117`): a reason the current choice can't
 /// be used, and a deterministic, independently-testable rule for what to use
 /// instead. See docs/reviews/2026-07-10-app-review.md section 4 item 3.
 ///
@@ -39,11 +39,11 @@ enum ConversationFallbackChain {
     /// mid-fallback"); an unconsented candidate is simply skipped, same as an
     /// unconfigured one.
     static func nextCandidate(
-        chain: [CompanionPresentationProvider],
-        failedProvider: CompanionPresentationProvider,
-        isConfigured: (CompanionPresentationProvider) -> Bool,
-        isConsented: (CompanionPresentationProvider) -> Bool
-    ) -> CompanionPresentationProvider? {
+        chain: [AttachePresentationProvider],
+        failedProvider: AttachePresentationProvider,
+        isConfigured: (AttachePresentationProvider) -> Bool,
+        isConsented: (AttachePresentationProvider) -> Bool
+    ) -> AttachePresentationProvider? {
         for candidate in chain {
             guard candidate != failedProvider else { continue }
             guard isConfigured(candidate) else { continue }
@@ -57,7 +57,7 @@ enum ConversationFallbackChain {
     /// "xAI / Grok hit its usage limit; using Ollama for now." Never contains
     /// an em dash (AGENTS.md "Never emit em dashes in spoken output"); this is
     /// a fixed template over provider titles, which never contain one either,
-    /// but it still runs through `CompanionPersonality.stripDashes` so the
+    /// but it still runs through `AttachePersonality.stripDashes` so the
     /// guarantee is structural, not just "true today."
     static func announcement(
         category: ConversationFailureCategory,
@@ -80,7 +80,7 @@ enum ConversationFallbackChain {
             problem = "is unavailable"
         }
         let sentence = "\(failedProviderTitle) \(problem); using \(fallbackProviderTitle) for now."
-        return CompanionPersonality.stripDashes(sentence)
+        return AttachePersonality.stripDashes(sentence)
     }
 }
 
@@ -93,7 +93,7 @@ struct ConversationFallbackState: Equatable {
     /// triggered this call. `nil` means the configured/primary provider is
     /// still in effect, either because fallback hasn't triggered yet or
     /// because it's disabled.
-    private(set) var activeProvider: CompanionPresentationProvider?
+    private(set) var activeProvider: AttachePresentationProvider?
 
     /// True once a fallback has been triggered this call. Distinct wording
     /// from `activeProvider != nil` only for readability at call sites (spec:
@@ -120,11 +120,11 @@ struct ConversationFallbackState: Equatable {
     mutating func advance(
         enabled: Bool,
         category: ConversationFailureCategory,
-        chain: [CompanionPresentationProvider],
-        failedProvider: CompanionPresentationProvider,
-        isConfigured: (CompanionPresentationProvider) -> Bool,
-        isConsented: (CompanionPresentationProvider) -> Bool
-    ) -> CompanionPresentationProvider? {
+        chain: [AttachePresentationProvider],
+        failedProvider: AttachePresentationProvider,
+        isConfigured: (AttachePresentationProvider) -> Bool,
+        isConsented: (AttachePresentationProvider) -> Bool
+    ) -> AttachePresentationProvider? {
         guard enabled, !hasFallenBackThisCall, ConversationFallbackChain.shouldTrigger(for: category) else {
             return nil
         }

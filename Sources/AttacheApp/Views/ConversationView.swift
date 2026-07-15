@@ -2,7 +2,7 @@ import AttacheCore
 import SwiftUI
 
 /// A back-and-forth chat with the configured personality: your turns vs. the
-/// companion's, type or hold-to-talk, replies are spoken aloud. Themed.
+/// attache's, type or hold-to-talk, replies are spoken aloud. Themed.
 struct ConversationView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var micTranscript: MicTranscriptController
@@ -237,7 +237,7 @@ struct ConversationView: View {
     }
 
     @ViewBuilder private var voiceInputModeContextMenu: some View {
-        ForEach(CompanionVoiceInputMode.allCases) { mode in
+        ForEach(AttacheVoiceInputMode.allCases) { mode in
             Button {
                 model.voiceInputMode = mode
             } label: {

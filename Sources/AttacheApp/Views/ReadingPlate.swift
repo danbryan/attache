@@ -7,7 +7,7 @@ import SwiftUI
 
 private struct ReadingPlate: ViewModifier {
     @Environment(\.colorScheme) private var scheme
-    var theme: CompanionTheme
+    var theme: AttacheTheme
     var cornerRadius: CGFloat
     var minimumOpacity: Double
 
@@ -29,7 +29,7 @@ private struct ReadingPlate: ViewModifier {
 extension View {
     /// Applies after any material background so the solid plate sits beneath
     /// it, guaranteeing a readable base even at minimum surface opacity.
-    func readingPlate(theme: CompanionTheme,
+    func readingPlate(theme: AttacheTheme,
                       cornerRadius: CGFloat = 14,
                       minimumOpacity: Double = 0.75) -> some View {
         modifier(ReadingPlate(theme: theme, cornerRadius: cornerRadius, minimumOpacity: minimumOpacity))

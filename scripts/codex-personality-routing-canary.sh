@@ -12,6 +12,6 @@ EOF
 
 ATTACHE_LIVE_CODEX_ROUTING_TEST=1 \
 ATTACHE_LIVE_CODEX_MODEL="${ATTACHE_LIVE_CODEX_MODEL:-default}" \
-  swift test --filter CompanionPresentationCLIToolBridgeTests.testLiveCodexRoutesExplicitArtifactDelegationToAgentTool
+  swift test --filter AttachePresentationCLIToolBridgeTests.testLiveCodexRoutesExplicitArtifactDelegationToAgentTool
 
 echo "==> Real Codex personality routing canary passed"

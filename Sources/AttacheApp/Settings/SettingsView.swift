@@ -6,7 +6,6 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case appearance
     case voice
     case personalities
-    case model
     case integrations
     case memory
     case about
@@ -18,7 +17,6 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "Appearance"
         case .voice: return "Voice & Captions"
         case .personalities: return "Personalities"
-        case .model: return "Model"
         case .integrations: return "Integrations"
         case .memory: return "Memory"
         case .about: return "About"
@@ -30,7 +28,6 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "circle.lefthalf.filled"
         case .voice: return "speaker.wave.2.fill"
         case .personalities: return "theatermasks.fill"
-        case .model: return "cpu.fill"
         case .integrations: return "puzzlepiece.extension.fill"
         case .memory: return "tray.full.fill"
         case .about: return "info.circle.fill"
@@ -44,7 +41,6 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var section: SettingsSection? = .appearance
-    @State private var idleImagePickerPresented = false
 
     var body: some View {
         NavigationSplitView {
@@ -75,13 +71,6 @@ struct SettingsView: View {
                 section = target
             }
         }
-        .fileImporter(isPresented: $idleImagePickerPresented, allowedContentTypes: [.image]) { result in
-            if case .success(let url) = result {
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                model.setIdleImage(from: url)
-            }
-        }
     }
 
     @ViewBuilder private var pane: some View {
@@ -89,7 +78,6 @@ struct SettingsView: View {
         case .appearance: appearancePane
         case .voice: VoicePane(model: model)
         case .personalities: PersonalitiesPane(model: model)
-        case .model: ModelPane(model: model)
         case .integrations: IntegrationsPane(model: model)
         case .memory: memoryPane
         case .about: AboutPane()
@@ -101,7 +89,7 @@ struct SettingsView: View {
             paneTitle("Appearance")
             settingRow("Light & dark") {
                 Picker("", selection: $model.appearanceMode) {
-                    ForEach(CompanionAppearanceMode.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                    ForEach(AttacheAppearanceMode.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
                 }
                 .labelsHidden()
                 .accessibilityLabel("Light and dark appearance")
@@ -109,7 +97,7 @@ struct SettingsView: View {
             }
             settingRow("Theme") {
                 Picker("", selection: themeSelection) {
-                    ForEach(CompanionTheme.allCases.filter { $0 != .custom }) {
+                    ForEach(AttacheTheme.allCases.filter { $0 != .custom }) {
                         Text(LocalizedStringKey($0.title)).tag($0.rawValue)
                     }
                     if !model.customThemes.isEmpty {
@@ -124,90 +112,22 @@ struct SettingsView: View {
                 .frame(width: 210)
             }
             CustomThemeEditor(model: model)
-            settingRow("Visual mode") {
-                Picker("", selection: $model.visualMode) {
-                    ForEach(CompanionVisualMode.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-                }
-                .labelsHidden()
-                .accessibilityLabel("Visual mode")
-                .frame(width: 210)
-            }
-            if model.visualMode == .pet {
-                settingRow("Pet character") {
-                    Picker("", selection: Binding(
-                        get: { model.petCharacter },
-                        set: { model.selectPetCharacter($0) }
-                    )) {
-                        ForEach(BubblesPetCharacter.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-                    }
-                    .labelsHidden()
-                    .accessibilityLabel("Pet character")
-                    .frame(width: 210)
-                }
-            }
-            settingRow("Idle screen") {
-                Picker("", selection: $model.idleBrand) {
-                    ForEach(CompanionIdleBrand.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-                }
-                .labelsHidden()
-                .accessibilityLabel("Idle screen")
-                .frame(width: 210)
-                if model.idleBrand == .customText {
-                    TextField("Your text", text: $model.idleCustomText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 160)
-                        .accessibilityLabel("Idle screen custom text")
-                }
-                if model.idleBrand == .customImage {
-                    Button(model.idleImage == nil ? "Choose image…" : "Change image…") {
-                        idleImagePickerPresented = true
-                    }
-                }
-            }
-            if model.visualMode == .pet {
-                settingRow("Pet delights") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Toggle("Types along with you", isOn: $model.petTypesAlong)
-                            .accessibilityLabel("Pet types along with you")
-                        Toggle("Rare idle animations", isOn: $model.petRareIdles)
-                            .accessibilityLabel("Pet rare idle animations")
-                        Toggle("Hover and click reactions", isOn: $model.petHoverReaction)
-                            .accessibilityLabel("Pet hover and click reactions")
-                        Text("Small touches over the calm states only; they never cover real agent activity.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            settingRow("Precise agent status") {
-                Toggle("", isOn: $model.installClaudeHooks).labelsHidden()
-                    .accessibilityLabel("Precise agent status")
-                Text("Lets Claude Code tell Attaché the instant a turn finishes or needs you, instead of guessing from the transcript. Adds two hooks to your Claude Code settings; turning this off removes them.")
+            Text("Characters choose their own presence, voice, model, and playback pace under Personalities.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            settingRow("Mini window") {
+                Toggle("", isOn: $model.miniAttacheEnabled).labelsHidden()
+                    .accessibilityLabel("Mini window")
+                Text("A small always-on-top window with the active character or Echo bars.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            settingRow("Mini companion") {
-                Toggle("", isOn: $model.miniCompanionEnabled).labelsHidden()
-                    .accessibilityLabel("Mini companion")
-                Text("A small always-on-top window with just the pet or bars, living on the desktop.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if model.miniCompanionEnabled {
+            if model.miniAttacheEnabled {
                 settingRow("Click-through") {
-                    Toggle("", isOn: $model.miniCompanionClickThrough).labelsHidden()
-                        .accessibilityLabel("Mini companion click-through")
+                    Toggle("", isOn: $model.miniAttacheClickThrough).labelsHidden()
+                        .accessibilityLabel("Mini window click-through")
                     Text("Clicks pass through the mini window; use the menu bar to reach its controls.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-            }
-            settingRow("Symmetry") {
-                Picker("", selection: $model.visualSymmetry) {
-                    ForEach(CompanionVisualSymmetry.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .accessibilityLabel("Visual symmetry")
-                .frame(width: 210)
-                Text("Mirrored folds the spectrum around the center; Natural keeps the raw low-to-high sweep.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
             settingRow("Text size") {
                 Slider(value: $model.uiTextScale,
@@ -225,25 +145,11 @@ struct SettingsView: View {
                     .typoCaption(.medium, monoDigit: true)
                     .foregroundStyle(.secondary)
             }
-            settingRow("Visual intensity") {
-                Slider(value: $model.visualIntensity, in: 0.2...1.5).frame(width: 240)
-            }
-            settingRow("Brightness") {
-                Stepper("Level \(model.brightnessLevel)", value: $model.brightnessLevel, in: 0...3)
-                    .frame(width: 160)
-            }
             Divider().padding(.vertical, 2)
             settingRow("Auto-hide controls") {
                 Toggle("", isOn: $model.autoHideControls).labelsHidden()
                 Text("Fade the chrome to the bare glow when the pointer is still.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            Divider().padding(.vertical, 2)
-            settingRow("Welcome") {
-                Button("Run welcome again") {
-                    NotificationCenter.default.post(name: .attacheShowOnboarding, object: nil)
-                }
-                .accessibilityLabel("Run welcome again")
             }
             if model.autoHideControls {
                 settingRow("Hide after") {
@@ -282,13 +188,13 @@ struct SettingsView: View {
             }
             settingRow("Notifications") {
                 Picker("", selection: $model.notifyScope) {
-                    ForEach(CompanionNotifyScope.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
+                    ForEach(AttacheNotifyScope.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .accessibilityLabel("Notifications")
                 .frame(width: 280)
-                Button("System settings…") { CompanionNotifier.shared.openSystemNotificationSettings() }
+                Button("System settings…") { AttacheNotifier.shared.openSystemNotificationSettings() }
                 Text("Delivery follows macOS Focus profiles and Do Not Disturb.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -301,7 +207,7 @@ struct SettingsView: View {
             Text("Durable tone, routing, and preference notes Attaché uses quietly. Kept separate from your personalities.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Button("Open Memory File") { model.openCompanionMemoryFile() }
+            Button("Open Memory File") { model.openAttacheMemoryFile() }
         }
     }
 
@@ -322,7 +228,7 @@ struct SettingsView: View {
             set: { newValue in
                 if newValue.hasPrefix("custom:") {
                     model.selectCustomTheme(String(newValue.dropFirst("custom:".count)))
-                } else if let builtin = CompanionTheme(rawValue: newValue) {
+                } else if let builtin = AttacheTheme(rawValue: newValue) {
                     model.theme = builtin
                 }
             }

@@ -1,7 +1,7 @@
 import AttacheCore
 import SwiftUI
 
-extension CompanionRootView {
+extension AttacheRootView {
     // Call / Hang up: start or end a live two-way with the focused session. While on a
     // call its updates speak; off a call everything waits in the inbox.
     var callButton: some View {
@@ -251,12 +251,12 @@ extension CompanionRootView {
     /// distinct label (existing UI smoke assertions target the live call's
     /// exact strings; new surfaces get their own).
     func recoveryActionsView(
-        providers: [CompanionPresentationProvider],
-        models: [CompanionPresentationModelOption],
+        providers: [AttachePresentationProvider],
+        models: [AttachePresentationModelOption],
         currentProviderTitle: String,
         switchAccessibilityLabel: String,
-        onSelectProvider: @escaping (CompanionPresentationProvider) -> Void,
-        onSelectModel: @escaping (CompanionPresentationModelOption) -> Void,
+        onSelectProvider: @escaping (AttachePresentationProvider) -> Void,
+        onSelectModel: @escaping (AttachePresentationModelOption) -> Void,
         canRetry: Bool,
         retryAccessibilityLabel: String,
         onRetry: @escaping () -> Void
@@ -282,7 +282,7 @@ extension CompanionRootView {
                     }
                 }
                 Divider()
-                Button("Open Model settings…") { openModelSettings() }
+                Button("Edit character model…") { openCharacterSettings() }
             } label: {
                 Label("Switch model", systemImage: "arrow.triangle.2.circlepath")
                     .typoCaption(.semibold)
@@ -308,7 +308,7 @@ extension CompanionRootView {
         }
     }
 
-    func requestConversationRecoveryProvider(_ provider: CompanionPresentationProvider) {
+    func requestConversationRecoveryProvider(_ provider: AttachePresentationProvider) {
         if model.presentationProviderSendsToCloud(provider),
            !model.cloudConsentAcknowledged(for: provider) {
             pendingCallPresentationProvider = provider
@@ -317,12 +317,12 @@ extension CompanionRootView {
         }
     }
 
-    func openModelSettings() {
+    func openCharacterSettings() {
         NotificationCenter.default.post(name: .attacheOpenSettings, object: nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             NotificationCenter.default.post(
                 name: .attacheOpenSettingsSection,
-                object: SettingsSection.model.rawValue
+                object: SettingsSection.personalities.rawValue
             )
         }
     }
@@ -358,7 +358,7 @@ extension CompanionRootView {
     }
 
     @ViewBuilder var voiceInputModeContextMenu: some View {
-        ForEach(CompanionVoiceInputMode.allCases) { mode in
+        ForEach(AttacheVoiceInputMode.allCases) { mode in
             Button {
                 model.voiceInputMode = mode
             } label: {

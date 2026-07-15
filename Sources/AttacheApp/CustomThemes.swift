@@ -4,19 +4,19 @@ import Foundation
 /// A user-defined theme: the same surface the built-ins expose, as data.
 /// Specs are stored one JSON file per theme under Application Support and
 /// are the interchange format for import, export, and the theme registry.
-struct CompanionThemeSpec: Codable, Identifiable, Equatable {
+struct AttacheThemeSpec: Codable, Identifiable, Equatable {
     var id: String
     var name: String
-    var stops: [CompanionThemeStop]
-    var accentDark: CompanionThemeStop
-    var accentLight: CompanionThemeStop
+    var stops: [AttacheThemeStop]
+    var accentDark: AttacheThemeStop
+    var accentLight: AttacheThemeStop
     var wantsSolidPlates: Bool
 
     init(id: String = UUID().uuidString,
          name: String,
-         stops: [CompanionThemeStop],
-         accentDark: CompanionThemeStop,
-         accentLight: CompanionThemeStop,
+         stops: [AttacheThemeStop],
+         accentDark: AttacheThemeStop,
+         accentLight: AttacheThemeStop,
          wantsSolidPlates: Bool = false) {
         self.id = id
         self.name = name
@@ -31,20 +31,20 @@ struct CompanionThemeSpec: Codable, Identifiable, Equatable {
     /// both at 4.5:1 minimum. Any color a user picks is nudged toward the
     /// plate's opposite until it passes, so a custom theme can never make
     /// selection chrome unreadable.
-    func enforcingContrastFloor() -> CompanionThemeSpec {
+    func enforcingContrastFloor() -> AttacheThemeSpec {
         var spec = self
         spec.accentDark = Self.enforced(spec.accentDark, onDarkPlate: true)
         spec.accentLight = Self.enforced(spec.accentLight, onDarkPlate: false)
         return spec
     }
 
-    static func contrastRatio(_ stop: CompanionThemeStop, onDarkPlate: Bool) -> Double {
+    static func contrastRatio(_ stop: AttacheThemeStop, onDarkPlate: Bool) -> Double {
         let plate: Double = onDarkPlate ? 0 : 1
         return WCAGContrast.ratio(red1: stop.red, green1: stop.green, blue1: stop.blue,
                                   red2: plate, green2: plate, blue2: plate)
     }
 
-    static func enforced(_ stop: CompanionThemeStop, onDarkPlate: Bool, floor: Double = 4.5) -> CompanionThemeStop {
+    static func enforced(_ stop: AttacheThemeStop, onDarkPlate: Bool, floor: Double = 4.5) -> AttacheThemeStop {
         var adjusted = stop
         var iterations = 0
         while contrastRatio(adjusted, onDarkPlate: onDarkPlate) < floor, iterations < 60 {
@@ -58,28 +58,28 @@ struct CompanionThemeSpec: Codable, Identifiable, Equatable {
     }
 }
 
-/// Disk store for custom themes plus the bridge the `CompanionTheme.custom`
+/// Disk store for custom themes plus the bridge the `AttacheTheme.custom`
 /// case reads its colors through. The active spec is set by AppModel whenever
 /// the selection or the spec itself changes.
 enum CustomThemeStore {
-    static var activeSpec: CompanionThemeSpec?
+    static var activeSpec: AttacheThemeSpec?
 
     static func directory() -> URL {
-        let dir = CompanionAppSupport.supportDirectory().appendingPathComponent("Themes", isDirectory: true)
+        let dir = AttacheAppSupport.supportDirectory().appendingPathComponent("Themes", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    static func load() -> [CompanionThemeSpec] {
+    static func load() -> [AttacheThemeSpec] {
         let files = (try? FileManager.default.contentsOfDirectory(
             at: directory(), includingPropertiesForKeys: nil)) ?? []
         return files
             .filter { $0.pathExtension == "json" }
-            .compactMap { try? JSONDecoder().decode(CompanionThemeSpec.self, from: Data(contentsOf: $0)) }
+            .compactMap { try? JSONDecoder().decode(AttacheThemeSpec.self, from: Data(contentsOf: $0)) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    static func save(_ spec: CompanionThemeSpec) {
+    static func save(_ spec: AttacheThemeSpec) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(spec) else { return }
@@ -90,11 +90,11 @@ enum CustomThemeStore {
         try? FileManager.default.removeItem(at: directory().appendingPathComponent("\(id).json"))
     }
 
-    static func decode(_ data: Data) throws -> CompanionThemeSpec {
-        try JSONDecoder().decode(CompanionThemeSpec.self, from: data)
+    static func decode(_ data: Data) throws -> AttacheThemeSpec {
+        try JSONDecoder().decode(AttacheThemeSpec.self, from: data)
     }
 
-    static func encode(_ spec: CompanionThemeSpec) throws -> Data {
+    static func encode(_ spec: AttacheThemeSpec) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try encoder.encode(spec)

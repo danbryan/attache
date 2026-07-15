@@ -186,7 +186,7 @@ final class CardStoreTests: XCTestCase {
             eventType: "companion.conversation.reply",
             externalSessionID: "session-a",
             projectPath: "/tmp/session-a",
-            title: "Companion reply",
+            title: "Attache reply",
             text: "The issue is probably scoped to the local app settings.",
             metadata: [
                 "companion_history_kind": "direct_reply",

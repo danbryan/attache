@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A labeled settings row: a fixed-width secondary label on the left and the
-/// supplied control on the right. Shared by the Appearance, Voice, and Model panes.
+/// supplied control on the right. Shared by ordinary Settings panes.
 func settingRow<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
     HStack(alignment: .center, spacing: 16) {
         // The label is UI vocabulary: route it through the localization table.

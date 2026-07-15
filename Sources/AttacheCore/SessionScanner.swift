@@ -122,7 +122,7 @@ public final class CodexSessionScanner: SessionScanner {
         let text = String(decoding: data, as: UTF8.self)
 
         let project = firstCWD(inJSONL: text)
-        let turns = CompanionSessionReader.parseTurns(fromJSONL: text)
+        let turns = AttacheSessionReader.parseTurns(fromJSONL: text)
         let firstUser = turns.first(where: { $0.role == "user" }).map { SessionDigest.title(from: $0.text) }
         var content = turns.map { $0.text }.joined(separator: " ").lowercased()
         if content.count > contentCap { content = String(content.prefix(contentCap)) }

@@ -3,9 +3,9 @@ import AttacheCore
 import XCTest
 @testable import AttacheApp
 
-/// T4 (INF-296): switching a personality applies its voice and pet as one unit,
+/// T4 (INF-296): switching a personality applies its voice and character as one unit,
 /// falls back gracefully when a cloud key is missing, inherits the current voice
-/// when the personality has none, and folds voice/pet edits back onto the active
+/// when the personality has none, and folds voice/character edits back onto the active
 /// personality instead of an orphan global.
 @MainActor
 final class AppModelPersonalitySwitchTests: XCTestCase {
@@ -13,7 +13,12 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         "attache.personalities", "attache.activePersonalityID",
         "attache.speechProvider", "attache.speechVoiceIdentifier",
         "attache.elevenLabsVoiceID", "attache.elevenLabsVoiceName",
-        "attache.petCharacter", "attache.personalityVoicePetMigrated"
+        "attache.petCharacter", "attache.visualMode", "attache.personalityVoicePetMigrated",
+        "attache.presentationLLMProvider", "attache.presentationLLMBaseURL",
+        "attache.presentationLLMModel", "attache.presentationReasoningEffort",
+        "attache.presentationServiceTier", "attache.conversationFallbackChainEnabled",
+        "attache.conversationFallbackChainProviders",
+        "attache.cloudConsentPresentationProviders", "attache.ollamaBaseURL"
     ]
 
     private func restoringDefaults(_ body: () throws -> Void) rethrows {
@@ -31,20 +36,20 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         try body()
     }
 
-    func testSwitchingAppliesVoiceAndPetTogether() throws {
+    func testSwitchingAppliesVoiceAndCharacterTogether() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
             model.elevenLabsAPIKey = "configured-key"
             let voice = Personality(
                 id: "custom.voice", name: "Voice", prompt: "p",
                 voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceID: "v-eleven", elevenLabsVoiceName: "Rae"),
-                petCharacter: .cowboy
+                character: .cowboy
             )
             model.personalities = [voice]
             model.selectPersonality("custom.voice")
             XCTAssertEqual(model.speechProvider, .elevenLabs)
             XCTAssertEqual(model.elevenLabsVoiceID, "v-eleven")
-            XCTAssertEqual(model.petCharacter, .cowboy)
+            XCTAssertEqual(model.character, .cowboy)
         }
     }
 
@@ -56,12 +61,12 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             let personality = Personality(
                 id: "custom.nokey", name: "NoKey", prompt: "p",
                 voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceID: "v"),
-                petCharacter: .robot
+                character: .robot
             )
             model.personalities = [personality]
             model.selectPersonality("custom.nokey")
             XCTAssertEqual(model.speechProvider, .system)
-            XCTAssertEqual(model.petCharacter, .robot)
+            XCTAssertEqual(model.character, .robot)
         }
     }
 
@@ -71,37 +76,157 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             model.elevenLabsAPIKey = "configured-key"
             model.speechProvider = .elevenLabs
             model.elevenLabsVoiceID = "keepme"
-            let robot = Personality(id: "custom.inherit", name: "Inherit", prompt: "p", voiceRef: nil, petCharacter: .robot)
+            let robot = Personality(id: "custom.inherit", name: "Inherit", prompt: "p", voiceRef: nil, character: .robot)
             model.personalities = [robot]
             model.selectPersonality("custom.inherit")
             XCTAssertEqual(model.speechProvider, .elevenLabs)
             XCTAssertEqual(model.elevenLabsVoiceID, "keepme")
-            XCTAssertEqual(model.petCharacter, .robot)
+            XCTAssertEqual(model.character, .robot)
         }
     }
 
-    func testChangingPetCapturesIntoActivePersonality() throws {
+    func testChangingCharacterCapturesIntoActivePersonality() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
-            let custom = Personality(id: "custom.pet", name: "Pet", prompt: "p", voiceRef: nil, petCharacter: .robot)
+            let custom = Personality(id: "custom.character", name: "Character", prompt: "p", voiceRef: nil, character: .robot)
             model.personalities = [custom]
-            model.activePersonalityID = "custom.pet"
-            model.selectPetCharacter(.cowboy)
-            XCTAssertEqual(model.petCharacter, .cowboy)
-            XCTAssertEqual(model.personalities.first { $0.id == "custom.pet" }?.petCharacter, .cowboy)
+            model.activePersonalityID = "custom.character"
+            model.selectCharacter(.cowboy)
+            XCTAssertEqual(model.character, .cowboy)
+            XCTAssertEqual(model.personalities.first { $0.id == "custom.character" }?.character, .cowboy)
         }
     }
 
-    func testSwitchingToADifferentPersonalityGreetsAndFollowsCharacter() throws {
+    func testSwitchingToADifferentPersonalityUsesVisualSwapWithoutGreeting() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
-            let a = Personality(id: "custom.a", name: "A", prompt: "p", petCharacter: .robot)
-            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            let a = Personality(id: "custom.a", name: "A", prompt: "p", character: .robot)
+            let b = Personality(
+                id: "custom.b", name: "B", prompt: "p",
+                character: .cowboy, visualMode: .bars
+            )
             model.personalities = [a, b]
             model.activePersonalityID = "custom.a"
             model.selectPersonality("custom.b")
-            XCTAssertEqual(model.companionMoment?.kind, .greet)
-            XCTAssertEqual(model.petCharacter, .cowboy)
+            XCTAssertNil(model.attacheMoment)
+            XCTAssertEqual(model.character, .cowboy)
+            XCTAssertEqual(model.visualMode, .bars)
+        }
+    }
+
+    func testSwitchingAppliesPreferredMainModelAndItsFallbackPolicy() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            model.conversationFallbackChainEnabled = true
+            model.addConversationFallbackChainProvider(.codexCLI)
+            let personality = Personality(
+                id: "custom.model", name: "Model", prompt: "p",
+                character: .robot, visualMode: .character,
+                modelRef: PersonalityModelRef(
+                    provider: .ollama,
+                    model: "qwen-custom",
+                    fallbackProviders: [.codexCLI]
+                )
+            )
+            model.personalities = [personality]
+
+            model.selectPersonality(personality.id)
+
+            XCTAssertEqual(model.presentationProvider, .ollama)
+            XCTAssertEqual(model.presentationModel, "qwen-custom")
+            XCTAssertTrue(model.conversationFallbackChainEnabled)
+            XCTAssertEqual(model.conversationFallbackChain, [.codexCLI])
+        }
+    }
+
+    func testSwitchingAppliesPerPersonalityReasoningEffort() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            model.xaiAPIKey = "configured-for-test"
+            model.acknowledgeCloudConsent(for: .xai)
+            let personality = Personality(
+                id: "custom.reasoning", name: "Reasoning", prompt: "p",
+                character: .robot, visualMode: .character,
+                modelRef: PersonalityModelRef(
+                    provider: .xai,
+                    model: "grok-4.5",
+                    reasoningEffort: "high"
+                )
+            )
+            model.personalities = [personality]
+
+            model.selectPersonality(personality.id)
+
+            XCTAssertEqual(model.presentationProvider, .xai)
+            XCTAssertEqual(model.presentationModel, "grok-4.5")
+            XCTAssertEqual(model.presentationReasoningEffort, "high")
+        }
+    }
+
+    func testOnboardingCharacterKeepsTheVoiceAndModelJustChosen() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            model.speechProvider = .system
+            model.speechVoiceIdentifier = "com.apple.voice.compact.en-US.Samantha"
+            model.selectPresentationProvider(.ollama)
+            model.presentationModel = "qwen3:8b"
+            model.presentationReasoningEffort = "high"
+            let target = Personality(
+                id: "custom.onboarding", name: "Onboarding", prompt: "p",
+                voiceRef: .systemVoice(Personality.cowboyPreferredVoiceID),
+                character: .cowboy,
+                modelRef: PersonalityModelRef(provider: .xai, model: "grok-4.5", reasoningEffort: "low")
+            )
+            model.personalities = [target]
+
+            model.selectOnboardingPersonality(target.id)
+
+            let selected = try XCTUnwrap(model.activePersonality)
+            XCTAssertEqual(selected.voiceRef?.provider, .system)
+            XCTAssertEqual(selected.voiceRef?.systemVoiceIdentifier, "com.apple.voice.compact.en-US.Samantha")
+            XCTAssertEqual(selected.modelRef?.provider, .ollama)
+            XCTAssertEqual(selected.modelRef?.model, "qwen3:8b")
+            XCTAssertEqual(selected.modelRef?.reasoningEffort, "high")
+        }
+    }
+
+    func testVoiceSelectionIsSilentUntilPreviewIsRequested() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            model.playback.stop()
+
+            model.selectSpeechVoice(nil)
+
+            XCTAssertFalse(model.playback.isBusy)
+            XCTAssertFalse(model.playback.isPlaying)
+            XCTAssertNil(model.playback.currentCardID)
+        }
+    }
+
+    func testHangUpDisconnectsThinkingAndPreventsOffCallPersonalityClarify() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let first = Personality(id: "custom.first", name: "First", prompt: "p", character: .robot)
+            let second = Personality(id: "custom.second", name: "Second", prompt: "p", character: .cowboy)
+            model.personalities = [first, second]
+            model.activePersonalityID = first.id
+            model.selectPresentationProvider(.ollama)
+            model.ollamaBaseURL = "http://127.0.0.1:1"
+
+            model.startConversation()
+            XCTAssertTrue(model.isLiveCallActive)
+            model.sendConversationMessage("This request should be disconnected.")
+            XCTAssertTrue(model.isConversing)
+
+            model.endConversation()
+            model.switchPersonalityFromUI(second.id)
+
+            XCTAssertFalse(model.onCall)
+            XCTAssertFalse(model.isLiveCallActive)
+            XCTAssertFalse(model.isConversing)
+            XCTAssertNil(model.conversationTargetSnapshot)
+            XCTAssertEqual(model.activePersonalityID, second.id)
+            XCTAssertFalse(model.playback.isBusy)
         }
     }
 
@@ -110,22 +235,22 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
     func testSwitchFromUIWithoutCallIsPlainSwitch() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
-            let a = Personality(id: "custom.a", name: "A", prompt: "p", petCharacter: .robot)
-            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            let a = Personality(id: "custom.a", name: "A", prompt: "p", character: .robot)
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", character: .cowboy)
             model.personalities = [a, b]
             model.activePersonalityID = "custom.a"
             XCTAssertFalse(model.isLiveCallActive)
             model.switchPersonalityFromUI("custom.b")
             XCTAssertEqual(model.activePersonalityID, "custom.b")
-            XCTAssertEqual(model.petCharacter, .cowboy)
+            XCTAssertEqual(model.character, .cowboy)
         }
     }
 
     func testClarifyWithNoCardsFallsBackToPlainSwitch() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
-            let a = Personality(id: "custom.a", name: "A", prompt: "p", petCharacter: .robot)
-            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            let a = Personality(id: "custom.a", name: "A", prompt: "p", character: .robot)
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", character: .cowboy)
             model.personalities = [a, b]
             model.activePersonalityID = "custom.a"
             XCTAssertTrue(model.cards.isEmpty)
@@ -146,7 +271,7 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             ))
             let model = try AppModel(store: store)
             let a = Personality(id: "custom.a", name: "A", prompt: "p")
-            let b = Personality(id: "custom.b", name: "B", prompt: "p", petCharacter: .cowboy)
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", character: .cowboy)
             model.personalities = [a, b]
             model.activePersonalityID = "custom.a"
             model.clarifyWithPersonality("custom.b")
@@ -161,7 +286,8 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             let source = Personality(
                 id: "custom.src", name: "Source", prompt: "Speak plainly.",
                 voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceID: "v", elevenLabsVoiceName: "Rae"),
-                petCharacter: .cowboy
+                character: .cowboy,
+                modelRef: PersonalityModelRef(provider: .ollama, model: "qwen3:8b", reasoningEffort: "high")
             )
             model.personalities = [source]
             model.activePersonalityID = "custom.src"
@@ -172,16 +298,32 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             XCTAssertEqual(imported?.isBuiltIn, false)
             XCTAssertEqual(imported?.name, "Source")
             XCTAssertEqual(imported?.prompt, "Speak plainly.")
-            XCTAssertEqual(imported?.petCharacter, .cowboy)
+            XCTAssertEqual(imported?.character, .cowboy)
             XCTAssertEqual(imported?.voiceRef?.elevenLabsVoiceName, "Rae")
+            XCTAssertEqual(imported?.modelRef?.provider, .ollama)
+            XCTAssertEqual(imported?.modelRef?.model, "qwen3:8b")
+            XCTAssertEqual(imported?.modelRef?.reasoningEffort, "high")
             XCTAssertEqual(model.personalities.count, 2)
+        }
+    }
+
+    func testLegacyImportReceivesAnExplicitSystemVoice() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let data = Data(#"{"id":"old","name":"Old","prompt":"Be clear.","voiceRef":{"provider":"system"},"modelRef":{"provider":"ollama","model":"llama3.2:3b"}}"#.utf8)
+
+            model.importPersonality(from: data)
+
+            let imported = try XCTUnwrap(model.personalities.first { $0.id == model.activePersonalityID })
+            XCTAssertFalse(imported.voiceRef?.systemVoiceIdentifier?.isEmpty ?? true)
+            XCTAssertEqual(imported.modelRef?.model, "llama3.2:3b")
         }
     }
 
     func testCapturingVoiceFoldsOntoActivePersonality() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
-            let custom = Personality(id: "custom.cap", name: "Cap", prompt: "p", voiceRef: nil, petCharacter: .robot)
+            let custom = Personality(id: "custom.cap", name: "Cap", prompt: "p", voiceRef: nil, character: .robot)
             model.personalities = [custom]
             model.activePersonalityID = "custom.cap"
             // A user voice change persists to defaults; capture folds it onto the personality.

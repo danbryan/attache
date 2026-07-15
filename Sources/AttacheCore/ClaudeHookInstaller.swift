@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure, testable merge of Attaché's managed hook entries into a Claude Code
-/// `settings.json`. Attaché drives the pet's exact status from Claude Code
+/// `settings.json`. Attaché drives the character's exact status from Claude Code
 /// lifecycle hooks (a `Notification` hook for "waiting on you" and a `Stop`
 /// hook for "turn done"); this places those entries without disturbing any of
 /// the user's own settings or hooks, and removes only its own on uninstall.

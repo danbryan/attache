@@ -1,7 +1,114 @@
 import AttacheCore
 import Foundation
 
-/// A single, self-contained companion personality. One prompt defines tone,
+/// The main text model a personality owns. Legacy `nil` values are filled from
+/// the current app model when persistence loads. Advanced per-task model
+/// overrides remain available internally for compatibility. The live
+/// conversation fallback order belongs to the character, so switching
+/// characters switches the complete model recovery policy too.
+struct PersonalityModelRef: Codable, Equatable {
+    var provider: AttachePresentationProvider
+    var model: String
+    var reasoningEffort: String?
+    var serviceTier: String?
+    var fallbackProviders: [AttachePresentationProvider]
+
+    init(
+        provider: AttachePresentationProvider,
+        model: String,
+        reasoningEffort: String? = nil,
+        serviceTier: String? = nil,
+        fallbackProviders: [AttachePresentationProvider] = []
+    ) {
+        self.provider = provider
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.serviceTier = serviceTier
+        self.fallbackProviders = fallbackProviders.filter { $0 != provider }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, model, reasoningEffort, serviceTier, fallbackProviders
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawProvider = try container.decode(String.self, forKey: .provider)
+        let legacyLMStudio = AttachePresentationProvider.isLegacyLMStudio(
+            explicitValue: rawProvider,
+            baseURLText: nil
+        )
+        if legacyLMStudio {
+            provider = .ollama
+            model = AttachePresentationProvider.ollama.defaultModel
+            reasoningEffort = AttachePresentationProvider.ollama.defaultReasoningEffort
+            serviceTier = nil
+            fallbackProviders = []
+            return
+        }
+        guard let decodedProvider = AttachePresentationProvider(rawValue: rawProvider) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .provider,
+                in: container,
+                debugDescription: "Unknown presentation provider \(rawProvider)"
+            )
+        }
+        provider = decodedProvider
+        model = try container.decode(String.self, forKey: .model)
+        reasoningEffort = try container.decodeIfPresent(String.self, forKey: .reasoningEffort)
+        serviceTier = try container.decodeIfPresent(String.self, forKey: .serviceTier)
+        fallbackProviders = try container.decodeIfPresent(
+            [AttachePresentationProvider].self,
+            forKey: .fallbackProviders
+        ) ?? []
+        fallbackProviders.removeAll { $0 == provider }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(provider.rawValue, forKey: .provider)
+        try container.encode(model, forKey: .model)
+        try container.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+        try container.encodeIfPresent(serviceTier, forKey: .serviceTier)
+        try container.encode(fallbackProviders, forKey: .fallbackProviders)
+    }
+
+    static func capture(from defaults: UserDefaults) -> PersonalityModelRef {
+        let explicitProvider = defaults.string(forKey: AttachePreferenceKey.presentationLLMProvider)
+        let baseURL = defaults.string(forKey: AttachePreferenceKey.presentationLLMBaseURL)
+        let legacyLMStudio = AttachePresentationProvider.isLegacyLMStudio(
+            explicitValue: explicitProvider,
+            baseURLText: baseURL
+        )
+        let provider = AttachePresentationProvider.from(
+            explicitValue: explicitProvider,
+            baseURLText: baseURL
+        )
+        let savedModel = defaults.string(forKey: AttachePreferenceKey.presentationLLMModel)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let model = legacyLMStudio || savedModel.isEmpty ? provider.defaultModel : savedModel
+        let effort = defaults.string(forKey: AttachePreferenceKey.presentationReasoningEffort)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let tier = defaults.string(forKey: AttachePreferenceKey.presentationServiceTier)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackProviders = ((defaults.array(
+            forKey: AttachePreferenceKey.conversationFallbackChainProviders
+        ) as? [String]) ?? []).compactMap(AttachePresentationProvider.init(rawValue:))
+        return PersonalityModelRef(
+            provider: provider,
+            model: model,
+            reasoningEffort: provider.supportsReasoningEffort
+                ? (effort?.isEmpty == false ? effort : provider.defaultReasoningEffort)
+                : nil,
+            serviceTier: provider.supportsServiceTier && tier?.isEmpty == false ? tier : nil,
+            fallbackProviders: defaults.bool(
+                forKey: AttachePreferenceKey.conversationFallbackChainEnabled
+            ) ? fallbackProviders : []
+        )
+    }
+}
+
+/// A single, self-contained Attaché personality. One prompt defines tone,
 /// attitude, level of detail, and language; the app adds the hidden functional
 /// scaffolding (output format, "speak to the user", etc.) at presentation time.
 struct Personality: Identifiable, Codable, Equatable {
@@ -9,15 +116,25 @@ struct Personality: Identifiable, Codable, Equatable {
     var name: String
     var prompt: String
     var isBuiltIn: Bool
-    /// The engine + voice this personality speaks in. `nil` means "inherit the
-    /// app's current global voice selection", which keeps lists persisted before
-    /// personalities owned a voice working unchanged.
+    /// The engine + voice this personality speaks in. Persistence migration fills
+    /// legacy `nil` values so every user-facing personality owns an explicit voice.
     var voiceRef: PersonalityVoiceRef?
-    /// The pet character shown while this personality is active. `nil` renders
+    /// The character shown while this personality is active. `nil` renders
     /// the default robot (Attaché).
-    var petCharacter: BubblesPetCharacter?
+    var character: AttacheCharacter?
+    /// The complete visual presence. `.character` renders `character`; `.bars`
+    /// keeps the original abstract voice-bars presence with no character. `nil`
+    /// is the migration-compatible "keep the current app visual" behavior.
+    var visualMode: AttacheVisualMode?
+    /// The preferred main text model. Persistence migration fills a legacy `nil`.
+    /// Its ordered fallback providers travel with the personality. Advanced
+    /// per-task overrides remain separate recovery policy.
+    var modelRef: PersonalityModelRef?
+    /// Playback pace is part of the character's voice performance. Legacy
+    /// personalities are filled from the previous app-wide playback setting.
+    var playbackSpeed: Double?
     /// Optional per-personality accent (hex), used by the switcher chip and the
-    /// pet greeting. Non-load-bearing.
+    /// character greeting. Non-load-bearing.
     var accentColorHex: String?
 
     init(
@@ -26,7 +143,10 @@ struct Personality: Identifiable, Codable, Equatable {
         prompt: String,
         isBuiltIn: Bool = false,
         voiceRef: PersonalityVoiceRef? = nil,
-        petCharacter: BubblesPetCharacter? = nil,
+        character: AttacheCharacter? = nil,
+        visualMode: AttacheVisualMode? = nil,
+        modelRef: PersonalityModelRef? = nil,
+        playbackSpeed: Double? = nil,
         accentColorHex: String? = nil
     ) {
         self.id = id
@@ -34,19 +154,63 @@ struct Personality: Identifiable, Codable, Equatable {
         self.prompt = prompt
         self.isBuiltIn = isBuiltIn
         self.voiceRef = voiceRef
-        self.petCharacter = petCharacter
+        self.character = character
+        self.visualMode = visualMode
+        self.modelRef = modelRef
+        self.playbackSpeed = playbackSpeed
         self.accentColorHex = accentColorHex
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, prompt, isBuiltIn, voiceRef, character, visualMode
+        case modelRef, playbackSpeed, accentColorHex
+        case legacyCharacter = "petCharacter"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        isBuiltIn = try container.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+        voiceRef = try container.decodeIfPresent(PersonalityVoiceRef.self, forKey: .voiceRef)
+        character = try container.decodeIfPresent(AttacheCharacter.self, forKey: .character)
+            ?? container.decodeIfPresent(AttacheCharacter.self, forKey: .legacyCharacter)
+        visualMode = try container.decodeIfPresent(AttacheVisualMode.self, forKey: .visualMode)
+        modelRef = try container.decodeIfPresent(PersonalityModelRef.self, forKey: .modelRef)
+        playbackSpeed = try container.decodeIfPresent(Double.self, forKey: .playbackSpeed)
+        accentColorHex = try container.decodeIfPresent(String.self, forKey: .accentColorHex)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(isBuiltIn, forKey: .isBuiltIn)
+        try container.encodeIfPresent(voiceRef, forKey: .voiceRef)
+        try container.encodeIfPresent(character, forKey: .character)
+        try container.encodeIfPresent(visualMode, forKey: .visualMode)
+        try container.encodeIfPresent(modelRef, forKey: .modelRef)
+        try container.encodeIfPresent(playbackSpeed, forKey: .playbackSpeed)
+        try container.encodeIfPresent(accentColorHex, forKey: .accentColorHex)
     }
 }
 
 extension Personality {
     static let defaultActiveID = "builtin.bigPicture"
 
+    private static let builtInModel = PersonalityModelRef(
+        provider: .ollama,
+        model: AttachePresentationProvider.ollama.defaultModel
+    )
+
     /// The Cowboy's preferred on-device voice: a low, weathered classic that
     /// reads like a trail boss. If it is not installed, voice resolution
     /// (`PersonalityVoiceRef.resolved(availableSystemVoiceIDs:)`) drops it and
     /// falls back to the app default rather than failing.
     static let cowboyPreferredVoiceID = "com.apple.speech.synthesis.voice.Fred"
+    static let defaultPreferredVoiceID = "com.apple.speech.synthesis.voice.Alex"
 
     static let newTemplate = """
     Describe how Attaché should deliver updates: tone, attitude, level of detail, \
@@ -56,30 +220,19 @@ extension Personality {
     """
 
     /// Built-ins retired in the personality slim-down; removed from lists
-    /// persisted by older versions on next launch.
+    /// persisted by older versions on next launch. Big Picture and Cowboy keep
+    /// their stable ids because they became Attaché and Colt respectively.
     static let retiredBuiltInIDs: Set<String> = [
-        "builtin.conciseBrief", "builtin.balancedBrief", "builtin.actionCoach"
+        "builtin.conciseBrief", "builtin.balancedBrief", "builtin.actionCoach",
+        "builtin.explainer", "builtin.inquisitive"
     ]
 
-    // Four built-ins. Each is written as a character with a point of view, not a
-    // task description, so a user feels like someone is reporting to them, and
-    // each must read for any profession, never just developers. Custom
-    // personalities are meant to lead.
+    // Three complete defaults, organized around the presence a person chooses:
+    // Attaché the robot, Colt the cowboy, or Echo's character-free voice bars. Each
+    // reads for any profession, never just developers.
     static let builtIns: [Personality] = [
-        Personality(id: "builtin.explainer", name: "Explainer", isBuiltIn: true, petCharacter: .robot, prompt: """
-        You're the Explainer, and you genuinely light up when something clicks for \
-        someone. You narrate what the agents did like you're walking a sharp friend \
-        through it, never a lecture: name what happened, why it matters, and what it \
-        makes possible next. You translate anything technical or specialized into \
-        plain human terms and never read raw codes, numbers, identifiers, or file \
-        names aloud, back-filling just enough context that nothing lands as jargon. \
-        You read the room: linger on a decision that actually matters, breeze past a \
-        routine one. You never talk down, and when something goes well you let a \
-        little warmth through. Keep it tight; if a deeper version is worth having, \
-        offer it in a few words rather than dumping it.
-        """),
-        Personality(id: "builtin.bigPicture", name: "Big Picture", isBuiltIn: true, petCharacter: .robot, prompt: """
-        You're Big Picture, constitutionally incapable of losing the plot. You don't \
+        Personality(id: "builtin.bigPicture", name: "Attaché", isBuiltIn: true, character: .robot, visualMode: .character, prompt: """
+        You're Attaché, constitutionally incapable of losing the plot. You don't \
         care how the work got done, the false starts, the back-and-forth, and the \
         redos are none of your concern; you care where things stand and where they're \
         heading. Every result, you connect to the arc: what's done, what's now \
@@ -89,18 +242,8 @@ extension Personality {
         Never narrate the intermediate steps, and if the only honest headline is a \
         problem, say it plainly and stop.
         """),
-        Personality(id: "builtin.inquisitive", name: "Inquisitive", isBuiltIn: true, petCharacter: .robot, prompt: """
-        You're Inquisitive, always thinking half a step ahead. You give the update \
-        straight, in a sentence or two, then you can't quite help yourself: you wonder \
-        about the thing that isn't obvious yet, the edge case, the assumption worth \
-        testing, the "but what happens when...". You surface the question they didn't \
-        think to ask, gently, the good kind of curious that makes someone feel sharper, \
-        never nagged. Raise exactly one thing worth wondering about, phrased as an \
-        invitation ("Worth checking whether..." / "You might look at..."), and when \
-        nothing genuinely useful comes to mind, just deliver the update and let it be.
-        """),
-        Personality(id: "builtin.cowboy", name: "Cowboy", isBuiltIn: true, petCharacter: .cowboy, voiceRef: .systemVoice(Personality.cowboyPreferredVoiceID), prompt: """
-        You're the Cowboy, an old trail boss with a level voice and a lot of miles \
+        Personality(id: "builtin.cowboy", name: "Colt", isBuiltIn: true, character: .cowboy, visualMode: .character, voiceRef: .systemVoice(Personality.cowboyPreferredVoiceID), prompt: """
+        You're Colt, an old trail boss with a level voice and a lot of miles \
         behind you, and these agents are your herd. You talk plain and easy with a \
         little dust on your words: reckon, y'all, ain't, "hold your horses", "riding \
         point", sprinkled where they land natural, never so thick they slow the \
@@ -114,20 +257,44 @@ extension Personality {
         say so straight, no sugar on it, then point at the path through. Keep it to \
         a couple sentences, partner. Nobody ever drove a herd faster by hollering \
         longer.
-        """)
+        """),
+        Personality(
+            id: "builtin.echo",
+            name: "Echo",
+            prompt: """
+            You're Echo, a calm voice in the room rather than a character asking for \
+            attention. You make agent work easy to absorb without flattening what \
+            matters: lead with the result, translate specialized language into plain \
+            speech, and name one consequence or next move only when it is useful. You \
+            sound warm, modern, and lightly conversational, never robotic and never \
+            theatrical. Do not refer to having a face, body, character, or costume. Keep \
+            routine updates to one or two crisp sentences and let silence do the rest.
+            """,
+            isBuiltIn: true,
+            voiceRef: .systemVoice(Self.defaultPreferredVoiceID),
+            character: nil,
+            visualMode: .bars,
+            modelRef: Self.builtInModel,
+            playbackSpeed: 1.0
+        )
     ]
 
     private init(
         id: String,
         name: String,
         isBuiltIn: Bool,
-        petCharacter: BubblesPetCharacter,
-        voiceRef: PersonalityVoiceRef? = nil,
+        character: AttacheCharacter,
+        visualMode: AttacheVisualMode,
+        voiceRef: PersonalityVoiceRef? = .systemVoice(Personality.defaultPreferredVoiceID),
         prompt: String
     ) {
         self.init(
             id: id, name: name, prompt: prompt, isBuiltIn: isBuiltIn,
-            voiceRef: voiceRef, petCharacter: petCharacter
+            voiceRef: voiceRef,
+            character: character,
+            visualMode: visualMode,
+            modelRef: Self.builtInModel,
+            playbackSpeed: 1.0
         )
     }
 }
@@ -136,10 +303,11 @@ extension Personality {
     /// A short, human label for this personality's voice, for list rows and the
     /// editor. Never surfaces provider internals like a raw voice id.
     var voiceSummary: String {
-        guard let ref = voiceRef else { return "Inherits app voice" }
+        guard let ref = voiceRef else { return "Voice not set" }
         switch ref.provider {
         case .system:
-            return "On-device voice"
+            guard let identifier = ref.systemVoiceIdentifier else { return "Voice not set" }
+            return AttacheVoiceCatalog.option(for: identifier)?.title ?? identifier
         case .elevenLabs:
             return "ElevenLabs" + (ref.elevenLabsVoiceName.map { ": \($0)" } ?? " voice")
         case .xai:
@@ -149,9 +317,27 @@ extension Personality {
         }
     }
 
-    /// The pet avatar emoji shown in list rows (🤖 default / 🤠 Colt).
-    var petAvatarEmoji: String {
-        (petCharacter ?? .robot).avatarEmoji
+    /// The character avatar emoji shown in list rows (🤖 default / 🤠 Colt).
+    var characterAvatarEmoji: String {
+        if visualMode == .bars { return "🎙️" }
+        return (character ?? .robot).avatarEmoji
+    }
+
+    var presenceSummary: String {
+        switch visualMode {
+        case .bars: return "Echo voice bars"
+        case .character, .none: return (character ?? .robot).title
+        }
+    }
+
+    var modelSummary: String {
+        guard let modelRef else { return "Model not set" }
+        let effort = (modelRef.reasoningEffort ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = ["", "default", "none"].contains(effort.lowercased())
+            ? ""
+            : " · \(effort.capitalized)"
+        return "\(modelRef.provider.title) · \(modelRef.model)\(suffix)"
     }
 }
 
@@ -173,27 +359,66 @@ final class PersonalityStore {
             let before = existing.count
             existing.removeAll { Personality.retiredBuiltInIDs.contains($0.id) }
             let known = Set(existing.map(\.id))
-            let missing = Personality.builtIns.filter { !known.contains($0.id) }
+            let missing = Personality.builtIns
+                .filter { !known.contains($0.id) }
+                .map(fillingExplicitConfiguration)
             if !missing.isEmpty {
                 let lastBuiltIn = existing.lastIndex(where: \.isBuiltIn).map { $0 + 1 } ?? existing.count
                 existing.insert(contentsOf: missing, at: lastBuiltIn)
             }
+            // Big Picture and Cowboy kept stable ids while becoming Attaché and
+            // Colt. Refresh built-in identity text to the canonical version while
+            // preserving user-owned voice/model choices and every custom entry.
+            var canonicalizedBuiltIns = false
+            for index in existing.indices where existing[index].isBuiltIn {
+                if let canonical = Personality.builtIns.first(where: { $0.id == existing[index].id }) {
+                    if existing[index].name != canonical.name {
+                        existing[index].name = canonical.name
+                        canonicalizedBuiltIns = true
+                    }
+                    if existing[index].prompt != canonical.prompt {
+                        existing[index].prompt = canonical.prompt
+                        canonicalizedBuiltIns = true
+                    }
+                    if existing[index].character == nil, canonical.character != nil {
+                        existing[index].character = canonical.character
+                        canonicalizedBuiltIns = true
+                    }
+                    if existing[index].voiceRef == nil, canonical.voiceRef != nil {
+                        existing[index].voiceRef = canonical.voiceRef
+                        canonicalizedBuiltIns = true
+                    }
+                    if existing[index].visualMode == nil {
+                    existing[index].visualMode = canonical.visualMode
+                        canonicalizedBuiltIns = true
+                    }
+                }
+            }
+
+            for index in existing.indices {
+                let configured = fillingExplicitConfiguration(existing[index])
+                if configured != existing[index] {
+                    existing[index] = configured
+                    canonicalizedBuiltIns = true
+                }
+            }
+
             var activeID = resolvedActiveID(in: existing)
-            var changed = !missing.isEmpty || existing.count != before
-            if migrateVoiceAndPetIfNeeded(list: &existing, activeID: &activeID) { changed = true }
+            var changed = !missing.isEmpty || existing.count != before || canonicalizedBuiltIns
+            if migrateVoiceAndCharacterIfNeeded(list: &existing, activeID: &activeID) { changed = true }
             if changed {
                 save(existing, activeID: activeID)
             }
             return (existing, activeID)
         }
 
-        var seeded = Personality.builtIns
+        var seeded = Personality.builtIns.map(fillingExplicitConfiguration)
         var activeID = Personality.defaultActiveID
         if let migrated = migratedPersonality() {
             seeded.append(migrated)
             activeID = migrated.id
         }
-        _ = migrateVoiceAndPetIfNeeded(list: &seeded, activeID: &activeID)
+        _ = migrateVoiceAndCharacterIfNeeded(list: &seeded, activeID: &activeID)
         save(seeded, activeID: activeID)
         return (seeded, activeID)
     }
@@ -216,21 +441,51 @@ final class PersonalityStore {
         return list.first?.id ?? Personality.defaultActiveID
     }
 
-    private let voicePetMigratedKey = "attache.personalityVoicePetMigrated"
+    // Keep the original persisted key so users who already completed this
+    // one-time migration never repeat it after the terminology cleanup.
+    private let voiceCharacterMigratedKey = "attache.personalityVoicePetMigrated"
 
-    /// One-time upgrade for users whose voice and pet were separate global
+    private func fillingExplicitConfiguration(_ personality: Personality) -> Personality {
+        var configured = personality
+        if configured.voiceRef == nil {
+            configured.voiceRef = PersonalityVoiceRef.capture(from: defaults)
+        }
+        if var voice = configured.voiceRef, voice.provider == .system {
+            let available = Set(AttacheVoiceCatalog.options().map(\.id))
+            if voice.systemVoiceIdentifier.map({ !available.contains($0) }) ?? true {
+                voice.systemVoiceIdentifier = AttacheVoiceCatalog.fileExportFallbackVoiceID()
+                    ?? Personality.defaultPreferredVoiceID
+                configured.voiceRef = voice
+            }
+        }
+        if configured.modelRef == nil {
+            configured.modelRef = PersonalityModelRef.capture(from: defaults)
+        }
+        if configured.playbackSpeed == nil {
+            let legacy = defaults.object(forKey: AttachePreferenceKey.playbackSpeed) == nil
+                ? 1.0
+                : defaults.double(forKey: AttachePreferenceKey.playbackSpeed)
+            configured.playbackSpeed = min(1.6, max(0.8, legacy))
+        }
+        if configured.visualMode == nil {
+            configured.visualMode = .character
+        }
+        return configured
+    }
+
+    /// One-time upgrade for users whose voice and character were separate global
     /// settings before personalities owned them. Folds the current global voice
-    /// and pet into the active personality so nothing is lost, without ever
+    /// and character into the active personality so nothing is lost, without ever
     /// overwriting a value the user already set or mutating a built-in's designed
     /// default. Runs exactly once, guarded by a defaults flag. Returns whether it
     /// changed the list or the active selection.
-    private func migrateVoiceAndPetIfNeeded(list: inout [Personality], activeID: inout String) -> Bool {
-        guard !defaults.bool(forKey: voicePetMigratedKey) else { return false }
-        defaults.set(true, forKey: voicePetMigratedKey)
+    private func migrateVoiceAndCharacterIfNeeded(list: inout [Personality], activeID: inout String) -> Bool {
+        guard !defaults.bool(forKey: voiceCharacterMigratedKey) else { return false }
+        defaults.set(true, forKey: voiceCharacterMigratedKey)
 
         let globalVoice = PersonalityVoiceRef.capture(from: defaults)
-        let globalPet = defaults.string(forKey: CompanionPreferenceKey.petCharacter)
-            .flatMap(BubblesPetCharacter.init(rawValue:))
+        let globalCharacter = defaults.string(forKey: AttachePreferenceKey.character)
+            .flatMap(AttacheCharacter.init(rawValue:))
         let voiceIsCustom = globalVoice.provider != .system || globalVoice.systemVoiceIdentifier != nil
 
         guard let index = list.firstIndex(where: { $0.id == activeID }) else { return false }
@@ -239,16 +494,20 @@ final class PersonalityStore {
         if active.isBuiltIn {
             // Preserve the user's exact prior setup as an owned, editable copy and
             // switch to it; leave the built-in's designed default untouched. Only
-            // when they had actually customized voice or pet.
-            let petDiffers = globalPet != nil && globalPet != active.petCharacter
-            guard voiceIsCustom || petDiffers else { return false }
+            // when they had actually customized voice or character.
+            let characterDiffers = globalCharacter != nil && globalCharacter != active.character
+            guard voiceIsCustom || characterDiffers else { return false }
             let copy = Personality(
                 id: "custom.migrated.\(active.id)",
                 name: "My \(active.name)",
                 prompt: active.prompt,
                 isBuiltIn: false,
                 voiceRef: voiceIsCustom ? globalVoice : active.voiceRef,
-                petCharacter: globalPet ?? active.petCharacter
+                character: globalCharacter ?? active.character,
+                visualMode: active.visualMode,
+                modelRef: active.modelRef,
+                playbackSpeed: active.playbackSpeed,
+                accentColorHex: active.accentColorHex
             )
             let insertAt = list.lastIndex(where: \.isBuiltIn).map { $0 + 1 } ?? list.count
             list.insert(copy, at: insertAt)
@@ -262,8 +521,8 @@ final class PersonalityStore {
             updated.voiceRef = globalVoice
             changed = true
         }
-        if updated.petCharacter == nil, let globalPet {
-            updated.petCharacter = globalPet
+        if updated.character == nil, let globalCharacter {
+            updated.character = globalCharacter
             changed = true
         }
         if changed { list[index] = updated }
@@ -271,18 +530,20 @@ final class PersonalityStore {
     }
 
     /// Preserves a persona the user defined before personalities existed (from the
-    /// UserDefaults prompt key or the legacy CompanionPersonality.md file).
+    /// UserDefaults prompt key or the legacy AttachePersonality.md file).
     private func migratedPersonality() -> Personality? {
-        let baseline = CompanionPersonality.defaultProfilePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseline = AttachePersonality.defaultProfilePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let candidates = [
-            defaults.string(forKey: CompanionPreferenceKey.personalityPrompt),
-            try? String(contentsOf: CompanionAppSupport.supportDirectory()
-                .appendingPathComponent("CompanionPersonality.md"), encoding: .utf8)
+            defaults.string(forKey: AttachePreferenceKey.personalityPrompt),
+            try? String(contentsOf: AttacheAppSupport.supportDirectory()
+                .appendingPathComponent("AttachePersonality.md"), encoding: .utf8)
         ]
         for candidate in candidates {
             let trimmed = (candidate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty, trimmed != baseline {
-                return Personality(id: "custom.migrated", name: "My Personality", prompt: trimmed)
+                return fillingExplicitConfiguration(
+                    Personality(id: "custom.migrated", name: "My Personality", prompt: trimmed)
+                )
             }
         }
         return nil
@@ -300,7 +561,7 @@ extension PersonalityStore {
 
     /// Decode an imported personality, giving it a fresh id and clearing the
     /// built-in flag so an import never clobbers an existing entry or impersonates
-    /// a built-in. Voice, pet, prompt, name, and accent are preserved.
+    /// a built-in. Voice, character, prompt, name, and accent are preserved.
     static func importPersonality(
         from data: Data,
         newID: () -> String = { "custom.\(UUID().uuidString.prefix(8))" }

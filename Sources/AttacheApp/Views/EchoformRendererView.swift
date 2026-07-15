@@ -4,35 +4,40 @@ import SwiftUI
 struct EchoformRendererView: View {
     @ObservedObject var playback: SpeechPlaybackController
     @ObservedObject var timeline: PlaybackTimeline
-    /// The companion contract (INF-268). This view reads its semantic fields
+    /// The Attaché activity contract (INF-268). This view reads its semantic fields
     /// (`unreadCount`) and keeps drawing audio from `timeline` at 20 Hz.
-    var activity: CompanionActivityState
-    /// The latest one-shot beat for the pet renderer (INF-271).
-    var activityMoment: CompanionActivityMoment?
-    var visualMode: CompanionVisualMode
-    var visualSymmetry: CompanionVisualSymmetry = .mirrored
-    var idleBrand: CompanionIdleBrand = .mark
+    var activity: AttacheActivityState
+    /// The latest one-shot beat for the character renderer (INF-271).
+    var activityMoment: AttacheActivityMoment?
+    var visualMode: AttacheVisualMode
+    var visualSymmetry: AttacheVisualSymmetry = .mirrored
+    var idleBrand: AttacheIdleBrand = .mark
     var idleCustomText: String = ""
     var idleImage: NSImage?
-    var theme: CompanionTheme
+    var theme: AttacheTheme
     var brightnessLevel: Int
     var intensity: Double
-    /// The mini companion window (INF-272) renders the same hierarchy with no
+    /// The mini attache window (INF-272) renders the same hierarchy with no
     /// background plate, so the renderer floats directly on the desktop.
     var transparentBackground = false
-    /// Pet delights and the shiny easter egg (INF-273), pet mode only.
-    var petDelights: PetDelights = .none
-    var petShiny = false
-    /// Fleet interactivity (INF-275), pet mode only.
+    /// Character delights and the shiny easter egg (INF-273), character mode only.
+    var characterDelights: CharacterDelights = .none
+    var characterShiny = false
+    /// Fleet interactivity (INF-275), character mode only.
     var onFleetFocus: ((String) -> Void)?
     var onFleetSwitch: (() -> Void)?
-    /// The focused mote's persisted ring angle (INF-280), pet mode only.
-    var petFocusAngle: Double = BubblesPetChoreography.defaultFocusAngle
-    var onPetFocusAngleChanged: ((Double) -> Void)?
-    /// The character in the middle of the ring (INF-283), pet mode only.
-    var petCharacter: BubblesPetCharacter = .robot
-    /// Desktop mini companion: show only focus/needs-you/finished (INF-291).
+    /// The focused mote's persisted ring angle (INF-280), character mode only.
+    var characterFocusAngle: Double = AttacheCharacterChoreography.defaultFocusAngle
+    var onCharacterFocusAngleChanged: ((Double) -> Void)?
+    /// The character in the middle of the ring (INF-283), character mode only.
+    var character: AttacheCharacter = .robot
+    /// Desktop mini attache: show only focus/needs-you/finished (INF-291).
     var fleetNotificationsOnly = false
+    /// Echo defaults to a character-sized presence. The parent enters a real
+    /// macOS full-screen space on double-click, then this same shared character
+    /// renderer grows to the immersive size.
+    var compactBars = false
+    var onToggleBarsExpansion: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -43,40 +48,36 @@ struct EchoformRendererView: View {
             if !transparentBackground {
                 rendererBackground
             }
-            if visualMode == .pet {
-                // The pet owns the whole surface in every phase: it IS the
+            if visualMode == .character {
+                // The character owns the whole surface in every phase: it IS the
                 // idle screen, the playback visual, and the status display.
                 // Fresh 20 Hz audio rides in on the contract so the speaking
                 // mouth can track the level.
-                BubblesPetView(
+                AttacheCharacterView(
                     activity: activity.with(audio: state),
                     moment: activityMoment,
                     theme: theme,
                     brightnessLevel: brightnessLevel,
-                    delights: petDelights,
-                    shiny: petShiny,
-                    character: petCharacter,
+                    delights: characterDelights,
+                    shiny: characterShiny,
+                    character: character,
                     fleetNotificationsOnly: fleetNotificationsOnly,
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch,
-                    focusAngle: petFocusAngle,
-                    onFocusAngleChanged: onPetFocusAngleChanged
+                    focusAngle: characterFocusAngle,
+                    onFocusAngleChanged: onCharacterFocusAngleChanged
                 )
                 .contextMenu {
-                    Button("Change visual mode…") {
+                    Button("Edit character…") {
                         NotificationCenter.default.post(name: .attacheOpenSettings, object: nil)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                             NotificationCenter.default.post(name: .attacheOpenSettingsSection,
-                                                            object: SettingsSection.appearance.rawValue)
+                                                            object: SettingsSection.personalities.rawValue)
                         }
                     }
                 }
-            } else if shouldAnimateContinuously {
-                rendererCanvas(date: Date())
-            } else if isPausedOnCard {
-                pausedShimmer
-            } else {
-                ambientGlow
+            } else if visualMode == .bars {
+                sharedEchoPresence
             }
 
             if playback.isPlaying || playback.isPaused {
@@ -89,6 +90,45 @@ struct EchoformRendererView: View {
                     .accessibilityLabel("Audio visualizer \(visualizerAccessibilityValue)")
                     .accessibilityValue(visualizerAccessibilityValue)
                     .allowsHitTesting(false)
+            }
+        }
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            guard visualMode == .bars else { return }
+            onToggleBarsExpansion?()
+        })
+    }
+
+    private var sharedEchoPresence: some View {
+        AttacheCharacterView(
+            activity: activity.with(audio: state),
+            moment: activityMoment,
+            theme: theme,
+            brightnessLevel: brightnessLevel,
+            delights: characterDelights,
+            character: character,
+            rendersEchoBars: true,
+            immersive: !compactBars,
+            fleetNotificationsOnly: fleetNotificationsOnly,
+            onFleetFocus: onFleetFocus,
+            onFleetSwitch: onFleetSwitch,
+            focusAngle: characterFocusAngle,
+            onFocusAngleChanged: onCharacterFocusAngleChanged
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Echo voice bars, \(activity.phase.accessibilityTitle)")
+        .accessibilityHint(compactBars ? "Double-click to enter full screen" : "Double-click to exit full screen")
+        .contextMenu {
+            Button(compactBars ? "Enter Full Screen" : "Exit Full Screen") {
+                onToggleBarsExpansion?()
+            }
+            Button("Change personality…") {
+                NotificationCenter.default.post(name: .attacheOpenSettings, object: nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    NotificationCenter.default.post(
+                        name: .attacheOpenSettingsSection,
+                        object: SettingsSection.personalities.rawValue
+                    )
+                }
             }
         }
     }
@@ -180,7 +220,7 @@ struct EchoformRendererView: View {
             // lockup is the default, not a requirement.
             VStack(spacing: 16) {
                 if idleBrand == .mark || idleBrand == .monogram {
-                    // The Bubbles mascot (design/attache-logo.svg): full color
+                    // The Attaché mark (design/attache-logo.svg): full color
                     // by default, a single-color silhouette for the monogram.
                     AttacheMascotMark(
                         arcColor: energyColor(1.0, opacity: 0.96),
@@ -260,7 +300,7 @@ struct EchoformRendererView: View {
 
     private var rendererBackground: some View {
         // Dark mode keeps the cinematic near-black stage. Light mode used to
-        // be raw system white, which glared and gave the pet no stage
+        // be raw system white, which glared and gave the character no stage
         // (INF-286 feedback); it now uses a soft cool-neutral with a gentle
         // radial vignette so the surface reads as chosen and the character
         // sits on a stage instead of a blank sheet. Energy tints stay faint.
@@ -313,24 +353,8 @@ struct EchoformRendererView: View {
             drawPulse(context: context, size: size, date: date, restrained: true)
             drawWaveform(context: context, size: size, band: band)
             drawBars(context: context, size: size, band: band)
-        case .wave:
-            drawPulse(context: context, size: size, date: date, restrained: true)
-            drawWaveform(context: context, size: size, band: band)
-        case .heat:
-            drawPulse(context: context, size: size, date: date, restrained: true)
-            drawSpectralHeat(context: context, size: size, band: band)
-        case .pulse:
-            drawPulse(context: context, size: size, date: date, restrained: false)
-        case .flow:
-            drawPulse(context: context, size: size, date: date, restrained: true)
-            drawFlow(context: context, size: size, band: band, date: date)
-        case .combined:
-            drawSpectralHeat(context: context, size: size, band: band)
-            drawPulse(context: context, size: size, date: date, restrained: false)
-            drawWaveform(context: context, size: size, band: band)
-            drawBars(context: context, size: size, band: band)
-        case .pet:
-            // Pet mode never reaches the canvas path; BubblesPetView owns the
+        case .character:
+            // Character mode never reaches the canvas path; AttacheCharacterView owns the
             // surface (see body).
             break
         }
@@ -521,6 +545,83 @@ struct EchoformRendererView: View {
 
     private func energyColor(_ energy: Double, opacity: Double = 1) -> Color {
         theme.energyColor(energy, opacity: opacity, brightnessLevel: brightnessLevel, darkScheme: colorScheme == .dark)
+    }
+}
+
+/// Echo's "face": a small equalizer that uses real audio while speaking and
+/// semantic motion for the same thinking, tool, blocked, and error states the
+/// illustrated characters consume.
+private struct EchoBarsGlyph: View {
+    var activity: AttacheActivityState
+    var date: Date
+    var color: Color
+
+    private let idleProfile: [Double] = [0.28, 0.42, 0.64, 0.88, 0.58, 1, 0.58, 0.88, 0.64, 0.42, 0.28]
+
+    var body: some View {
+        GeometryReader { proxy in
+            HStack(alignment: .center, spacing: max(3, proxy.size.width * 0.025)) {
+                ForEach(idleProfile.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [color.opacity(0.38), color],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: proxy.size.height * barHeight(index: index))
+                        .shadow(color: color.opacity(activity.phase == .speaking ? 0.42 : 0.18), radius: 5)
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+
+    private func barHeight(index: Int) -> CGFloat {
+        let time = date.timeIntervalSinceReferenceDate
+        if activity.phase == .speaking, !activity.audio.bars.isEmpty {
+            let source = Int(
+                (Double(index) / Double(max(1, idleProfile.count - 1)))
+                    * Double(activity.audio.bars.count - 1)
+            )
+            let energy = min(1, pow(Double(activity.audio.bars[source]), 0.55) * 2.8)
+            return CGFloat(max(0.08, energy))
+        }
+
+        let speed: Double
+        let strength: Double
+        switch activity.phase {
+        case .sleeping: (speed, strength) = (0.55, 0.12)
+        case .idle: (speed, strength) = (0.9, 0.18)
+        case .agentThinking: (speed, strength) = (3.2, 0.38)
+        case .agentResponding: (speed, strength) = (2.3, 0.48)
+        case .toolRunning: (speed, strength) = (4.4, 0.42)
+        case .paused: (speed, strength) = (0, 0)
+        case .blockedOnUser: (speed, strength) = (2.1, 0.25)
+        case .error: (speed, strength) = (7.0, 0.32)
+        case .speaking: (speed, strength) = (3.0, 0.5)
+        }
+        let wave = 0.5 + 0.5 * sin(time * speed + Double(index) * 0.78)
+        let base = idleProfile[index] * (activity.phase == .paused ? 0.62 : 0.72)
+        return CGFloat(min(1, max(0.08, base + wave * strength)))
+    }
+}
+
+private extension AttacheActivityPhase {
+    var accessibilityTitle: String {
+        switch self {
+        case .sleeping: return "sleeping"
+        case .idle: return "idle"
+        case .agentThinking: return "agent thinking"
+        case .agentResponding: return "agent responding"
+        case .toolRunning: return "tool running"
+        case .speaking: return "speaking"
+        case .paused: return "paused"
+        case .blockedOnUser: return "waiting for you"
+        case .error: return "error"
+        }
     }
 }
 

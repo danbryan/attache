@@ -12,7 +12,7 @@ repositories. It has shipped publicly; see Status.
 
 ## Status
 
-Attaché has shipped publicly. The current release is `v0.1.4`.
+Attaché has shipped publicly. The current release is `v0.4.0`.
 
 - `origin` is the public repo `github.com/danbryan/attache`; releases and the
   Homebrew cask (`danbryan/tap`) live there. `archive`
@@ -54,11 +54,14 @@ one app process.
   server, speech playback, two-way delivery adapters and coordinator, views.
 - `docs/two-way.md`: two-way channel design of record.
 - `Sources/AttacheApp/Personality.swift`: a personality is one first-class unit
-  that owns its brain (`prompt`), voice (`PersonalityVoiceRef`), and pet
-  (`BubblesPetCharacter`). `PersonalityStore` persists the set, migrates a
-  pre-unification user's separate voice/pet onto their active personality, and
-  imports/exports JSON. `CompanionPersonality.anotherTakePrompt` (Core) is the
-  pure "another take" re-narration engine. See Decisions of Record.
+  that owns its brain (`prompt`), voice (`PersonalityVoiceRef`), visual presence
+  (`visualMode` plus `AttacheCharacter`), and explicit preferred main model
+  (`PersonalityModelRef`). `PersonalityStore` persists the set, migrates a
+  pre-unification user's separate voice/character onto their active personality, and
+  imports/exports JSON. Its ordered live-call fallback providers and playback
+  speed travel with the personality; advanced per-task overrides remain
+  app-wide policy. `AttachePersonality.anotherTakePrompt` (Core) is the pure
+  "another take" re-narration engine. See Decisions of Record.
 - New logic that can be unit-tested belongs in `AttacheCore`.
 
 ## Build Rules
@@ -114,17 +117,17 @@ swift test
   packaged app for screenshots via the smoke harness; `SMOKE_TEXTSCALE` sets
   text size and `SMOKE_POSE_SECONDS` the hold time.
 - `ATTACHE_ACTIVITY_SIMULATOR=1` shows a debug panel that overrides
-  `CompanionActivityState` (INF-268): pick any phase/agent/tool kind or cycle
-  through all phases, with a readout of what `companionActivity` actually
+  `AttacheActivityState` (INF-268): pick any phase/agent/tool kind or cycle
+  through all phases, with a readout of what `attacheActivity` actually
   publishes. Drives every renderer that consumes the contract.
-- `Attache --render-poses [dir]` exports the Bubbles pet pose catalog
-  (`design/pet-animation-spec.md`) as PNGs and fails if the rig's neutral
+- `Attache --render-character-poses [dir]` exports the Attaché character pose catalog
+  (`design/attache-animation-spec.md`) as PNGs and fails if the rig's neutral
   pose deviates by even one pixel channel from `AttacheMascotMark` (the
   geometry lock, INF-269). `--render-brand-poses [dir]` is the marketing
   variant (2048 px set plus the idle hero loop frames, INF-274).
-- `ATTACHE_PET_RARE_IDLE_SECONDS=<n>` shrinks the pet's rare-idle cadence
+- `ATTACHE_CHARACTER_RARE_IDLE_SECONDS=<n>` shrinks the character's rare-idle cadence
   (INF-273, normally minutes) so reels and QA runs can catch one quickly.
-  `attache.petShinySeed` set to 0 via defaults forces the shiny variant.
+  `attache.characterShinySeed` set to 0 via defaults forces the shiny variant.
 - `ATTACHE_TWO_WAY_EXPIRY_SECONDS=<n>` overrides the two-way instruction expiry
   window (docs/two-way.md's 30-minute default) to `<n>` seconds, so
   `scripts/two-way-negative-path-smoke.sh` can drive a real expiry against the
@@ -136,7 +139,7 @@ swift test
   `~/.claude` (verified against the real CLI on this machine, INF-257/E2), the
   Claude analog of `CODEX_HOME`. `ClaudePaths.home()` is the one place
   Attaché resolves it, and `ClaudeCodeSessionScanner`, `CodexSessionWatcher`,
-  `SessionActivityWatcher`, and `CompanionSessionReader.sessionFileURL` all
+  `SessionActivityWatcher`, and `AttacheSessionReader.sessionFileURL` all
   read Claude Code session state through it, so a disposable
   `CLAUDE_CONFIG_DIR` set on the app's own environment is honored end to end:
   session discovery, the live watcher, and the two-way delivery adapter's
@@ -290,42 +293,54 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
 
 ## Decisions of Record
 
-- **No "companion" in user-facing text.** Historical internal names still say
-  Companion (`CompanionPersonality`, `CompanionTheme`, etc.); those are code, not
-  copy. Never surface the word to users.
+- **No "companion" in user-facing text.** Current code uses Attaché naming.
+  Frozen metadata, environment variables, preference keys, and migration paths
+  may retain older strings solely so existing users and stored cards keep
+  working. Never surface those compatibility strings to users.
 - **Tagline: "Give your agents a voice."** (2026-07-11). Retires "Fluent in
   agent. Speaks human." and the older "Your AI agents, out loud" everywhere
   (README, brand, site, video).
-- **The brand is Attaché the robot** (2026-07-13, INF-291, superseding the
-  retired Bubbles mascot): the robot head broadcasting under three voice arcs.
+- **The brand is Attaché the robot** (2026-07-13, INF-291): the robot head
+  broadcasting under three voice arcs.
   Sources of truth: `AttacheMascotMark` (in-app mark/idle/menu bar),
   `AttacheAppIcon` plus `scripts/generate-app-icon.swift` (icon, kept
-  identical), `Volt2`/`Mark2` in `video/src/epic` (promo). The default pet
-  character is the robot, named **Attaché** in the picker; **Colt** the cowboy
-  is the only other character. The Bubbles mascot (limbs, typing bubbles) is
-  fully retired. The outer voice arc still crests above the 240-unit design
-  box; every renderer pads to 252 or it clips.
+  identical), `Volt2`/`Mark2` in `video/src/epic` (promo). The default character
+  is the robot, named **Attaché** in the picker; **Colt** the cowboy is the only
+  other character. Older limb-and-agent-glyph artwork is fully retired. The
+  outer voice arc still crests above the 240-unit design box; every renderer
+  pads to 252 or it clips.
 - **Built-in themes are exactly four:** macOS (default AND first in the list),
   High Contrast, Paper, Cyberpunk. Brass / classic / ember / ocean / slate-mono /
   violet-dusk were removed. Users can still author custom themes.
-- **The three built-in personalities are domain-agnostic.** Explainer, Big
-  Picture, and Inquisitive must read for any profession (finance, medicine, law,
-  athletics, content), not just developers. No build/log/ship/deploy specifics.
-- **A personality is one unit: brain, voice, and pet** (2026-07-14, INF-293..302,
-  "Personality Manager"). `Personality` owns a `voiceRef` (engine + voice) and a
-  `petCharacter`; switching a personality applies all three together, and a voice
-  or pet edit folds onto the active personality rather than an orphan global.
-  Built-in defaults: the three domain-agnostic personalities use the robot;
-  Cowboy is Colt with a weathered on-device voice. **"Another take"** lets any
+- **The built-in wardrobe is exactly Attaché, Colt, and Echo.** Attaché uses the
+  domain-agnostic big-picture temperament and the robot presence. Colt uses the
+  weathered cowboy temperament, cowboy presence, and on-device voice. Echo is
+  voice-only and keeps the original visual bars in a compact character-sized
+  presence; double-click expands the visualizer. No other built-in personality
+  or character is shown.
+- **A personality is one unit: brain, voice, presence, and model**
+  (2026-07-14, INF-293..302, "Personality Manager"). `Personality` owns a
+  `voiceRef` (engine + voice), a visual presence, and an explicit `modelRef`
+  including model-specific reasoning effort, ordered live-call fallbacks, and
+  playback speed. Legacy personalities with any field missing are filled from
+  the user's current configuration on load.
+  Switching applies the unit together. The original Voice Bars visual is a
+  first-class no-character presence. The preferred model replaces the app's main
+  model; Advanced per-task overrides still win for their role, and the
+  personality's ordered live-call fallback list starts after its preferred
+  provider fails.
+  Ordinary personality switches animate the presence without speaking; greetings
+  are explicit previews in the creator. Off-call audio may only begin from an
+  explicit Play, Preview, or catch-up action. **"Another take"** lets any
   voicemail card or live turn be re-narrated by a different personality that
   briefly reacts to the prior take then gives its own spin, in its own voice and
-  pet. Another-take is narration only: it never triggers a reverse-send and never
+  character. Another-take is narration only: it never triggers a reverse-send and never
   touches the frozen agent destinations.
 - **Recap length is dynamic.** The recap prompt scales a sentence ceiling by item
   count, clusters related items, compresses solved problems to their outcome, and
   preserves decisions.
 - **Never emit em dashes in spoken output.** Personalities are instructed to
-  avoid them AND `CompanionPersonality.stripDashes` removes them deterministically
+  avoid them AND `AttachePersonality.stripDashes` removes them deterministically
   on the spoken path, because the model ignores the instruction often enough to
   matter.
 - **No hidden phrase routing for agent sends.** Live conversation has explicit

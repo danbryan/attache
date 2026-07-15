@@ -199,7 +199,7 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
 }
 
 /// Tracks whether the user is actively typing in the app, feeding
-/// `CompanionActivityState.userTyping`. Privacy contract: only the fact that
+/// `AttacheActivityState.userTyping`. Privacy contract: only the fact that
 /// a key went down is recorded, never keycodes or characters, and the local
 /// monitor observes events without consuming them. Local-only by design (no
 /// Input Monitoring permission, no new data collection): it fires while an

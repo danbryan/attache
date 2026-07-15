@@ -17,11 +17,11 @@ public enum CallPhase: Equatable {
     case idle
     /// The mic is actively capturing, or starting to capture, a turn.
     ///
-    /// `mode` mirrors `CompanionVoiceInputMode`'s raw value ("pushToTalk",
+    /// `mode` mirrors `AttacheVoiceInputMode`'s raw value ("pushToTalk",
     /// "toggle", "alwaysOn") from AttacheApp, or "preparing" while the mic is
     /// still starting up (mirrors `callMicStatusText`'s own precedence in
     /// `CallHUD.swift`, which checks `isPreparing` before branching on mode).
-    /// Kept as a plain `String` rather than referencing `CompanionVoiceInputMode`
+    /// Kept as a plain `String` rather than referencing `AttacheVoiceInputMode`
     /// directly because that enum lives in AttacheApp, and AttacheCore must not
     /// depend on AttacheApp.
     case listening(mode: String)
@@ -79,13 +79,13 @@ public enum CallPhase: Equatable {
 /// - `micIsListening`, `micIsPreparing` <-
 ///   `MicTranscriptController.isListening` / `.isPreparing`.
 /// - `voiceInputMode` <- `AppModel.voiceInputMode.rawValue`
-///   (`CompanionVoiceInputMode`, an AttacheApp type).
+///   (`AttacheVoiceInputMode`, an AttacheApp type).
 /// - `playbackIsPlaying`, `playbackIsPaused`, `playbackIsBusy` <-
 ///   `SpeechPlaybackController.isPlaying` / `.isPaused` / `.isBusy`, exposed
 ///   on AppModel as `playback.*`.
 /// - `isComposingNarration` <- `AppModel`'s in-flight narration-compose
 ///   tokens being non-empty: true for the LLM call
-///   (`CompanionPresentationService.prepare`) that writes a watched
+///   (`AttachePresentationService.prepare`) that writes a watched
 ///   session's spoken recap, which runs BEFORE `playbackIsBusy` ever goes
 ///   true (that only covers the TTS synthesis after the text exists).
 ///   Without this, a Tell Agent reply's recap composition had no signal at

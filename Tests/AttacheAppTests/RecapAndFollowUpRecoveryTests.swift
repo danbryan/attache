@@ -9,7 +9,7 @@ import XCTest
 /// (INF-244). These tests cover the two pieces that only show up wired
 /// end-to-end:
 ///
-/// 1. `CompanionPresentationService.complete(role:)` used to swallow every
+/// 1. `AttachePresentationService.complete(role:)` used to swallow every
 ///    failure behind `try?`; it now throws so a caller can classify it via
 ///    `ConversationRecovery.classify`, while still returning `nil` (not an
 ///    error) when the role simply isn't configured.
@@ -26,7 +26,7 @@ import XCTest
 /// `scripts/conversation-recovery-smoke.sh` (AX-driven, real process); these
 /// tests instead exercise the service/model layer directly and fast, using
 /// the exact same deterministic mock (`scripts/personality-two-way-smoke-server.py`)
-/// the shell smoke and `CompanionPresentationErrorRelayTests` already rely on.
+/// the shell smoke and `AttachePresentationErrorRelayTests` already rely on.
 final class RecapAndFollowUpRecoveryTests: XCTestCase {
     private static var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
@@ -72,7 +72,7 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
     }
 
     /// Starts `scripts/personality-two-way-smoke-server.py` as a loopback-only
-    /// subprocess, same as `CompanionPresentationErrorRelayTests`. `errorMode`
+    /// subprocess, same as `AttachePresentationErrorRelayTests`. `errorMode`
     /// and `recoveryModel` map onto `ATTACHE_SMOKE_PROVIDER_ERROR` /
     /// `ATTACHE_SMOKE_PROVIDER_RECOVERY_MODEL` (INF-254's addition to the
     /// existing mock, also used by the extended shell smoke).
@@ -133,9 +133,9 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             return XCTFail("could not create isolated defaults")
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(true, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+        defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = CompanionPresentationService(defaults: defaults, environment: [
+        let service = AttachePresentationService(defaults: defaults, environment: [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": "attache-recap-default"
@@ -145,7 +145,7 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             _ = try await service.complete(system: "system prompt", user: "user prompt", role: .recap)
             XCTFail("expected complete(role:) to throw on a 429 usage-limit response")
         } catch {
-            let presentationError = error as? CompanionPresentationError
+            let presentationError = error as? AttachePresentationError
             XCTAssertEqual(presentationError?.httpStatus, 429, "the thrown error must carry the structural HTTP status so ConversationRecovery.classify can use it")
         }
     }
@@ -166,11 +166,11 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             return XCTFail("could not create isolated defaults")
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(true, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+        defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
         // Simulates the recap recovery menu having switched the `.recap`
         // role's override to the model the mock will actually answer.
-        let service = CompanionPresentationService(defaults: defaults, environment: [
+        let service = AttachePresentationService(defaults: defaults, environment: [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": recoveryModel
@@ -180,17 +180,21 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         XCTAssertEqual(text, "ATTACHE_RECOVERY_SUCCEEDED_\(nonce)")
     }
 
-    func testCompleteReturnsNilWhenRoleIsNotConfiguredRatherThanThrowing() async throws {
+    func testLegacyDisabledSummaryPreferenceIsIgnored() {
         let suiteName = "AttacheRecapRecoveryTests-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             return XCTFail("could not create isolated defaults")
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(false, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+        defaults.set(false, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = CompanionPresentationService(defaults: defaults, environment: [:])
-        let text = try await service.complete(system: "system", user: "user", role: .tagging)
-        XCTAssertNil(text, "an unconfigured role is expected, not an error; callers must not classify it as a recoverable failure")
+        let settings = AttachePresentationSettings.load(
+            role: .tagging,
+            defaults: defaults,
+            environment: [:],
+            resolveSecrets: false
+        )
+        XCTAssertTrue(settings.llmEnabled)
     }
 
     // MARK: - answerFollowUpQuestion carries structural detail behind its fallback (follow-up)
@@ -205,9 +209,9 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             return XCTFail("could not create isolated defaults")
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(true, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+        defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = CompanionPresentationService(defaults: defaults, environment: [
+        let service = AttachePresentationService(defaults: defaults, environment: [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": "attache-followup-default"
@@ -222,13 +226,13 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             metadataJSON: "{}", durationMs: 0, alignment: nil
         )
 
-        let result: CompanionFollowUpAnswerResult = await withCheckedContinuation { continuation in
+        let result: AttacheFollowUpAnswerResult = await withCheckedContinuation { continuation in
             service.answerFollowUpQuestion(card: card, danQuestion: "What changed?") { result in
                 switch result {
                 case .success(let answer): continuation.resume(returning: answer)
                 case .failure(let error):
                     XCTFail("answerFollowUpQuestion must never resolve .failure; got \(error)")
-                    continuation.resume(returning: CompanionFollowUpAnswerResult(
+                    continuation.resume(returning: AttacheFollowUpAnswerResult(
                         answerText: "", strategy: "unexpected-failure", model: nil,
                         rawContextCharacterCount: 0, truncatedContext: false, errorDescription: nil
                     ))
@@ -243,16 +247,16 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
     // MARK: - Role-scoped recovery switches persist to their own role, not the global keys
 
     private let roleKeyPreferenceKeys = [
-        CompanionPreferenceKey.presentationLLMProvider,
-        CompanionPreferenceKey.presentationLLMModel,
-        CompanionPreferenceKey.presentationLLMRoleKey(.recap, .provider),
-        CompanionPreferenceKey.presentationLLMRoleKey(.recap, .model),
-        CompanionPreferenceKey.presentationLLMRoleKey(.recap, .reasoningEffort),
-        CompanionPreferenceKey.presentationLLMRoleKey(.recap, .serviceTier),
-        CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .provider),
-        CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .model),
-        CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .reasoningEffort),
-        CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .serviceTier)
+        AttachePreferenceKey.presentationLLMProvider,
+        AttachePreferenceKey.presentationLLMModel,
+        AttachePreferenceKey.presentationLLMRoleKey(.recap, .provider),
+        AttachePreferenceKey.presentationLLMRoleKey(.recap, .model),
+        AttachePreferenceKey.presentationLLMRoleKey(.recap, .reasoningEffort),
+        AttachePreferenceKey.presentationLLMRoleKey(.recap, .serviceTier),
+        AttachePreferenceKey.presentationLLMRoleKey(.conversation, .provider),
+        AttachePreferenceKey.presentationLLMRoleKey(.conversation, .model),
+        AttachePreferenceKey.presentationLLMRoleKey(.conversation, .reasoningEffort),
+        AttachePreferenceKey.presentationLLMRoleKey(.conversation, .serviceTier)
     ]
 
     @MainActor
@@ -262,25 +266,25 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         let snapshot = DefaultsKeySnapshot(keys: roleKeyPreferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
 
-        defaults.set(CompanionPresentationProvider.ollama.rawValue, forKey: CompanionPreferenceKey.presentationLLMProvider)
-        defaults.set("original-global-model", forKey: CompanionPreferenceKey.presentationLLMModel)
+        defaults.set(AttachePresentationProvider.ollama.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("original-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
         model.selectRecapRecoveryProvider(.groq)
 
         XCTAssertEqual(
-            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(.recap, .provider)),
-            CompanionPresentationProvider.groq.rawValue,
+            defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, .provider)),
+            AttachePresentationProvider.groq.rawValue,
             "the recap recovery switch must persist to the recap role's own key"
         )
         XCTAssertEqual(
-            defaults.string(forKey: CompanionPreferenceKey.presentationLLMProvider),
-            CompanionPresentationProvider.ollama.rawValue,
+            defaults.string(forKey: AttachePreferenceKey.presentationLLMProvider),
+            AttachePresentationProvider.ollama.rawValue,
             "the global provider key must be untouched by a recap-only recovery switch"
         )
-        let recapSettings = CompanionPresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
+        let recapSettings = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
         XCTAssertEqual(recapSettings.provider, .groq, "recap should pick up the recovered provider on the next call")
-        let conversationSettings = CompanionPresentationSettings.load(role: .conversation, defaults: defaults, environment: [:], resolveSecrets: false)
+        let conversationSettings = AttachePresentationSettings.load(role: .conversation, defaults: defaults, environment: [:], resolveSecrets: false)
         XCTAssertEqual(conversationSettings.provider, .ollama, "conversation must not be affected by a recap-only recovery switch")
     }
 
@@ -291,23 +295,23 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         let snapshot = DefaultsKeySnapshot(keys: roleKeyPreferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
 
-        defaults.set(CompanionPresentationProvider.ollama.rawValue, forKey: CompanionPreferenceKey.presentationLLMProvider)
-        defaults.set("original-global-model", forKey: CompanionPreferenceKey.presentationLLMModel)
+        defaults.set(AttachePresentationProvider.ollama.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("original-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
         model.selectFollowUpRecoveryProvider(.groq)
 
         XCTAssertEqual(
-            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .provider)),
-            CompanionPresentationProvider.groq.rawValue,
+            defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.conversation, .provider)),
+            AttachePresentationProvider.groq.rawValue,
             "the follow-up recovery switch must persist to the conversation role's own key"
         )
         XCTAssertEqual(
-            defaults.string(forKey: CompanionPreferenceKey.presentationLLMProvider),
-            CompanionPresentationProvider.ollama.rawValue,
+            defaults.string(forKey: AttachePreferenceKey.presentationLLMProvider),
+            AttachePresentationProvider.ollama.rawValue,
             "the global provider key must be untouched by a follow-up-only recovery switch"
         )
-        let recapSettings = CompanionPresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
+        let recapSettings = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
         XCTAssertEqual(recapSettings.provider, .ollama, "recap must not be affected by a follow-up-only recovery switch")
     }
 
@@ -318,18 +322,18 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         let snapshot = DefaultsKeySnapshot(keys: roleKeyPreferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
 
-        defaults.set(CompanionPresentationProvider.groq.rawValue, forKey: CompanionPreferenceKey.presentationLLMProvider)
-        defaults.set("original-global-model", forKey: CompanionPreferenceKey.presentationLLMModel)
+        defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("original-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
-        model.selectLiveFollowUpRecoveryModel(CompanionPresentationModelOption(id: "recovered-model", detail: "test", reasoningEfforts: []))
+        model.selectLiveFollowUpRecoveryModel(AttachePresentationModelOption(id: "recovered-model", detail: "test", reasoningEfforts: []))
 
         XCTAssertEqual(
-            defaults.string(forKey: CompanionPreferenceKey.presentationLLMRoleKey(.conversation, .model)),
+            defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.conversation, .model)),
             "recovered-model"
         )
         XCTAssertEqual(
-            defaults.string(forKey: CompanionPreferenceKey.presentationLLMModel),
+            defaults.string(forKey: AttachePreferenceKey.presentationLLMModel),
             "original-global-model",
             "the global model key must be untouched by a live-follow-up-only recovery switch"
         )
@@ -348,9 +352,9 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             return XCTFail("could not create isolated defaults")
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(true, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+        defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = CompanionPresentationService(defaults: defaults, environment: [
+        let service = AttachePresentationService(defaults: defaults, environment: [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": "attache-tagging-default"

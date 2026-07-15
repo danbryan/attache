@@ -4,13 +4,13 @@ import SwiftUI
 /// in Integrations.
 struct VoicePane: View {
     @ObservedObject var model: AppModel
-    @State private var pendingCloudEngine: CompanionSpeechProvider?
+    @State private var pendingCloudEngine: AttacheSpeechProvider?
 
     // Show every voice engine, not just connected ones, so providers like OpenAI are
     // discoverable here (selecting an unconfigured one points you to Integrations to
     // add its key) instead of silently hidden until a key exists.
-    private var engineOptions: [CompanionSpeechProvider] {
-        CompanionSpeechProvider.allCases
+    private var engineOptions: [AttacheSpeechProvider] {
+        AttacheSpeechProvider.allCases
     }
 
     private var engineNeedsKey: Bool {
@@ -59,17 +59,6 @@ struct VoicePane: View {
             if !model.voiceProviderStatus.isEmpty {
                 Text(model.voiceProviderStatus).font(.caption).foregroundStyle(.secondary)
             }
-            settingRow("Playback speed") {
-                Slider(value: $model.playbackSpeed, in: 0.8...1.6, step: 0.05)
-                    .frame(width: 200)
-                    .accessibilityLabel("Playback speed")
-                Text(String(format: "%.2fx", model.playbackSpeed))
-                    .typoCaption(.medium, monoDigit: true)
-                    .foregroundStyle(.secondary)
-                Text("Applies to every voice, live. Captions stay in sync and replays cost nothing extra.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
             Divider().padding(.vertical, 4)
             Text("Captions").typoBody(.semibold)
             Toggle("Show captions", isOn: $model.captionsEnabled)
@@ -121,7 +110,7 @@ struct VoicePane: View {
             Text("Narration").typoBody(.semibold)
             settingRow("Detail") {
                 Picker("", selection: $model.narrationDetail) {
-                    ForEach(CompanionNarrationDetail.allCases) { Text($0.title).tag($0) }
+                    ForEach(AttacheNarrationDetail.allCases) { Text($0.title).tag($0) }
                 }
                 .labelsHidden().frame(width: 200)
             }
@@ -133,7 +122,7 @@ struct VoicePane: View {
             Text("Conversation").typoBody(.semibold)
             settingRow("Voice input") {
                 Picker("", selection: $model.voiceInputMode) {
-                    ForEach(CompanionVoiceInputMode.allCases) { Text($0.title).tag($0) }
+                    ForEach(AttacheVoiceInputMode.allCases) { Text($0.title).tag($0) }
                 }
                 .labelsHidden().frame(width: 200)
             }
@@ -176,12 +165,13 @@ struct VoicePane: View {
             }
             settingRow("Spoken language") {
                 Picker("", selection: $model.spokenLanguage) {
-                    ForEach(CompanionCaptionLanguage.all) { Text($0.name).tag($0.id) }
+                    ForEach(AttacheCaptionLanguage.all) { Text($0.name).tag($0.id) }
                 }
                 .labelsHidden().frame(width: 200)
             }
-            Toggle("Low-latency transcription", isOn: $model.lowLatencyCaptions)
-            Toggle("On-device transcription only", isOn: $model.onDeviceOnly)
+            Text("Attaché uses responsive transcription and may use Apple's network-assisted recognizer when it improves accuracy.")
+                .typoCaption()
+                .foregroundStyle(.secondary)
             Text(model.voiceInputMode.detail)
                 .typoCaption()
                 .foregroundStyle(.secondary)
@@ -202,7 +192,7 @@ struct VoicePane: View {
         }
     }
 
-    private var engineBinding: Binding<CompanionSpeechProvider> {
+    private var engineBinding: Binding<AttacheSpeechProvider> {
         Binding(
             get: { model.speechProvider },
             set: { engine in

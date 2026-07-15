@@ -11,7 +11,7 @@ struct CustomThemeEditor: View {
     @State private var importPresented = false
     @State private var importError: String?
 
-    private var activeSpec: CompanionThemeSpec? {
+    private var activeSpec: AttacheThemeSpec? {
         guard model.theme == .custom, let id = model.activeCustomThemeID else { return nil }
         return model.customThemes.first { $0.id == id }
     }
@@ -63,7 +63,7 @@ struct CustomThemeEditor: View {
         }
     }
 
-    private func editor(for spec: CompanionThemeSpec) -> some View {
+    private func editor(for spec: AttacheThemeSpec) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("Name").typoCaption(.medium).foregroundStyle(.secondary).frame(width: 92, alignment: .leading)
@@ -123,7 +123,7 @@ struct CustomThemeEditor: View {
     }
 
     @ViewBuilder
-    private func colorRow(_ label: String, value: CompanionThemeStop?, onChange: @escaping (CompanionThemeStop) -> Void) -> some View {
+    private func colorRow(_ label: String, value: AttacheThemeStop?, onChange: @escaping (AttacheThemeStop) -> Void) -> some View {
         if let value {
             HStack(spacing: 8) {
                 Text(label).typoCaption(.medium).foregroundStyle(.secondary).frame(width: 92, alignment: .leading)
@@ -131,7 +131,7 @@ struct CustomThemeEditor: View {
                     get: { Color(red: value.red, green: value.green, blue: value.blue) },
                     set: { color in
                         let ns = NSColor(color).usingColorSpace(.sRGB) ?? .black
-                        onChange(CompanionThemeStop(red: Double(ns.redComponent),
+                        onChange(AttacheThemeStop(red: Double(ns.redComponent),
                                                     green: Double(ns.greenComponent),
                                                     blue: Double(ns.blueComponent)))
                     }
@@ -142,7 +142,7 @@ struct CustomThemeEditor: View {
         }
     }
 
-    private func exportSpec(_ spec: CompanionThemeSpec) {
+    private func exportSpec(_ spec: AttacheThemeSpec) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = "\(spec.name.replacingOccurrences(of: "/", with: "-")).json"

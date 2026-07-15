@@ -1,16 +1,16 @@
 import AttacheCore
 import SwiftUI
 
-/// Debug-only driver for the companion contract (INF-268): pick any phase,
+/// Debug-only driver for the Attaché activity contract (INF-268): pick any phase,
 /// agent, and tool kind, or let it cycle through every phase on a timer, and
 /// every renderer follows because the override flows through the same
-/// `companionActivity` they already consume. Shown only when the app runs
+/// `attacheActivity` they already consume. Shown only when the app runs
 /// with `ATTACHE_ACTIVITY_SIMULATOR=1`; the override never persists.
 struct ActivitySimulatorPanel: View {
     @ObservedObject var model: AppModel
-    @State private var phase: CompanionActivityPhase = .idle
-    @State private var agent: CompanionAgentIdentity = .codex
-    @State private var toolKind: CompanionToolKind = .shell
+    @State private var phase: AttacheActivityPhase = .idle
+    @State private var agent: AttacheAgentIdentity = .codex
+    @State private var toolKind: AttacheToolKind = .shell
     @State private var overriding = false
     @State private var cycling = false
     @State private var claudeCount = 0
@@ -22,7 +22,7 @@ struct ActivitySimulatorPanel: View {
     /// Sub-agents assigned per fleet slot by "Add subs to focused", kept when
     /// focus moves so several sessions (including non-focused ones) can carry them.
     @State private var subsBySlot: [Int: Int] = [:]
-    /// When set, the pet compacts (ramping squish) as if the focused session
+    /// When set, the character compacts (ramping squish) as if the focused session
     /// fired PreCompact, for previewing the sustained compaction.
     @State private var compactingSince: Date?
     @State private var demoElapsed = -1.0
@@ -43,21 +43,21 @@ struct ActivitySimulatorPanel: View {
             }
 
             Picker("Phase", selection: $phase) {
-                ForEach(CompanionActivityPhase.allCases, id: \.self) { phase in
+                ForEach(AttacheActivityPhase.allCases, id: \.self) { phase in
                     Text(phase.rawValue).tag(phase)
                 }
             }
             .accessibilityLabel("Simulated phase")
 
             Picker("Agent", selection: $agent) {
-                ForEach(CompanionAgentIdentity.allCases, id: \.self) { agent in
+                ForEach(AttacheAgentIdentity.allCases, id: \.self) { agent in
                     Text(agent.rawValue).tag(agent)
                 }
             }
             .accessibilityLabel("Simulated agent")
 
             Picker("Tool", selection: $toolKind) {
-                ForEach(CompanionToolKind.allCases, id: \.self) { kind in
+                ForEach(AttacheToolKind.allCases, id: \.self) { kind in
                     Text(kind.rawValue).tag(kind)
                 }
             }
@@ -156,7 +156,7 @@ struct ActivitySimulatorPanel: View {
                 .typoCaption(.medium, design: .monospaced)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
-                .accessibilityLabel("Companion activity state \(stateReadout)")
+                .accessibilityLabel("Attache activity state \(stateReadout)")
         }
         .pickerStyle(.menu)
         .controlSize(.small)
@@ -183,7 +183,7 @@ struct ActivitySimulatorPanel: View {
         }
         .onReceive(cycleTimer) { _ in
             guard cycling else { return }
-            let all = CompanionActivityPhase.allCases
+            let all = AttacheActivityPhase.allCases
             let index = all.firstIndex(of: phase) ?? 0
             phase = all[(index + 1) % all.count]
         }
@@ -201,10 +201,10 @@ struct ActivitySimulatorPanel: View {
         }
     }
 
-    /// Round-trip proof for QA: reads back what `companionActivity` actually
+    /// Round-trip proof for QA: reads back what `attacheActivity` actually
     /// publishes, not what the pickers requested.
     private var stateReadout: String {
-        let state = model.companionActivity
+        let state = model.attacheActivity
         var parts = [state.phase.rawValue, state.activeAgent.rawValue]
         if let toolKind = state.toolKind { parts.append(toolKind.rawValue) }
         if state.userTyping { parts.append("typing") }
@@ -214,7 +214,7 @@ struct ActivitySimulatorPanel: View {
     /// A moment preview button. Full-width in its grid cell and never truncated,
     /// so labels like "Configuring" and "Permission" always show in full.
     @ViewBuilder
-    private func momentButton(_ title: String, _ kind: CompanionActivityMoment.Kind) -> some View {
+    private func momentButton(_ title: String, _ kind: AttacheActivityMoment.Kind) -> some View {
         Button(title) { model.triggerMoment(kind, agent: agent) }
             .frame(maxWidth: .infinity)
             .accessibilityLabel("\(title) moment")
@@ -233,7 +233,7 @@ struct ActivitySimulatorPanel: View {
     }
 
     private func apply() {
-        model.simulatedActivity = CompanionActivityState(
+        model.simulatedActivity = AttacheActivityState(
             phase: phase,
             activeAgent: agent,
             toolKind: phase == .toolRunning ? toolKind : nil,
@@ -257,15 +257,15 @@ struct ActivitySimulatorPanel: View {
     /// the sub-agents, the last Claude is the blocked one when that toggle
     /// is on, the second-to-last the finished one, and the working share
     /// fills front to back.
-    private func simulatedFleet() -> [CompanionFleetSession] {
-        func sessions(_ count: Int, agent: CompanionAgentIdentity, prefix: String) -> [CompanionFleetSession] {
+    private func simulatedFleet() -> [AttacheFleetSession] {
+        func sessions(_ count: Int, agent: AttacheAgentIdentity, prefix: String) -> [AttacheFleetSession] {
             guard count > 0 else { return [] }
             let workingCount = workShare == 0 ? 0 : (workShare == 1 ? (count + 1) / 2 : count)
             return (0..<count).map { index in
-                var state: CompanionFleetSession.State = index < workingCount ? .working : .quiet
+                var state: AttacheFleetSession.State = index < workingCount ? .working : .quiet
                 if oneFinished, agent == .claude, index == max(0, count - 2) { state = .finished }
                 if oneBlocked, agent == .claude, index == count - 1 { state = .blocked }
-                return CompanionFleetSession(
+                return AttacheFleetSession(
                     id: "sim-\(prefix)-\(index)",
                     agent: agent,
                     state: state,

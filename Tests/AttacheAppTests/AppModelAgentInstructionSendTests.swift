@@ -6,12 +6,12 @@ import AttacheCore
 @MainActor
 final class AppModelAgentInstructionSendTests: XCTestCase {
     private let preferenceKeys = [
-        CompanionPreferenceKey.codexSourceEnabled,
-        CompanionPreferenceKey.watchedSessions,
-        CompanionPreferenceKey.attachedCodexSessionID,
-        CompanionPreferenceKey.agentInstructionSendPolicy,
-        CompanionPreferenceKey.presentationLLMEnabled,
-        CompanionPreferenceKey.onboardingCompleted
+        AttachePreferenceKey.codexSourceEnabled,
+        AttachePreferenceKey.watchedSessions,
+        AttachePreferenceKey.attachedCodexSessionID,
+        AttachePreferenceKey.agentInstructionSendPolicy,
+        AttachePreferenceKey.presentationLLMEnabled,
+        AttachePreferenceKey.onboardingCompleted
     ]
 
     func testDefaultPolicyStagesInstructionForFinalConfirmation() throws {
@@ -73,7 +73,7 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
         let sessionID = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
-        defaults.set(false, forKey: CompanionPreferenceKey.presentationLLMEnabled)
+        defaults.set(false, forKey: AttachePreferenceKey.presentationLLMEnabled)
         let model = try AppModel(store: CardStore.inMemory())
         model.twoWay.setEnabled(true, sessionID: sessionID)
         model.conversationDestination = .attache
@@ -143,7 +143,7 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
         _ = try seedWatchedSession(policy: .confirmEveryInstruction, defaults: defaults)
-        defaults.removeObject(forKey: CompanionPreferenceKey.attachedCodexSessionID)
+        defaults.removeObject(forKey: AttachePreferenceKey.attachedCodexSessionID)
         let model = try AppModel(store: CardStore.inMemory())
         model.attachCodexSession(nil)
         model.startConversation()
@@ -425,11 +425,11 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
             status: nil,
             sourceKind: .codex
         )
-        defaults.set(true, forKey: CompanionPreferenceKey.codexSourceEnabled)
-        defaults.set(try JSONEncoder().encode([target]), forKey: CompanionPreferenceKey.watchedSessions)
-        defaults.set(sessionID, forKey: CompanionPreferenceKey.attachedCodexSessionID)
-        defaults.set(policy.rawValue, forKey: CompanionPreferenceKey.agentInstructionSendPolicy)
-        defaults.set(true, forKey: CompanionPreferenceKey.onboardingCompleted)
+        defaults.set(true, forKey: AttachePreferenceKey.codexSourceEnabled)
+        defaults.set(try JSONEncoder().encode([target]), forKey: AttachePreferenceKey.watchedSessions)
+        defaults.set(sessionID, forKey: AttachePreferenceKey.attachedCodexSessionID)
+        defaults.set(policy.rawValue, forKey: AttachePreferenceKey.agentInstructionSendPolicy)
+        defaults.set(true, forKey: AttachePreferenceKey.onboardingCompleted)
         return sessionID
     }
 }

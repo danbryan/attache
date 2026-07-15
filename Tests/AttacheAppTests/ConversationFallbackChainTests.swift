@@ -90,7 +90,7 @@ final class ConversationFallbackChainTests: XCTestCase {
 
     func testNextCandidatePicksFirstEligibleEntryInOrder() {
         let candidate = ConversationFallbackChain.nextCandidate(
-            chain: [.groq, .ollama, .lmStudio],
+            chain: [.groq, .ollama, .codexCLI],
             failedProvider: .xai,
             isConfigured: { _ in true },
             isConsented: { _ in true }
@@ -122,9 +122,9 @@ final class ConversationFallbackChainTests: XCTestCase {
         let text = ConversationFallbackChain.announcement(
             category: .transient,
             failedProviderTitle: "Ollama",
-            fallbackProviderTitle: "LM Studio"
+            fallbackProviderTitle: "Codex subscription"
         )
-        XCTAssertEqual(text, "Ollama had a connection issue; using LM Studio for now.")
+        XCTAssertEqual(text, "Ollama had a connection issue; using Codex subscription for now.")
     }
 
     func testAnnouncementNeverContainsAnEmDash() {
@@ -264,9 +264,12 @@ final class ConversationFallbackChainTests: XCTestCase {
 @MainActor
 final class ConversationFallbackChainSettingsTests: XCTestCase {
     private let preferenceKeys = [
-        CompanionPreferenceKey.conversationFallbackChainEnabled,
-        CompanionPreferenceKey.conversationFallbackChainProviders,
-        CompanionPreferenceKey.presentationLLMProvider
+        AttachePreferenceKey.conversationFallbackChainEnabled,
+        AttachePreferenceKey.conversationFallbackChainProviders,
+        AttachePreferenceKey.presentationLLMProvider,
+        "attache.personalities",
+        "attache.activePersonalityID",
+        "attache.personalityVoicePetMigrated"
     ]
 
     func testFallbackChainIsDisabledAndEmptyByDefault() throws {
@@ -288,9 +291,11 @@ final class ConversationFallbackChainSettingsTests: XCTestCase {
         defer { snapshot.restore() }
 
         let model = try AppModel(store: CardStore.inMemory())
+        model.selectPresentationProvider(.codexCLI)
         model.conversationFallbackChainEnabled = true
         model.addConversationFallbackChainProvider(.ollama)
         model.addConversationFallbackChainProvider(.groq)
+        model.captureCurrentModelIntoActivePersonality()
 
         let relaunched = try AppModel(store: CardStore.inMemory())
         XCTAssertTrue(relaunched.conversationFallbackChainEnabled)

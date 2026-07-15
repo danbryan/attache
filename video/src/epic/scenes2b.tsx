@@ -9,7 +9,7 @@ import {
 import { ambient, live, twoway, f, karaokeEnd, ssec, stext } from "./timing2";
 
 /* ------------------------------------------------------------------ */
-/* 5 — COMPANION: the pet at a glance, and on your desktop.            */
+/* 5: ATTACHÉ at a glance, and on your desktop.                        */
 /*   Storyboards the n_ambient narration:                              */
 /*   "leave it in the corner"  -> the desktop widget                   */
 /*   "up to at a glance"        -> the fleet ring of Claude sessions    */
@@ -20,9 +20,9 @@ const CLAUDE_HUE = "#D97757";
 const AMBER = "#FFB020";
 const clampBoth = { extrapolateLeft: "clamp" as const, extrapolateRight: "clamp" as const };
 
-// Volt, the default pet character, as inline SVG (mirrors the app icon and
+// Attaché, the default character, as inline SVG (mirrors the app icon and
 // the AttacheApp robot face: steel plate, LED eyes, antenna, mouth).
-const Volt2: React.FC<{ size?: number; talking?: boolean }> = ({ size = 170, talking = false }) => {
+const AttacheRobot2: React.FC<{ size?: number; talking?: boolean }> = ({ size = 170, talking = false }) => {
   const frame = useCurrentFrame();
   const blinkT = frame % 95;
   const openness = blinkT < 3 ? 0.16 : blinkT < 7 ? 0.6 : 1;
@@ -48,20 +48,7 @@ const Volt2: React.FC<{ size?: number; talking?: boolean }> = ({ size = 170, tal
   );
 };
 
-// Bubbles (the mark face) and Colt (the cowboy), head-only, for the
-// character-picker beat. Volt2 is the robot above.
-const BubblesHead2: React.FC<{ size?: number }> = ({ size = 120 }) => (
-  <svg width={size} height={size} viewBox="82 74 76 76" fill="none" style={{ display: "block" }}>
-    <circle cx="120" cy="112" r="33" fill="#FFF6E4" />
-    <path d="M97 107 Q105 97 113 107" stroke="#10243E" strokeWidth={5} strokeLinecap="round" />
-    <path d="M127 107 Q135 97 143 107" stroke="#10243E" strokeWidth={5} strokeLinecap="round" />
-    <circle cx="95" cy="119" r="6" fill="#FF9DA1" opacity={0.6} />
-    <circle cx="145" cy="119" r="6" fill="#FF9DA1" opacity={0.6} />
-    <path d="M108 119 C 111 134, 129 134, 132 119 Z" fill="#10243E" />
-  </svg>
-);
-
-const Colt2: React.FC<{ size?: number }> = ({ size = 120 }) => (
+export const Colt2: React.FC<{ size?: number }> = ({ size = 120 }) => (
   <svg width={size} height={size} viewBox="76 52 88 100" fill="none" style={{ display: "block" }}>
     <circle cx="120" cy="112" r="33" fill="#FFF6E4" />
     <circle cx="106" cy="106" r="7" fill="#fff" /><circle cx="106.5" cy="106.5" r="3.4" fill="#10243E" />
@@ -100,8 +87,8 @@ const Pill: React.FC<{ x: number; y: number; text: string; color: string; appear
 // The fleet ring: Volt centered, Claude session dots orbiting the inner
 // track, a focused pin on the outer track, and a Done / Needs-you
 // notification that spring in. Frame is scene-relative.
-const PetRing: React.FC<{ size?: number; labels?: boolean; doneAt?: number; blockAt?: number; talking?: boolean; focusAngle?: number; character?: "volt" | "bubbles" | "colt"; notificationsOnly?: boolean }> = ({
-  size = 520, labels = false, doneAt, blockAt, talking = false, focusAngle = Math.PI / 2, character = "volt", notificationsOnly = false,
+const CharacterRing: React.FC<{ size?: number; labels?: boolean; doneAt?: number; blockAt?: number; talking?: boolean; focusAngle?: number; character?: "attache" | "colt"; notificationsOnly?: boolean }> = ({
+  size = 520, labels = false, doneAt, blockAt, talking = false, focusAngle = Math.PI / 2, character = "attache", notificationsOnly = false,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -138,9 +125,8 @@ const PetRing: React.FC<{ size?: number; labels?: boolean; doneAt?: number; bloc
       </svg>
       {!notificationsOnly && workers.filter((w) => w.behind).map((w) => workerDot(w, 1))}
       <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)", zIndex: 2 }}>
-        {character === "bubbles" ? <BubblesHead2 size={size * 0.42} />
-          : character === "colt" ? <Colt2 size={size * 0.42} />
-          : <Volt2 size={size * 0.42} talking={talking} />}
+        {character === "colt" ? <Colt2 size={size * 0.42} />
+          : <AttacheRobot2 size={size * 0.42} talking={talking} />}
       </div>
       {!notificationsOnly && workers.filter((w) => !w.behind).map((w) => workerDot(w, 3))}
 
@@ -250,7 +236,7 @@ export const Ambient2: React.FC = () => {
       <AbsoluteFill style={{ opacity: deskOpacity }}>
         <MacDesktop>
           <div style={{ position: "absolute", right: 118, bottom: 108, filter: "drop-shadow(0 26px 54px rgba(0,0,0,0.42))" }}>
-            <PetRing size={392} notificationsOnly blockAt={44} />
+            <CharacterRing size={392} notificationsOnly blockAt={44} />
           </div>
           <div style={{ position: "absolute", right: 150, bottom: 58, color: "#fff", fontSize: 26, fontWeight: 700, textShadow: "0 2px 12px rgba(0,0,0,0.5)", opacity: 0.94 }}>
             Lives on your desktop, and pings you
@@ -265,7 +251,7 @@ export const Ambient2: React.FC = () => {
         <AppWindow width={980} style={{ height: 690 }}>
           <div style={{ position: "relative", height: 640, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ transform: `scale(${breathe})` }}>
-              <PetRing size={540} labels doneAt={232} blockAt={250} />
+              <CharacterRing size={540} labels doneAt={232} blockAt={250} />
             </div>
             <div style={{ position: "absolute", left: 0, right: 0, top: 18, textAlign: "center", color: T.text, fontSize: 26, fontWeight: 600, height: 34 }}>
               <span style={{ position: "absolute", left: 0, right: 0, opacity: capGlance }}>Every Claude session it runs, at a glance.</span>
@@ -288,11 +274,11 @@ export const Ambient2: React.FC = () => {
       <AbsoluteFill style={{ opacity: charOpacity, alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 40 }}>
         <Aurora accent="blue" strength={0.6} />
         <div style={{ fontSize: 52, fontWeight: 700, color: T.text, letterSpacing: "-0.02em" }}>
-          Pick your <span style={{ color: T.gold }}>companion</span>
+          Pick your <span style={{ color: T.gold }}>character</span>
         </div>
         <div style={{ display: "flex", gap: 56, alignItems: "flex-end" }}>
           {[
-            { name: "Attaché", el: <Volt2 size={158} />, sel: true },
+            { name: "Attaché", el: <AttacheRobot2 size={158} />, sel: true },
             { name: "Colt", el: <Colt2 size={158} />, sel: false },
           ].map((c) => (
             <div key={c.name} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
@@ -339,7 +325,7 @@ export const Live2: React.FC = () => {
         <AppWindow width={1180} live={frame >= composerF}>
           <div style={{ padding: "30px 34px 30px", display: "flex", flexDirection: "column", gap: 26, minHeight: 430, justifyContent: "space-between" }}>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24, paddingTop: 16 }}>
-              <Volt2 size={150} talking={speaking} />
+              <AttacheRobot2 size={150} talking={speaking} />
               {frame >= listenF && frame < thinkF && (
                 <>
                   <WaveBars n={26} height={30} color="rgba(242,242,245,0.75)" />

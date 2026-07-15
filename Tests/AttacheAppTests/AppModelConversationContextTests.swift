@@ -10,9 +10,9 @@ final class AppModelConversationContextTests: XCTestCase {
         let defaults = UserDefaults.standard
         let defaultsSnapshot = ConversationContextDefaultsSnapshot(
             keys: [
-                CompanionPreferenceKey.attachedCodexSessionID,
-                CompanionPreferenceKey.watchedSessions,
-                CompanionPreferenceKey.codexSourceEnabled
+                AttachePreferenceKey.attachedCodexSessionID,
+                AttachePreferenceKey.watchedSessions,
+                AttachePreferenceKey.codexSourceEnabled
             ],
             defaults: defaults
         )
@@ -27,9 +27,9 @@ final class AppModelConversationContextTests: XCTestCase {
             status: nil,
             sourceKind: .codex
         )
-        defaults.set(true, forKey: CompanionPreferenceKey.codexSourceEnabled)
-        defaults.set(sessionID, forKey: CompanionPreferenceKey.attachedCodexSessionID)
-        defaults.set(try JSONEncoder().encode([target]), forKey: CompanionPreferenceKey.watchedSessions)
+        defaults.set(true, forKey: AttachePreferenceKey.codexSourceEnabled)
+        defaults.set(sessionID, forKey: AttachePreferenceKey.attachedCodexSessionID)
+        defaults.set(try JSONEncoder().encode([target]), forKey: AttachePreferenceKey.watchedSessions)
         _ = try store.insertEvent(NormalizedEvent(
             source: SourceKind.codex.rawValue,
             eventType: "assistant.completed",
