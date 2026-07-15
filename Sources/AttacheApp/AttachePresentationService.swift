@@ -6,7 +6,6 @@ final class AttachePresentationService {
     private let defaults: UserDefaults
     private let environment: [String: String]
     private let memoryStore: AttacheMemoryStore
-    private let personaStore: AttachePersonaStore
 
     init(
         defaults: UserDefaults = .standard,
@@ -15,12 +14,12 @@ final class AttachePresentationService {
         self.defaults = defaults
         self.environment = environment
         self.memoryStore = AttacheMemoryStore(environment: environment)
-        self.personaStore = AttachePersonaStore(environment: environment)
     }
 
     func prepare(
         _ event: NormalizedEvent,
         personality: Personality?,
+        profilePrompt: String,
         completion: @escaping (NormalizedEvent) -> Void
     ) {
         if environment["ATTACHE_FORCE_PLAIN_READBACK"] == "1" {
@@ -67,12 +66,11 @@ final class AttachePresentationService {
             let presentedEvent: NormalizedEvent
             do {
                 let memorySnapshot = memoryStore.loadSnapshot()
-                let personaSnapshot = personaStore.loadSnapshot()
                 presentedEvent = try await Self.eventWithLLMPresentation(
                     event,
                     settings: settings,
                     memorySnapshot: memorySnapshot,
-                    personaSnapshot: personaSnapshot,
+                    profilePrompt: profilePrompt,
                     personality: personality,
                     spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
                 )
@@ -109,6 +107,8 @@ final class AttachePresentationService {
     func answerFollowUpQuestion(
         card: VoicemailCard,
         danQuestion: String,
+        personality: Personality?,
+        profilePrompt: String,
         completion: @escaping (Result<AttacheFollowUpAnswerResult, Error>) -> Void
     ) {
         let fallback = Self.fallbackFollowUpAnswer(
@@ -140,12 +140,6 @@ final class AttachePresentationService {
 
             do {
                 let memorySnapshot = memoryStore.loadSnapshot()
-                let personaSnapshot = personaStore.loadSnapshot()
-                let profilePrompt = Self.firstNonEmpty(
-                    settings.profilePrompt,
-                    personaSnapshot.prompt,
-                    AttachePersonality.defaultProfilePrompt
-                )
                 let prompt = AttachePersonality.followUpPrompt(
                     for: card,
                     danQuestion: danQuestion,
@@ -199,6 +193,7 @@ final class AttachePresentationService {
     ///   `nil` (the default) is byte-for-byte the original behavior.
     func converse(
         messages: [AttacheChatMessage],
+        allowSessionContextTools: Bool,
         allowAgentInstructionTool: Bool = false,
         settingsOverride: AttachePresentationSettings? = nil,
         executeTool: @escaping (String, String) async -> String,
@@ -217,6 +212,7 @@ final class AttachePresentationService {
                 do {
                     let reply = try await Self.runConversation(
                         messages: messages,
+                        allowSessionContextTools: allowSessionContextTools,
                         allowAgentInstructionTool: allowAgentInstructionTool,
                         settings: settingsOverride,
                         executeTool: executeTool
@@ -249,6 +245,7 @@ final class AttachePresentationService {
             do {
                 let reply = try await Self.runConversation(
                     messages: messages,
+                    allowSessionContextTools: allowSessionContextTools,
                     allowAgentInstructionTool: allowAgentInstructionTool,
                     settings: settings,
                     executeTool: executeTool
@@ -262,12 +259,16 @@ final class AttachePresentationService {
 
     private static func runConversation(
         messages: [AttacheChatMessage],
+        allowSessionContextTools: Bool,
         allowAgentInstructionTool: Bool,
         settings: AttachePresentationSettings,
         executeTool: @escaping (String, String) async -> String
     ) async throws -> AttacheConversationReply {
         var payloadMessages: [[String: Any]] = messages.map { ["role": $0.role, "content": $0.content] }
-        let tools = conversationTools(allowAgentInstructionTool: allowAgentInstructionTool)
+        let tools = conversationTools(
+            allowSessionContextTools: allowSessionContextTools,
+            allowAgentInstructionTool: allowAgentInstructionTool
+        )
         let maxToolRounds = 8   // room to page/search across a long session (INF-165)
         // Sticky across rounds: if any round in this conversation attempted and
         // lost a CLI tool call (INF-243), the final reply still flags it even
@@ -275,8 +276,18 @@ final class AttachePresentationService {
         var toolCallLost = false
 
         for _ in 0..<maxToolRounds {
-            let result = try await requestChat(messages: payloadMessages, tools: tools, settings: settings)
+            let result = try await requestChat(
+                messages: payloadMessages,
+                tools: tools.isEmpty ? nil : tools,
+                settings: settings
+            )
             if result.toolCallLost { toolCallLost = true }
+            // A provider must not be able to manufacture access by returning a
+            // tool call that was never offered. Fail closed before invoking the
+            // app-level executor, even if the provider ignores the request schema.
+            if !allowSessionContextTools, !result.toolCalls.isEmpty {
+                throw AttachePresentationError.invalidResponse
+            }
             if result.toolCalls.isEmpty {
                 let text = sanitizeFollowUpAnswerOutput(result.content)
                 guard !text.isEmpty else { throw AttachePresentationError.emptyResponse }
@@ -356,7 +367,11 @@ final class AttachePresentationService {
         return unresolved.llmEnabled && unresolved.hasProviderConfiguration
     }
 
-    static func conversationTools(allowAgentInstructionTool: Bool) -> [[String: Any]] {
+    static func conversationTools(
+        allowSessionContextTools: Bool,
+        allowAgentInstructionTool: Bool
+    ) -> [[String: Any]] {
+        guard allowSessionContextTools else { return [] }
         var tools: [[String: Any]] = [
             ["type": "function", "function": [
                 "name": "read_session_transcript",
@@ -738,11 +753,10 @@ final class AttachePresentationService {
         _ event: NormalizedEvent,
         settings: AttachePresentationSettings,
         memorySnapshot: AttacheMemorySnapshot,
-        personaSnapshot: AttachePersonaSnapshot,
+        profilePrompt: String,
         personality: Personality?,
         spokenLanguageName: String? = nil
     ) async throws -> NormalizedEvent {
-        let profilePrompt = firstNonEmpty(personality?.prompt, settings.profilePrompt, personaSnapshot.prompt, AttachePersonality.defaultProfilePrompt)
         let prompt = AttachePersonality.presentationPrompt(
             for: event,
             profilePrompt: profilePrompt,
@@ -778,16 +792,12 @@ final class AttachePresentationService {
             presented.metadata["companion_personality_name"] = personality.name
         }
         presented.metadata["companion_personality_profile"] = personality?.id ?? "default"
-        presented.metadata["companion_personality_file"] = personaSnapshot.fileURL.path
         presented.metadata["companion_memory_file"] = memorySnapshot.fileURL.path
         presented.metadata["companion_memory_context_chars"] = String(memorySnapshot.context?.count ?? 0)
         presented.metadata["companion_raw_output_chars"] = String(prompt.rawOutputCharacterCount)
         presented.metadata["companion_raw_output_truncated"] = prompt.truncatedRawOutput ? "true" : "false"
         if let errorDescription = memorySnapshot.errorDescription {
             presented.metadata["companion_memory_error"] = errorDescription
-        }
-        if let errorDescription = personaSnapshot.errorDescription {
-            presented.metadata["companion_personality_error"] = errorDescription
         }
         if let reasoningEffort = settings.reasoningEffort, !reasoningEffort.isEmpty {
             presented.metadata["companion_llm_reasoning_effort"] = reasoningEffort

@@ -5,6 +5,47 @@ import XCTest
 
 @MainActor
 final class AppModelConversationContextTests: XCTestCase {
+    func testContextFreeConversationDoesNotInheritSelectedCardOrSessionMetadata() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let defaultsSnapshot = ConversationContextDefaultsSnapshot(
+            keys: [
+                AttachePreferenceKey.attachedCodexSessionID,
+                AttachePreferenceKey.watchedSessions,
+                AttachePreferenceKey.codexSourceEnabled,
+                AttachePreferenceKey.claudeCodeSourceEnabled
+            ],
+            defaults: defaults
+        )
+        defer { defaultsSnapshot.restore() }
+        defaults.set(false, forKey: AttachePreferenceKey.codexSourceEnabled)
+        defaults.set(false, forKey: AttachePreferenceKey.claudeCodeSourceEnabled)
+
+        let store = try CardStore.inMemory()
+        _ = try store.insertEvent(NormalizedEvent(
+            source: SourceKind.codex.rawValue,
+            eventType: "assistant.completed",
+            externalSessionID: "hidden-recent-session",
+            projectPath: "/private/hidden-project",
+            title: "Secret redesign topic",
+            text: "Secret agent reply that must not enter a context-free call.",
+            metadata: ["companion_summary": "Secret session summary"]
+        ))
+
+        let model = AppModel(store: store)
+        XCTAssertNotNil(model.selectedCard, "precondition: a selected voicemail exists")
+
+        model.startConversation()
+        defer { model.endConversation() }
+
+        XCTAssertNil(model.conversationTargetSnapshot)
+        XCTAssertNil(model.conversationContextSession)
+        XCTAssertNil(model.conversationLatestSummary)
+        XCTAssertNil(model.conversationLatestAgentReply)
+        XCTAssertFalse(model.canSendToAgent)
+        XCTAssertEqual(model.conversationStatus, "No session attached. I can still chat.")
+    }
+
     func testLatestAgentContextIgnoresFiledPersonalityReplies() throws {
         _ = NSApplication.shared
         let defaults = UserDefaults.standard
@@ -73,7 +114,7 @@ final class AppModelConversationContextTests: XCTestCase {
     }
 }
 
-private final class ConversationContextDefaultsSnapshot {
+final class ConversationContextDefaultsSnapshot {
     private let keys: [String]
     private let defaults: UserDefaults
     private let values: [String: Any]

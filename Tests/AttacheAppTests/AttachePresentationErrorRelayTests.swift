@@ -155,6 +155,7 @@ final class AttachePresentationErrorRelayTests: XCTestCase {
                     AttacheChatMessage(role: "system", content: system),
                     AttacheChatMessage(role: "user", content: user)
                 ],
+                allowSessionContextTools: true,
                 allowAgentInstructionTool: true,
                 executeTool: { name, arguments in
                     guard name == "stage_agent_instruction",

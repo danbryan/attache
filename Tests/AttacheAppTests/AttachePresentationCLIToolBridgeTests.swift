@@ -3,6 +3,15 @@ import XCTest
 @testable import AttacheApp
 
 final class AttachePresentationCLIToolBridgeTests: XCTestCase {
+    func testContextFreeConversationOffersNoSessionOrAgentTools() {
+        let tools = AttachePresentationService.conversationTools(
+            allowSessionContextTools: false,
+            allowAgentInstructionTool: true
+        )
+
+        XCTAssertTrue(tools.isEmpty)
+    }
+
     func testParsesAttacheToolCallObject() {
         let calls = AttachePresentationService.parseCLIToolDirectives(in: """
         {"companion_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"reply exactly PONG"}}}
@@ -50,7 +59,10 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     }
 
     func testAgentInstructionToolDescriptionDistinguishesQuestionFromDelegation() {
-        let tools = AttachePresentationService.conversationTools(allowAgentInstructionTool: true)
+        let tools = AttachePresentationService.conversationTools(
+            allowSessionContextTools: true,
+            allowAgentInstructionTool: true
+        )
         let function = tools
             .compactMap { $0["function"] as? [String: Any] }
             .first { $0["name"] as? String == "stage_agent_instruction" }
@@ -68,7 +80,10 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     /// to the two live agent sources so an out-of-band value cannot slip in
     /// undetected by the schema itself.
     func testAgentInstructionToolSchemaAddsOptionalIntendedAgentEnum() {
-        let tools = AttachePresentationService.conversationTools(allowAgentInstructionTool: true)
+        let tools = AttachePresentationService.conversationTools(
+            allowSessionContextTools: true,
+            allowAgentInstructionTool: true
+        )
         let function = tools
             .compactMap { $0["function"] as? [String: Any] }
             .first { $0["name"] as? String == "stage_agent_instruction" }
@@ -310,6 +325,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
                     AttacheChatMessage(role: "system", content: system),
                     AttacheChatMessage(role: "user", content: user)
                 ],
+                allowSessionContextTools: true,
                 allowAgentInstructionTool: true,
                 executeTool: { name, arguments in
                     await recorder.append(name: name, arguments: arguments)

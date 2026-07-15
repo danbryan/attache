@@ -74,11 +74,14 @@ final class AppUnderTest {
 
     /// Posts a key chord directly to the app's event queue, so it works without
     /// the app being frontmost systemwide.
-    func key(_ keyCode: CGKeyCode, command: Bool = false) {
+    func key(_ keyCode: CGKeyCode, command: Bool = false, shift: Bool = false) {
         let source = CGEventSource(stateID: .hidSystemState)
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else { continue }
-            if command { event.flags = .maskCommand }
+            var flags: CGEventFlags = []
+            if command { flags.insert(.maskCommand) }
+            if shift { flags.insert(.maskShift) }
+            event.flags = flags
             event.postToPid(pid)
             Thread.sleep(forTimeInterval: 0.03)
         }
@@ -106,6 +109,9 @@ enum Key {
     static let k: CGKeyCode = 40
     static let i: CGKeyCode = 34
     static let y: CGKeyCode = 16
+    static let p: CGKeyCode = 35
+    static let upArrow: CGKeyCode = 126
+    static let downArrow: CGKeyCode = 125
     static let comma: CGKeyCode = 43
     static let escape: CGKeyCode = 53
     static let space: CGKeyCode = 49

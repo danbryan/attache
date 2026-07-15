@@ -253,8 +253,12 @@ struct ConversationView: View {
                 ? "Messages go to \(model.twoWayTargetTitle ?? "the focused agent")."
                 : "Focus a Codex or Claude Code session first."
         }
+        let hasSessionContext = model.conversationContextSession != nil
         switch model.voiceInputMode {
-        case .pushToTalk: return "Type below, or hold the mic to talk. I can read more of the session if I need to."
+        case .pushToTalk:
+            return hasSessionContext
+                ? "Type below, or hold the mic to talk. I can read more of the focused session if I need to."
+                : "Type below, or hold the mic to talk. No work session is in this conversation."
         case .toggle: return "Type below, or click the mic to start and click again to send."
         case .alwaysOn: return "Just start talking — I'm listening and send when you pause. You can also type."
         }
@@ -273,7 +277,10 @@ struct ConversationView: View {
 
     private var inputPlaceholder: String {
         switch model.conversationDestination {
-        case .attache: return "Ask about this session…"
+        case .attache:
+            return model.conversationContextSession == nil
+                ? "Message \(model.activePersonality?.name ?? "Attaché")…"
+                : "Ask about the focused session…"
         case .agent: return model.canSendToAgent
             ? "Tell \(model.twoWayTargetSourceName ?? "agent") · \(model.twoWayTargetTitle ?? "focused session")…"
             : "Focus an agent first…"

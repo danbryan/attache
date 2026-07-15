@@ -144,7 +144,7 @@ extension AttacheRootView {
     // turns it on. Hover reveals the current name either way.
     var personalitySwitcher: some View {
         Button {
-            personalitySwitcherVisible.toggle()
+            NotificationCenter.default.post(name: .attacheOpenCharacterSwitcher, object: nil)
         } label: {
             if model.showPersonalityNameInDock {
                 HStack(spacing: 7) {
@@ -177,14 +177,9 @@ extension AttacheRootView {
             }
         }
         .buttonStyle(.plain)
-        .popover(isPresented: $personalitySwitcherVisible, arrowEdge: .bottom) {
-            PersonalitySwitcherPopover(
-                model: model,
-                isPresented: $personalitySwitcherVisible
-            )
-        }
-        .help("Personality: \(model.activePersonality?.name ?? "none"). Switch with ⌘[ / ⌘].")
-        .accessibilityLabel("Switch personality")
+        .help("Character: \(model.activePersonality?.name ?? "none"). Search with ⇧⌘P or cycle with ⌘[ / ⌘].")
+        .accessibilityLabel("Switch character")
+        .accessibilityValue("Active character \(model.activePersonality?.name ?? "none")")
         .onHover { setDockHover(.personality, $0) }
     }
 
@@ -295,90 +290,5 @@ extension AttacheRootView {
               ? "Inbox: updates wait quietly as voicemail. Click to go Live (⇧⌘V)."
               : "Live: the focused session narrates as it goes. Click to go quiet (⇧⌘V).")
         .onHover { setDockHover(.mode, $0) }
-    }
-}
-
-private struct PersonalitySwitcherPopover: View {
-    @ObservedObject var model: AppModel
-    @Binding var isPresented: Bool
-    @State private var query = ""
-    @State private var hoveredID: String?
-
-    private var filtered: [Personality] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return model.personalities }
-        return model.personalities.filter {
-            $0.name.localizedCaseInsensitiveContains(trimmed)
-                || model.personalityVoiceName($0).localizedCaseInsensitiveContains(trimmed)
-                || ($0.modelRef?.model.localizedCaseInsensitiveContains(trimmed) ?? false)
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Switch character").typoSection()
-                Spacer()
-                Text("⌘[  ⌘]").typoCaption(.medium, design: .monospaced).foregroundStyle(.secondary)
-            }
-            if model.personalities.count > 8 {
-                TextField("Search characters", text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Search characters")
-            }
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(filtered) { personality in
-                        Button {
-                            model.switchPersonalityFromUI(personality.id)
-                            isPresented = false
-                        } label: {
-                            HStack(spacing: 10) {
-                                Text(personality.characterAvatarEmoji)
-                                    .font(.title3)
-                                    .frame(width: 26)
-                                Text(personality.name)
-                                    .typoBody(.semibold)
-                                    .lineLimit(1)
-                                Spacer(minLength: 8)
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text(model.personalityVoiceName(personality))
-                                    Text(personality.modelRef?.model ?? "Model not set")
-                                }
-                                .typoCaption(.medium)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .opacity(hoveredID == personality.id ? 1 : 0)
-                                .frame(width: 210, alignment: .trailing)
-                                if personality.id == model.activePersonalityID {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(model.theme.signatureColor)
-                                }
-                            }
-                            .padding(.horizontal, 9)
-                            .frame(height: 46)
-                            .background(
-                                hoveredID == personality.id
-                                    ? model.theme.signatureColor.opacity(0.11)
-                                    : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 8)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .onHover { hoveredID = $0 ? personality.id : nil }
-                        .accessibilityLabel("Switch to \(personality.name)")
-                        .accessibilityValue("\(model.personalityVoiceName(personality)), \(personality.modelRef?.model ?? "model not set")")
-                    }
-                }
-            }
-            .frame(maxHeight: 360)
-            if filtered.isEmpty {
-                Text("No matching characters.")
-                    .typoCaption()
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .frame(width: 470)
     }
 }

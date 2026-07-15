@@ -349,6 +349,14 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
   English phrase matching before the personality sees the turn. That approach is
   brittle across languages and unsafe on false positives; personality-driven
   delegation remains available through `stage_agent_instruction`.
+- **No implicit work-session context.** A direct Ask Attaché conversation may
+  read only the session the user explicitly focused. Recency, watched sessions,
+  a selected voicemail, prior call turns, and the local session index are not
+  authorization to inject a title, transcript, working directory, file, or
+  tool. With no focused session the character can still chat, but the request
+  is context-free apart from the character prompt and explicit durable memory;
+  session-reading, rename, and agent-send tools are absent. Hang-up starts a
+  new context boundary, so the next call never inherits the prior call's turns.
 - **Agent destinations are frozen and explicit.** Agent sends require a focused
   session. A live call freezes that session's ID, source, title, and working
   directory for tool calls, confirmation, and delivery until hang-up. Tell Agent

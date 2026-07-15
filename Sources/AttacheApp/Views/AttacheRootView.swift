@@ -112,7 +112,7 @@ struct AttacheRootView: View {
     // pinned, or you're interacting), and fades to the bare glow when still.
     private var controlsVisible: Bool {
         !model.autoHideControls || chromeAwake || controlsPinned || paletteVisible || liveComposerVisible
-            || focusConfirmationVisible || model.conversationActive
+            || personalitySwitcherVisible || focusConfirmationVisible || model.conversationActive
     }
 
     private func pointerMoved(at location: CGPoint) {
@@ -129,7 +129,7 @@ struct AttacheRootView: View {
     private func scheduleIdleFade() {
         idleWorkItem?.cancel()
         guard model.autoHideControls, !controlsPinned, !paletteVisible, !liveComposerVisible,
-              !focusConfirmationVisible else { return }
+              !personalitySwitcherVisible, !focusConfirmationVisible else { return }
         let work = DispatchWorkItem {
             withAnimation(.easeInOut(duration: 0.4)) { chromeAwake = false }
         }
@@ -275,6 +275,15 @@ struct AttacheRootView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
 
+            if personalitySwitcherVisible {
+                Color.black.opacity(0.28)
+                    .ignoresSafeArea()
+                    .onTapGesture { personalitySwitcherVisible = false }
+                CharacterSwitcherPalette(model: model, isVisible: $personalitySwitcherVisible)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+
             if shortcutsVisible {
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
@@ -296,6 +305,7 @@ struct AttacheRootView: View {
         .attacheTextScale(model.uiTextScale)
         .onPreferenceChange(BottomOverlayHeightKey.self) { bottomOverlayHeight = $0 }
         .animation(.easeInOut(duration: 0.18), value: inboxVisible)
+        .animation(.easeInOut(duration: 0.18), value: personalitySwitcherVisible)
         .animation(.easeInOut(duration: 0.18), value: shortcutsVisible)
         .background(
             KeyboardShortcutMonitor(
@@ -390,6 +400,9 @@ struct AttacheRootView: View {
         .animation(.easeInOut(duration: 0.2), value: model.conversationActive)
         .onChange(of: model.attachedCodexSessionID) { _ in showFocusConfirmation() }
         .onChange(of: model.activePersonalityID) { _ in echoExpanded = false }
+        .onChange(of: personalitySwitcherVisible) { isVisible in
+            if !isVisible { scheduleIdleFade() }
+        }
         .onChange(of: model.visualMode) { mode in
             if mode != .bars { echoExpanded = false }
         }
@@ -417,6 +430,7 @@ struct AttacheRootView: View {
             withAnimation(.easeInOut(duration: 0.16)) {
                 surfaceMode = .live
                 paletteVisible = false
+                personalitySwitcherVisible = false
                 historyVisible = false
                 inboxVisible = true
             }
@@ -425,6 +439,7 @@ struct AttacheRootView: View {
             withAnimation(.easeInOut(duration: 0.16)) {
                 surfaceMode = .live
                 paletteVisible = false
+                personalitySwitcherVisible = false
                 inboxVisible = false
                 historyVisible = true
             }
@@ -432,6 +447,7 @@ struct AttacheRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenVoicemailSurface)) { _ in
             withAnimation(.easeInOut(duration: 0.16)) {
                 inboxVisible = false
+                personalitySwitcherVisible = false
                 surfaceMode = .voicemail
             }
         }
@@ -439,12 +455,29 @@ struct AttacheRootView: View {
             withAnimation(.easeInOut(duration: 0.16)) {
                 surfaceMode = .live
                 inboxVisible = false
+                personalitySwitcherVisible = false
                 historyVisible = false
                 paletteVisible = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .attacheOpenCharacterSwitcher)) { _ in
+            withAnimation(.easeInOut(duration: 0.16)) {
+                surfaceMode = .live
+                chromeAwake = true
+                paletteVisible = false
+                inboxVisible = false
+                historyVisible = false
+                shortcutsVisible = false
+                personalitySwitcherVisible = true
+            }
+            scheduleIdleFade()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenShortcuts)) { _ in
             withAnimation(.easeInOut(duration: 0.16)) {
+                paletteVisible = false
+                inboxVisible = false
+                historyVisible = false
+                personalitySwitcherVisible = false
                 shortcutsVisible = true
             }
         }
@@ -470,6 +503,10 @@ struct AttacheRootView: View {
         }
         if historyVisible {
             withAnimation(.easeInOut(duration: 0.16)) { historyVisible = false }
+            return true
+        }
+        if personalitySwitcherVisible {
+            withAnimation(.easeInOut(duration: 0.16)) { personalitySwitcherVisible = false }
             return true
         }
         if inboxVisible {

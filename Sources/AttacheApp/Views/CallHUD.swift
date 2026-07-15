@@ -2,8 +2,8 @@ import AttacheCore
 import SwiftUI
 
 extension AttacheRootView {
-    // Call / Hang up: start or end a live two-way with the focused session. While on a
-    // call its updates speak; off a call everything waits in the inbox.
+    // Call / Hang up: start or end a live conversation. An explicitly focused
+    // session adds work context; without one this is a context-free character chat.
     var callButton: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.16)) {
@@ -25,7 +25,11 @@ extension AttacheRootView {
         }
         .buttonStyle(.plain)
         .onHover { hoveredDockItem = $0 ? .talk : nil }
-        .help(model.onCall ? "Hang up (updates go to your inbox)" : "Call the focused session (talk live)")
+        .help(model.onCall
+              ? "Hang up. Agent updates go to your inbox."
+              : model.conversationContextSession == nil
+                  ? "Call \(model.activePersonality?.name ?? "Attaché") without work-session context"
+                  : "Call about the focused session")
     }
 
     // A standard chat composer for the live call: destination toggle, one input
@@ -35,7 +39,7 @@ extension AttacheRootView {
         VStack(alignment: .leading, spacing: 8) {
             callDestinationPicker
 
-            if model.conversationDestination == .agent || !model.canSendToAgent {
+            if model.conversationDestination == .agent {
                 Label(
                     agentDestinationLabel,
                     systemImage: model.canSendToAgent ? "terminal.fill" : "exclamationmark.triangle.fill"
@@ -44,6 +48,12 @@ extension AttacheRootView {
                 .foregroundStyle(model.canSendToAgent ? accent : Color.red)
                 .lineLimit(1)
                 .accessibilityLabel(agentDestinationLabel)
+            } else if model.conversationContextSession == nil {
+                Label("No work session context", systemImage: "shield.fill")
+                    .typoCaption(.semibold)
+                    .foregroundStyle(accent.opacity(0.86))
+                    .lineLimit(1)
+                    .accessibilityLabel("No work session context")
             }
 
             HStack(spacing: 8) {
@@ -186,7 +196,10 @@ extension AttacheRootView {
 
     var callMessagePlaceholder: String {
         switch model.conversationDestination {
-        case .attache: return "Type instead…"
+        case .attache:
+            return model.conversationContextSession == nil
+                ? "Message \(model.activePersonality?.name ?? "Attaché")…"
+                : "Ask about the focused session…"
         case .agent: return model.canSendToAgent ? "Tell \(model.twoWayTargetTitle ?? "the agent")…" : "Focus an agent first…"
         }
     }
@@ -226,7 +239,7 @@ extension AttacheRootView {
 
     var idleCallStatusText: String {
         model.conversationContextSession == nil
-            ? "No session attached — I can still chat."
+            ? "No session attached. I can still chat."
             : "Talking about \(model.conversationContextSession?.displayTitle ?? "this session")."
     }
 

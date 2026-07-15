@@ -654,6 +654,27 @@ if enabled("f1") {
         _ = try waitForElement("focus dock button", in: try mainWindow(),
                                role: kAXButtonRole as String, containing: "Focus status")
     }
+    run.step("f1-boundary", "context-free call exposes no work-session context") {
+        app.activate()
+        app.key(Key.l, command: true)
+        _ = try waitForElement("context-free live call composer", in: try mainWindow(),
+                               containing: "Live call composer", timeout: 10)
+        _ = try waitForElement("explicit no-session boundary", in: try mainWindow(),
+                               containing: "No work session context", timeout: 10)
+        _ = try waitForElement("context-free character message field", in: try mainWindow(), timeout: 10) { element in
+            element.role == kAXTextFieldRole as String
+                && element.matchesExactly("Call message")
+        }
+    }
+    run.step("f1-boundary", "hang up closes the context-free call") {
+        let hangUp = try waitForElement("context-free Hang up control", in: try mainWindow(),
+                                       role: kAXButtonRole as String, containing: "Hang up")
+        guard hangUp.press() else {
+            throw SmokeError(message: "AXPress failed on \(hangUp.summary)")
+        }
+        try waitForElementGone("context-free live call composer", in: try mainWindow(),
+                               containing: "Live call composer", timeout: 10)
+    }
 }
 
 // MARK: Flow 2: demo event becomes an unread card and plays on demand
@@ -2709,6 +2730,50 @@ if enabled("personality") {
         _ = try waitForElement("imported personality model", in: try settingsWindow(), containing: "qwen3:7b")
         app.key(Key.escape)
         try waitUntil("settings window closes", timeout: 10) { (try? settingsWindow()) == nil }
+    }
+
+    run.step("character-switcher", "the character switcher stays open and supports keyboard navigation") {
+        app.key(Key.p, command: true, shift: true)
+        _ = try waitForElement("character switcher", in: try mainWindow(), containing: "Character switcher")
+        _ = try waitForElement(
+            "character search",
+            in: try mainWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search characters"
+        )
+
+        // The old native popover disappeared with the dock's roughly
+        // three-second auto-hide. The app-owned palette must remain available.
+        Thread.sleep(forTimeInterval: 3.5)
+        _ = try waitForElement(
+            "persistent character search",
+            in: try mainWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search characters",
+            timeout: 2
+        )
+
+        app.key(Key.upArrow)
+        app.key(Key.returnKey)
+        try waitForElementGone("character switcher after arrow selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
+    }
+
+    run.step("character-switcher", "typing a character name and pressing Return switches the whole character") {
+        app.key(Key.p, command: true, shift: true)
+        let search = try waitForElement(
+            "character search",
+            in: try mainWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search characters"
+        )
+        _ = search.setFocused()
+        if !search.setValue("Smoke Character") { app.type("Smoke Character") }
+        _ = try waitForElement("filtered custom character", in: try mainWindow(), containing: "Character Smoke Character")
+        _ = try waitForElement("character presence metadata", in: try mainWindow(), containing: "Echo voice bars")
+        _ = try waitForElement("character model metadata", in: try mainWindow(), containing: "Ollama")
+        app.key(Key.returnKey)
+        try waitForElementGone("character switcher after named selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
+        _ = try waitForElement("active character in dock", in: try mainWindow(), containing: "Active character Smoke Character")
     }
 }
 

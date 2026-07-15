@@ -227,7 +227,7 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         )
 
         let result: AttacheFollowUpAnswerResult = await withCheckedContinuation { continuation in
-            service.answerFollowUpQuestion(card: card, danQuestion: "What changed?") { result in
+            service.answerFollowUpQuestion(card: card, danQuestion: "What changed?", personality: nil, profilePrompt: AttachePersonality.defaultProfilePrompt) { result in
                 switch result {
                 case .success(let answer): continuation.resume(returning: answer)
                 case .failure(let error):

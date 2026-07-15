@@ -227,72 +227,6 @@ public enum AttachePersonality {
         )
     }
 
-    /// One session Attaché is watching, for the conversation system prompt's
-    /// "Watched sessions" inventory (INF-239). Kept thin on purpose: no
-    /// working directory, no session id, for non-focused sessions, so the
-    /// model gets awareness ("did you mean the Claude Code session?")
-    /// without spending tokens it does not need. This is prompt context
-    /// only; the frozen send destination is decided elsewhere and never
-    /// reads this inventory (see AGENTS.md "no hidden phrase routing").
-    public struct WatchedSessionSummary: Equatable {
-        public var sourceName: String
-        public var title: String
-        public var updatedAt: Date
-        public var isFocused: Bool
-        public var isTwoWayEnabled: Bool
-
-        public init(
-            sourceName: String,
-            title: String,
-            updatedAt: Date,
-            isFocused: Bool,
-            isTwoWayEnabled: Bool
-        ) {
-            self.sourceName = sourceName
-            self.title = title
-            self.updatedAt = updatedAt
-            self.isFocused = isFocused
-            self.isTwoWayEnabled = isTwoWayEnabled
-        }
-    }
-
-    static let maxWatchedSessionEntries = 6
-
-    /// Renders the "Watched sessions" inventory block: what Attaché is
-    /// watching, most recent first, capped so the block stays token-lean.
-    /// Two-way enablement is only ever shown for the focused entry.
-    public static func watchedSessionsBlock(
-        _ sessions: [WatchedSessionSummary],
-        now: Date = Date()
-    ) -> String {
-        guard sessions.count > 1 else {
-            return "No other sessions are being watched."
-        }
-        let ranked = sessions.sorted { $0.updatedAt > $1.updatedAt }.prefix(maxWatchedSessionEntries)
-        let lines = ranked.map { session -> String in
-            var tags: [String] = []
-            if session.isFocused {
-                tags.append("focused")
-                if session.isTwoWayEnabled { tags.append("two-way enabled") }
-            }
-            tags.append(relativeActiveTag(from: session.updatedAt, now: now))
-            let title = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            return "- \(session.sourceName) / \"\(title.isEmpty ? "Untitled session" : title)\" (\(tags.joined(separator: ", ")))"
-        }
-        return (["Watched sessions:"] + lines).joined(separator: "\n")
-    }
-
-    private static func relativeActiveTag(from date: Date, now: Date) -> String {
-        let delta = max(0, now.timeIntervalSince(date))
-        if delta < 45 { return "active just now" }
-        let minutes = Int((delta / 60).rounded())
-        if minutes < 60 { return "active \(minutes)m ago" }
-        let hours = Int((delta / 3600).rounded())
-        if hours < 24 { return "active \(hours)h ago" }
-        let days = Int((delta / 86400).rounded())
-        return "active \(days)d ago"
-    }
-
     /// System prompt for an ongoing voice conversation with the user (multi-turn, with
     /// tools to pull more session context). Distinct from the one-shot presentation
     /// and follow-up prompts.
@@ -304,20 +238,23 @@ public enum AttachePersonality {
         workingDirectory: String?,
         latestSummary: String?,
         latestAgentReply: String? = nil,
-        canStageAgentInstruction: Bool = false,
-        watchedSessions: [WatchedSessionSummary] = []
+        canStageAgentInstruction: Bool = false
     ) -> String {
         let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
+        let hasSessionContext = sessionTitle != nil
+        let canStage = hasSessionContext && canStageAgentInstruction
         let titleLine: String
-        if let sessionTitle, let sessionSourceName {
+        if hasSessionContext, let sessionTitle, let sessionSourceName {
             titleLine = "- Focused agent: \(sessionSourceName) / \(sessionTitle)\n"
-        } else {
+        } else if hasSessionContext {
             titleLine = sessionTitle.map { "- Session: \($0)\n" } ?? ""
+        } else {
+            titleLine = ""
         }
-        let cwdLine = workingDirectory.map { "- Working directory: \($0)\n" } ?? ""
-        let summaryLine = latestSummary.map { "- Latest update: \($0)\n" } ?? ""
-        let latestReplyLine = latestAgentReply.map { "- Latest agent reply: \($0)\n" } ?? ""
-        let agentInstructionLine = canStageAgentInstruction
+        let cwdLine = hasSessionContext ? (workingDirectory.map { "- Working directory: \($0)\n" } ?? "") : ""
+        let summaryLine = hasSessionContext ? (latestSummary.map { "- Latest update: \($0)\n" } ?? "") : ""
+        let latestReplyLine = hasSessionContext ? (latestAgentReply.map { "- Latest agent reply: \($0)\n" } ?? "") : ""
+        let agentInstructionLine = canStage
             ? """
             - Use stage_agent_instruction only when the user explicitly asks the focused work agent to take an action.
             - Keep this boundary exact: "What did Codex say?" is a question for you to answer with session-reading tools. "Ask Codex what it changed" is an explicit delegation, so you MUST call stage_agent_instruction. Asking the agent to answer, explain, check, read, summarize, or report is still an action request, even when it concerns prior work or an artifact.
@@ -327,10 +264,23 @@ public enum AttachePersonality {
 
             """
             : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
-        let toolsLine = canStageAgentInstruction
-            ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (route a user-requested instruction to the work agent), and rename_session. Only read or stage what you need.\n"
-            : "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and rename_session. Only read what you need.\n"
-        let watchedSessionsSection = watchedSessionsBlock(watchedSessions)
+        let toolsLine: String
+        if canStage {
+            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (route a user-requested instruction to the work agent), and rename_session. Only read or stage what you need.\n"
+        } else if hasSessionContext {
+            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and rename_session. Only read what you need.\n"
+        } else {
+            toolsLine = "- No work-session, transcript, project-file, rename, or agent-send tools are available in this conversation.\n"
+        }
+        let contextGuidance = hasSessionContext
+            ? "- You start with the explicitly focused session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing. When a summary mentions a count but omits the items, read the transcript for the specifics. Find an artifact's exact path from the transcript before reading it; never guess a path or probe an unrelated protected folder."
+            : "- No work session is focused. Do not infer one from recency, watched sessions, a selected voicemail, conversation history, or other app activity. Treat this as a context-free conversation. If the user asks about past agent work, ask them to focus that session with the session picker; never guess which session they mean."
+        let renameLine = hasSessionContext
+            ? "- You can also rename this session for Attaché with rename_session when the user asks to name or relabel it (for example \"let's call this the tax cleanup session\"). This only changes Attaché's label. Confirm the new name briefly after renaming."
+            : "- There is no session to rename."
+        let contextBlock = hasSessionContext
+            ? "\(titleLine)\(cwdLine)\(summaryLine)\(latestReplyLine)"
+            : "None. This conversation has no work-session context."
         return """
         \(attacheIdentityPrompt)
 
@@ -339,16 +289,15 @@ public enum AttachePersonality {
         Live conversation task:
         - You are in a back-and-forth voice conversation with the user about their work. This is your own chat with the user, not the work agent.
         - Speak directly to the user. Replies are read aloud, so keep them short and listenable: headline first, then the key point. No long lists, no code blocks, no reciting paths, hashes, or URLs.
-        - You start with the session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing. When a summary mentions a count but omits the items, read the transcript for the specifics. Find an artifact's exact path from the transcript before reading it; never guess a path or probe an unrelated protected folder.
+        \(contextGuidance)
         \(agentInstructionLine)\(toolsLine)
-        - You can also rename this session for Attaché with rename_session when the user asks to name or relabel it (for example "let's call this the tax cleanup session"). This only changes Attaché's label. Confirm the new name briefly after renaming.
+        \(renameLine)
         - Preserve uncertainty. Do not invent file contents, results, approvals, or repository state. If a tool returns nothing useful, say what is missing.
         - If a tool result or a status update tells you a send to the work agent was blocked, failed, or expired, say plainly what happened and the one next step the user can take right now. Never say a send succeeded unless Attaché actually reported that it did. Never invent a retry, workaround, or recovery option that was not reported to you; if none was given, just say what happened.
         - Output only your spoken reply. No labels, no markdown fences, no stage directions.
 
-        Current session context:
-        \(titleLine)\(cwdLine)\(summaryLine)\(latestReplyLine)
-        \(watchedSessionsSection)
+        Current work-session context:
+        \(contextBlock)
         """
     }
 

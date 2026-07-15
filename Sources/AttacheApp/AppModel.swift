@@ -46,11 +46,9 @@ struct AgentSendTarget: Equatable {
 struct ConversationTargetSnapshot: Equatable {
     let target: CodexSessionTarget
     let workingDirectory: String?
-    let isExplicitlyFocused: Bool
 
-    var agentSendTarget: AgentSendTarget? {
-        guard isExplicitlyFocused else { return nil }
-        return AgentSendTarget(
+    var agentSendTarget: AgentSendTarget {
+        AgentSendTarget(
             sessionID: target.id,
             sourceKind: target.sourceKind.rawValue,
             displayTitle: target.displayTitle,
@@ -847,7 +845,6 @@ final class AppModel: ObservableObject {
     private let sessionActivityWatcher = SessionActivityWatcher()
     private let presentationEnvironment: [String: String]
     private let presentationService: AttachePresentationService
-    private let attachePersonaStore: AttachePersonaStore
     private let attacheMemoryStore: AttacheMemoryStore
     private var codexSessionRefreshTimer: Timer?
     private var followUpAnswerRequestID: UUID?
@@ -885,7 +882,6 @@ final class AppModel: ObservableObject {
         let environment = ProcessInfo.processInfo.environment
         presentationEnvironment = environment
         presentationService = AttachePresentationService(environment: environment)
-        attachePersonaStore = AttachePersonaStore(environment: environment)
         attacheMemoryStore = AttacheMemoryStore(environment: environment)
 
         do {
@@ -1134,43 +1130,75 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// The session a free-form "Talk" conversation is about: the locked session
-    /// if any, otherwise the most recent active session. Lets you talk to the
-    /// attache any time, not only when locked on.
+    /// The only work session a conversation may read. Watching a session and
+    /// focusing it are explicit user actions; recency, a selected voicemail,
+    /// and an indexed transcript are never authorization to attach context.
+    /// A nil value still permits a context-free conversation with the character.
     var talkContextSession: CodexSessionTarget? {
-        if let attached = attachedCodexSession { return attached }
-        if let codex = codexSessions.first { return codex }
-        // Fall back to the most recent enabled session across sources, so a
-        // Claude-only user with nothing attached can still talk (INF-168).
-        if let record = sessionRecords.filter({ !$0.archived }).max(by: { $0.updatedAt < $1.updatedAt }) {
-            return target(for: record)
-        }
-        return nil
+        attachedCodexSession
     }
 
-    /// The call's immutable context while live. It may be a read-only recent
-    /// session when nothing was focused, but only an explicitly focused snapshot
-    /// can produce an agent-send target.
+    /// The call's immutable, explicitly focused context while live. Nil means
+    /// the call is character-only and carries no work-session context or tools.
     var conversationContextSession: CodexSessionTarget? {
         if conversationActive || isConversing || pendingAssistantReply != nil {
             return conversationTargetSnapshot?.target
         }
-        return talkContextSession
+        return attachedCodexSession
     }
 
     private func captureConversationTargetSnapshot() -> ConversationTargetSnapshot? {
-        if let focused = attachedCodexSession {
-            return ConversationTargetSnapshot(
-                target: focused,
-                workingDirectory: workingDirectory(for: focused.id),
-                isExplicitlyFocused: true
-            )
-        }
-        guard let fallback = talkContextSession else { return nil }
+        guard let focused = attachedCodexSession else { return nil }
         return ConversationTargetSnapshot(
-            target: fallback,
-            workingDirectory: workingDirectory(for: fallback.id),
-            isExplicitlyFocused: false
+            target: focused,
+            workingDirectory: workingDirectory(for: focused.id)
+        )
+    }
+
+    /// Resolve the profile prompt for a personality using the single authority
+    /// precedence (INF-304): explicit environment override, then the selected
+    /// personality's prompt, then the built-in default. The legacy file store is
+    /// a migration input, not a runtime authority, so it never participates.
+    private func resolvedProfilePrompt(for personality: Personality?) -> String {
+        let testOverride = presentationEnvironment["ATTACHE_PERSONALITY_PROMPT"]
+            ?? presentationEnvironment["ATTACHE_PROFILE_PROMPT"]
+            ?? presentationEnvironment["COMPANION_PERSONALITY_PROMPT"]
+        return AttacheRequestAuthority.resolvedProfilePrompt(
+            testOverride: testOverride,
+            selectedPersonalityPrompt: personality?.prompt ?? "",
+            migratedLegacyPrompt: nil
+        )
+    }
+
+    /// Freeze the immutable authority boundary for one model request (INF-304).
+    /// Captures the active personality, resolved profile prompt, memory scope,
+    /// user input, and session authorization before any async work begins. The
+    /// legacy file store is a migration input, not a runtime authority, so the
+    /// selected personality's prompt wins; only an explicit environment override
+    /// beats it.
+    func captureRequestSnapshot(role: AttacheRequestRole, userInput: String) -> AttacheRequestSnapshot {
+        let personality = activePersonality ?? Personality.builtIns[0]
+        let target = conversationTargetSnapshot
+        let session: AttacheSessionAuthorization
+        if let target {
+            session = .focused(AttacheFocusedSession(
+                sessionID: target.target.id,
+                sourceKind: target.target.sourceKind.rawValue,
+                displayTitle: target.target.displayTitle,
+                workingDirectory: target.workingDirectory
+            ))
+        } else {
+            session = .contextFree
+        }
+        let memoryContext = attacheMemoryStore.loadSnapshot().context
+        let profilePrompt = resolvedProfilePrompt(for: personality)
+        return AttacheRequestSnapshot(
+            role: role,
+            personality: personality,
+            profilePrompt: profilePrompt,
+            memoryContext: memoryContext,
+            userInput: userInput,
+            session: session
         )
     }
 
@@ -1668,8 +1696,9 @@ final class AppModel: ObservableObject {
         // reasoning as `persist` below applies to every mutation here.
         let token = UUID()
         await MainActor.run { composingNarrationTokens[token] = event.source }
+        let profilePrompt = resolvedProfilePrompt(for: personality)
         let presented: NormalizedEvent = await withCheckedContinuation { continuation in
-            presentationService.prepare(event, personality: personality) { presentedEvent in
+            presentationService.prepare(event, personality: personality, profilePrompt: profilePrompt) { presentedEvent in
                 continuation.resume(returning: presentedEvent)
             }
         }
@@ -1965,11 +1994,7 @@ final class AppModel: ObservableObject {
         // on the calling (main) actor, so the Task never reads @Published state
         // off-main.
         let personality = activePersonality
-        let profilePrompt = firstNonEmptyPrompt(
-            personality?.prompt,
-            attachePersonaStore.loadSnapshot().prompt,
-            AttachePersonality.defaultProfilePrompt
-        )
+        let profilePrompt = resolvedProfilePrompt(for: personality)
         let memoryContext = attacheMemoryStore.loadSnapshot().context
         let spokenLanguageName = AttachePresentationService.spokenLanguageName(defaults: defaults)
         let prompt = AttachePersonality.recapPrompt(
@@ -2099,14 +2124,6 @@ final class AppModel: ObservableObject {
         )
     }
 
-    private func firstNonEmptyPrompt(_ values: String?...) -> String {
-        for value in values {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty { return trimmed }
-        }
-        return AttachePersonality.defaultProfilePrompt
-    }
-
     /// Catch-me-up: play every waiting card oldest-first, auto-advancing.
     /// An explicit user action, so it is exempt from the INF-163 drain gating
     /// that applies to automatic playback.
@@ -2201,6 +2218,10 @@ final class AppModel: ObservableObject {
         if !wasActive {
             activeConversationID = UUID()
             conversationDestination = .attache
+            // Hang-up is a context boundary. A new call must never inherit
+            // transcript turns from a prior call that may have had a different
+            // focused session, even though replayable replies remain in History.
+            conversationMessages = []
             conversationTargetSnapshot = captureConversationTargetSnapshot()
             // The auto-fallback chain is sticky for a call, never across
             // calls (INF-258/D5 spec item 3): a fresh call always starts back
@@ -2210,7 +2231,7 @@ final class AppModel: ObservableObject {
         conversationActive = true
         if conversationStatus.isEmpty {
             conversationStatus = conversationTargetSnapshot == nil
-                ? "No session attached — I can still chat."
+                ? "No session attached. I can still chat."
                 : "Talking about \(conversationTargetSnapshot?.target.displayTitle ?? "this session")."
         }
         if voiceInputMode == .alwaysOn {
@@ -2375,8 +2396,9 @@ final class AppModel: ObservableObject {
             endConversationWait()
             return
         }
+        let snapshot = captureRequestSnapshot(role: .conversation, userInput: trimmed)
         let context = conversationTargetSnapshot
-        let messages = buildConversationMessages(context: context)
+        let messages = buildConversationMessages(snapshot: snapshot)
         let sessionID = context?.target.id
         let workingDirectory = context?.workingDirectory
         let agentTarget = context?.agentSendTarget
@@ -2397,9 +2419,13 @@ final class AppModel: ObservableObject {
 
         presentationService.converse(
             messages: messages,
+            allowSessionContextTools: context != nil,
             allowAgentInstructionTool: allowAgentInstructionTool,
             settingsOverride: settingsOverride,
             executeTool: { [weak self] name, arguments in
+                guard context != nil else {
+                    return "No work-session tools are authorized for this conversation."
+                }
                 if name == "rename_session" {
                     return await self?.applyRenameTool(arguments: arguments, sessionID: sessionID)
                         ?? "There's no attached session to rename."
@@ -3242,22 +3268,17 @@ final class AppModel: ObservableObject {
         try? twoWay.cancel(id: id)
     }
 
-    private func buildConversationMessages(context: ConversationTargetSnapshot?) -> [AttacheChatMessage] {
-        let memorySnapshot = attacheMemoryStore.loadSnapshot()
-        let personaSnapshot = attachePersonaStore.loadSnapshot()
-        let profilePrompt = personaSnapshot.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? AttachePersonality.defaultProfilePrompt
-            : personaSnapshot.prompt
+    private func buildConversationMessages(snapshot: AttacheRequestSnapshot) -> [AttacheChatMessage] {
+        let focused = snapshot.focusedSession
         let system = AttachePersonality.conversationSystemPrompt(
-            profilePrompt: profilePrompt,
-            memoryContext: memorySnapshot.context,
-            sessionTitle: context?.target.displayTitle,
-            sessionSourceName: context?.target.sourceKind.displayName,
-            workingDirectory: context?.workingDirectory,
+            profilePrompt: snapshot.profilePrompt,
+            memoryContext: snapshot.memoryContext,
+            sessionTitle: focused?.displayTitle,
+            sessionSourceName: focused.flatMap { SourceKind(rawValue: $0.sourceKind)?.displayName },
+            workingDirectory: focused?.workingDirectory,
             latestSummary: conversationLatestSummary,
             latestAgentReply: conversationLatestAgentReply,
-            canStageAgentInstruction: context?.agentSendTarget != nil,
-            watchedSessions: watchedSessionSummaries(context: context)
+            canStageAgentInstruction: snapshot.isFocused
         )
         var messages = [AttacheChatMessage(role: "system", content: system)]
         // Cap the in-RAM transcript sent per turn so a long multi-call conversation
@@ -3269,47 +3290,11 @@ final class AppModel: ObservableObject {
         return messages
     }
 
-    /// Rebuilds the "Watched sessions" inventory fresh on every turn (INF-239)
-    /// so "active Nm ago" stays honest. Sourced from the same watch list the
-    /// UI shows (`attachedTargets`); two-way enablement is reported only for
-    /// the explicitly focused session, never for the rest. This is prompt
-    /// context for the model to read and mention, not a routing input, per
-    /// AGENTS.md's "no hidden phrase routing" decision: the frozen send
-    /// destination is unaffected by anything built here.
-    private func watchedSessionSummaries(context: ConversationTargetSnapshot?) -> [AttachePersonality.WatchedSessionSummary] {
-        let focusedSessionID = (context?.isExplicitlyFocused == true) ? context?.target.id : nil
-        var summaries = attachedTargets.values.map { target -> AttachePersonality.WatchedSessionSummary in
-            let isFocused = focusedSessionID != nil && target.id == focusedSessionID
-            return AttachePersonality.WatchedSessionSummary(
-                sourceName: target.sourceKind.displayName,
-                title: target.displayTitle,
-                updatedAt: target.updatedAt,
-                isFocused: isFocused,
-                isTwoWayEnabled: isFocused && twoWay.isEnabled(sessionID: target.id)
-            )
-        }
-        // Safety net: if the focused session hasn't landed in attachedTargets
-        // yet (e.g. mid-restore), still surface it so the block never omits
-        // the one session the model is otherwise told is focused.
-        if let focusedSessionID, let context, !summaries.contains(where: { $0.isFocused }) {
-            summaries.append(AttachePersonality.WatchedSessionSummary(
-                sourceName: context.target.sourceKind.displayName,
-                title: context.target.displayTitle,
-                updatedAt: context.target.updatedAt,
-                isFocused: true,
-                isTwoWayEnabled: twoWay.isEnabled(sessionID: focusedSessionID)
-            ))
-        }
-        return summaries
-    }
-
     private static let maxConversationTurnsPerRequest = 24
     private static let maxLoadedCards = 1_000
 
     private var conversationWorkingDirectory: String? {
-        if let snapshot = conversationTargetSnapshot { return snapshot.workingDirectory }
-        guard let id = talkContextSession?.id else { return nil }
-        return workingDirectory(for: id)
+        conversationTargetSnapshot?.workingDirectory
     }
 
     private func workingDirectory(for id: String) -> String? {
@@ -3346,14 +3331,8 @@ final class AppModel: ObservableObject {
     /// context stable across a multi-turn call instead of replacing it with the
     /// personality's previous answer after every turn.
     private var conversationLatestAgentCard: VoicemailCard? {
-        let id = conversationTargetSnapshot?.target.id
-            ?? talkContextSession?.id
-            ?? selectedCard?.externalSessionID
-        if let id {
-            return cards.first { $0.externalSessionID == id && !isDirectConversationReply($0) }
-        }
-        guard let selectedCard, !isDirectConversationReply(selectedCard) else { return nil }
-        return selectedCard
+        guard let id = conversationTargetSnapshot?.target.id else { return nil }
+        return cards.first { $0.externalSessionID == id && !isDirectConversationReply($0) }
     }
 
     private static func executeConversationTool(
@@ -5715,7 +5694,9 @@ final class AppModel: ObservableObject {
 
         presentationService.answerFollowUpQuestion(
             card: card,
-            danQuestion: trimmed
+            danQuestion: trimmed,
+            personality: activePersonality,
+            profilePrompt: resolvedProfilePrompt(for: activePersonality)
         ) { [weak self] result in
             guard let self,
                   self.followUpAnswerRequestID == requestID else {
@@ -5794,7 +5775,9 @@ final class AppModel: ObservableObject {
 
         presentationService.answerFollowUpQuestion(
             card: followUpContextCard(for: session),
-            danQuestion: trimmed
+            danQuestion: trimmed,
+            personality: activePersonality,
+            profilePrompt: resolvedProfilePrompt(for: activePersonality)
         ) { [weak self] result in
             guard let self,
                   self.liveFollowUpAnswerRequestID == requestID else {

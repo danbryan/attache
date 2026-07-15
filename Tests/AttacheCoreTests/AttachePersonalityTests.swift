@@ -298,7 +298,33 @@ final class AttachePersonalityTests: XCTestCase {
         )
 
         XCTAssertFalse(prompt.contains("stage_agent_instruction"))
+        XCTAssertFalse(prompt.contains("read_session_transcript"))
+        XCTAssertFalse(prompt.contains("list_working_directory"))
+        XCTAssertFalse(prompt.contains("read_file"))
+        XCTAssertFalse(prompt.contains("rename_session"))
         XCTAssertTrue(prompt.contains("Do not address, write to, or imply you can message the work agent"))
+        XCTAssertTrue(prompt.contains("No work session is focused"))
+        XCTAssertTrue(prompt.contains("no work-session context"))
+    }
+
+    func testContextFreeConversationDropsStraySessionFieldsAndPrivileges() {
+        let prompt = AttachePersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: nil,
+            sessionSourceName: "Codex",
+            workingDirectory: "/private/should-not-leak",
+            latestSummary: "SECRET SUMMARY",
+            latestAgentReply: "SECRET AGENT REPLY",
+            canStageAgentInstruction: true
+        )
+
+        XCTAssertFalse(prompt.contains("Codex"))
+        XCTAssertFalse(prompt.contains("/private/should-not-leak"))
+        XCTAssertFalse(prompt.contains("SECRET SUMMARY"))
+        XCTAssertFalse(prompt.contains("SECRET AGENT REPLY"))
+        XCTAssertFalse(prompt.contains("stage_agent_instruction"))
+        XCTAssertFalse(prompt.contains("read_session_transcript"))
+        XCTAssertTrue(prompt.contains("Do not infer one from recency, watched sessions, a selected voicemail, conversation history, or other app activity"))
     }
 
     // MARK: - Error-behavior guidance for blocked/failed/expired sends (INF-252)
@@ -331,142 +357,6 @@ final class AttachePersonalityTests: XCTestCase {
             XCTAssertTrue(prompt.contains("Never say a send succeeded unless Attaché actually reported that it did"))
             XCTAssertTrue(prompt.contains("Never invent a retry, workaround, or recovery option that was not reported to you"))
         }
-    }
-
-    // MARK: - Watched sessions inventory (INF-239)
-
-    func testWatchedSessionsBlockWordsEmptyCaseWhenNoOtherSessionsExist() {
-        XCTAssertEqual(
-            AttachePersonality.watchedSessionsBlock([]),
-            "No other sessions are being watched."
-        )
-
-        let now = Date()
-        let onlyTheFocusedOne = AttachePersonality.WatchedSessionSummary(
-            sourceName: "Codex",
-            title: "attache release prep",
-            updatedAt: now,
-            isFocused: true,
-            isTwoWayEnabled: true
-        )
-        XCTAssertEqual(
-            AttachePersonality.watchedSessionsBlock([onlyTheFocusedOne], now: now),
-            "No other sessions are being watched."
-        )
-    }
-
-    func testWatchedSessionsBlockMarksFocusedAndTwoWayEnabledOnlyForFocusedEntry() {
-        let now = Date()
-        let focused = AttachePersonality.WatchedSessionSummary(
-            sourceName: "Claude Code",
-            title: "Weekly Codex Improvement Review",
-            updatedAt: now.addingTimeInterval(-120),
-            isFocused: true,
-            isTwoWayEnabled: true
-        )
-        let other = AttachePersonality.WatchedSessionSummary(
-            sourceName: "Codex",
-            title: "attache release prep",
-            updatedAt: now.addingTimeInterval(-3 * 3600),
-            isFocused: false,
-            isTwoWayEnabled: true // should never surface: two-way is focused-only per spec
-        )
-
-        let block = AttachePersonality.watchedSessionsBlock([focused, other], now: now)
-
-        let expected = """
-        Watched sessions:
-        - Claude Code / "Weekly Codex Improvement Review" (focused, two-way enabled, active 2m ago)
-        - Codex / "attache release prep" (active 3h ago)
-        """
-        XCTAssertEqual(block, expected)
-    }
-
-    func testWatchedSessionsBlockCapsAtSixMostRecentFirst() {
-        let now = Date()
-        // 8 sessions, oldest first; the two oldest should be dropped by the cap.
-        let sessions = (0..<8).map { index -> AttachePersonality.WatchedSessionSummary in
-            AttachePersonality.WatchedSessionSummary(
-                sourceName: "Codex",
-                title: "session \(index)",
-                updatedAt: now.addingTimeInterval(-Double(8 - index) * 3600),
-                isFocused: false,
-                isTwoWayEnabled: false
-            )
-        }
-
-        let block = AttachePersonality.watchedSessionsBlock(sessions, now: now)
-        let lines = block.split(separator: "\n")
-
-        XCTAssertEqual(lines.first, "Watched sessions:")
-        XCTAssertEqual(lines.count, 1 + 6, "expected the header plus exactly 6 capped entries")
-        // Most recent first: "session 7" (1h ago) leads, "session 2" (6h ago) is last kept.
-        XCTAssertTrue(lines[1].contains("session 7"))
-        XCTAssertTrue(lines[6].contains("session 2"))
-        XCTAssertFalse(block.contains("session 1\""))
-        XCTAssertFalse(block.contains("session 0\""))
-    }
-
-    func testWatchedSessionsBlockFallsBackToUntitledForBlankTitle() {
-        let now = Date()
-        let sessions = [
-            AttachePersonality.WatchedSessionSummary(
-                sourceName: "Codex", title: "  ", updatedAt: now, isFocused: false, isTwoWayEnabled: false
-            ),
-            AttachePersonality.WatchedSessionSummary(
-                sourceName: "Codex", title: "named", updatedAt: now.addingTimeInterval(-60), isFocused: false, isTwoWayEnabled: false
-            )
-        ]
-
-        let block = AttachePersonality.watchedSessionsBlock(sessions, now: now)
-
-        XCTAssertTrue(block.contains("Codex / \"Untitled session\""))
-    }
-
-    func testConversationSystemPromptEmbedsWatchedSessionsBlock() {
-        let now = Date()
-        let watched = [
-            AttachePersonality.WatchedSessionSummary(
-                sourceName: "Claude Code",
-                title: "Weekly Codex Improvement Review",
-                updatedAt: now,
-                isFocused: true,
-                isTwoWayEnabled: true
-            ),
-            AttachePersonality.WatchedSessionSummary(
-                sourceName: "Codex",
-                title: "attache release prep",
-                updatedAt: now.addingTimeInterval(-3 * 3600),
-                isFocused: false,
-                isTwoWayEnabled: false
-            )
-        ]
-
-        let prompt = AttachePersonality.conversationSystemPrompt(
-            memoryContext: nil,
-            sessionTitle: "Weekly Codex Improvement Review",
-            sessionSourceName: "Claude Code",
-            workingDirectory: nil,
-            latestSummary: nil,
-            canStageAgentInstruction: true,
-            watchedSessions: watched
-        )
-
-        XCTAssertTrue(prompt.contains("Watched sessions:"))
-        XCTAssertTrue(prompt.contains("- Claude Code / \"Weekly Codex Improvement Review\" (focused, two-way enabled, active just now)"))
-        XCTAssertTrue(prompt.contains("- Codex / \"attache release prep\" (active 3h ago)"))
-    }
-
-    func testConversationSystemPromptDefaultsToNoOtherSessionsWatched() {
-        let prompt = AttachePersonality.conversationSystemPrompt(
-            memoryContext: nil,
-            sessionTitle: nil,
-            workingDirectory: nil,
-            latestSummary: nil,
-            canStageAgentInstruction: false
-        )
-
-        XCTAssertTrue(prompt.contains("No other sessions are being watched."))
     }
 
     // MARK: - T5: "another take" re-narration engine
