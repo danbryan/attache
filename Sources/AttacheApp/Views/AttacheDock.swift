@@ -244,7 +244,7 @@ extension AttacheRootView {
                 )
         }
         .buttonStyle(.plain)
-        .help("Converse with Attaché — type or hold to talk (⌘L)")
+        .help("Converse with Attaché: type or hold to talk (⌘L)")
         .accessibilityLabel(model.conversationActive ? "Close conversation" : "Open conversation")
         .onHover { setDockHover(.talk, $0) }
     }

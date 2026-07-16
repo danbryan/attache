@@ -4,8 +4,8 @@ import Security
 /// Inspects the running binary's own code signature.
 ///
 /// Keychain item ACLs are keyed to the creating app's code identity. A
-/// Developer ID (or Apple Development) signature has a stable identity — anchored
-/// to Apple + the bundle identifier + the Team Identifier — that survives
+/// Developer ID (or Apple Development) signature has a stable identity, anchored
+/// to Apple + the bundle identifier + the Team Identifier, that survives
 /// rebuilds and even certificate renewal. An ad-hoc / linker-only signature
 /// (what `swift build` produces on Apple Silicon) has no Team Identifier and its
 /// identity is the binary hash, which changes on every build, so items written

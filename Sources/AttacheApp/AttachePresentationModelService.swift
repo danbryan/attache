@@ -933,8 +933,8 @@ private enum ModelDiscoveryError: LocalizedError {
             return "\(provider) model discovery returned a non-HTTP response."
         case .invalidPayload(let provider):
             return "\(provider) model discovery returned an unexpected payload."
-        case .httpStatus(let provider, let status, let body):
-            return "\(provider) model discovery failed with HTTP \(status): \(body)"
+        case .httpStatus(let provider, let status, _):
+            return "\(provider) model discovery failed with HTTP \(status)."
         }
     }
 }

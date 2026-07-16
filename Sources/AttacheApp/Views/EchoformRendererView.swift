@@ -179,7 +179,7 @@ struct EchoformRendererView: View {
         .onDisappear { breathing = false }
     }
 
-    // Idle look: a low-key branded animation — a soft breathing glow, gently
+    // Idle look: a low-key branded animation, a soft breathing glow, gently
     // emanating sound-wave rings (the brand motif), and the wordmark. Signals the
     // app is alive (not a frozen window) without spending main-thread CPU
     // (everything is Core Animation scale/opacity).

@@ -383,6 +383,10 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         let legacyURL = root.appendingPathComponent("AttacheMemory.md")
         let markdown = "# Attaché Memory\n- Prefers concise answers\n"
         try markdown.write(to: legacyURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: legacyURL.path
+        )
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "memory-delete.\(UUID().uuidString)"))
         let databaseURL = root.appendingPathComponent("memory.sqlite")
         let snapshot = AttacheMemorySnapshot(
@@ -397,6 +401,11 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             defaults: defaults
         )
         XCTAssertEqual(runtime.activeRecords.map(\.statement), ["Prefers concise answers"])
+        let migratedSourceAttributes = try FileManager.default.attributesOfItem(atPath: legacyURL.path)
+        XCTAssertEqual(
+            ((migratedSourceAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777,
+            0o600
+        )
         let backupURL = legacyURL.appendingPathExtension("pre-structured-memory-backup")
         XCTAssertEqual(try Data(contentsOf: backupURL), Data(markdown.utf8))
 

@@ -2,6 +2,52 @@ import AttacheCore
 import XCTest
 
 final class CardStoreTests: XCTestCase {
+    func testFreshSavedHistoryAndAudioDirectoriesUsePrivatePermissions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-card-permissions-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("cards.sqlite")
+        let store = try CardStore(databaseURL: databaseURL)
+        _ = try store.insertEvent(EventNormalizer.simulatedEvent(projectPath: "/tmp/private"))
+
+        let rootAttributes = try FileManager.default.attributesOfItem(atPath: root.path)
+        XCTAssertEqual(((rootAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o700)
+        let audioAttributes = try FileManager.default.attributesOfItem(atPath: store.audioAssetsPath)
+        XCTAssertEqual(((audioAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o700)
+        for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"]
+            where FileManager.default.fileExists(atPath: path) {
+            let attributes = try FileManager.default.attributesOfItem(atPath: path)
+            XCTAssertEqual(((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o600, path)
+        }
+    }
+
+    func testLegacySavedHistoryAndNarrationArtifactsAreHardenedOnOpen() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-card-permissions-legacy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let databaseURL = root.appendingPathComponent("cards.sqlite")
+        XCTAssertTrue(FileManager.default.createFile(atPath: databaseURL.path, contents: Data()))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: databaseURL.path)
+        let audioDirectory = root.appendingPathComponent("audio-assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: audioDirectory, withIntermediateDirectories: true)
+        let audioURL = audioDirectory.appendingPathComponent("legacy-private-recap.aiff")
+        XCTAssertTrue(FileManager.default.createFile(atPath: audioURL.path, contents: Data("private narration".utf8)))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: audioURL.path)
+
+        _ = try CardStore(databaseURL: databaseURL)
+
+        for path in [databaseURL.path, audioURL.path] {
+            let attributes = try FileManager.default.attributesOfItem(atPath: path)
+            XCTAssertEqual(((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o600, path)
+        }
+        let audioDirectoryAttributes = try FileManager.default.attributesOfItem(atPath: audioDirectory.path)
+        XCTAssertEqual(
+            ((audioDirectoryAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777,
+            0o700
+        )
+    }
+
     func testInMemoryStoreExposesAnExplicitNonFilesystemIdentity() throws {
         let store = try CardStore.inMemory()
         XCTAssertTrue(store.isInMemory)

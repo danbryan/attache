@@ -2,6 +2,36 @@ import AttacheCore
 import XCTest
 
 final class SessionIndexerTests: XCTestCase {
+    private final class StubScanner: SessionScanner {
+        let kind: SourceKind = .codex
+        let file: ScannedFile
+        let marker: String
+
+        init(file: ScannedFile, marker: String) {
+            self.file = file
+            self.marker = marker
+        }
+
+        func beginScan() {}
+        func enumerateFiles() -> [ScannedFile] { [file] }
+        func makeRecord(for file: ScannedFile, priorTopicTag: String?, contentCap: Int) -> SessionRecord {
+            SessionRecord(
+                id: file.id,
+                title: "Private session",
+                project: "/tmp/private",
+                threadName: nil,
+                updatedAt: Date(timeIntervalSince1970: file.mtime),
+                archived: false,
+                filePath: file.url.path,
+                fileMtime: file.mtime,
+                content: marker,
+                topicTag: priorTopicTag,
+                sourceKind: .codex
+            )
+        }
+        func refreshMetadata(_ record: SessionRecord, for file: ScannedFile) -> SessionRecord { record }
+    }
+
     func testCodexHomeFallsBackToUserCodexDirectory() {
         let home = CodexPaths.home(environment: [:])
         XCTAssertEqual(home.lastPathComponent, ".codex")
@@ -61,5 +91,61 @@ final class SessionIndexerTests: XCTestCase {
         XCTAssertTrue(parsed.content.contains("validator notes"))
         XCTAssertTrue(parsed.content.contains("done, notes added."))
         XCTAssertFalse(parsed.content.contains("hmm"), "thinking blocks are not part of the digest")
+    }
+
+    func testFreshCacheIsPrivateAndDoesNotDuplicateTranscriptContent() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-session-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cacheURL = root.appendingPathComponent("SessionIndex.json")
+        let transcriptURL = root.appendingPathComponent("session.jsonl")
+        let marker = "SESSION_CACHE_PRIVATE_MARKER"
+        let scanner = StubScanner(
+            file: ScannedFile(id: "session-1", url: transcriptURL, mtime: 100, archived: false),
+            marker: marker
+        )
+
+        let indexer = SessionIndexer(cacheURL: cacheURL, scanners: [scanner])
+        XCTAssertEqual(indexer.refresh().first?.content, marker)
+
+        let stored = try String(contentsOf: cacheURL, encoding: .utf8)
+        XCTAssertFalse(stored.contains(marker))
+        let attributes = try FileManager.default.attributesOfItem(atPath: cacheURL.path)
+        XCTAssertEqual(((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o600)
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: root.path)
+        XCTAssertEqual(((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o700)
+    }
+
+    func testLegacyCacheIsHardenedAndTranscriptContentIsScrubbedOnLoad() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-session-cache-legacy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let cacheURL = root.appendingPathComponent("SessionIndex.json")
+        let marker = "LEGACY_SESSION_CACHE_PRIVATE_MARKER"
+        let record = SessionRecord(
+            id: "legacy-1",
+            title: "Legacy",
+            project: "/tmp/legacy",
+            threadName: nil,
+            updatedAt: Date(timeIntervalSince1970: 100),
+            archived: false,
+            filePath: "/tmp/legacy.jsonl",
+            fileMtime: 100,
+            content: marker,
+            sourceKind: .codex
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode([record]).write(to: cacheURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: cacheURL.path)
+
+        let indexer = SessionIndexer(cacheURL: cacheURL, scanners: [])
+
+        XCTAssertEqual(indexer.allRecords.first?.content, "")
+        let stored = try String(contentsOf: cacheURL, encoding: .utf8)
+        XCTAssertFalse(stored.contains(marker))
+        let attributes = try FileManager.default.attributesOfItem(atPath: cacheURL.path)
+        XCTAssertEqual(((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o600)
     }
 }

@@ -70,17 +70,78 @@ public final class SessionIndexer: @unchecked Sendable {
     // MARK: - Cache
 
     private func loadCache() {
-        guard let data = try? Data(contentsOf: cacheURL),
+        guard secureCacheFileForAccess(createIfMissing: false),
+              let data = try? Data(contentsOf: cacheURL),
               let cached = try? JSONDecoder.iso8601.decode([SessionRecord].self, from: data) else {
             return
         }
-        records = Dictionary(uniqueKeysWithValues: cached.map { ($0.id, $0) })
+        let scrubbed = cached.map(Self.cacheRecord)
+        records = Dictionary(uniqueKeysWithValues: scrubbed.map { ($0.id, $0) })
+        if zip(cached, scrubbed).contains(where: { $0.content != $1.content }) {
+            saveCache()
+        }
     }
 
     private func saveCache() {
-        guard let data = try? JSONEncoder.iso8601.encode(Array(records.values)) else { return }
-        try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: cacheURL)
+        let cacheRecords = records.values.map(Self.cacheRecord)
+        guard let data = try? JSONEncoder.iso8601.encode(cacheRecords),
+              secureCacheFileForAccess(createIfMissing: true) else { return }
+        do {
+            // The cache is rebuildable. A direct write keeps the pre-created
+            // inode at 0600 and avoids an atomic-write replacement briefly
+            // inheriting a permissive process umask.
+            try data.write(to: cacheURL)
+            guard secureCacheFileForAccess(createIfMissing: false) else {
+                try? FileManager.default.removeItem(at: cacheURL)
+                return
+            }
+        } catch {
+            // Never leave a partial cache available to a later launch.
+            try? FileManager.default.removeItem(at: cacheURL)
+        }
+    }
+
+    /// Transcript excerpts belong in the private FTS database, not in a second
+    /// JSON cache. Metadata and mtimes are sufficient for incremental scanning.
+    private static func cacheRecord(_ record: SessionRecord) -> SessionRecord {
+        var scrubbed = record
+        scrubbed.content = ""
+        return scrubbed
+    }
+
+    /// Upgrades legacy cache permissions before reading and creates new cache
+    /// files with restrictive permissions before any private bytes are written.
+    private func secureCacheFileForAccess(createIfMissing: Bool) -> Bool {
+        let fileManager = FileManager.default
+        let directory = cacheURL.deletingLastPathComponent()
+        do {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+
+            if fileManager.fileExists(atPath: cacheURL.path) {
+                let attributes = try fileManager.attributesOfItem(atPath: cacheURL.path)
+                guard attributes[.type] as? FileAttributeType != .typeSymbolicLink else { return false }
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheURL.path)
+            } else {
+                guard createIfMissing else { return false }
+                guard fileManager.createFile(
+                    atPath: cacheURL.path,
+                    contents: nil,
+                    attributes: [.posixPermissions: 0o600]
+                ) else { return false }
+            }
+
+            let attributes = try fileManager.attributesOfItem(atPath: cacheURL.path)
+            let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? -1
+            return attributes[.type] as? FileAttributeType == .typeRegular
+                && permissions & 0o777 == 0o600
+        } catch {
+            return false
+        }
     }
 }
 

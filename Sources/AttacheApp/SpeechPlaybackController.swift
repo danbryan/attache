@@ -141,7 +141,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         let directory = AttacheAppSupport.supportDirectory()
             .appendingPathComponent("AudioCache", isDirectory: true)
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Self.securePrivateAudioDirectory(at: directory)
             return directory
         } catch {
             return nil
@@ -623,6 +623,11 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
 
     private func beginPlayback(card: VoicemailCard, audioURL: URL, startTimeMs: Int) {
         if generatedAudioIsCached {
+            guard Self.securePrivateAudioFile(at: audioURL) else {
+                onPlaybackError?("Playback failed: saved voice audio could not be secured.")
+                finishWithoutPlayback()
+                return
+            }
             touchAudioFile(audioURL)
         }
         analyzeAndStart(
@@ -883,11 +888,63 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     }
 
     private func isUsableAudioFile(_ url: URL) -> Bool {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+        guard Self.securePrivateAudioFile(at: url),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attributes[.size] as? Int else {
             return false
         }
         return size > 0
+    }
+
+    /// Audio may contain a spoken form of private agent or direct-chat text.
+    /// Upgrade legacy caches before reuse and create every new cache directory
+    /// as user-only storage.
+    static func securePrivateAudioDirectory(at directory: URL) throws {
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: directory.path) {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: directory.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+        ) else { return }
+        for case let child as URL in enumerator {
+            let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isSymbolicLink != true else {
+                throw CocoaError(.fileWriteInvalidFileName)
+            }
+            if values.isDirectory == true {
+                try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: child.path)
+            } else if values.isRegularFile == true,
+                      !securePrivateAudioFile(at: child) {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        }
+    }
+
+    static func securePrivateAudioFile(at url: URL) -> Bool {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: url.path),
+              let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular else {
+            return false
+        }
+        do {
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            let secured = try fileManager.attributesOfItem(atPath: url.path)
+            return ((secured[.posixPermissions] as? NSNumber)?.intValue ?? -1) & 0o777 == 0o600
+        } catch {
+            return false
+        }
     }
 
     private func touchAudioFile(_ url: URL) {

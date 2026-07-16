@@ -31,11 +31,13 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
             .appendingPathExtension("pre-structured-memory-backup")
         self.reviewQueueURL = databaseURL.deletingLastPathComponent()
             .appendingPathComponent("memory-review-queue.json")
+        let legacySourceIsSecure = Self.hardenLegacySource(at: legacyFileURL)
         if !ledger.isMigrated {
             // The original Markdown remains untouched. A byte-for-byte,
             // restrictive-permission backup is additionally verified before
             // the ledger can record migration success.
-            if Self.createAndVerifyLegacyBackup(legacySnapshot, at: legacyBackupURL) {
+            if legacySourceIsSecure,
+               Self.createAndVerifyLegacyBackup(legacySnapshot, at: legacyBackupURL) {
                 _ = ledger.migrate(fromMarkdown: legacySnapshot.rawText)
             }
         }
@@ -436,6 +438,22 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
             }
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backupURL.path)
             return try Data(contentsOf: backupURL) == expected
+        } catch {
+            return false
+        }
+    }
+
+    private static func hardenLegacySource(at fileURL: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path) else { return false }
+        do {
+            if try fileURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+                return false
+            }
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            let attributes = try fm.attributesOfItem(atPath: fileURL.path)
+            let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? -1
+            return permissions & 0o777 == 0o600
         } catch {
             return false
         }

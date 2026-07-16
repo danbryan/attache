@@ -167,6 +167,65 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         ).serializedOutboundRequest)
     }
 
+    func testReflectedProviderErrorBodyNeverEntersPersistedOrConversationText() async throws {
+        let marker = "REFLECTED_PRIVATE_PROMPT_\(UUID().uuidString)"
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BrokerStubURLProtocol.self]
+        let broker = AttacheProductionRequestBroker(urlSession: URLSession(configuration: configuration))
+        let suite = "AttacheProductionRequestBrokerTests.error-reflection.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let service = AttachePresentationService(defaults: defaults, environment: [:], requestBroker: broker)
+        let settings = AttachePresentationSettings(
+            llmEnabled: true,
+            provider: .ollama,
+            baseURL: URL(string: "http://127.0.0.1:11434/v1")!,
+            apiKey: "",
+            apiKeySecretRef: "",
+            model: "test-model",
+            reasoningEffort: nil,
+            serviceTier: nil,
+            profilePrompt: "Stay concise."
+        )
+        let snapshot = makeSnapshot(role: .presentation, modelSettings: settings)
+        let event = NormalizedEvent(
+            source: SourceKind.codex.rawValue,
+            eventType: "assistant.completed",
+            externalSessionID: "safe-error-session",
+            projectPath: "/tmp/safe-error",
+            title: "Safe error",
+            text: "A harmless agent result."
+        )
+        BrokerStubURLProtocol.failure = nil
+        BrokerStubURLProtocol.statusCode = 500
+        BrokerStubURLProtocol.responseBody = Data(#"{"error":"\#(marker)"}"#.utf8)
+        defer {
+            BrokerStubURLProtocol.statusCode = 200
+            BrokerStubURLProtocol.responseBody = Data()
+        }
+
+        let prepared: AttachePreparedEventResult = await withCheckedContinuation { continuation in
+            service.prepare(event, snapshot: snapshot) { continuation.resume(returning: $0) }
+        }
+
+        let persistedError = try XCTUnwrap(prepared.event.metadata["companion_presentation_error"])
+        XCTAssertEqual(persistedError, "LLM request failed with HTTP 500.")
+        XCTAssertFalse(persistedError.contains(marker))
+        XCTAssertFalse("I hit a problem: \(persistedError)".contains(marker))
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-safe-error-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try CardStore(databaseURL: root.appendingPathComponent("cards.sqlite"))
+        let card = try store.insertEvent(prepared.event)
+        XCTAssertFalse(card.metadataJSON.contains(marker))
+        XCTAssertFalse(try store.fetchCard(id: card.id).metadataJSON.contains(marker))
+
+        let structural = AttachePresentationError.httpStatus(500, marker)
+        XCTAssertEqual(structural.responseBody, marker)
+        XCTAssertFalse(structural.localizedDescription.contains(marker))
+    }
+
     func testProviderUsagePersistsConservativeCalibrationAndCustomBypassesIt() async throws {
         let databaseURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("attache-broker-calibration-\(UUID().uuidString).sqlite")
@@ -1001,6 +1060,102 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         XCTAssertFalse(remoteMetadata.containsLocalOnlyContext)
     }
 
+    func testExactLocalOnlyDirectTurnTaintsDerivedToolRoundAndRemoteFallbackOmitsIt() throws {
+        let privateTurn = AttacheChatMessage(
+            role: "assistant",
+            content: "LOCAL_DIRECT_SECRET"
+        )
+        let privateSource = AttachePrebuiltMessageSource(
+            message: privateTurn,
+            source: .recentDirectChatTurns,
+            egress: .localOnly
+        )
+        let snapshot = makeSnapshot(
+            contextItems: [],
+            directChatMessages: [privateTurn],
+            directChatMessageSources: [privateSource]
+        )
+        XCTAssertTrue(snapshot.contextItems.isEmpty, "short-call fixture has no summary capsule")
+        let baseMessages = [
+            AttacheChatMessage(role: "system", content: "Stay concise."),
+            privateTurn,
+            AttacheChatMessage(role: "user", content: "continue")
+        ]
+        let broker = AttacheProductionRequestBroker()
+        let localAttempt = try makeAttempt(capacity: 32_000, tools: false)
+        let localCompiled = try broker.compile(
+            snapshot: snapshot,
+            attempt: localAttempt,
+            messages: baseMessages
+        )
+        let localMetadata = AttacheInferenceMetadata.model(
+            snapshot: snapshot,
+            compiled: localCompiled,
+            usage: AttacheParsedTokenUsage(
+                inputTokens: nil,
+                outputTokens: nil,
+                cachedTokens: nil,
+                totalTokens: nil
+            ),
+            attempt: localAttempt
+        )
+        XCTAssertTrue(localMetadata.containsLocalOnlyContext)
+
+        let toolCall = AttacheChatMessage(
+            role: "assistant",
+            content: "LOCAL_TOOL_ARGUMENT_SECRET",
+            toolCalls: [AttacheChatToolCall(
+                id: "local-tool",
+                name: "propose_memory",
+                arguments: #"{"statement":"LOCAL_TOOL_ARGUMENT_SECRET"}"#
+            )]
+        )
+        let toolResult = AttacheChatMessage(
+            role: "tool",
+            content: "LOCAL_TOOL_RESULT_SECRET",
+            toolCallID: "local-tool"
+        )
+        var sources = AttacheProductionRequestBroker.prebuiltMessageSources(
+            snapshot: snapshot,
+            messages: baseMessages
+        )
+        sources.append(AttachePresentationService.causallyDerivedSource(
+            message: toolCall,
+            source: .recentDirectChatTurns,
+            inference: localMetadata
+        ))
+        sources.append(AttachePresentationService.causallyDerivedSource(
+            message: toolResult,
+            source: .toolResults,
+            inference: localMetadata
+        ))
+        XCTAssertEqual(sources.suffix(2).map(\.egress), [.localOnly, .localOnly])
+
+        let remoteAttempt = try makeAttempt(
+            capacity: 32_000,
+            tools: false,
+            provider: .custom,
+            baseURL: URL(string: "https://remote.example/v1")!
+        )
+        let remoteCompiled = try broker.compile(
+            snapshot: snapshot,
+            attempt: remoteAttempt,
+            messages: baseMessages + [toolCall, toolResult],
+            messageSources: sources
+        )
+        let outbound = String(decoding: remoteCompiled.serializedOutboundRequest, as: UTF8.self)
+        for marker in [
+            "LOCAL_DIRECT_SECRET",
+            "LOCAL_TOOL_ARGUMENT_SECRET",
+            "LOCAL_TOOL_RESULT_SECRET"
+        ] {
+            XCTAssertFalse(outbound.contains(marker), "remote fallback leaked \(marker)")
+        }
+        let effects = ConversationTurnEffectLedger()
+        XCTAssertTrue(effects.claim(.memoryProposal))
+        XCTAssertFalse(effects.claim(.memoryProposal), "the same effect runs only once across fallback")
+    }
+
     func testMemoryProposalSchemaRequiresBoundScopeValue() throws {
         let data = try AttacheProductionRequestBroker.conversationToolDefinitions(
             allowSessionContextTools: false,
@@ -1064,6 +1219,42 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         XCTAssertTrue(broker.contains("private func transport(\n        compiled: CompiledModelRequest"))
         XCTAssertFalse(broker.contains("private func transport(\n        messages:"))
         XCTAssertTrue(broker.contains("request.httpBody = compiled.serializedOutboundRequest"))
+
+        let cliTransport = try String(contentsOf: root.appendingPathComponent(
+            "Sources/AttacheApp/CLILanguageModel.swift"
+        ))
+        XCTAssertFalse(
+            cliTransport.contains("func complete(messages:"),
+            "CLI transport must accept only the exact compiled prompt bytes"
+        )
+    }
+
+    func testProductionCopyContainsNoEmDashOutsideSpokenSanitizer() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources", isDirectory: true)
+        let enumerator = try XCTUnwrap(
+            FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey]
+            )
+        )
+        for case let file as URL in enumerator {
+            guard ["swift", "strings"].contains(file.pathExtension) else { continue }
+            var content = try String(contentsOf: file, encoding: .utf8)
+            if file.lastPathComponent == "AttachePersonality.swift" {
+                content = content.replacingOccurrences(
+                    of: "for dash in [\"—\", \"–\", \"―\"] {",
+                    with: "for dash in [\"–\", \"―\"] {"
+                )
+            }
+            XCTAssertFalse(
+                content.contains("—"),
+                "production source contains an em dash: \(file.path)"
+            )
+        }
     }
 
     private func makeSnapshot(
@@ -1071,7 +1262,9 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         modelSettings: AttachePresentationSettings? = nil,
         contextItems: [AttacheContextItem]? = nil,
         memorySelectionReceipt: [AttacheMemoryReceiptEntry] = [],
-        userInput: String = "question"
+        userInput: String = "question",
+        directChatMessages: [AttacheChatMessage] = [],
+        directChatMessageSources: [AttachePrebuiltMessageSource] = []
     ) -> AttacheRequestSnapshot {
         AttacheRequestSnapshot(
             requestID: "request-338",
@@ -1090,7 +1283,9 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
                 treatment: .headTailExcerpt
             )],
             contextStrategy: .automatic,
-            memorySelectionReceipt: memorySelectionReceipt
+            memorySelectionReceipt: memorySelectionReceipt,
+            directChatMessages: directChatMessages,
+            directChatMessageSources: directChatMessageSources
         )
     }
 
@@ -1151,6 +1346,7 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
 
 private final class BrokerStubURLProtocol: URLProtocol {
     static var responseBody = Data()
+    static var statusCode = 200
     static var lastBody: Data?
     static var lastURL: URL?
     static var requestCount = 0
@@ -1170,7 +1366,7 @@ private final class BrokerStubURLProtocol: URLProtocol {
         }
         let response = HTTPURLResponse(
             url: request.url!,
-            statusCode: 200,
+            statusCode: Self.statusCode,
             httpVersion: "HTTP/1.1",
             headerFields: ["Content-Type": "application/json"]
         )!

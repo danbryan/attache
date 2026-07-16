@@ -2813,7 +2813,7 @@ final class AppModel: ObservableObject {
             if trimmed.isEmpty {
                 self.conversationStatus = Self.meaningfulMicStatus(self.micTranscript.status)
                     ?? Self.meaningfulMicStatus(micStatusBeforeFinish)
-                    ?? "Didn't catch that — try again."
+                    ?? "Didn't catch that. Try again."
                 self.maybeResumeContinuousListening()
             } else {
                 self.micTranscript.clearTranscript()
@@ -5663,6 +5663,10 @@ final class AppModel: ObservableObject {
         conversationTurnEffectLedger = nil
         conversationSessionToolRuntime = nil
         sessionContextRuntime.advanceRequestBoundary()
+        conversationTargetSnapshot = Self.refreshedConversationTargetSnapshot(
+            conversationTargetSnapshot,
+            authority: sessionContextRuntime.authoritySnapshot().session
+        )
         isConversing = false
         endConversationWait()
         pendingAssistantReply = nil
@@ -5673,6 +5677,26 @@ final class AppModel: ObservableObject {
         conversationRecoveryConfirmation = nil
         playback.stop()
         conversationFallbackState.reset()
+    }
+
+    /// A personality switch cancels the in-flight request but does not end the
+    /// call. Refresh only the app-owned authorization epoch for the same frozen
+    /// target. A different or missing authority fails closed without changing
+    /// the frozen agent destination.
+    static func refreshedConversationTargetSnapshot(
+        _ snapshot: ConversationTargetSnapshot?,
+        authority: AttacheFocusedSession?
+    ) -> ConversationTargetSnapshot? {
+        guard let snapshot else { return nil }
+        let refreshed = authority?.sessionID == snapshot.target.id
+            && authority?.sourceKind == snapshot.target.sourceKind.rawValue
+            ? authority
+            : nil
+        return ConversationTargetSnapshot(
+            target: snapshot.target,
+            workingDirectory: snapshot.workingDirectory,
+            focusedSession: refreshed
+        )
     }
 
     /// The welcome flow asks for a voice before it asks for a character. Carry

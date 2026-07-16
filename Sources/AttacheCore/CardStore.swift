@@ -7,6 +7,7 @@ public enum CardStoreError: Error, LocalizedError {
     case prepareFailed(String)
     case stepFailed(String)
     case missingDatabase
+    case insecureStorage(String)
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ public enum CardStoreError: Error, LocalizedError {
             return "SQLite step failed: \(message)"
         case .missingDatabase:
             return "SQLite database is not open."
+        case .insecureStorage(let path):
+            return "Saved history storage could not be secured at \(path)."
         }
     }
 }
@@ -61,9 +64,13 @@ public final class CardStore: @unchecked Sendable {
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         if !inMemory {
-            try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Self.secureDirectory(
+                databaseURL.deletingLastPathComponent(),
+                hardenExistingDirectory: false
+            )
+            try Self.secureRegularFile(databaseURL, createIfMissing: true)
         }
-        try FileManager.default.createDirectory(at: self.audioAssetsURL, withIntermediateDirectories: true)
+        try Self.secureDirectory(self.audioAssetsURL, recursively: true)
 
         var handle: OpaquePointer?
         let openPath = inMemory ? ":memory:" : databaseURL.path
@@ -74,6 +81,9 @@ public final class CardStore: @unchecked Sendable {
         }
         db = handle
         try migrate()
+        if !inMemory {
+            try secureDatabaseArtifacts()
+        }
     }
 
     deinit {
@@ -90,6 +100,87 @@ public final class CardStore: @unchecked Sendable {
     public var databasePath: String { usesInMemoryDatabase ? ":memory:" : databaseURL.path }
     public var isInMemory: Bool { usesInMemoryDatabase }
     public var audioAssetsPath: String { audioAssetsURL.path }
+
+    private var databaseArtifactURLs: [URL] {
+        [
+            databaseURL,
+            URL(fileURLWithPath: databaseURL.path + "-wal"),
+            URL(fileURLWithPath: databaseURL.path + "-shm")
+        ]
+    }
+
+    private func secureDatabaseArtifacts() throws {
+        for artifact in databaseArtifactURLs
+            where FileManager.default.fileExists(atPath: artifact.path) {
+            try Self.secureRegularFile(artifact, createIfMissing: false)
+        }
+    }
+
+    private static func secureDirectory(
+        _ url: URL,
+        recursively: Bool = false,
+        hardenExistingDirectory: Bool = true
+    ) throws {
+        let fileManager = FileManager.default
+        let existed = fileManager.fileExists(atPath: url.path)
+        if !existed {
+            try fileManager.createDirectory(
+                at: url,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+            throw CardStoreError.insecureStorage(url.path)
+        }
+        if !existed || hardenExistingDirectory {
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+            let secured = try fileManager.attributesOfItem(atPath: url.path)
+            guard ((secured[.posixPermissions] as? NSNumber)?.intValue ?? -1) & 0o777 == 0o700 else {
+                throw CardStoreError.insecureStorage(url.path)
+            }
+        }
+        guard recursively,
+              let enumerator = fileManager.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+              ) else { return }
+        for case let child as URL in enumerator {
+            let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isSymbolicLink != true else {
+                throw CardStoreError.insecureStorage(child.path)
+            }
+            if values.isDirectory == true {
+                try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: child.path)
+            } else if values.isRegularFile == true {
+                try secureRegularFile(child, createIfMissing: false)
+            }
+        }
+    }
+
+    private static func secureRegularFile(_ url: URL, createIfMissing: Bool) throws {
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: url.path) {
+            guard createIfMissing,
+                  fileManager.createFile(
+                    atPath: url.path,
+                    contents: nil,
+                    attributes: [.posixPermissions: 0o600]
+                  ) else {
+                throw CardStoreError.insecureStorage(url.path)
+            }
+        }
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw CardStoreError.insecureStorage(url.path)
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let secured = try fileManager.attributesOfItem(atPath: url.path)
+        guard ((secured[.posixPermissions] as? NSNumber)?.intValue ?? -1) & 0o777 == 0o600 else {
+            throw CardStoreError.insecureStorage(url.path)
+        }
+    }
 
     public func insertEvent(
         _ rawEvent: NormalizedEvent,

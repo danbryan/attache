@@ -254,7 +254,7 @@ struct AttacheInferenceMetadata: Equatable {
         compiled: CompiledModelRequest
     ) -> Bool {
         let included = Set(compiled.receipt.includedSourceIdentifiers ?? [])
-        return snapshot.contextItems.contains { item in
+        if snapshot.contextItems.contains(where: { item in
             guard item.egress == .localOnly else { return false }
             let identifier: String
             if item.source == .durableMemory,
@@ -265,6 +265,16 @@ struct AttacheInferenceMetadata: Equatable {
                 identifier = item.source.rawValue
             }
             return included.contains(identifier)
+        }) {
+            return true
+        }
+        // Recent exact conversation messages carry their own frozen egress
+        // provenance outside contextItems. The compiler removes every
+        // local-only occurrence for remote attempts; if the exact bytes remain
+        // in this compiled local request, its output inherits the restriction.
+        return snapshot.directChatMessageSources.contains { descriptor in
+            descriptor.egress == .localOnly
+                && compiled.messages.contains(descriptor.message)
         }
     }
 

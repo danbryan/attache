@@ -273,7 +273,7 @@ struct ConversationView: View {
                 ? "Type below, or hold the mic to talk. I can read more of the focused session if I need to."
                 : "Type below, or hold the mic to talk. No work session is in this conversation."
         case .toggle: return "Type below, or click the mic to start and click again to send."
-        case .alwaysOn: return "Just start talking — I'm listening and send when you pause. You can also type."
+        case .alwaysOn: return "Just start talking. I'm listening and send when you pause. You can also type."
         }
     }
 

@@ -6,7 +6,7 @@ import os
 ///
 ///   log stream --predicate 'subsystem == "com.bryanlabs.attache"' --level info
 ///
-/// Never log secrets, transcript content, or full prompts here — log lengths and
+/// Never log secrets, transcript content, or full prompts here. Log lengths and
 /// identifiers instead (INF-158).
 public enum AttacheLog {
     public static let subsystem = "com.bryanlabs.attache"

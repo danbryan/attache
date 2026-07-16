@@ -307,9 +307,10 @@ final class AttachePresentationService {
                 correctiveMessages.append(attemptedToolText)
                 correctiveMessages.append(correctiveInstruction)
                 var correctiveSources = payloadSources
-                correctiveSources.append(AttachePrebuiltMessageSource(
+                correctiveSources.append(Self.causallyDerivedSource(
                     message: attemptedToolText,
-                    source: .recentDirectChatTurns
+                    source: .recentDirectChatTurns,
+                    inference: response.metadata
                 ))
                 correctiveSources.append(AttachePrebuiltMessageSource(
                     message: correctiveInstruction,
@@ -358,9 +359,10 @@ final class AttachePresentationService {
                 toolCalls: response.toolCalls
             )
             payloadMessages.append(assistantToolCall)
-            payloadSources.append(AttachePrebuiltMessageSource(
+            payloadSources.append(Self.causallyDerivedSource(
                 message: assistantToolCall,
-                source: .recentDirectChatTurns
+                source: .recentDirectChatTurns,
+                inference: response.metadata
             ))
             for call in response.toolCalls {
                 AttacheLog.presentation.info(
@@ -380,12 +382,13 @@ final class AttachePresentationService {
                 )
                 payloadMessages.append(toolResult)
                 let resultSource = Self.toolResultSource(for: call.name)
-                payloadSources.append(AttachePrebuiltMessageSource(
+                payloadSources.append(Self.causallyDerivedSource(
                     message: toolResult,
                     source: resultSource,
                     authorization: resultSource.requiresFocusedSessionAuthorization
                         ? snapshot.session
-                        : .contextFree
+                        : .contextFree,
+                    inference: response.metadata
                 ))
             }
         }
@@ -439,6 +442,24 @@ final class AttachePresentationService {
         default:
             return .toolResults
         }
+    }
+
+    /// Tool calls and results are causally derived from the provider-visible
+    /// input that produced the round. Preserve a local-only restriction across
+    /// every later compile so a remote fallback cannot launder the assistant's
+    /// arguments or a tool result derived from private local evidence.
+    static func causallyDerivedSource(
+        message: AttacheChatMessage,
+        source: AttacheContextItemSource,
+        authorization: AttacheSessionAuthorization = .contextFree,
+        inference: AttacheInferenceMetadata
+    ) -> AttachePrebuiltMessageSource {
+        AttachePrebuiltMessageSource(
+            message: message,
+            source: source,
+            authorization: authorization,
+            egress: inference.containsLocalOnlyContext ? .localOnly : .allowedRemote
+        )
     }
 
     private func performConversationRound(
@@ -1443,9 +1464,11 @@ enum AttachePresentationError: LocalizedError {
             return "LLM response was not HTTP."
         case .unauthorizedContext:
             return "The focused session authorization changed. Focus the session and try again."
-        case .httpStatus(let status, let body):
-            let clipped = String(body.prefix(300))
-            return "LLM request failed with HTTP \(status): \(clipped)"
+        case .httpStatus(let status, _):
+            // Provider bodies are untrusted and may reflect prompt or tool
+            // content. Keep them available only through `responseBody` for
+            // structural in-memory classification, never UI or persistence.
+            return "LLM request failed with HTTP \(status)."
         case .notConfigured:
             return "No personality LLM is configured. Set one up in Settings → Model."
         case .transport(let urlError):
@@ -1462,7 +1485,8 @@ enum AttachePresentationError: LocalizedError {
     }
 
     /// Unmodified provider response body for structural safety classification.
-    /// It is never logged or persisted; callers use it only to distinguish
+    /// It is never included in `localizedDescription`, logged, or persisted;
+    /// callers use it only to distinguish
     /// context-window and authentication failures from retryable transport
     /// failures (INF-337).
     var responseBody: String? {

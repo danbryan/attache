@@ -39,6 +39,13 @@ final class AttacheMemoryStore {
             try? fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? fm.moveItem(at: legacy, to: fileURL)
         }
+        if fm.fileExists(atPath: fileURL.path) {
+            do {
+                try hardenMemoryFilePermissions()
+            } catch {
+                return
+            }
+        }
         // Refresh the header comment earlier builds wrote (it used the old wording),
         // in place, without disturbing the user's saved entries.
         if let content = try? String(contentsOf: fileURL, encoding: .utf8),
@@ -47,6 +54,7 @@ final class AttacheMemoryStore {
                 of: "injected into the companion presentation LLM",
                 with: "injected into Attaché's presentation model")
             try? fixed.write(to: fileURL, atomically: true, encoding: .utf8)
+            try? hardenMemoryFilePermissions()
         }
     }
 
@@ -78,8 +86,30 @@ final class AttacheMemoryStore {
             withIntermediateDirectories: true
         )
         if !fm.fileExists(atPath: fileURL.path) {
-            try AttachePersonality.defaultMemoryFileText.write(to: fileURL, atomically: true, encoding: .utf8)
+            guard fm.createFile(
+                atPath: fileURL.path,
+                contents: Data(AttachePersonality.defaultMemoryFileText.utf8),
+                attributes: [.posixPermissions: 0o600]
+            ) else {
+                throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: fileURL.path])
+            }
         }
+        try hardenMemoryFilePermissions()
         return fileURL
+    }
+
+    private func hardenMemoryFilePermissions() throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path) else { return }
+        let initialAttributes = try fm.attributesOfItem(atPath: fileURL.path)
+        guard initialAttributes[.type] as? FileAttributeType == .typeRegular else {
+            throw CocoaError(.fileReadUnsupportedScheme, userInfo: [NSFilePathErrorKey: fileURL.path])
+        }
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        let attributes = try fm.attributesOfItem(atPath: fileURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        guard permissions & 0o777 == 0o600 else {
+            throw CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: fileURL.path])
+        }
     }
 }

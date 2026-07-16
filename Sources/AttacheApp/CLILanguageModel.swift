@@ -36,10 +36,6 @@ struct CLILanguageModel {
     var reasoningEffort: String? = nil   // Codex: model_reasoning_effort (low/medium/high/xhigh)
     var serviceTier: String? = nil       // Codex: service_tier (fast = 1.5x, flex = cheaper)
 
-    func complete(messages: [AttacheChatMessage]) async throws -> String {
-        try await complete(prompt: Self.renderPrompt(messages: messages))
-    }
-
     /// Run the exact prompt bytes already measured by `ContextCompiler`.
     /// Production broker calls use this overload so transport cannot silently
     /// re-render a different request after the pre-egress budget gate.

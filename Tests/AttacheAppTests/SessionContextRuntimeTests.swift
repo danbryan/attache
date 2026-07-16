@@ -282,6 +282,46 @@ final class SessionContextRuntimeTests: XCTestCase {
         )
     }
 
+    func testPersonalitySwitchBoundaryRefreshKeepsFrozenTargetToolsUsable() throws {
+        let fixture = try makeFixture(sessions: [
+            ("alpha", "Alpha", ["evidence after personality switch"])
+        ])
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let grant = try commandKGrant(fixture.runtime, query: "alpha")
+        let target = CodexSessionTarget(
+            id: "alpha",
+            title: "Alpha",
+            updatedAt: Date(),
+            category: .activeSession,
+            status: nil,
+            sourceKind: .codex
+        )
+        let original = ConversationTargetSnapshot(
+            target: target,
+            workingDirectory: fixture.directory.path,
+            focusedSession: grant.session
+        )
+
+        fixture.runtime.advanceRequestBoundary()
+        let refreshed = try XCTUnwrap(AppModel.refreshedConversationTargetSnapshot(
+            original,
+            authority: fixture.runtime.authoritySnapshot().session
+        ))
+
+        XCTAssertEqual(refreshed.target, original.target)
+        XCTAssertEqual(refreshed.agentSendTarget, original.agentSendTarget)
+        XCTAssertGreaterThan(
+            try XCTUnwrap(refreshed.focusedSession).authorizationEpoch,
+            grant.session.authorizationEpoch
+        )
+        let tools = try XCTUnwrap(fixture.runtime.makeToolRuntime(
+            frozenSession: try XCTUnwrap(refreshed.focusedSession),
+            toolReserveTokens: 1_024
+        ))
+        let evidence = try tools.readTranscript(turnOrdinal: 1).get()
+        XCTAssertTrue(evidence.content.contains("evidence after personality switch"))
+    }
+
     func testBeginningMiddleAndEndTurnsAreIndividuallyRetrievable() throws {
         let fixture = try makeFixture(sessions: [
             ("range", "Range", [

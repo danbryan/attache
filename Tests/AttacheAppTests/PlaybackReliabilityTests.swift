@@ -2,6 +2,24 @@ import XCTest
 @testable import AttacheApp
 
 final class PlaybackReliabilityTests: XCTestCase {
+    func testLegacyNarrationCacheIsHardenedBeforeReuse() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-audio-cache-permissions-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let audio = root.appendingPathComponent("private-recap.aiff")
+        XCTAssertTrue(FileManager.default.createFile(atPath: audio.path, contents: Data("private narration".utf8)))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: audio.path)
+
+        try SpeechPlaybackController.securePrivateAudioDirectory(at: root)
+
+        let rootAttributes = try FileManager.default.attributesOfItem(atPath: root.path)
+        XCTAssertEqual(((rootAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o700)
+        let audioAttributes = try FileManager.default.attributesOfItem(atPath: audio.path)
+        XCTAssertEqual(((audioAttributes[.posixPermissions] as? NSNumber)?.intValue ?? 0) & 0o777, 0o600)
+        XCTAssertTrue(SpeechPlaybackController.securePrivateAudioFile(at: audio))
+    }
+
     func testInboxReloadNeverPreSynthesizesUnplayedVoicemail() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -711,7 +711,7 @@ extension AttacheRootView {
     }
 
     func codexSessionLabel(_ session: CodexSessionTarget) -> String {
-        "\(session.displayTitle) — \(session.activityLabel)"
+        "\(session.displayTitle) · \(session.activityLabel)"
     }
 
     var primaryPlaybackContextTitle: String {
