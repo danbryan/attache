@@ -265,8 +265,8 @@ func enterAgentCallInstruction(_ instruction: String, mustContain token: String?
     }
 }
 
-func pressAgentInstructionSend() throws {
-    let send = try waitForElement("enabled agent call send button", in: try mainWindow(), timeout: 10) { element in
+func pressAgentInstructionSend(timeout: TimeInterval = 10) throws {
+    let send = try waitForElement("enabled agent call send button", in: try mainWindow(), timeout: timeout) { element in
         element.role == kAXButtonRole as String
             && element.matchesExactly("Send call message")
             && element.isEnabled
@@ -1394,8 +1394,18 @@ if enabled("f9") {
 
     run.step("f9-two-way-safety", "approval-like instruction is refused before confirmation") {
         guard enableConfirmed else { throw SmokeError(message: "skipped: send-to-agent was not enabled") }
+        // Tell Agent is deliberately one-shot, including when the prior
+        // confirmation is canceled. Select it again so this assertion reaches
+        // the guarded agent-send path instead of accidentally asking Attaché.
+        try selectConversationDestination("Tell Agent")
+        _ = try waitForElement("frozen Tell Agent target for refusal", in: try mainWindow(), timeout: 8) { element in
+            element.role == (kAXStaticTextRole as String)
+                && element.stringValue.localizedCaseInsensitiveContains(nonce)
+        }
         try enterAgentCallInstruction(rejectedInstruction)
-        try pressAgentInstructionSend()
+        // The first staging acknowledgement is spoken in the live call. A
+        // second turn is intentionally disabled until that audio completes.
+        try pressAgentInstructionSend(timeout: 30)
         _ = try waitForElement("visible safety refusal", in: try mainWindow(),
                                containing: "won't deliver permission", timeout: 8)
         guard (try mainWindow()).firstDescendant(containing: "Send this to") == nil else {
