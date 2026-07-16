@@ -784,7 +784,7 @@ struct PersonalityStudioSheet: View {
                             set: { value in selectDraftModel(value) }
                         )) {
                             if !modelOptions.contains(where: { $0.id == modelRef.model }) {
-                                Text(modelRef.model).tag(modelRef.model)
+                                Text("\(modelRef.model) (not installed)").tag(modelRef.model)
                             }
                             ForEach(modelOptions) { option in Text(option.title).tag(option.id) }
                         }
@@ -922,6 +922,7 @@ struct PersonalityStudioSheet: View {
                 allowsInheritance: true,
                 capabilitySummary: draftCapabilitySummary,
                 modelLabel: draft.modelSummary,
+                capabilityNotice: draftCapabilityNotice,
                 migrationNotice: draft.contextStrategyMigrationNotice,
                 onDismissMigrationNotice: {
                     draft.contextStrategyMigrationNotice = nil
@@ -1109,6 +1110,16 @@ struct PersonalityStudioSheet: View {
                 modelID: ref.model
             )
         return .from(detected: detected, override: draft.contextStrategy?.custom)
+    }
+
+    private var draftCapabilityNotice: String? {
+        guard let ref = draft.modelRef,
+              ref.provider == .ollama,
+              !modelOptions.isEmpty,
+              !modelOptions.contains(where: { $0.id == ref.model }) else {
+            return nil
+        }
+        return "\(ref.model) is not installed on this Ollama server. Choose a listed model or install it, then refresh to inspect its capacity and reasoning support."
     }
 
     private func normalizedDraftReasoning(in options: [String]) -> String {

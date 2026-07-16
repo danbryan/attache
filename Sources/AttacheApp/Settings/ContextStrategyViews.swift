@@ -39,6 +39,10 @@ struct ContextStrategyEditor: View {
     var allowsInheritance: Bool
     var capabilitySummary: AttacheCapabilitySummary
     var modelLabel: String
+    /// A concrete discovery problem, such as a saved Ollama tag that is no
+    /// longer installed. This is deliberately distinct from unknown provider
+    /// capability metadata.
+    var capabilityNotice: String? = nil
     var migrationNotice: String?
     var onDismissMigrationNotice: (() -> Void)?
     var onRefreshCapabilities: (() -> Void)?
@@ -154,10 +158,16 @@ struct ContextStrategyEditor: View {
             capabilityRow("Source", capabilitySummary.sourceLabel)
             capabilityRow("Last confirmed", capabilitySummary.freshnessLabel)
             if capabilitySummary.isUnknown {
-                Label("Capacity is unknown. Attaché uses a conservative plan until the provider reports it or you set a Custom cap.", systemImage: "questionmark.circle")
-                    .typoCaption()
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Capacity is unknown. Automatic still uses a bounded 16,384-token working envelope, staged retrieval, and tool budgets. It never treats that envelope as a provider fact.")
+                        .typoCaption()
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Set a Custom cap", action: openCustomLimits)
+                        .buttonStyle(.link)
+                        .accessibilityLabel("Set Custom context limits")
+                        .accessibilityHint("Changes the strategy to Custom and opens the input-limit controls")
+                }
             } else if capabilitySummary.isStale {
                 Label("This capability evidence is stale. Refresh before relying on its ceiling.", systemImage: "clock.badge.exclamationmark")
                     .typoCaption()
@@ -167,6 +177,12 @@ struct ContextStrategyEditor: View {
                 Label("Your Custom limits are active. Detected model facts remain unchanged.", systemImage: "slider.horizontal.3")
                     .typoCaption()
                     .foregroundStyle(.secondary)
+            }
+            if let capabilityNotice {
+                Label(capabilityNotice, systemImage: "exclamationmark.triangle")
+                    .typoCaption()
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(10)
@@ -273,6 +289,12 @@ struct ContextStrategyEditor: View {
         strategyOverride = AttacheContextStrategy(.custom, custom: policy)
     }
 
+    private func openCustomLimits() {
+        let existing = effectiveStrategy.custom ?? AttacheContextCustomPolicy()
+        strategyOverride = AttacheContextStrategy(.custom, custom: existing)
+        advancedExpanded = true
+    }
+
     private func customValidationError(_ policy: AttacheContextCustomPolicy) -> Error? {
         do {
             try policy.validate()
@@ -311,6 +333,7 @@ struct ContextSettingsPane: View {
                 allowsInheritance: false,
                 capabilitySummary: activeCapabilitySummary,
                 modelLabel: model.presentationProviderSummary,
+                capabilityNotice: activeCapabilityNotice,
                 migrationNotice: state.strategyMigrationNotice,
                 onDismissMigrationNotice: state.dismissStrategyMigrationNotice
             )
@@ -341,6 +364,15 @@ struct ContextSettingsPane: View {
                 modelID: model.presentationModel
             )
         return .from(detected: profile, override: state.globalStrategy.custom)
+    }
+
+    private var activeCapabilityNotice: String? {
+        guard model.presentationProvider == .ollama,
+              !model.presentationModelOptions.isEmpty,
+              !model.presentationModelOptions.contains(where: { $0.id == model.presentationModel }) else {
+            return nil
+        }
+        return "\(model.presentationModel) is not installed on this Ollama server. Choose a listed model or install it, then refresh to inspect its capacity and reasoning support."
     }
 }
 

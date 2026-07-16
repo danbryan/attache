@@ -78,7 +78,15 @@ public struct AttacheCapabilitySummary: Equatable, Sendable {
         } else {
             reasoning = "Not supported"
         }
-        let source = detected.provenance.rawValue
+        let source: String
+        switch detected.provenance {
+        case .providerMetadata: source = "Provider metadata"
+        case .runtimeObservation: source = "Runtime observation"
+        case .localCache: source = "Local model cache"
+        case .explicitUserOverride: source = "Your Custom limits"
+        case .curatedFallback: source = "Verified model catalog"
+        case .unknown: source = "Not reported"
+        }
         let freshness: String
         if let date = detected.freshness {
             let formatter = ISO8601DateFormatter()

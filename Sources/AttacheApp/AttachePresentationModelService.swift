@@ -121,18 +121,30 @@ enum AttachePresentationModelService {
         modelID: String
     ) -> AttacheModelCapabilityProfile {
         let identity = modelIdentity(provider: provider, baseURLText: baseURLText, modelID: modelID)
-        guard let record = capabilityCache.record(for: identity) else { return .unknown }
-        let profile = record.profile
-        return AttacheModelCapabilityProfile(
-            architecturalMaximum: profile.architecturalMaximum,
-            configuredRuntimeLimit: profile.configuredRuntimeLimit,
-            outputLimit: profile.outputLimit,
-            estimatorFamily: profile.estimatorFamily,
-            supportsReasoning: profile.supportsReasoning,
-            reasoningLevels: profile.reasoningLevels,
-            freshness: profile.freshness ?? record.recordedAt,
-            confidence: profile.confidence,
-            provenance: profile.provenance
+        guard let record = capabilityCache.record(for: identity) else {
+            return provider == .xai ? documentedXAICapability(for: modelID) ?? .unknown : .unknown
+        }
+        let stored = record.profile
+        let profile = AttacheModelCapabilityProfile(
+            architecturalMaximum: stored.architecturalMaximum,
+            configuredRuntimeLimit: stored.configuredRuntimeLimit,
+            outputLimit: stored.outputLimit,
+            estimatorFamily: stored.estimatorFamily,
+            supportsReasoning: stored.supportsReasoning,
+            reasoningLevels: stored.reasoningLevels,
+            freshness: stored.freshness ?? record.recordedAt,
+            confidence: stored.confidence,
+            provenance: stored.provenance
+        )
+        guard provider == .xai else { return profile }
+        let efforts = profile.reasoningLevels.isEmpty
+            ? (documentedXAICapability(for: modelID)?.reasoningLevels ?? [])
+            : profile.reasoningLevels
+        return mergedXAICapability(
+            live: profile,
+            liveEfforts: profile.reasoningLevels,
+            documented: documentedXAICapability(for: modelID),
+            effectiveEfforts: efforts
         )
     }
 
@@ -414,7 +426,21 @@ enum AttachePresentationModelService {
         return models.compactMap { model in
             guard let id = model["id"] as? String, !id.isEmpty else { return nil }
             guard supportsXAIChatCompletions(modelID: id) else { return nil }
-            let efforts = reasoningEfforts(in: model, provider: .xai, modelID: id)
+            let liveEfforts = reasoningEfforts(in: model, provider: .xai, modelID: id)
+            let documented = documentedXAICapability(for: id)
+            // xAI's team-scoped catalog is authoritative for availability, but
+            // its current list response omits window and reasoning fields. Use
+            // a versioned, exact-ID catalog derived from xAI's public model
+            // pages only when those live fields are absent. Any future catalog
+            // fields override the bundled record immediately.
+            let efforts = liveEfforts.isEmpty ? (documented?.reasoningLevels ?? []) : liveEfforts
+            let liveProfile = hostedCapabilityProfile(model, reasoningEfforts: liveEfforts)
+            let capability = mergedXAICapability(
+                live: liveProfile,
+                liveEfforts: liveEfforts,
+                documented: documented,
+                effectiveEfforts: efforts
+            )
             let aliases = (model["aliases"] as? [String] ?? []).filter { !$0.isEmpty }
             let modalities = [model["input_modalities"], model["output_modalities"]]
                 .compactMap { $0 as? [String] }
@@ -433,7 +459,7 @@ enum AttachePresentationModelService {
                 // capability table for known model families.
                 reasoningEfforts: efforts,
                 serviceTiers: serviceTiers(in: model, provider: .xai, modelID: id),
-                capabilityProfile: hostedCapabilityProfile(model, reasoningEfforts: efforts)
+                capabilityProfile: capability
             )
         }
         .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
@@ -449,13 +475,24 @@ enum AttachePresentationModelService {
             guard let id = model["id"] as? String, !id.isEmpty else { return nil }
             if provider == .xai, !supportsXAIChatCompletions(modelID: id) { return nil }
             let owner = model["owned_by"] as? String ?? ""
-            let efforts = reasoningEfforts(in: model, provider: provider, modelID: id)
+            let liveEfforts = reasoningEfforts(in: model, provider: provider, modelID: id)
+            let documented = provider == .xai ? documentedXAICapability(for: id) : nil
+            let efforts = liveEfforts.isEmpty ? (documented?.reasoningLevels ?? []) : liveEfforts
+            let liveProfile = hostedCapabilityProfile(model, reasoningEfforts: liveEfforts)
+            let capability = provider == .xai
+                ? mergedXAICapability(
+                    live: liveProfile,
+                    liveEfforts: liveEfforts,
+                    documented: documented,
+                    effectiveEfforts: efforts
+                )
+                : hostedCapabilityProfile(model, reasoningEfforts: efforts)
             return AttachePresentationModelOption(
                 id: id,
                 detail: owner,
                 reasoningEfforts: efforts,
                 serviceTiers: serviceTiers(in: model, provider: provider, modelID: id),
-                capabilityProfile: hostedCapabilityProfile(model, reasoningEfforts: efforts)
+                capabilityProfile: capability
             )
         }
         .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
@@ -504,9 +541,10 @@ enum AttachePresentationModelService {
     }
 
     static func fallbackReasoningEfforts(provider: AttachePresentationProvider, modelID: String) -> [String] {
-        _ = modelID
         switch provider {
-        case .xai, .groq, .custom:
+        case .xai:
+            return documentedXAICapability(for: modelID)?.reasoningLevels ?? []
+        case .groq, .custom:
             // Hosted model names never imply capability. The selected model's
             // live catalog metadata is the only authority.
             return []
@@ -605,6 +643,89 @@ enum AttachePresentationModelService {
             freshness: parsed.freshness,
             confidence: reasoningEfforts.isEmpty ? parsed.confidence : .authoritative,
             provenance: reasoningEfforts.isEmpty ? parsed.provenance : .providerMetadata
+        )
+    }
+
+    /// Exact xAI model records verified against xAI's public model pages on
+    /// 2026-07-16. This table supplements, but never replaces, fields returned
+    /// by the authenticated xAI catalog. Keep unknown future IDs unknown.
+    private static func documentedXAICapability(for modelID: String) -> AttacheModelCapabilityProfile? {
+        let verifiedAt = Date(timeIntervalSince1970: 1_784_160_000)
+        switch modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "grok-4.3":
+            return AttacheModelCapabilityProfile(
+                architecturalMaximum: 1_000_000,
+                supportsReasoning: true,
+                reasoningLevels: ["none", "low", "medium", "high"],
+                freshness: verifiedAt,
+                confidence: .authoritative,
+                provenance: .curatedFallback
+            )
+        case "grok-4.5":
+            return AttacheModelCapabilityProfile(
+                architecturalMaximum: 500_000,
+                supportsReasoning: true,
+                reasoningLevels: ["low", "medium", "high"],
+                freshness: verifiedAt,
+                confidence: .authoritative,
+                provenance: .curatedFallback
+            )
+        case "grok-build-0.1":
+            return AttacheModelCapabilityProfile(
+                architecturalMaximum: 256_000,
+                supportsReasoning: true,
+                freshness: verifiedAt,
+                confidence: .authoritative,
+                provenance: .curatedFallback
+            )
+        case "grok-4.20-0309-reasoning":
+            return AttacheModelCapabilityProfile(
+                architecturalMaximum: 1_000_000,
+                supportsReasoning: true,
+                freshness: verifiedAt,
+                confidence: .authoritative,
+                provenance: .curatedFallback
+            )
+        case "grok-4.20-0309-non-reasoning":
+            return AttacheModelCapabilityProfile(
+                architecturalMaximum: 1_000_000,
+                supportsReasoning: false,
+                freshness: verifiedAt,
+                confidence: .authoritative,
+                provenance: .curatedFallback
+            )
+        default:
+            return nil
+        }
+    }
+
+    private static func mergedXAICapability(
+        live: AttacheModelCapabilityProfile,
+        liveEfforts: [String],
+        documented: AttacheModelCapabilityProfile?,
+        effectiveEfforts: [String]
+    ) -> AttacheModelCapabilityProfile {
+        guard let documented else { return live }
+        let hasLiveFacts = live.architecturalMaximum != nil
+            || live.configuredRuntimeLimit != nil
+            || live.outputLimit != nil
+            || !liveEfforts.isEmpty
+        guard hasLiveFacts else { return documented }
+
+        let usesDocumentedCapacity = live.architecturalMaximum == nil
+            && live.configuredRuntimeLimit == nil
+            && documented.declaredInputCeiling != nil
+
+        return AttacheModelCapabilityProfile(
+            architecturalMaximum: live.architecturalMaximum ?? documented.architecturalMaximum,
+            configuredRuntimeLimit: live.configuredRuntimeLimit ?? documented.configuredRuntimeLimit,
+            outputLimit: live.outputLimit ?? documented.outputLimit,
+            estimatorFamily: live.estimatorFamily ?? documented.estimatorFamily,
+            supportsReasoning: !effectiveEfforts.isEmpty || documented.supportsReasoning,
+            reasoningLevels: effectiveEfforts,
+            freshness: usesDocumentedCapacity ? documented.freshness : live.freshness,
+            confidence: .authoritative,
+            provenance: usesDocumentedCapacity ? .curatedFallback : .providerMetadata
         )
     }
 

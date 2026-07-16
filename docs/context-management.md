@@ -34,6 +34,12 @@ values cannot be saved and the error explains how to fix them. Custom can make
 requests fail if the limits are too tight for protected content (safety
 policy, active personality, and the current user turn must always fit).
 
+When the Advanced capability panel says capacity is unknown, select **Set a
+Custom cap** there. Attaché switches the strategy to Custom and reveals the
+hard and working input-limit fields in place. A Custom cap is user policy: it
+limits how Attaché uses a model but never rewrites the model evidence shown
+above it.
+
 Advertised context is a ceiling, not a target. Attaché never fills the
 context window for its own sake.
 
@@ -54,8 +60,18 @@ observation, or local cache. Capabilities include:
   reserves. Custom policy never rewrites detected provider facts; both remain
   visible in the advanced view.
 - **Unknown providers**: when Attaché cannot detect capabilities, it uses an
-  unknown-capacity plan with conservative defaults. It never assumes a large
-  context window.
+  unknown-capacity plan with a 16,384-token working envelope, staged
+  retrieval, and bounded tools. It never treats that envelope as a provider
+  fact or assumes a large context window.
+- **Installed Ollama models**: Attaché discovers the exact tags on the selected
+  Ollama host, then asks `/api/show` for each installed model's context and
+  thinking capabilities. A saved tag that is no longer installed is labeled as
+  such rather than presented as a mysterious unknown profile.
+- **xAI catalog gaps**: Attaché asks xAI which models are available. xAI's
+  current catalog omits capacity and reasoning fields, so exact current Grok
+  4.3, 4.5, Build 0.1, and 4.20 records are supplemented from a versioned
+  verified model catalog. The Advanced panel labels those facts "Verified model
+  catalog". Any capability fields returned by xAI take precedence.
 - **Reset**: deleting the capability cache forces a fresh detection on the
   next request.
 
