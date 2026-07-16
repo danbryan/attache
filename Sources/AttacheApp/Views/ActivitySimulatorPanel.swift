@@ -1,13 +1,14 @@
 import AttacheCore
 import SwiftUI
 
-/// Debug-only driver for the Attaché activity contract (INF-268): pick any phase,
-/// agent, and tool kind, or let it cycle through every phase on a timer, and
-/// every renderer follows because the override flows through the same
-/// `attacheActivity` they already consume. Shown only when the app runs
-/// with `ATTACHE_ACTIVITY_SIMULATOR=1`; the override never persists.
+/// Playground for the Attaché activity contract (INF-268): pick any phase,
+/// agent, tool kind, or one-shot expression and every renderer follows because
+/// the override flows through the same `attacheActivity` they already consume.
+/// The override never persists. The environment flag still opens the panel for
+/// automated QA, but people can also open it from a character's context menu.
 struct ActivitySimulatorPanel: View {
     @ObservedObject var model: AppModel
+    var onClose: () -> Void
     @State private var phase: AttacheActivityPhase = .idle
     @State private var agent: AttacheAgentIdentity = .codex
     @State private var toolKind: AttacheToolKind = .shell
@@ -30,7 +31,7 @@ struct ActivitySimulatorPanel: View {
     private let demoTimer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text("Activity simulator")
                     .typoCaption(.bold)
@@ -40,128 +41,180 @@ struct ActivitySimulatorPanel: View {
                     .toggleStyle(.checkbox)
                     .typoCaption(.medium)
                     .accessibilityLabel("Cycle activity phases")
-            }
-
-            Picker("Phase", selection: $phase) {
-                ForEach(AttacheActivityPhase.allCases, id: \.self) { phase in
-                    Text(phase.rawValue).tag(phase)
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close activity simulator")
             }
-            .accessibilityLabel("Simulated phase")
+            .padding(12)
 
-            Picker("Agent", selection: $agent) {
-                ForEach(AttacheAgentIdentity.allCases, id: \.self) { agent in
-                    Text(agent.rawValue).tag(agent)
-                }
-            }
-            .accessibilityLabel("Simulated agent")
+            Divider()
 
-            Picker("Tool", selection: $toolKind) {
-                ForEach(AttacheToolKind.allCases, id: \.self) { kind in
-                    Text(kind.rawValue).tag(kind)
-                }
-            }
-            .disabled(phase != .toolRunning)
-            .accessibilityLabel("Simulated tool kind")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Activity source", selection: $overriding) {
+                        Text("Preview controls").tag(true)
+                        Text("Follow the app").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityLabel("Activity simulator source")
 
-            HStack(spacing: 8) {
-                Button(overriding ? "Simulating" : "Simulate") {
-                    overriding = true
-                    apply()
-                }
-                .disabled(overriding)
-                Button("Live") {
-                    overriding = false
-                    cycling = false
-                    model.simulatedActivity = nil
-                    model.simulatedFleetFocusID = nil
-                }
-                .disabled(!overriding)
-            }
-            .typoCaption(.medium)
+                    Text(overriding
+                         ? "The controls below are driving the character preview."
+                         : "The character is following real app activity.")
+                        .typoCaption(.medium)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
-                momentButton("Celebrate", .celebrate)
-                momentButton("Pop", .cardArrived)
-                momentButton("Drowsy", .drowsy)
-                momentButton("Needs you", .needsYou)
-                momentButton("Greet", .greet)
-                momentButton("Farewell", .farewell)
-                momentButton("Configuring", .configuring)
-                momentButton("Compacting", .compacting)
-                momentButton("Errored", .errored)
-                momentButton("Permission", .permissionAsk)
-                momentButton("Denied", .permissionDenied)
-            }
-            .typoCaption(.medium)
+                    GroupBox("Activity") {
+                        VStack(alignment: .leading, spacing: 9) {
+                            Picker("Phase", selection: $phase) {
+                                ForEach(AttacheActivityPhase.allCases, id: \.self) { phase in
+                                    Text(phaseTitle(phase)).tag(phase)
+                                }
+                            }
+                            .accessibilityLabel("Simulated phase")
 
-            Stepper("Claude fleet: \(claudeCount)", value: $claudeCount, in: 0...40)
-                .typoCaption(.medium)
-                .accessibilityLabel("Simulated Claude fleet size")
-            Stepper("Codex fleet: \(codexCount)", value: $codexCount, in: 0...40)
-                .typoCaption(.medium)
-                .accessibilityLabel("Simulated Codex fleet size")
-            Picker("Working", selection: $workShare) {
-                Text("none").tag(0)
-                Text("half").tag(1)
-                Text("all").tag(2)
-            }
-            .accessibilityLabel("Simulated working share")
-            HStack(spacing: 6) {
-                Toggle("Blocked", isOn: $oneBlocked)
-                    .toggleStyle(.checkbox)
-                    .accessibilityLabel("Simulate one blocked session")
-                Toggle("Done", isOn: $oneFinished)
-                    .toggleStyle(.checkbox)
-                    .accessibilityLabel("Simulate one finished session")
-                Stepper("Subs: \(subAgents)", value: $subAgents, in: 0...30)
-                    .accessibilityLabel("Sub-agents to add per click")
-            }
-            .typoCaption(.medium)
-            HStack(spacing: 6) {
-                Button("Add subs to focused") { addSubsToFocusedSession() }
-                    .disabled(claudeCount + codexCount == 0 || subAgents == 0)
-                    .accessibilityLabel("Add sub-agents to the focused session")
-                Button("Clear subs") { subsBySlot = [:]; applyIfSimulating() }
-                    .accessibilityLabel("Clear simulated sub-agents")
-                Button(compactingSince == nil ? "Compact" : "Compacting…") {
-                    compactingSince = compactingSince == nil ? Date() : nil
-                    applyIfSimulating()
-                }
-                .accessibilityLabel("Toggle sustained compaction preview")
-            }
-            .typoCaption(.medium)
-            HStack(spacing: 6) {
-                Button(demoElapsed >= 0 ? "Fleet demo running" : "Fleet demo") { startFleetDemo() }
-                    .disabled(demoElapsed >= 0)
-                    .accessibilityLabel("Run fleet demo")
-                Button("Speak sample") {
-                    // Real speech needs the real signal path: drop the
-                    // override so the speaking phase, mouth sync, arcs, and
-                    // captions all fire as they would live.
-                    overriding = false
-                    cycling = false
-                    model.simulatedActivity = nil
-                    model.playback.preview("""
-                    Here's a taste of narration so you can watch the mouth, the arcs, \
-                    and the karaoke captions all move together. The agents wrapped two \
-                    tasks while you were away, and nothing needs your attention yet.
-                    """)
-                }
-                .accessibilityLabel("Speak a sample with captions")
-            }
-            .typoCaption(.medium)
+                            Picker("Agent", selection: $agent) {
+                                ForEach(AttacheAgentIdentity.allCases, id: \.self) { agent in
+                                    Text(agentTitle(agent)).tag(agent)
+                                }
+                            }
+                            .accessibilityLabel("Simulated agent")
 
-            Text(stateReadout)
-                .typoCaption(.medium, design: .monospaced)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .accessibilityLabel("Attache activity state \(stateReadout)")
+                            if phase == .toolRunning {
+                                Picker("Tool gesture", selection: $toolKind) {
+                                    ForEach(AttacheToolKind.allCases, id: \.self) { kind in
+                                        Text(toolTitle(kind)).tag(kind)
+                                    }
+                                }
+                                .accessibilityLabel("Simulated tool kind")
+
+                                Text("Tool gestures preview how the character reacts to editing, reading, shell commands, and web tools.")
+                                    .typoCaption(.medium)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    GroupBox("One-shot expressions") {
+                        LazyVGrid(
+                            columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)],
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            momentButton("Celebrate", .celebrate)
+                            momentButton("Pop", .cardArrived)
+                            momentButton("Drowsy", .drowsy)
+                            momentButton("Needs you", .needsYou)
+                            momentButton("Greet", .greet)
+                            momentButton("Farewell", .farewell)
+                            momentButton("Configuring", .configuring)
+                            momentButton("Compacting", .compacting)
+                            momentButton("Errored", .errored)
+                            momentButton("Permission", .permissionAsk)
+                            momentButton("Denied", .permissionDenied)
+                        }
+                        .typoCaption(.medium)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    GroupBox("Agent fleet") {
+                        VStack(alignment: .leading, spacing: 9) {
+                            Stepper("Claude Code sessions: \(claudeCount)", value: $claudeCount, in: 0...40)
+                                .accessibilityLabel("Simulated Claude fleet size")
+                            Stepper("Codex sessions: \(codexCount)", value: $codexCount, in: 0...40)
+                                .accessibilityLabel("Simulated Codex fleet size")
+                            Picker("Working sessions", selection: $workShare) {
+                                Text("None").tag(0)
+                                Text("Half").tag(1)
+                                Text("All").tag(2)
+                            }
+                            .accessibilityLabel("Simulated working share")
+
+                            HStack(spacing: 16) {
+                                Toggle("One blocked", isOn: $oneBlocked)
+                                    .toggleStyle(.checkbox)
+                                    .accessibilityLabel("Simulate one blocked session")
+                                Toggle("One finished", isOn: $oneFinished)
+                                    .toggleStyle(.checkbox)
+                                    .accessibilityLabel("Simulate one finished session")
+                            }
+
+                            Stepper("Subagents to add: \(subAgents)", value: $subAgents, in: 0...30)
+                                .accessibilityLabel("Sub-agents to add per click")
+
+                            LazyVGrid(
+                                columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)],
+                                spacing: 8
+                            ) {
+                                simulatorButton("Add subagents to focused session") {
+                                    addSubsToFocusedSession()
+                                }
+                                .disabled(claudeCount + codexCount == 0 || subAgents == 0)
+                                .accessibilityLabel("Add sub-agents to the focused session")
+
+                                simulatorButton("Clear all subagents") {
+                                    subsBySlot = [:]
+                                    applyIfSimulating()
+                                }
+                                .accessibilityLabel("Clear simulated sub-agents")
+                            }
+
+                            simulatorButton(compactingSince == nil ? "Start compaction preview" : "Stop compaction preview") {
+                                compactingSince = compactingSince == nil ? Date() : nil
+                                applyIfSimulating()
+                            }
+                            .accessibilityLabel("Toggle sustained compaction preview")
+
+                            LazyVGrid(
+                                columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)],
+                                spacing: 8
+                            ) {
+                                simulatorButton(demoElapsed >= 0 ? "Fleet demo running" : "Run fleet demo") {
+                                    startFleetDemo()
+                                }
+                                .disabled(demoElapsed >= 0)
+                                .accessibilityLabel("Run fleet demo")
+
+                                simulatorButton("Speak sample") {
+                                    // Real speech needs the real signal path: drop the
+                                    // override so the speaking phase, mouth sync, arcs,
+                                    // and captions all fire as they would live.
+                                    overriding = false
+                                    cycling = false
+                                    model.simulatedActivity = nil
+                                    model.playback.preview("""
+                                    Here's a taste of narration so you can watch the mouth, the arcs, \
+                                    and the karaoke captions all move together. The agents wrapped two \
+                                    tasks while you were away, and nothing needs your attention yet.
+                                    """)
+                                }
+                                .accessibilityLabel("Speak a sample with captions")
+                            }
+                        }
+                        .typoCaption(.medium)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Text(stateReadout)
+                        .typoCaption(.medium, design: .monospaced)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Attache activity state \(stateReadout)")
+                }
+                .padding(12)
+            }
         }
         .pickerStyle(.menu)
         .controlSize(.small)
-        .padding(12)
-        .frame(width: 230)
+        .frame(width: 410)
+        .frame(maxHeight: 680)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12)))
         .onChange(of: phase) { _ in if overriding { apply() } }
@@ -175,6 +228,15 @@ struct ActivitySimulatorPanel: View {
         .onChange(of: model.simulatedFleetFocusID) { _ in applyIfSimulating() }
         .onChange(of: subAgents) { _ in applyIfSimulating() }
         .onReceive(demoTimer) { _ in advanceFleetDemo() }
+        .onChange(of: overriding) { active in
+            if active {
+                apply()
+            } else {
+                cycling = false
+                model.simulatedActivity = nil
+                model.simulatedFleetFocusID = nil
+            }
+        }
         .onChange(of: cycling) { active in
             if active {
                 overriding = true
@@ -192,6 +254,9 @@ struct ActivitySimulatorPanel: View {
                 phase = .toolRunning
                 overriding = true
                 cycling = true
+                apply()
+            } else {
+                overriding = true
                 apply()
             }
         }
@@ -215,9 +280,64 @@ struct ActivitySimulatorPanel: View {
     /// so labels like "Configuring" and "Permission" always show in full.
     @ViewBuilder
     private func momentButton(_ title: String, _ kind: AttacheActivityMoment.Kind) -> some View {
-        Button(title) { model.triggerMoment(kind, agent: agent) }
-            .frame(maxWidth: .infinity)
+        Button {
+            model.triggerMoment(kind, agent: agent)
+        } label: {
+            Text(title)
+                .lineLimit(nil)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 18)
+        }
             .accessibilityLabel("\(title) moment")
+    }
+
+    /// Simulator controls are allowed to wrap and grow vertically. A fixed
+    /// one-line label silently reintroduces ellipses as soon as the app text
+    /// scale or a localization is wider than the English default.
+    private func simulatorButton<Label: StringProtocol>(
+        _ title: Label,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .lineLimit(nil)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 20)
+        }
+    }
+
+    private func phaseTitle(_ phase: AttacheActivityPhase) -> String {
+        switch phase {
+        case .sleeping: return "Sleeping"
+        case .idle: return "Idle"
+        case .agentThinking: return "Agent thinking"
+        case .agentResponding: return "Agent responding"
+        case .toolRunning: return "Tool running"
+        case .speaking: return "Speaking"
+        case .paused: return "Playback paused"
+        case .blockedOnUser: return "Needs your input"
+        case .error: return "Error"
+        }
+    }
+
+    private func agentTitle(_ agent: AttacheAgentIdentity) -> String {
+        switch agent {
+        case .none: return "No agent"
+        case .codex: return "Codex"
+        case .claude: return "Claude Code"
+        }
+    }
+
+    private func toolTitle(_ tool: AttacheToolKind) -> String {
+        switch tool {
+        case .edit: return "Editing files"
+        case .read: return "Reading or searching"
+        case .shell: return "Shell command"
+        case .web: return "Web or external tool"
+        case .other: return "Other tool"
+        }
     }
 
     /// Assign the current Subs count to the currently focused session, and keep

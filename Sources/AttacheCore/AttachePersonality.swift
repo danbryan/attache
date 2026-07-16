@@ -507,9 +507,9 @@ public enum AttachePersonality {
         \(targetProfilePrompt.trimmingCharacters(in: .whitespacesAndNewlines))\(memoryBlock)
 
         Another-take task:\(languageBlock)
-        - The user already heard \(priorNameForPrompt)'s take on this same update and wants to hear it again from you, in your own voice and character.
+        - The user already heard \(priorNameForPrompt)'s take on this same material and wants to hear it again from you, in your own voice and character.
         - Open with one short beat that reacts to \(priorNameForPrompt)'s take: agree, push back, or reframe it. One clause or one short sentence. Do not repeat their take back or summarize it at length.
-        - Then give your own take on the underlying update, in your voice: what actually matters here and what the user can do next. Bring your own angle, not a paraphrase of \(priorNameForPrompt).
+        - Then give your own take on the underlying source material or conversation context, in your voice: what actually matters here and what the user can do next. Bring your own angle, not a paraphrase of \(priorNameForPrompt).
         - Read for any profession or domain. Use only what the source below actually says; never assume software, coding, or any specific field unless the source makes it explicit.
         - This is spoken and captioned: short sentences, headline first, no lists, no code, no reciting paths, hashes, URLs, or IDs.
         - Keep it tight: at most \(ceiling) sentences, including the opening beat. Let the information set the length; do not pad.
@@ -524,10 +524,10 @@ public enum AttachePersonality {
         """
 
         let user = """
-        Here is \(priorNameForPrompt)'s earlier take on the update. React to it in one short beat, do not repeat it:
+        Here is \(priorNameForPrompt)'s earlier take. React to it in one short beat, do not repeat it:
         \(trimmedPrior.isEmpty ? "[No prior take text was provided.]" : trimmedPrior)
 
-        Here is the underlying agent update to give your own take on:
+        Here is the underlying source material or conversation context to give your own take on:
         \(clippedSource.isEmpty ? "[No source text was provided.]" : clippedSource)
 
         Write your another-take spoken update now.

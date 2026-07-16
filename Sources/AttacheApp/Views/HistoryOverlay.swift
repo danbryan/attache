@@ -16,6 +16,7 @@ struct HistoryOverlay: View {
     @State private var selectedID: String?
     @State private var hoveredID: String?
     @State private var collapsedGroups: Set<String> = []
+    @State private var pendingDeletion: HistoryDeletionRequest?
     @FocusState private var fieldFocused: Bool
 
     /// All / Recaps / Sent filter over history. All and Recaps are heard
@@ -35,6 +36,12 @@ struct HistoryOverlay: View {
             case .sent: return NSLocalizedString("Sent", comment: "")
             }
         }
+    }
+
+    private struct HistoryDeletionRequest: Identifiable {
+        let card: VoicemailCard
+        let count: Int
+        var id: String { card.id }
     }
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -224,6 +231,26 @@ struct HistoryOverlay: View {
             selectedID = nil
             hoveredID = nil
         }
+        .confirmationDialog(
+            pendingDeletion.map { $0.count > 1 ? "Delete conversation?" : "Delete history item?" } ?? "Delete history?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            presenting: pendingDeletion
+        ) { request in
+            Button(request.count > 1 ? "Delete Conversation" : "Delete History Item", role: .destructive) {
+                model.deleteConversationHistory(containing: request.card)
+                selectedID = nil
+                hoveredID = nil
+                pendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: { request in
+            Text(request.count > 1
+                 ? "This permanently deletes all \(request.count) saved replies and alternate takes in this Attaché conversation."
+                 : "This permanently deletes the selected saved reply. Legacy replies cannot always be grouped into a whole conversation.")
+        }
     }
 
     private var emptyStateText: String {
@@ -322,6 +349,7 @@ struct HistoryOverlay: View {
             }
             Spacer(minLength: 0)
             ContextReceiptDisclosure(responseID: card.id, style: .compact)
+            anotherTakeMenu(for: card)
             Image(systemName: "play.circle.fill").typoIcon(size: 16)
                 .foregroundStyle(active ? model.theme.signatureColor : Color.secondary.opacity(0.6))
         }
@@ -332,10 +360,59 @@ struct HistoryOverlay: View {
             if hovering { hoveredID = card.id } else if hoveredID == card.id { hoveredID = nil }
         }
         .onTapGesture { play(card) }
+        .contextMenu {
+            Button { play(card) } label: {
+                Label("Play", systemImage: "play.fill")
+            }
+            anotherTakeButtons(for: card)
+            Divider()
+            Button(role: .destructive) {
+                pendingDeletion = HistoryDeletionRequest(
+                    card: card,
+                    count: model.conversationHistoryCount(containing: card)
+                )
+            } label: {
+                Label(
+                    model.conversationID(for: card) == nil ? "Delete History Item" : "Delete Conversation",
+                    systemImage: "trash"
+                )
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Replay \(rowTitle(for: card))")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { play(card) }
+    }
+
+    private func anotherTakeMenu(for card: VoicemailCard) -> some View {
+        Menu {
+            anotherTakeButtons(for: card)
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .typoIcon(size: 16)
+                .foregroundStyle(Color.secondary.opacity(0.7))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Hear another personality's take")
+        .accessibilityLabel("Another take on \(rowTitle(for: card))")
+    }
+
+    @ViewBuilder
+    private func anotherTakeButtons(for card: VoicemailCard) -> some View {
+        let choices = model.personalities.filter { $0.name != card.producedByPersonalityName }
+        if choices.isEmpty {
+            Text("No other personalities")
+        } else {
+            ForEach(choices) { personality in
+                Button {
+                    model.anotherTake(card: card, targetPersonalityID: personality.id)
+                    isVisible = false
+                } label: {
+                    Text("\(personality.characterAvatarEmoji)  \(personality.name)")
+                }
+            }
+        }
     }
 
     private func instructionGroupHeader(_ group: InstructionGroup) -> some View {

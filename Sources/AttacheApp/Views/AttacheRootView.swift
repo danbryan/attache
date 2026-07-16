@@ -32,7 +32,7 @@ extension View {
     }
 }
 
-enum DockItem { case unread, focus, mode, talk, send, personality, settings }
+enum DockItem { case unread, focus, mode, talk, personality, settings }
 
 /// How much of the window bottom the floating interaction stack occupies.
 /// Each bottom-anchored overlay reports its band (content height plus its
@@ -294,10 +294,16 @@ struct AttacheRootView: View {
             }
 
             if model.activitySimulatorEnabled {
-                ActivitySimulatorPanel(model: model)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                ActivitySimulatorPanel(model: model) {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.hideActivitySimulator()
+                    }
+                }
                     .padding(.top, 18)
+                    .padding(.bottom, 18)
                     .padding(.trailing, 18)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
 
         }
@@ -307,6 +313,7 @@ struct AttacheRootView: View {
         .animation(.easeInOut(duration: 0.18), value: inboxVisible)
         .animation(.easeInOut(duration: 0.18), value: personalitySwitcherVisible)
         .animation(.easeInOut(duration: 0.18), value: shortcutsVisible)
+        .animation(.easeInOut(duration: 0.18), value: model.activitySimulatorEnabled)
         .background(
             KeyboardShortcutMonitor(
                 onEscape: handleEscapeKey,
@@ -472,6 +479,19 @@ struct AttacheRootView: View {
             }
             scheduleIdleFade()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .attacheOpenActivitySimulator)) { _ in
+            withAnimation(.easeInOut(duration: 0.16)) {
+                surfaceMode = .live
+                chromeAwake = true
+                paletteVisible = false
+                inboxVisible = false
+                historyVisible = false
+                shortcutsVisible = false
+                personalitySwitcherVisible = false
+                model.showActivitySimulator()
+            }
+            scheduleIdleFade()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenShortcuts)) { _ in
             withAnimation(.easeInOut(duration: 0.16)) {
                 paletteVisible = false
@@ -497,6 +517,10 @@ struct AttacheRootView: View {
     }
 
     private func handleEscapeKey() -> Bool {
+        if model.activitySimulatorEnabled {
+            withAnimation(.easeInOut(duration: 0.16)) { model.hideActivitySimulator() }
+            return true
+        }
         if shortcutsVisible {
             withAnimation(.easeInOut(duration: 0.16)) { shortcutsVisible = false }
             return true

@@ -441,11 +441,57 @@ public final class CardStore: @unchecked Sendable {
         )
     }
 
+    /// Permanently remove cards and their owned audio assets. This is separate
+    /// from Archive because conversation deletion is an explicit privacy act,
+    /// not inbox housekeeping. SQLite secure-delete and a truncated WAL keep
+    /// removed transcript text out of reusable pages and the journal.
+    @discardableResult
+    public func deleteCards(ids: [String]) throws -> Int {
+        let uniqueIDs = Array(Set(ids.filter { !$0.isEmpty }))
+        guard !uniqueIDs.isEmpty else { return 0 }
+        let placeholders = uniqueIDs.map { _ in "?" }.joined(separator: ", ")
+        let bindings = uniqueIDs.map(SQLiteBinding.text)
+
+        lock.lock()
+        defer { lock.unlock() }
+        let existing = try query(
+            sql: "SELECT id FROM cards WHERE id IN (\(placeholders))",
+            bindings: bindings
+        ) { columnText($0, 0) ?? "" }
+        guard !existing.isEmpty else { return 0 }
+        let paths = try query(
+            sql: "SELECT file_path FROM audio_assets WHERE card_id IN (\(placeholders)) AND file_path IS NOT NULL",
+            bindings: bindings
+        ) { columnText($0, 0) }.compactMap { $0 }
+
+        try exec("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try execute("DELETE FROM cards WHERE id IN (\(placeholders))", bindings)
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+
+        for path in paths {
+            guard let url = ownedAudioAssetURL(for: path) else { continue }
+            try? FileManager.default.removeItem(at: url)
+        }
+        try exec("PRAGMA wal_checkpoint(TRUNCATE)")
+        return existing.count
+    }
+
+    @discardableResult
+    public func deleteCard(id: String) throws -> Bool {
+        try deleteCards(ids: [id]) == 1
+    }
+
     private func migrate() throws {
         try exec(
             """
             PRAGMA journal_mode = WAL;
             PRAGMA foreign_keys = ON;
+            PRAGMA secure_delete = ON;
 
             CREATE TABLE IF NOT EXISTS sources (
                 id TEXT PRIMARY KEY,
@@ -697,6 +743,16 @@ public final class CardStore: @unchecked Sendable {
                 part.prefix(1).uppercased() + part.dropFirst()
             }.joined(separator: " ")
         }
+    }
+
+    private func ownedAudioAssetURL(for storedPath: String) -> URL? {
+        let candidate = storedPath.hasPrefix("/")
+            ? URL(fileURLWithPath: storedPath)
+            : audioAssetsURL.appendingPathComponent(storedPath)
+        let rootPath = audioAssetsURL.standardizedFileURL.path + "/"
+        let candidateURL = candidate.standardizedFileURL
+        guard candidateURL.path.hasPrefix(rootPath) else { return nil }
+        return candidateURL
     }
 
     private func encodeJSON<T: Encodable>(_ value: T) throws -> String {

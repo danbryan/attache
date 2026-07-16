@@ -337,6 +337,12 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
   briefly reacts to the prior take then gives its own spin, in its own voice and
   character. Another-take is narration only: it never triggers a reverse-send and never
   touches the frozen agent destinations.
+- **Private Call means no Attaché conversation record.** A private call keeps
+  recent turns and rolling continuity only in memory, writes no history cards or
+  direct-chat capsules, offers no memory proposal, rename, or agent-send effects,
+  and clears the temporary state at hangup. It is a local app-storage guarantee,
+  not a cloud-provider retention guarantee. Saved calls carry a conversation id
+  so History can permanently delete every linked reply and alternate take.
 - **Recap length is dynamic.** The recap prompt scales a sentence ceiling by item
   count, clusters related items, compresses solved problems to their outcome, and
   preserves decisions.

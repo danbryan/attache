@@ -154,7 +154,10 @@ voicemail.
 - **Inbox** (Command-I): the catch-all list of cards, replayable and skippable,
   filterable to the focused session, watched sessions, Codex, or Claude Code.
 - **History** (Command-Y): prior spoken recaps and replies for review; selecting
-  one replays it through the normal card playback path.
+  one replays it through the normal card playback path. Direct conversation
+  replies share a frozen conversation id so the user can permanently delete the
+  whole saved conversation. Any row can explicitly request Another Take from a
+  different personality.
 - **Recap** is one-shot: `InboxDigest` clusters unread cards by session, the
   presentation model writes a single spoken digest, the summarized originals are
   archived out of the inbox (they remain in history), and the recap plays as its
@@ -204,6 +207,13 @@ call freezes its target identity, title, source, and working directory so focus
 changes cannot retarget a staged instruction. The structured instruction payload
 is frozen separately and compared with persisted state immediately before
 delivery; any mismatch fails closed.
+
+Private Call is a separate storage mode frozen at call start. It does not write
+conversation cards, memory proposals, direct-chat capsules, renames, or agent
+instructions. Recent turns and locally generated continuity capsules exist only
+in process memory and are cleared at hangup. This is a local Attaché storage
+guarantee, not a promise about retention by a selected cloud model or voice
+provider, which the UI states directly.
 
 ## Live call UI: the composer and `CallPhase`
 

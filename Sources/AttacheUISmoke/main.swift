@@ -242,18 +242,18 @@ func focusSessionInCommandK(query: String, sessionID: String, timeout: TimeInter
                            role: kAXTextFieldRole as String, containing: "Search name", timeout: 8)
 }
 
-func openLiveInstructionComposer() throws -> AXElement {
-    let open = try waitForElement("send composer dock button", in: try mainWindow(),
-                                  role: kAXButtonRole as String, containing: "Open send-to-agent composer",
-                                  timeout: 20)
-    _ = open.press()
-    return try waitForElement("live session instruction editor", in: try mainWindow(),
-                              containing: "Live session instruction", timeout: 10)
+func openAgentCallComposer() throws -> AXElement {
+    app.key(Key.l, command: true)
+    _ = try waitForElement("live call composer", in: try mainWindow(),
+                           containing: "Live call composer", timeout: 20)
+    try selectConversationDestination("Tell Agent")
+    return try waitForElement("agent call message field", in: try mainWindow(),
+                              role: kAXTextFieldRole as String, exactly: "Call message", timeout: 10)
 }
 
-func enterLiveInstruction(_ instruction: String, mustContain token: String? = nil) throws {
-    let editor = try waitForElement("live session instruction editor", in: try mainWindow(),
-                                    containing: "Live session instruction", timeout: 10)
+func enterAgentCallInstruction(_ instruction: String, mustContain token: String? = nil) throws {
+    let editor = try waitForElement("agent call message field", in: try mainWindow(),
+                                    role: kAXTextFieldRole as String, exactly: "Call message", timeout: 10)
     _ = editor.setFocused()
     if !editor.setValue(instruction) { app.type(instruction) }
     let expected = token ?? instruction
@@ -262,6 +262,17 @@ func enterLiveInstruction(_ instruction: String, mustContain token: String? = ni
         _ = editor.setFocused()
         if !editor.setValue(instruction) { app.type(instruction) }
         return editor.stringValue.contains(expected)
+    }
+}
+
+func pressAgentInstructionSend() throws {
+    let send = try waitForElement("enabled agent call send button", in: try mainWindow(), timeout: 10) { element in
+        element.role == kAXButtonRole as String
+            && element.matchesExactly("Send call message")
+            && element.isEnabled
+    }
+    guard send.press() else {
+        throw SmokeError(message: "AXPress failed on agent call send button: \(send.summary); actions: \(send.actionNames)")
     }
 }
 
@@ -452,13 +463,46 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 // named by SMOKE_POSE_PHASE so a capture can study one totem
                 // without racing the cycler.
                 let phaseName = ProcessInfo.processInfo.environment["SMOKE_POSE_PHASE"] ?? "agentThinking"
+                let phaseTitles = [
+                    "sleeping": "Sleeping",
+                    "idle": "Idle",
+                    "agentThinking": "Agent thinking",
+                    "agentResponding": "Agent responding",
+                    "toolRunning": "Tool running",
+                    "speaking": "Speaking",
+                    "paused": "Playback paused",
+                    "blockedOnUser": "Needs your input",
+                    "error": "Error"
+                ]
                 Thread.sleep(forTimeInterval: 2)
                 let picker = try waitForElement("simulated phase picker", in: try mainWindow(),
                                                 role: kAXPopUpButtonRole as String, containing: "Simulated phase")
-                try selectPopup(picker, item: phaseName)
-                let simulate = try waitForElement("simulate button", in: try mainWindow(),
-                                                  role: kAXButtonRole as String, containing: "Simulate")
-                _ = simulate.press()
+                try selectPopup(picker, item: phaseTitles[phaseName] ?? phaseName)
+                _ = try waitForElement("simulated activity readout", in: try mainWindow(),
+                                       containing: phaseName, timeout: 8)
+
+            case "sim-fleet":
+                // Simulator layout QA: bring the longest fleet controls into
+                // view before the window-scoped capture so ellipses or clipped
+                // buttons cannot hide below the scroll position.
+                Thread.sleep(forTimeInterval: 2)
+                let scrollBar = try waitForElement(
+                    "activity simulator scroll bar",
+                    in: try mainWindow()
+                ) { element in
+                    element.role == kAXScrollBarRole as String
+                }
+                guard scrollBar.setValue(1.0) else {
+                    throw SmokeError(message: "could not scroll to the simulator fleet controls")
+                }
+                Thread.sleep(forTimeInterval: 0.4)
+                let button = try waitForElement(
+                    "add subagents simulator button",
+                    in: try mainWindow(),
+                    role: kAXButtonRole as String,
+                    containing: "Add sub-agents to the focused session"
+                )
+                _ = button.perform("AXScrollToVisible")
 
             case "type-along":
                 // Delight reel support (INF-273): type like a user so the
@@ -674,6 +718,52 @@ if enabled("f1") {
         }
         try waitForElementGone("context-free live call composer", in: try mainWindow(),
                                containing: "Live call composer", timeout: 10)
+    }
+    run.step("f1-private", "private call is reachable and discloses its storage boundary") {
+        let more = try waitForElement(
+            "more call options",
+            in: try mainWindow(),
+            containing: "More call options"
+        )
+        try selectPopup(more, item: "Start Private Call")
+        _ = try waitForElement(
+            "private call composer",
+            in: try mainWindow(),
+            containing: "Private call composer",
+            timeout: 10
+        )
+        _ = try waitForElement(
+            "private call disclosure",
+            in: try mainWindow(),
+            containing: "Not saved by Attaché",
+            timeout: 10
+        )
+        _ = try waitForElement(
+            "private call session boundary",
+            in: try mainWindow(),
+            containing: "No work session context",
+            timeout: 10
+        )
+        guard (try mainWindow()).firstDescendant(exactly: "Tell Agent") == nil else {
+            throw SmokeError(message: "Private Call exposed the disabled Tell Agent destination")
+        }
+    }
+    run.step("f1-private", "hang up erases the private call surface") {
+        let hangUp = try waitForElement(
+            "private call Hang up control",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            containing: "Hang up"
+        )
+        guard hangUp.press() else {
+            throw SmokeError(message: "AXPress failed on \(hangUp.summary)")
+        }
+        try waitForElementGone(
+            "private call composer",
+            in: try mainWindow(),
+            containing: "Private call composer",
+            timeout: 10
+        )
     }
 }
 
@@ -959,39 +1049,16 @@ if enabled("f7") {
         focusedSession = true
     }
 
-    run.step("f7-codex-two-way", "live send composer opens for the focused session") {
+    run.step("f7-codex-two-way", "Tell Agent call composer opens for the focused session") {
         guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
-        let open = try waitForElement("send composer dock button", in: try mainWindow(),
-                                      role: kAXButtonRole as String, containing: "Open send-to-agent composer",
-                                      timeout: 20)
-        _ = open.press()
-        _ = try waitForElement("live session instruction editor", in: try mainWindow(),
-                               containing: "Live session instruction", timeout: 10)
+        _ = try openAgentCallComposer()
         composerOpened = true
     }
 
     run.step("f7-codex-two-way", "instruction is entered and staged for send-to-agent") {
         guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
-        let editor = try waitForElement("live session instruction editor", in: try mainWindow(),
-                                        containing: "Live session instruction", timeout: 10)
-        _ = editor.setFocused()
-        if !editor.setValue(instruction) { app.type(instruction) }
-        try waitUntil("instruction text to land in the live composer", timeout: 8, interval: 0.5) {
-            if editor.stringValue.contains(pongToken) { return true }
-            _ = editor.setFocused()
-            if !editor.setValue(instruction) { app.type(instruction) }
-            return editor.stringValue.contains(pongToken)
-        }
-        try waitUntil("Send to Agent button to enable", timeout: 8, interval: 0.5) {
-            (try? mainWindow())?
-                .firstDescendant(role: kAXButtonRole as String, exactly: "Send to Agent")?
-                .isEnabled == true
-        }
-        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
-                                      role: kAXButtonRole as String, exactly: "Send to Agent")
-        guard send.press() else {
-            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
-        }
+        try enterAgentCallInstruction(instruction, mustContain: pongToken)
+        try pressAgentInstructionSend()
         instructionStaged = true
     }
 
@@ -1299,20 +1366,16 @@ if enabled("f9") {
         sessionFocused = true
     }
 
-    run.step("f9-two-way-safety", "send-to-agent composer opens for the safety session") {
+    run.step("f9-two-way-safety", "Tell Agent call composer opens for the safety session") {
         guard sessionFocused else { throw SmokeError(message: "skipped: session was not focused") }
-        _ = try openLiveInstructionComposer()
+        _ = try openAgentCallComposer()
         composerOpened = true
     }
 
     run.step("f9-two-way-safety", "first-use enable sheet can be confirmed without sending") {
         guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
-        try enterLiveInstruction("first real instruction for enable gate")
-        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
-                                      role: kAXButtonRole as String, exactly: "Send to Agent")
-        guard send.press() else {
-            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
-        }
+        try enterAgentCallInstruction("first real instruction for enable gate")
+        try pressAgentInstructionSend()
         let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
                                         role: kAXButtonRole as String, exactly: "Enable send-to-agent",
                                         timeout: 12)
@@ -1331,12 +1394,8 @@ if enabled("f9") {
 
     run.step("f9-two-way-safety", "approval-like instruction is refused before confirmation") {
         guard enableConfirmed else { throw SmokeError(message: "skipped: send-to-agent was not enabled") }
-        try enterLiveInstruction(rejectedInstruction)
-        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
-                                      role: kAXButtonRole as String, exactly: "Send to Agent")
-        guard send.press() else {
-            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
-        }
+        try enterAgentCallInstruction(rejectedInstruction)
+        try pressAgentInstructionSend()
         _ = try waitForElement("visible safety refusal", in: try mainWindow(),
                                containing: "won't deliver permission", timeout: 8)
         guard (try mainWindow()).firstDescendant(containing: "Send this to") == nil else {
@@ -1991,9 +2050,11 @@ if enabled("f12") {
 
     run.step("f12-load", "Command-K finds the target Codex session among many indexed sessions") {
         try focusSessionInCommandK(query: needle, sessionID: sessionID, timeout: 90)
-        _ = try waitForElement("focused load session send button", in: try mainWindow(),
-                               role: kAXButtonRole as String, containing: "Open send-to-agent composer",
-                               timeout: 15)
+        _ = try waitForElement("focused load session Call button", in: try mainWindow(),
+                               role: kAXButtonRole as String, exactly: "Call", timeout: 15)
+        guard (try mainWindow()).firstDescendant(containing: "Open send-to-agent composer") == nil else {
+            throw SmokeError(message: "legacy off-call send-to-agent dock button is still exposed")
+        }
     }
 }
 
@@ -2519,25 +2580,16 @@ if enabled("f21") {
         focusedSession = true
     }
 
-    run.step("f21-claude-two-way", "live send composer opens for the focused session") {
+    run.step("f21-claude-two-way", "Tell Agent call composer opens for the focused session") {
         guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
-        _ = try openLiveInstructionComposer()
+        _ = try openAgentCallComposer()
         composerOpened = true
     }
 
     run.step("f21-claude-two-way", "instruction is entered and staged for send-to-agent") {
         guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
-        try enterLiveInstruction(instruction, mustContain: pongToken)
-        try waitUntil("Send to Agent button to enable", timeout: 8, interval: 0.5) {
-            (try? mainWindow())?
-                .firstDescendant(role: kAXButtonRole as String, exactly: "Send to Agent")?
-                .isEnabled == true
-        }
-        let send = try waitForElement("Send to Agent button", in: try mainWindow(),
-                                      role: kAXButtonRole as String, exactly: "Send to Agent")
-        guard send.press() else {
-            throw SmokeError(message: "AXPress failed on Send to Agent: \(send.summary); actions: \(send.actionNames)")
-        }
+        try enterAgentCallInstruction(instruction, mustContain: pongToken)
+        try pressAgentInstructionSend()
         instructionStaged = true
     }
 
@@ -2803,17 +2855,36 @@ if enabled("personality") {
         // The old native popover disappeared with the dock's roughly
         // three-second auto-hide. The app-owned palette must remain available.
         Thread.sleep(forTimeInterval: 3.5)
-        _ = try waitForElement(
-            "persistent character search",
-            in: try mainWindow(),
-            role: kAXTextFieldRole as String,
-            containing: "Search characters",
-            timeout: 2
-        )
+        // Refresh the window AX element on every poll. SwiftUI can replace the
+        // window's accessibility subtree when background activity updates,
+        // invalidating a previously captured AX root even though the palette
+        // remains visible.
+        try waitUntil("persistent character search", timeout: 2) {
+            guard let window = try? mainWindow() else { return false }
+            return window.firstDescendant(
+                role: kAXTextFieldRole as String,
+                containing: "Search characters"
+            ) != nil
+        }
 
         app.key(Key.upArrow)
         app.key(Key.returnKey)
         try waitForElementGone("character switcher after arrow selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
+    }
+
+    run.step("character-switcher", "the palette opens the personality manager directly") {
+        app.key(Key.p, command: true, shift: true)
+        let edit = try waitForElement(
+            "Edit personalities action",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Edit personalities"
+        )
+        guard edit.press() else { throw SmokeError(message: "AXPress failed on \(edit.summary)") }
+        try waitUntil("settings window from character palette", timeout: 10) { (try? settingsWindow()) != nil }
+        _ = try waitForElement("personality manager from palette", in: try settingsWindow(), containing: "Your wardrobe")
+        app.key(Key.escape)
+        try waitUntil("settings window closes after palette navigation", timeout: 10) { (try? settingsWindow()) == nil }
     }
 
     run.step("character-switcher", "typing a character name and pressing Return switches the whole character") {

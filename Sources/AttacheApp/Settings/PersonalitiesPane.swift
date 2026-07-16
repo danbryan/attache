@@ -174,11 +174,18 @@ struct PersonalitiesPane: View {
                 .stroke(active ? model.theme.signatureColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: active ? 1.5 : 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 13))
+        .onTapGesture(count: 2) {
+            openStudio(personality.isBuiltIn ? .customize(personality) : .edit(personality))
+        }
         .onTapGesture { model.switchPersonalityFromUI(personality.id) }
+        .help("Click to switch. Double-click to \(personality.isBuiltIn ? "customize" : "edit").")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(personality.name), \(active ? "active" : "available") personality")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { model.switchPersonalityFromUI(personality.id) }
+        .accessibilityAction(named: Text(personality.isBuiltIn ? "Customize character" : "Edit character")) {
+            openStudio(personality.isBuiltIn ? .customize(personality) : .edit(personality))
+        }
     }
 
     private func exportPersonality(_ personality: Personality) {

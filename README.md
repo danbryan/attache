@@ -95,6 +95,12 @@ first time you pick a cloud provider, Attaché tells you exactly what gets sent.
 Each character saves its own voice, model, supported reasoning level, playback
 pace, and ordered fallback providers.
 
+Need a conversation that does not become history? Open the Call options and
+choose **Private Call**. Attaché keeps that call in memory only, disables memory
+capture and agent sends, and erases the temporary context at hangup. Cloud model
+and voice providers still receive what they normally receive. Saved Attaché
+conversations can be permanently deleted from History.
+
 ## Shortcuts
 
 | Key | Does |
@@ -110,6 +116,8 @@ pace, and ordered fallback providers.
 
 [Quick start](docs/quick-start.md) ·
 [The mindset](docs/mindset.md) ·
+[Context and memory](docs/context-management.md) ·
+[Model integrations](docs/model-integrations.md) ·
 [Contributing personalities & themes](CONTRIBUTING.md)
 
 ## License

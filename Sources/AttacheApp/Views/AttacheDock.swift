@@ -14,7 +14,6 @@ extension AttacheRootView {
             HStack(spacing: 8) {
                 callButton
                 if model.onCall { callMicButton }
-                if model.canSendToAgent, !model.onCall { sendToAgentComposerButton }
                 focusButton
                 unreadBadge
                 if model.showPersonalitySwitcher {
@@ -50,29 +49,6 @@ extension AttacheRootView {
         .help(focusDockHelpText)
         .accessibilityLabel("Focus status")
         .onHover { setDockHover(.focus, $0) }
-    }
-
-    var sendToAgentComposerButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.16)) {
-                surfaceMode = .live
-                liveComposerVisible = true
-            }
-        } label: {
-            Image(systemName: "paperplane.fill")
-                .typoIcon(size: 13, .semibold)
-                .foregroundStyle(liveComposerVisible || hoveredDockItem == .send ? .orange : Color.primary.opacity(0.62))
-                .frame(width: 38, height: 38)
-                .background(.ultraThinMaterial.opacity(hoveredDockItem == .send ? 0.72 : 0.58), in: Circle())
-                .overlay(
-                    Circle()
-                        .stroke(liveComposerVisible || hoveredDockItem == .send ? Color.orange.opacity(0.5) : Color.primary.opacity(0.12))
-                )
-        }
-        .buttonStyle(.plain)
-        .help("Send an instruction to the focused agent")
-        .accessibilityLabel("Open send-to-agent composer")
-        .onHover { setDockHover(.send, $0) }
     }
 
     private var focusDockIconName: String {
@@ -181,6 +157,14 @@ extension AttacheRootView {
         .accessibilityLabel("Switch character")
         .accessibilityValue("Active character \(model.activePersonality?.name ?? "none")")
         .onHover { setDockHover(.personality, $0) }
+        .contextMenu {
+            Button("Switch character…") {
+                NotificationCenter.default.post(name: .attacheOpenCharacterSwitcher, object: nil)
+            }
+            Button("Edit personalities…") {
+                AttacheNavigation.openPersonalityManager()
+            }
+        }
     }
 
     func setDockHover(_ item: DockItem, _ hovering: Bool) {

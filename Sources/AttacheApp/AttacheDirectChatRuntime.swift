@@ -42,7 +42,8 @@ final class AttacheDirectChatRuntime {
         strategy: AttacheContextStrategy,
         capability: AttacheModelCapabilityProfile,
         userInput: String,
-        profilePrompt: String
+        profilePrompt: String,
+        persistCapsules: Bool = true
     ) -> AttacheDirectChatSnapshotContext {
         let callIDString = callID.uuidString
         let egressByTurnID = Dictionary(uniqueKeysWithValues: turns.map { ($0.id, $0.egress) })
@@ -69,16 +70,28 @@ final class AttacheDirectChatRuntime {
             estimator: estimator
         )
 
-        _ = store.invalidateBySummarizerVersion(
-            olderThan: AttacheDirectChatSummaryPlanner.summarizerVersion
-        )
-        var active = store.list().filter { $0.callID == callIDString }
+        if persistCapsules {
+            _ = store.invalidateBySummarizerVersion(
+                olderThan: AttacheDirectChatSummaryPlanner.summarizerVersion
+            )
+        }
+        var active = persistCapsules ? store.list().filter { $0.callID == callIDString } : []
         let turnByID = Dictionary(uniqueKeysWithValues: frozenTurns.map { ($0.id, $0) })
         var capsules: [AttacheDirectChatSummaryCapsule] = []
 
         for segment in plan.segmentsToSummarize {
             let segmentTurns = segment.turnIDs.compactMap { turnByID[$0] }
             guard segmentTurns.count == segment.turnIDs.count else { continue }
+
+            if !persistCapsules {
+                capsules.append(Self.makeLocalCapsule(
+                    segment: segment,
+                    turns: segmentTurns,
+                    strategy: strategy,
+                    budgetTokens: suffixBudget
+                ))
+                continue
+            }
 
             let staleHashes = Set(active.compactMap { capsule -> String? in
                 guard capsule.segmentID == segment.id,

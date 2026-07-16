@@ -5,31 +5,55 @@ extension AttacheRootView {
     // Call / Hang up: start or end a live conversation. An explicitly focused
     // session adds work context; without one this is a context-free character chat.
     var callButton: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.16)) {
-                if model.onCall { model.endCall() } else { model.startCall() }
+        HStack(spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    if model.onCall { model.endCall() } else { model.startCall() }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: model.onCall ? "phone.down.fill" : "phone.fill")
+                        .typoIcon(size: 13, .semibold)
+                    Text(model.onCall ? "Hang up" : "Call")
+                        .typoLabel(.medium)
+                }
+                .foregroundStyle(model.onCall ? Color.red : (hoveredDockItem == .talk ? accent : Color.primary.opacity(0.82)))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(
+                    Capsule().fill(Color.primary.opacity(0.06))
+                        .overlay(Capsule().stroke(model.onCall ? Color.red.opacity(0.45) : Color.primary.opacity(0.12)))
+                )
             }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: model.onCall ? "phone.down.fill" : "phone.fill")
-                    .typoIcon(size: 13, .semibold)
-                Text(model.onCall ? "Hang up" : "Call")
-                    .typoLabel(.medium)
+            .buttonStyle(.plain)
+            .help(model.onCall
+                  ? "Hang up. Agent updates go to your inbox."
+                  : model.conversationContextSession == nil
+                      ? "Call \(model.activePersonality?.name ?? "Attaché") without work-session context"
+                      : "Call about the focused session")
+            .accessibilityLabel(model.onCall ? "Hang up" : "Start saved call")
+
+            if !model.onCall {
+                Menu {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) { model.startPrivateCall() }
+                    } label: {
+                        Label("Start Private Call", systemImage: "eye.slash.fill")
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .typoIcon(size: 9, .bold)
+                        .foregroundStyle(Color.primary.opacity(0.62))
+                        .frame(width: 28, height: 32)
+                        .background(Color.primary.opacity(0.06), in: Circle())
+                        .overlay(Circle().stroke(Color.primary.opacity(0.12)))
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("More call options, including Private Call")
+                .accessibilityLabel("More call options")
             }
-            .foregroundStyle(model.onCall ? Color.red : (hoveredDockItem == .talk ? accent : Color.primary.opacity(0.82)))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(
-                Capsule().fill(Color.primary.opacity(0.06))
-                    .overlay(Capsule().stroke(model.onCall ? Color.red.opacity(0.45) : Color.primary.opacity(0.12)))
-            )
         }
-        .buttonStyle(.plain)
         .onHover { hoveredDockItem = $0 ? .talk : nil }
-        .help(model.onCall
-              ? "Hang up. Agent updates go to your inbox."
-              : model.conversationContextSession == nil
-                  ? "Call \(model.activePersonality?.name ?? "Attaché") without work-session context"
-                  : "Call about the focused session")
     }
 
     // A standard chat composer for the live call: destination toggle, one input
@@ -37,7 +61,11 @@ extension AttacheRootView {
     // call controls.
     var onCallHUD: some View {
         VStack(alignment: .leading, spacing: 8) {
-            callDestinationPicker
+            if model.isPrivateConversation {
+                privateCallBanner
+            } else {
+                callDestinationPicker
+            }
 
             ContextOverflowRecoveryBanner()
             ExhaustiveReviewSurface()
@@ -104,7 +132,29 @@ extension AttacheRootView {
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(accent.opacity(0.22)))
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Live call composer")
+        .accessibilityLabel(model.isPrivateConversation ? "Private call composer" : "Live call composer")
+    }
+
+    var privateCallBanner: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "eye.slash.fill")
+                .typoIcon(size: 12, .semibold)
+                .foregroundStyle(accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Private Call")
+                    .typoLabel(.bold)
+                Text(model.privateConversationDisclosure)
+                    .typoCaption()
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Private Call. \(model.privateConversationDisclosure)")
     }
 
     // One status row for the whole call-phase surface (INF-244): icon (or
@@ -208,6 +258,7 @@ extension AttacheRootView {
     }
 
     var callDestinationSummary: String {
+        if model.isPrivateConversation { return "Private Attaché call" }
         switch model.conversationDestination {
         case .attache:
             return model.presentationProviderSummary

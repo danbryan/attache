@@ -44,6 +44,24 @@ final class AnotherTakeEventTests: XCTestCase {
         XCTAssertEqual(event.metadata["companion_needs_decision"], "1")
     }
 
+    func testAnotherTakeStaysLinkedToSavedConversationForDeletion() {
+        var original = makeCard(id: "conversation-reply", sessionID: nil, project: nil)
+        original.metadataJSON = #"{"companion_conversation_id":"call-1","companion_conversation_user_turn":"Explain this","companion_conversation_context_v1":"[]"}"#
+        let target = Personality(id: "custom.colt", name: "Colt", prompt: "p")
+
+        let event = AttachePresentationService.anotherTakeEvent(
+            from: original,
+            targetPersonality: target,
+            summary: "A second view",
+            spoken: "Here is another angle.",
+            needsDecision: false
+        )
+
+        XCTAssertEqual(event.metadata["companion_conversation_id"], "call-1")
+        XCTAssertEqual(event.metadata["companion_conversation_user_turn"], "Explain this")
+        XCTAssertEqual(event.metadata["companion_conversation_context_v1"], "[]")
+    }
+
     func testInsertedAnotherTakeCardCarriesTakeOfThroughStore() throws {
         let store = try CardStore.inMemory()
         let original = makeCard(id: "orig-1", sessionID: "sess-9", project: "/tmp/p")

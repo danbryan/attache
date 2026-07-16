@@ -68,12 +68,11 @@ struct EchoformRendererView: View {
                     onFocusAngleChanged: onCharacterFocusAngleChanged
                 )
                 .contextMenu {
-                    Button("Edit character…") {
-                        NotificationCenter.default.post(name: .attacheOpenSettings, object: nil)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            NotificationCenter.default.post(name: .attacheOpenSettingsSection,
-                                                            object: SettingsSection.personalities.rawValue)
-                        }
+                    Button("Edit personalities…") {
+                        AttacheNavigation.openPersonalityManager()
+                    }
+                    Button("Preview expressions…") {
+                        AttacheNavigation.openActivitySimulator()
                     }
                 }
             } else if visualMode == .bars {
@@ -121,14 +120,11 @@ struct EchoformRendererView: View {
             Button(compactBars ? "Enter Full Screen" : "Exit Full Screen") {
                 onToggleBarsExpansion?()
             }
-            Button("Change personality…") {
-                NotificationCenter.default.post(name: .attacheOpenSettings, object: nil)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    NotificationCenter.default.post(
-                        name: .attacheOpenSettingsSection,
-                        object: SettingsSection.personalities.rawValue
-                    )
-                }
+            Button("Edit personalities…") {
+                AttacheNavigation.openPersonalityManager()
+            }
+            Button("Preview expressions…") {
+                AttacheNavigation.openActivitySimulator()
             }
         }
     }

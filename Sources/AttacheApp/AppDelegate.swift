@@ -18,6 +18,7 @@ extension Notification.Name {
     static let attacheFocusSession = Notification.Name("attache.focusSession")
     static let attacheOpenSettingsSection = Notification.Name("attache.openSettingsSection")
     static let attacheOpenPersonalityStudio = Notification.Name("attache.openPersonalityStudio")
+    static let attacheOpenActivitySimulator = Notification.Name("attache.openActivitySimulator")
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

@@ -894,6 +894,7 @@ final class AttachePresentationService {
     /// presentation model is configured or the model call fails.
     func prepareAnotherTake(
         original: VoicemailCard,
+        sourceText: String? = nil,
         targetPersonality: Personality,
         priorPersonalityName: String,
         authorization: AnotherTakeRequestAuthorization,
@@ -911,7 +912,7 @@ final class AttachePresentationService {
             return
         }
         let prompt = AttachePersonality.anotherTakePrompt(
-            sourceText: original.rawText,
+            sourceText: sourceText ?? original.rawText,
             priorTake: original.spokenText,
             priorPersonalityName: priorPersonalityName,
             targetProfilePrompt: snapshot.profilePrompt,
@@ -971,6 +972,15 @@ final class AttachePresentationService {
         metadata["companion_personality_id"] = targetPersonality.id
         metadata["companion_personality_name"] = targetPersonality.name
         metadata["companion_take_of"] = original.id
+        for key in [
+            "companion_conversation_id",
+            "companion_conversation_user_turn",
+            "companion_conversation_context_v1"
+        ] {
+            if let value = original.metadataObject[key] as? String {
+                metadata[key] = value
+            }
+        }
         return NormalizedEvent(
             source: original.sourceKind,
             eventType: "assistant.completed",

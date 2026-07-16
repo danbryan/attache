@@ -295,6 +295,23 @@ final class CardStoreTests: XCTestCase {
         XCTAssertEqual(includingArchived.map(\.id), [secondSessionCard.id, firstSessionCard.id])
     }
 
+    func testPermanentDeleteRemovesOnlyRequestedCards() throws {
+        let store = try CardStore.inMemory()
+        var firstEvent = historyEvent(sessionID: "private-a", summary: "First private reply")
+        firstEvent.metadata["source_time"] = "2026-07-16T10:00:00.000Z"
+        var secondEvent = historyEvent(sessionID: "private-a", summary: "Second private reply")
+        secondEvent.metadata["source_time"] = "2026-07-16T10:00:01.000Z"
+        var keepEvent = historyEvent(sessionID: "keep", summary: "Keep this reply")
+        keepEvent.metadata["source_time"] = "2026-07-16T10:00:02.000Z"
+        let first = try store.insertEvent(firstEvent)
+        let second = try store.insertEvent(secondEvent)
+        let keep = try store.insertEvent(keepEvent)
+
+        XCTAssertEqual(try store.deleteCards(ids: [first.id, second.id]), 2)
+        XCTAssertEqual(try store.fetchCards(includeArchived: true).map(\.id), [keep.id])
+        XCTAssertFalse(try store.deleteCard(id: first.id))
+    }
+
     private func historyEvent(sessionID: String, summary: String) -> NormalizedEvent {
         NormalizedEvent(
             source: "codex",

@@ -200,7 +200,15 @@ struct CharacterSwitcherPalette: View {
             Label("Switch", systemImage: "return")
             Label("Close", systemImage: "escape")
             Spacer()
-            Text("\(filtered.count) character\(filtered.count == 1 ? "" : "s")")
+            Button {
+                isVisible = false
+                AttacheNavigation.openPersonalityManager()
+            } label: {
+                Label("Edit personalities…", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(model.theme.signatureColor)
+            .accessibilityLabel("Edit personalities")
         }
         .typoCaption(.medium)
         .foregroundStyle(.secondary)

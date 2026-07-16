@@ -326,6 +326,42 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         }
     }
 
+    func testEditingActivePersonalityAppliesNewVoiceWithoutHangup() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            model.elevenLabsAPIKey = "configured-key"
+            model.acknowledgeCloudVoiceConsent(for: .elevenLabs)
+            let original = Personality(
+                id: "custom.live-voice",
+                name: "Live Voice",
+                prompt: "Be clear.",
+                voiceRef: .systemVoice(model.speechVoiceOptions.first?.id ?? Personality.defaultPreferredVoiceID),
+                character: .robot,
+                modelRef: model.currentPersonalityModelRef
+            )
+            model.personalities = [original]
+            model.activePersonalityID = "not-selected"
+            model.selectPersonality(original.id)
+            model.startConversation()
+            var edited = original
+            edited.voiceRef = PersonalityVoiceRef(
+                provider: .elevenLabs,
+                elevenLabsVoiceID: "voice-live",
+                elevenLabsVoiceName: "Live"
+            )
+
+            let savedID = model.savePersonality(edited, replacingID: original.id)
+
+            XCTAssertEqual(savedID, original.id)
+            XCTAssertEqual(model.activePersonalityID, original.id)
+            XCTAssertEqual(model.speechProvider, .elevenLabs)
+            XCTAssertEqual(model.elevenLabsVoiceID, "voice-live")
+            XCTAssertEqual(model.playback.configuredSpeechProvider, .elevenLabs)
+            XCTAssertTrue(model.isLiveCallActive)
+            model.endConversation()
+        }
+    }
+
     func testHangUpDisconnectsThinkingAndPreventsOffCallPersonalityClarify() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())

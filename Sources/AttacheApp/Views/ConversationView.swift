@@ -33,7 +33,7 @@ struct ConversationView: View {
                 .typoIcon(size: 13, .bold)
                 .foregroundStyle(accent)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Conversation")
+                Text(model.isPrivateConversation ? "Private Conversation" : "Conversation")
                     .typoBody(.bold)
                 Text(model.conversationStatus.isEmpty
                      ? conversationTargetText
@@ -43,7 +43,15 @@ struct ConversationView: View {
                     .lineLimit(1)
             }
             Spacer()
-            destinationPicker(width: 214)
+            if model.isPrivateConversation {
+                Label("Not saved", systemImage: "eye.slash.fill")
+                    .typoCaption(.semibold)
+                    .foregroundStyle(accent)
+                    .help(model.privateConversationDisclosure)
+                    .accessibilityLabel("Private conversation. \(model.privateConversationDisclosure)")
+            } else {
+                destinationPicker(width: 214)
+            }
             if !model.conversationMessages.isEmpty {
                 Button { model.clearConversation() } label: {
                     Image(systemName: "trash").typoIcon(size: 11, .semibold)

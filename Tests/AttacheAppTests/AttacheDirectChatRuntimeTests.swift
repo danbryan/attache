@@ -194,6 +194,33 @@ final class AttacheDirectChatRuntimeTests: XCTestCase {
         XCTAssertTrue(rendered.contains("Open questions:"))
     }
 
+    func testPrivateCaptureBuildsContinuityWithoutWritingCapsules() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-private-direct-chat-\(UUID().uuidString).sqlite")
+        addTeardownBlock {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: url.path + suffix)
+            }
+        }
+        let runtime = AttacheDirectChatRuntime(databaseURL: url)
+        let turns = makeTurns(prefix: "private-call", count: 28)
+
+        let frozen = runtime.capture(
+            turns: turns,
+            callID: UUID(),
+            strategy: .efficient,
+            capability: capability(8_000),
+            userInput: turns.last!.text,
+            profilePrompt: "Be concise.",
+            persistCapsules: false
+        )
+
+        XCTAssertFalse(frozen.summaryItems.isEmpty)
+        XCTAssertTrue(
+            AttacheDirectChatSummaryStore(databaseURL: url).list(activeOnly: false).isEmpty
+        )
+    }
+
     private func makeRuntime() -> AttacheDirectChatRuntime {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("attache-direct-chat-test-\(UUID().uuidString).sqlite")

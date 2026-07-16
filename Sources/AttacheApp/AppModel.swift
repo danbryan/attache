@@ -51,6 +51,14 @@ enum ConversationDestination: String, CaseIterable, Identifiable {
     }
 }
 
+/// Whether Attaché keeps a replayable local record of a call. This setting is
+/// frozen when the call starts. Private calls still use the selected model and
+/// voice provider, but they never write conversation cards or memory proposals.
+enum AttacheConversationStorageMode: String, Equatable {
+    case saved
+    case privateCall
+}
+
 struct AgentSendTarget: Equatable {
     let sessionID: String
     let sourceKind: String
@@ -224,6 +232,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isConversing: Bool = false
     @Published var conversationDraft: String = ""
     @Published var conversationDestination: ConversationDestination = .attache
+    @Published private(set) var conversationStorageMode: AttacheConversationStorageMode = .saved
     @Published private(set) var conversationTargetSnapshot: ConversationTargetSnapshot?
     @Published private(set) var conversationStatus: String = ""
     @Published private(set) var conversationRecovery: ConversationRecovery?
@@ -799,6 +808,9 @@ final class AppModel: ObservableObject {
     private var conversationCompiledInference: (requestID: UUID, inference: AttacheInferenceMetadata)?
     private var activeConversationRequestID: UUID?
     private var activeConversationID: UUID?
+    /// Receipt disclosures for ephemeral chat bubbles. Remove them at the call
+    /// boundary so a private call leaves no content-free trace in UI state.
+    private var conversationReceiptResponseIDs: Set<String> = []
     private static let conversationRequestTimeoutSeconds: TimeInterval = 90
     // @Published (rather than a plain var) so refreshCallPhase()'s Combine
     // subscription (setupConversationObservers()) picks up every transition,
@@ -835,8 +847,9 @@ final class AppModel: ObservableObject {
     /// choke point; renderers compose live audio per frame via
     /// `with(audio:)` from the `PlaybackTimeline` they already observe.
     @Published private(set) var attacheActivity: AttacheActivityState = .initial
-    /// Debug override driven by the activity simulator panel
-    /// (`ATTACHE_ACTIVITY_SIMULATOR=1`); nil means live derivation.
+    /// Override driven by the activity simulator panel; nil means live
+    /// derivation. The environment flag remains available for automated QA,
+    /// while the in-app character menu can now present the same panel.
     @Published var simulatedActivity: AttacheActivityState? {
         didSet { refreshAttacheActivity() }
     }
@@ -873,14 +886,24 @@ final class AppModel: ObservableObject {
     /// activity. Tighter than the phrase's own 36s display lifetime so the
     /// character stops miming tools soon after the burst ends; INF-271 tunes this.
     private static let toolActivityDwell: TimeInterval = 10
-    var activitySimulatorEnabled: Bool {
-        ["1", "cycle"].contains(ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"])
-    }
+    @Published var activitySimulatorEnabled = ["1", "cycle"].contains(
+        ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"]
+    )
     /// `ATTACHE_ACTIVITY_SIMULATOR=cycle` starts the phase cycler on launch,
     /// so an unattended posed screenshot proves the override pipe without a
     /// human clicking the panel.
     var activitySimulatorAutoCycles: Bool {
         ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"] == "cycle"
+    }
+
+    func showActivitySimulator() {
+        activitySimulatorEnabled = true
+    }
+
+    func hideActivitySimulator() {
+        activitySimulatorEnabled = false
+        simulatedActivity = nil
+        simulatedFleetFocusID = nil
     }
     private static let sessionIndexURL = AttacheAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
     // AppModel is frequently constructed with CardStore.inMemory() in unit
@@ -1078,7 +1101,9 @@ final class AppModel: ObservableObject {
             self?.voiceProviderStatus = message
             self?.postHomeNotice(message, kind: .info, duration: 6)
             if self?.conversationActive == true, self?.expectingReplyAudio == true {
-                self?.conversationStatus = "Voice playback failed. Reply was filed."
+                self?.conversationStatus = self?.isPrivateConversation == true
+                    ? "Voice playback failed. The reply remains in this private call."
+                    : "Voice playback failed. Reply was filed."
             }
         }
         setupMediaRemote()
@@ -1431,7 +1456,8 @@ final class AppModel: ObservableObject {
                 strategy: contextStrategy,
                 capability: capability,
                 userInput: userInput,
-                profilePrompt: profilePrompt
+                profilePrompt: profilePrompt,
+                persistCapsules: !isPrivateConversation
             )
             contextItems.append(contentsOf: directChat.summaryItems)
             directChatMessages = directChat.exactMessages
@@ -2127,15 +2153,17 @@ final class AppModel: ObservableObject {
         }
 
         let priorName = currentCard.producedByPersonalityName ?? activePersonality?.name ?? "Attaché"
+        let underlyingSource = anotherTakeUnderlyingSource(for: currentCard)
         selectPersonality(targetPersonalityID)
         intakeStatus = "Getting another take from \(target.name)…"
         let snapshot = captureRequestSnapshot(
             role: .anotherTake,
-            userInput: currentCard.rawText,
+            userInput: underlyingSource,
             personalityOverride: target
         )
         presentationService.prepareAnotherTake(
             original: currentCard,
+            sourceText: underlyingSource,
             targetPersonality: target,
             priorPersonalityName: priorName,
             authorization: authorization,
@@ -2161,6 +2189,27 @@ final class AppModel: ObservableObject {
                 self.intakeStatus = "Another take failed: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Direct-chat cards carry the bounded conversation through the user's
+    /// request. Voicemail cards already carry their underlying agent update in
+    /// rawText. This keeps Another Take conversational without silently reading
+    /// a whole work-session transcript from history.
+    func anotherTakeUnderlyingSource(for card: VoicemailCard) -> String {
+        let metadata = metadataDictionary(for: card)
+        if let encoded = metadata["companion_conversation_context_v1"],
+           let data = encoded.data(using: .utf8),
+           let turns = try? JSONDecoder().decode([StoredConversationContextTurn].self, from: data),
+           !turns.isEmpty {
+            let transcript = turns.map { turn in
+                "\(turn.role == "user" ? "User" : "Attaché"): \(turn.text)"
+            }.joined(separator: "\n")
+            return "Conversation context through the user's request:\n\(transcript)"
+        }
+        if let userTurn = metadata["companion_conversation_user_turn"], !userTurn.isEmpty {
+            return "The user asked:\n\(userTurn)"
+        }
+        return card.rawText
     }
 
     func playSelected() {
@@ -2597,10 +2646,11 @@ final class AppModel: ObservableObject {
 
     // MARK: - Live voice conversation
 
-    func startConversation() {
+    func startConversation(storageMode: AttacheConversationStorageMode = .saved) {
         let wasActive = conversationActive
         if !wasActive {
             activeConversationID = UUID()
+            conversationStorageMode = storageMode
             conversationDestination = .attache
             // Hang-up is a context boundary. A new call must never inherit
             // transcript turns from a prior call that may have had a different
@@ -2669,11 +2719,17 @@ final class AppModel: ObservableObject {
         conversationStatus = ""
         conversationDestination = .attache
         conversationTargetSnapshot = nil
+        let endingReceiptResponseIDs = conversationReceiptResponseIDs
+        conversationReceiptResponseIDs.removeAll()
+        conversationStorageMode = .saved
         Task { @MainActor [weak self] in
             guard self?.activeConversationID == nil
                     || self?.activeConversationID == endingConversationID else { return }
             AttacheContextUIState.shared.dismissOverflowRecovery()
             AttacheContextUIState.shared.dismissExhaustiveReview(id: endingReviewID)
+            for responseID in endingReceiptResponseIDs {
+                AttacheContextUIState.shared.removeReceipt(for: responseID)
+            }
         }
         micTranscript.stop(status: "")
         // Hanging up silences live narration immediately: stop what's speaking and
@@ -2681,6 +2737,17 @@ final class AppModel: ObservableObject {
         // inbox as unread (INF-163).
         playback.stop()
         livePlaybackQueue.reset()
+        conversationMessages = []
+    }
+
+    var isPrivateConversation: Bool {
+        conversationActive && conversationStorageMode == .privateCall
+    }
+
+    /// User-facing copy intentionally promises only what Attaché controls.
+    /// Remote model and voice providers can still receive a private call.
+    var privateConversationDisclosure: String {
+        "Not saved by Attaché. New memory and agent sends are off. Your selected model and voice providers still receive what they normally receive."
     }
 
     func clearConversation() {
@@ -2780,6 +2847,11 @@ final class AppModel: ObservableObject {
         appendConversationTurn(role: .user, text: trimmed)
 
         if conversationDestination == .agent {
+            guard !isPrivateConversation else {
+                conversationDestination = .attache
+                conversationStatus = "Private calls cannot write to an agent session."
+                return
+            }
             let target = conversationTargetSnapshot?.agentSendTarget
             // Tell Agent is deliberately one-shot. Continuous listening and the
             // next typed turn return to the personality unless the user selects it again.
@@ -2823,7 +2895,7 @@ final class AppModel: ObservableObject {
         }
         let context = conversationTargetSnapshot
         let agentTarget = context?.agentSendTarget
-        let allowAgentInstructionTool = agentTarget != nil
+        let allowAgentInstructionTool = agentTarget != nil && !isPrivateConversation
         // Sticky for the rest of the call (INF-258/D5): once a fallback is
         // active, every subsequent turn in this call keeps using it.
         let fallbackProvider = conversationFallbackState.activeProvider
@@ -2838,8 +2910,7 @@ final class AppModel: ObservableObject {
                 settingsOverride: settingsOverride
             )
         let messages = buildConversationMessages(snapshot: snapshot)
-        let allowMemoryProposalTool = AttacheContextUIState.persistedMemoryMode(defaults: defaults)
-            .allowsProposals
+        let allowMemoryProposalTool = conversationAllowsMemoryProposals
         let allowSessionDiscoveryTool = localAgentSourcesEnabled
         if conversationSessionToolRuntime == nil,
            let focusedSession = snapshot.focusedSession {
@@ -2885,7 +2956,7 @@ final class AppModel: ObservableObject {
             allowAgentInstructionTool: allowAgentInstructionTool,
             allowMemoryProposalTool: allowMemoryProposalTool,
             allowSessionDiscoveryTool: allowSessionDiscoveryTool,
-            allowExhaustiveReviewTool: snapshot.isFocused,
+            allowExhaustiveReviewTool: snapshot.isFocused && !isPrivateConversation,
             settingsOverride: settingsOverride,
             requestIsActive: { [weak self] in
                 guard let self else { return false }
@@ -3539,12 +3610,14 @@ final class AppModel: ObservableObject {
         // replayable history card, while live delivery uses the same preview
         // playback/caption path as other immediate voice responses.
         livePlaybackQueue.replyStarted()
-        _ = persistConversationReply(
-            trimmed,
-            toolCallLost: toolCallLost,
-            inference: inference,
-            egress: replyEgress
-        )
+        if conversationSavesHistory {
+            _ = persistConversationReply(
+                trimmed,
+                toolCallLost: toolCallLost,
+                inference: inference,
+                egress: replyEgress
+            )
+        }
         if replyEgress == .localOnly {
             playback.preview(trimmed, configuration: localOnlySpeechConfiguration)
         } else {
@@ -3574,6 +3647,15 @@ final class AppModel: ObservableObject {
             "companion_presentation_strategy": "attache-direct-chat",
             "companion_direct_reply": "true"
         ]
+        if let conversationID = activeConversationID {
+            metadata["companion_conversation_id"] = conversationID.uuidString
+        }
+        if let userTurn = conversationMessages.last(where: { $0.role == .user })?.text {
+            metadata["companion_conversation_user_turn"] = Self.boundedConversationText(userTurn, limit: 4_000)
+        }
+        if let context = encodedConversationContext() {
+            metadata["companion_conversation_context_v1"] = context
+        }
         // INF-243: a CLI personality attempted a tool call that never
         // recovered into a valid directive, even after the one corrective
         // retry. The card still carries the spoken degrade above; this only
@@ -3630,6 +3712,47 @@ final class AppModel: ObservableObject {
         return String(prefix).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
     }
 
+    private struct StoredConversationContextTurn: Codable {
+        let role: String
+        let text: String
+    }
+
+    /// Saved calls retain a bounded transcript so a later Another Take can
+    /// answer the user's actual question instead of merely restyling the prior
+    /// personality's words. Private calls never reach this method.
+    private func encodedConversationContext() -> String? {
+        var remaining = 12_000
+        var reversed: [StoredConversationContextTurn] = []
+        for turn in conversationMessages.reversed().prefix(16) {
+            guard remaining > 0 else { break }
+            let clipped = Self.boundedConversationText(turn.text, limit: remaining)
+            remaining -= clipped.count
+            reversed.append(StoredConversationContextTurn(
+                role: turn.role == .user ? "user" : "attache",
+                text: clipped
+            ))
+        }
+        let turns = Array(reversed.reversed())
+        guard !turns.isEmpty,
+              let data = try? JSONEncoder().encode(turns) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func boundedConversationText(_ text: String, limit: Int) -> String {
+        guard limit > 0, text.count > limit else { return text }
+        let end = text.index(text.startIndex, offsetBy: limit)
+        return String(text[..<end]) + "\n[Turn truncated.]"
+    }
+
+    var conversationSavesHistory: Bool {
+        conversationStorageMode == .saved
+    }
+
+    var conversationAllowsMemoryProposals: Bool {
+        conversationStorageMode == .saved
+            && AttacheContextUIState.persistedMemoryMode(defaults: defaults).allowsProposals
+    }
+
     private func revealPendingReply() {
         revealTimer?.invalidate(); revealTimer = nil
         guard let reply = pendingAssistantReply else { return }
@@ -3640,6 +3763,7 @@ final class AppModel: ObservableObject {
         pendingAssistantReplyEgress = .allowedRemote
         let turnID = appendConversationTurn(role: .assistant, text: reply, egress: egress)
         if let inference {
+            conversationReceiptResponseIDs.insert(turnID)
             Task { @MainActor in
                 AttacheContextUIState.shared.publishReceipt(
                     inference.receiptView.bound(to: turnID),
@@ -3749,6 +3873,7 @@ final class AppModel: ObservableObject {
     /// the most recent session remains read-only and never becomes an implicit target.
     private var twoWayTarget: AgentSendTarget? {
         if conversationActive {
+            guard !isPrivateConversation else { return nil }
             return conversationTargetSnapshot?.agentSendTarget
         }
         guard let session = attachedCodexSession else { return nil }
@@ -4069,6 +4194,9 @@ final class AppModel: ObservableObject {
             if let authorization, !conversationRequestIsAuthorized(authorization) {
                 return "That conversation request ended, so the rename was canceled without any side effect."
             }
+            if isPrivateConversation {
+                return "Private calls cannot rename or otherwise change a work session."
+            }
             if let effectLedger, !effectLedger.claim(.renameSession) {
                 return "This turn already renamed the focused session. The rename was not repeated."
             }
@@ -4113,6 +4241,9 @@ final class AppModel: ObservableObject {
         return await MainActor.run { [pending, intendedAgent] in
             if let authorization, !conversationRequestIsAuthorized(authorization) {
                 return "That conversation request ended, so the instruction was canceled without staging or sending."
+            }
+            if isPrivateConversation {
+                return "Private calls cannot stage or send an instruction to an agent session."
             }
             // Fail-closed mismatch gate (INF-246): compare the model-declared
             // intent against the already-frozen target's source and the
@@ -4180,6 +4311,9 @@ final class AppModel: ObservableObject {
     ) -> String {
         if let authorization, !conversationRequestIsAuthorized(authorization) {
             return "That conversation request ended, so the memory was canceled without being saved."
+        }
+        if isPrivateConversation {
+            return "Private calls cannot save or queue memories."
         }
         guard let decoded = Self.memoryProposalArguments(
             fromToolArguments: arguments,
@@ -5620,6 +5754,7 @@ final class AppModel: ObservableObject {
     /// personalities keep their stable id so old voicemail markers still resolve.
     @discardableResult
     func savePersonality(_ draft: Personality, replacingID: String?) -> String {
+        let previous = replacingID.flatMap { id in personalities.first(where: { $0.id == id }) }
         var saved = draft
         saved.name = saved.name.trimmingCharacters(in: .whitespacesAndNewlines)
         if saved.name.isEmpty { saved.name = "My Personality" }
@@ -5646,7 +5781,22 @@ final class AppModel: ObservableObject {
             personalities.append(saved)
         }
 
-        selectPersonality(saved.id)
+        if saved.id == activePersonalityID {
+            personalityStore.save(personalities, activeID: saved.id)
+            writeActivePersonalityToDefaults()
+            refreshPresentationStatus()
+            let semanticsChanged = previous?.prompt != saved.prompt
+                || previous?.modelRef != saved.modelRef
+                || previous?.contextStrategy != saved.contextStrategy
+            if semanticsChanged,
+               isConversing || activeConversationRequestID != nil || pendingAssistantReply != nil {
+                cancelPendingReplyForPersonalitySwitch()
+            }
+            let issue = applyPersonalityConfiguration(saved)
+            intakeStatus = issue ?? "Personality \"\(saved.name)\" saved and applied."
+        } else {
+            selectPersonality(saved.id)
+        }
         return saved.id
     }
 
@@ -7463,6 +7613,53 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func conversationID(for card: VoicemailCard) -> String? {
+        let value = metadataDictionary(for: card)["companion_conversation_id"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+
+    func conversationHistoryCount(containing card: VoicemailCard) -> Int {
+        guard let conversationID = conversationID(for: card),
+              let allCards = try? store.fetchCards(includeArchived: true) else { return 1 }
+        return max(1, allCards.filter { self.conversationID(for: $0) == conversationID }.count)
+    }
+
+    /// Delete the whole saved Attaché conversation when the card has a modern
+    /// conversation id. Legacy direct replies were stored independently, so
+    /// the honest fallback is to delete only the explicitly selected item.
+    func deleteConversationHistory(containing card: VoicemailCard) {
+        do {
+            let allCards = try store.fetchCards(includeArchived: true)
+            let cardsToDelete: [VoicemailCard]
+            if let conversationID = conversationID(for: card) {
+                cardsToDelete = allCards.filter { self.conversationID(for: $0) == conversationID }
+            } else {
+                cardsToDelete = allCards.filter { $0.id == card.id }
+            }
+            let ids = cardsToDelete.map(\.id)
+            guard !ids.isEmpty else {
+                intakeStatus = "That conversation was already deleted."
+                return
+            }
+            if let currentCardID = playback.currentCardID, ids.contains(currentCardID) {
+                playback.stop()
+            }
+            let removed = try store.deleteCards(ids: ids)
+            Task { @MainActor in
+                for id in ids {
+                    AttacheContextUIState.shared.removeReceipt(for: id)
+                }
+            }
+            reloadCards()
+            intakeStatus = removed == 1
+                ? "Deleted the saved conversation item."
+                : "Deleted the saved conversation and its \(removed) replies."
+        } catch {
+            intakeStatus = "Conversation deletion failed: \(error.localizedDescription)"
+        }
+    }
+
     func createFollowUpAnswer() {
         guard let card = selectedCard else { return }
         let trimmed = followUpText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -8383,6 +8580,13 @@ final class AppModel: ObservableObject {
         if let session = conversationTargetSnapshot?.target {
             intakeStatus = "On a call with \(session.displayTitle)."
         }
+    }
+
+    func startPrivateCall() {
+        acknowledgedFailedSendIDs.formUnion(twoWay.log.filter { $0.state == .failed }.map(\.id))
+        refreshCallPhase()
+        startConversation(storageMode: .privateCall)
+        intakeStatus = "Private call started. Attaché will not save this conversation."
     }
 
     func endCall() {

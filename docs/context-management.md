@@ -43,6 +43,21 @@ above it.
 Advertised context is a ceiling, not a target. Attaché never fills the
 context window for its own sake.
 
+### Which strategy should I choose?
+
+| If you want... | Choose | What changes |
+| --- | --- | --- |
+| A strong default that adapts to the selected model | **Automatic** | Balanced evidence allowances, rolling conversation compression, and bounded retrieval |
+| Faster answers or dependable behavior on a small local model | **Efficient** | Smaller recent-turn and memory allowances, earlier compression, and tighter tool-result limits |
+| The deepest answer the known model budget can support | **Maximum coverage** | Larger evidence allowances and wider staged whole-session review |
+| A hard ceiling you control for cost, latency, or an unprofiled model | **Custom** | Your input cap, reserves, evidence mix, and retrieval limits become the working policy |
+
+The strategies are ceilings and priorities, not filler. A context-free greeting
+can compile identically under Efficient and Maximum coverage because there is no
+relevant authorized evidence to add. The difference becomes visible on longer
+direct chats, focused sessions, memory retrieval, tool results, and whole-session
+reviews. Expand **Advanced** to see the concrete plan before sending anything.
+
 Expand **Advanced** to see a live strategy plan. It changes immediately when
 you select a strategy and shows the runtime evidence allowance, conversation
 compression behavior, durable-memory budget, retrieved-tool limits, and
@@ -97,7 +112,8 @@ egress policy:
    conversation, kept as a strategy-dependent suffix.
 5. **Older chat summary**: neutral, locally extracted capsules that compress
    older direct-chat history while retaining decisions, questions,
-   corrections, and unresolved commitments. Not durable memory.
+   corrections, and unresolved commitments. Not durable memory. Private calls
+   build these capsules in process memory only and erase them at hangup.
 6. **Durable personal memory**: facts you told Attaché to remember, scoped and
    egress-labeled. Treated as quoted user data, never system instructions.
 7. **Focused-session metadata**: the title, source, and working directory of
@@ -110,7 +126,8 @@ egress policy:
 10. **Tool definitions and results**: session transcript and project-file
     tools are available only with exact frozen focus authority. Context-free
     app tools, such as proposing a memory or opening native session discovery,
-    remain available without exposing session data.
+    remain available without exposing session data. Private calls do not expose
+    memory, rename, exhaustive-review, or agent-send effects.
 
 ## Search vs Authorization
 
@@ -178,6 +195,24 @@ remote model. A model tool can only propose local-only memory. Promoting one
 record for remote use requires an explicit native per-item confirmation in
 Settings. Legacy migration and JSON import also start every record local-only;
 an imported egress label is never treated as disclosure consent.
+
+### Scope
+
+Memory visibility and network egress are separate controls. A saved record can
+be scoped to:
+
+- **All personalities** for stable facts and preferences that should follow the
+  user everywhere.
+- **This personality** for a relationship, tone, shared history, or standing
+  instruction that belongs only to one character.
+- **This topic** for a bounded subject that should not leak into unrelated
+  conversations.
+
+Attaché filters scope before memory text enters a request. A personality-scoped
+record is invisible to other personalities, and switching characters does not
+copy it. Global memory should remain the default for ordinary user facts;
+personality scope should be reserved for details whose meaning really depends on
+that character.
 
 ### Inspection and correction
 
