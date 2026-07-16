@@ -131,15 +131,20 @@ final class AttacheRequestAuthorityTests: XCTestCase {
         XCTAssertFalse(AttacheRequestAuthority.roleMayUseSessionContext(.topicTagging, authorization: focused))
     }
 
-    func testUserFacingRolesUseSessionContextWhenFocused() {
+    func testOnlyExplicitSessionRolesUseSessionContextWhenFocused() {
         let focused = AttacheSessionAuthorization.focused(AttacheFocusedSession(
             sessionID: "s1", sourceKind: "codex", displayTitle: "T", workingDirectory: nil
         ))
-        let userFacing: [AttacheRequestRole] = [.presentation, .conversation, .recap, .followUp, .liveFollowUp, .anotherTake, .preview]
-        for role in userFacing {
+        for role in [AttacheRequestRole.conversation, .recap, .liveFollowUp] {
             XCTAssertTrue(
                 AttacheRequestAuthority.roleMayUseSessionContext(role, authorization: focused),
                 "Role \(role) should use focused session context."
+            )
+        }
+        for role in [AttacheRequestRole.presentation, .followUp, .anotherTake, .preview, .topicTagging] {
+            XCTAssertFalse(
+                AttacheRequestAuthority.roleMayUseSessionContext(role, authorization: focused),
+                "Role \(role) must remain isolated from ambient work-session context."
             )
         }
     }

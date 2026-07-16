@@ -5,13 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 cat <<EOF
-==> Running the real Codex personality routing canary
-    This uses Attaché's production prompt and CLI tool bridge with the exact
-    explicit artifact-delegation wording from the July 10 routing incident.
+==> Running the Codex personality isolation canary
+    This proves legacy Codex personality settings fail before compilation,
+    subprocess launch, or app-tool execution.
 EOF
 
-ATTACHE_LIVE_CODEX_ROUTING_TEST=1 \
-ATTACHE_LIVE_CODEX_MODEL="${ATTACHE_LIVE_CODEX_MODEL:-default}" \
-  swift test --filter AttachePresentationCLIToolBridgeTests.testLiveCodexRoutesExplicitArtifactDelegationToAgentTool
+swift test --filter AttachePresentationCLIToolBridgeTests.testCodexPersonalityInferenceFailsClosedBeforeToolExecution
 
-echo "==> Real Codex personality routing canary passed"
+echo "==> Codex personality isolation canary passed"

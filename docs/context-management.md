@@ -50,8 +50,9 @@ observation, or local cache. Capabilities include:
 - **Provenance and freshness**: where the capability information came from
   (provider metadata, runtime observation, user override, curated fallback)
   and when it was last confirmed. Stale profiles are flagged.
-- **Overrides**: a user can override the detected capability profile. The
-  override is always visible in the advanced view.
+- **Custom policy**: a user can set a separate effective input limit and
+  reserves. Custom policy never rewrites detected provider facts; both remain
+  visible in the advanced view.
 - **Unknown providers**: when Attaché cannot detect capabilities, it uses an
   unknown-capacity plan with conservative defaults. It never assumes a large
   context window.
@@ -69,8 +70,9 @@ egress policy:
 3. **Current user turn**: what you just said. Always included.
 4. **Recent direct-chat turns**: the exact recent turns in the current direct
    conversation, kept as a strategy-dependent suffix.
-5. **Older chat summary**: neutral, provenance-backed capsules that compress
-   older direct-chat history. Not durable memory.
+5. **Older chat summary**: neutral, locally extracted capsules that compress
+   older direct-chat history while retaining decisions, questions,
+   corrections, and unresolved commitments. Not durable memory.
 6. **Durable personal memory**: facts you told Attaché to remember, scoped and
    egress-labeled. Treated as quoted user data, never system instructions.
 7. **Focused-session metadata**: the title, source, and working directory of
@@ -80,8 +82,10 @@ egress policy:
    session's transcript, accessed through provenance-addressable tools.
 9. **Retrieved file evidence**: bounded excerpts from project files in the
    focused session's working directory.
-10. **Tool definitions and results**: available only when a session is
-    focused.
+10. **Tool definitions and results**: session transcript and project-file
+    tools are available only with exact frozen focus authority. Context-free
+    app tools, such as proposing a memory or opening native session discovery,
+    remain available without exposing session data.
 
 ## Search vs Authorization
 
@@ -106,12 +110,17 @@ every eligible region through a checkpointed staged workflow:
    covered ranges, not an indeterminate spinner.
 3. **Staged processing**: small models use more bounded stages; large models
    may combine more evidence. Both stay within per-call and cumulative limits.
+   A single exact range that cannot fit is not sent and the review reports
+   incomplete instead of silently truncating it.
 4. **Cancellation and resume**: cancel stops new provider calls. Resume
-   continues from local checkpoints without repeating completed work, as long
-   as the source version and authorization are still valid.
+   continues from in-memory checkpoints during the current app run without
+   repeating completed work, as long as the source version and authorization
+   are still valid. Relaunching starts a new cost preview and coverage ledger.
 5. **Final output**: states complete, incomplete, canceled, or stale. Only
-   complete may say the whole eligible session was reviewed. Every material
-   claim cites its source locator.
+   complete may say the whole eligible session was reviewed. Every completed
+   stage must return machine-validated episode IDs, turn boundaries, and full
+   source hashes for every supplied range; those locators are retained with the
+   stage summary.
 
 Source mutation, focus change, or authorization expiry marks the review
 incomplete or stale. No effectful tool or reverse-send is available in review
@@ -125,8 +134,9 @@ this" every time. Three modes:
 - **Off** (default for existing users): no proposals or automatic writes.
 - **Suggest**: shows a quiet review queue. Nothing persists until you accept.
 - **Automatic**: persists low-sensitivity, high-confidence durable facts and
-  reports what changed. Sensitive or ambiguous proposals still require
-  confirmation.
+  reports what changed. Automatic capture requires the durable statement to
+  appear in the user's own current turn, with negation preserved. Sensitive,
+  inferred, or ambiguous proposals still require confirmation.
 
 ### What is never saved
 
@@ -139,7 +149,10 @@ work-session content not explicitly restated by the user.
 Memory records are stored locally with 0600 file permissions. Each record has
 an egress label (local-only or allowed-remote). Local-only memories never
 appear in remote-bound requests, even when the active personality uses a
-remote model.
+remote model. A model tool can only propose local-only memory. Promoting one
+record for remote use requires an explicit native per-item confirmation in
+Settings. Legacy migration and JSON import also start every record local-only;
+an imported egress label is never treated as disclosure consent.
 
 ### Inspection and correction
 
@@ -218,7 +231,12 @@ engine.
   provenance/confidence, AttacheContextStrategy, AttacheContextCustomPolicy,
   versioned AttacheContextPolicyRecord (INF-305).
 - **SessionFTSIndex**: SQLite FTS5 index over privacy-filtered session chunks
-  with provenance locators (INF-306).
+  with provenance locators (INF-306). Reconciliation and insertion run on the
+  background session-index queue. A fast app-owned metadata catalog keeps
+  Command-K and model-assisted discovery usable during a first build. JSONL
+  records over 2 MiB are omitted from the discovery index to bound memory;
+  explicitly focused transcript reads remain available on demand under their
+  separate 64 MiB per-record safety ceiling.
 - **AttacheDataEgress**: endpoint-aware egress classifier and consent
   transitions (INF-307).
 - **AttacheCapabilityDiscovery**: parsers for Codex cache, Ollama show/ps,
@@ -255,17 +273,19 @@ engine.
   (INF-324).
 - **AttacheContextReceiptView**: privacy-safe context receipts (INF-325).
 - **AttacheSessionMap**: incremental session maps with topic episodes (INF-326).
-- **AttacheHierarchicalCapsules**: provenance-backed hierarchical capsules
-  (INF-328).
+- **AttacheHierarchicalCapsules**: pure provenance and validation primitives
+  for future persisted hierarchical retrieval (INF-328). Production direct
+  chat currently uses local extractive capsules, while whole-session review
+  uses session-map stages and validated citations.
 - **AttacheExhaustiveReview**: exhaustive whole-session review with coverage
   ledger (INF-329).
 - **AttacheEvaluationHarness**: deterministic offline evaluation gate (INF-330).
 
 ### Schema versions
 
-- SessionFTSIndex: schema version 1
+- SessionFTSIndex: schema version 2
 - AttacheMemoryLedger: migration version 1
-- AttacheDirectChatSummaryStore: schema version 1
+- AttacheDirectChatSummaryStore: schema version 2
 - AttacheCalibrationStore: schema version 1
 
 ### Evaluation gate
@@ -275,3 +295,17 @@ harness. It measures budget compliance, authorization leakage, strategy
 monotonicity, memory scope/egress, effectful-tool-once, incomplete-never-
 complete, report-no-secrets, and determinism. All scenarios must pass for a
 green gate.
+
+Run `scripts/context-smoke.sh` for the release gate. It reports the actual
+XCTest cases executed across named authorization, budget, memory, retrieval,
+receipt, fallback, and review matrices. It then packages the app and captures
+the exact production-broker payload for every request role over HTTP and the
+tool-isolated Claude CLI path without contacting a provider. Codex personality
+inference has a separate fail-closed canary because its CLI cannot currently
+disable native file-reading tools. The conversation artifacts
+use a synthetic frozen focus grant and matching session evidence before session
+tools are enabled. The gate verifies every captured artifact, proves a payload
+mutation is rejected, drives the packaged context, memory, receipt, discovery,
+overflow, and exhaustive-review surfaces through accessibility, and proves a
+missing review surface makes that UI gate fail. `scripts/release-readiness-smoke.sh`
+invokes this gate first.

@@ -12,48 +12,115 @@ public protocol TokenEstimating: Sendable {
     func estimate(text: String) -> Int
 }
 
-/// A conservative, Unicode-aware fallback estimator (INF-309). It deliberately
-/// overestimates so a budget never silently under-reserves: CJK, kana, hangul,
-/// and emoji count as roughly one token each (they are typically one to two in
-/// real BPE), while Latin and punctuation count at about four characters per
-/// token, rounded up. A small per-call framing overhead is added by the caller.
+/// A conservative, tokenizer-independent fallback estimator (INF-309).
+/// Ordinary lowercase prose keeps a four-characters-per-token baseline, while
+/// token-dense material uses a much stricter envelope: non-ASCII scalars count
+/// their UTF-8 bytes, punctuation counts individually, and mixed-case,
+/// alphanumeric, base64-shaped, and long high-variety identifiers count one per
+/// byte. This avoids the dangerous undercount from applying a prose heuristic
+/// to minified JSON, URLs, random identifiers, emoji sequences, and non-Latin
+/// scripts without reducing every prose budget to one quarter of capacity.
 public struct AttacheFallbackTokenEstimator: TokenEstimating {
     public let family = "unicode-fallback"
-    public let version = 1
+    public let version = 2
 
     public init() {}
 
     public func estimate(text: String) -> Int {
-        var dense = 0
-        var sparse = 0
-        for scalar in text.unicodeScalars {
-            if Self.isDense(scalar) {
-                dense += 1
+        var tokens = 0
+        var runCount = 0
+        var runIsAllLowercase = true
+        var runIsAllDigits = true
+        var lowercaseVariety: Set<UInt8> = []
+        var whitespaceCount = 0
+
+        func flushRun() {
+            guard runCount > 0 else { return }
+            if runIsAllLowercase {
+                let highVarietyLongIdentifier = runCount >= 12 && lowercaseVariety.count > 4
+                tokens += highVarietyLongIdentifier ? runCount : (runCount + 3) / 4
+            } else if runIsAllDigits {
+                // Common tokenizers split long decimal strings into groups no
+                // larger than about three digits.
+                tokens += (runCount + 2) / 3
             } else {
-                sparse += 1
+                // Mixed case or letters plus digits are code/base64/identifier
+                // shaped. One token per byte is the conservative fallback.
+                tokens += runCount
+            }
+            runCount = 0
+            runIsAllLowercase = true
+            runIsAllDigits = true
+            lowercaseVariety.removeAll(keepingCapacity: true)
+        }
+
+        func flushWhitespace() {
+            guard whitespaceCount > 0 else { return }
+            tokens += (whitespaceCount + 3) / 4
+            whitespaceCount = 0
+        }
+
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            if value <= 0x7F {
+                let byte = UInt8(value)
+                let isAlphaNumeric = (byte >= 0x30 && byte <= 0x39)
+                    || (byte >= 0x41 && byte <= 0x5A)
+                    || (byte >= 0x61 && byte <= 0x7A)
+                if isAlphaNumeric {
+                    flushWhitespace()
+                    runCount += 1
+                    let isLowercase = byte >= 0x61 && byte <= 0x7A
+                    let isDigit = byte >= 0x30 && byte <= 0x39
+                    runIsAllLowercase = runIsAllLowercase && isLowercase
+                    runIsAllDigits = runIsAllDigits && isDigit
+                    if isLowercase, lowercaseVariety.count <= 4 {
+                        lowercaseVariety.insert(byte)
+                    }
+                } else if byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D {
+                    flushRun()
+                    whitespaceCount += 1
+                } else {
+                    flushRun()
+                    flushWhitespace()
+                    tokens += 1
+                }
+            } else {
+                flushRun()
+                flushWhitespace()
+                tokens += scalar.utf8.count
             }
         }
-        let denseTokens = dense
-        let sparseTokens = (sparse + 3) / 4
-        return denseTokens + sparseTokens
+        flushRun()
+        flushWhitespace()
+        return tokens
+    }
+}
+
+/// A conservative calibrated estimator (INF-318). Calibration may only raise
+/// a base estimate. It never changes a provider hard limit and production does
+/// not apply it to Custom policies.
+public struct AttacheCalibratedTokenEstimator: TokenEstimating {
+    public let family: String
+    public let version: Int
+    private let base: any TokenEstimating
+    private let correction: AttacheCalibrationCorrection
+
+    public init(
+        base: any TokenEstimating,
+        correction: AttacheCalibrationCorrection
+    ) {
+        self.base = base
+        self.correction = correction
+        family = "\(base.family)+calibrated"
+        version = base.version
     }
 
-    /// True for code points that are typically one to two BPE tokens, so the
-    /// fallback counts them as one each (a conservative lower bound on token
-    /// count that still beats treating them as four-characters-per-token).
-    static func isDense(_ scalar: Unicode.Scalar) -> Bool {
-        let v = scalar.value
-        // CJK Unified Ideographs, extensions A/B, kana, hangul, emoji, and
-        // combining marks are dense in token space.
-        if v >= 0x3040 && v <= 0x30FF { return true }   // Hiragana + Katakana
-        if v >= 0x3400 && v <= 0x9FFF { return true }   // CJK Unified + Ext A
-        if v >= 0xAC00 && v <= 0xD7AF { return true }   // Hangul syllables
-        if v >= 0xF900 && v <= 0xFAFF { return true }   // CJK compat ideographs
-        if v >= 0x20000 && v <= 0x2FFFF { return true } // CJK extensions B-F
-        if v >= 0x1F000 && v <= 0x1FAFF { return true } // emoji + symbols
-        if v >= 0x2600 && v <= 0x27BF { return true }   // misc symbols + dingbats
-        if v >= 0x0300 && v <= 0x036F { return true }   // combining diacriticals
-        return false
+    public func estimate(text: String) -> Int {
+        AttacheTokenUsageCalibrator.applyCorrection(
+            estimate: base.estimate(text: text),
+            correction: correction
+        )
     }
 }
 
@@ -108,7 +175,13 @@ public struct AttacheContextBudgetPlan: Equatable, Sendable, Codable {
     /// The total reserved portion (output + tool + safety + retrieval + framing
     /// + current input). Never exceeds the hard limit on a valid plan.
     public var totalReserved: Int {
-        outputReserve + toolReserve + safetyMargin + retrievalReserve + framingOverhead + currentUserInputTokens
+        [
+            outputReserve, toolReserve, safetyMargin, retrievalReserve,
+            framingOverhead, currentUserInputTokens
+        ].reduce(0) { partial, value in
+            let result = partial.addingReportingOverflow(value)
+            return result.overflow ? Int.max : result.partialValue
+        }
     }
 }
 
@@ -142,6 +215,7 @@ public enum ContextBudgetPlanner {
         role: AttacheRequestRole,
         currentUserInput: String,
         estimator: TokenEstimating = AttacheFallbackTokenEstimator(),
+        protectedContentText: String = "",
         toolDefinitionsText: String = "",
         bridgeWrapperText: String = ""
     ) throws -> AttacheContextBudgetPlan {
@@ -162,25 +236,24 @@ public enum ContextBudgetPlanner {
         // policy's hard cap. Unknown capacity uses the progressive envelope,
         // labeled, never a fake provider fact.
         let customHardCap = (strategy.kind == .custom ? strategy.custom?.hardInputLimit : nil)
+        let customWorkingCap = (strategy.kind == .custom ? strategy.custom?.effectiveInputLimit : nil)
         let mergedCeiling: Int? = {
-            switch (capabilityCeiling, customHardCap) {
-            case let (cap?, custom?): return min(cap, custom)
-            case (let cap?, nil): return cap
-            case (nil, let custom?): return custom
-            default: return nil
-            }
+            [capabilityCeiling, customHardCap, customWorkingCap]
+                .compactMap { $0 }
+                .min()
         }()
         let effectiveHardLimit: Int? = mergedCeiling ?? (unknownCapacity ? unknownCapacityEnvelope : nil)
 
         let toolDefinitionTokens = estimator.estimate(text: toolDefinitionsText)
         let bridgeTokens = estimator.estimate(text: bridgeWrapperText)
+        let protectedContentTokens = estimator.estimate(text: protectedContentText)
 
         // Reserves are proportionally capped by the effective hard limit so they
         // never exceed it on a small model (INF-309: "never reserve beyond the
         // hard limit"). Custom uses the user's validated values.
         let limit = effectiveHardLimit ?? Int.max
         let outputReserve: Int
-        let toolReserve: Int
+        var toolReserve: Int
         let safetyMargin: Int
         if strategy.kind == .custom, let custom = strategy.custom {
             outputReserve = custom.outputReserve
@@ -191,8 +264,15 @@ public enum ContextBudgetPlanner {
             toolReserve = Self.capped(Self.defaultToolReserve(role: role), limit: limit, divisor: 4)
             safetyMargin = Self.capped(Self.safetyMargin(for: capability), limit: limit, divisor: 16)
         }
-        let framingOverhead = min(framingOverhead(role: role) + toolDefinitionTokens + bridgeTokens, max(64, limit / 16))
-        let retrievalReserve = Self.capped(Self.defaultRetrievalReserve(role: role), limit: limit, divisor: 4)
+        // Provider-bound wrappers and protected prompts are measured, not
+        // capped. Capping these values made a giant tool schema appear small
+        // enough to send even though the serialized request exceeded the
+        // model's declared limit.
+        let framingOverhead = framingOverhead(role: role)
+            + toolDefinitionTokens
+            + bridgeTokens
+            + protectedContentTokens
+        var retrievalReserve = Self.capped(Self.defaultRetrievalReserve(role: role), limit: limit, divisor: 4)
 
         guard effectiveHardLimit != nil else {
             // Unbounded: return nil budget (no ceiling to plan against).
@@ -210,8 +290,44 @@ public enum ContextBudgetPlanner {
         // Never reserve beyond the hard limit. If protected content (current
         // input + all reserves + framing) cannot fit, fail before inference and
         // preserve the user draft.
-        let totalReserved = outputReserve + toolReserve + safetyMargin + retrievalReserve + framingOverhead + inputTokens
-        if totalReserved > hard {
+        var totalReserved = 0
+        var reserveArithmeticOverflow = false
+        for value in [
+            outputReserve, toolReserve, safetyMargin, retrievalReserve,
+            framingOverhead, inputTokens
+        ] {
+            let result = totalReserved.addingReportingOverflow(value)
+            if result.overflow {
+                reserveArithmeticOverflow = true
+                totalReserved = Int.max
+                break
+            }
+            totalReserved = result.partialValue
+        }
+        // Named strategies treat retrieval and tool-result room as elastic.
+        // Protected prompts, the current user turn, output room, and the safety
+        // margin must fit first. This keeps an otherwise ordinary request from
+        // failing merely because conservative prospective reserves overlap on
+        // a small or unknown-capacity model. Custom reserves remain exact.
+        if !reserveArithmeticOverflow,
+           totalReserved > hard,
+           strategy.kind != .custom {
+            let reserveFloor = 128
+            let retrievalReduction = min(
+                totalReserved - hard,
+                max(retrievalReserve - reserveFloor, 0)
+            )
+            retrievalReserve -= retrievalReduction
+            totalReserved -= retrievalReduction
+
+            let toolReduction = min(
+                max(totalReserved - hard, 0),
+                max(toolReserve - reserveFloor, 0)
+            )
+            toolReserve -= toolReduction
+            totalReserved -= toolReduction
+        }
+        if reserveArithmeticOverflow || totalReserved > hard {
             throw AttacheBudgetFailure.protectedContentOverflow(
                 userDraft: currentUserInput,
                 requestedTokens: totalReserved,

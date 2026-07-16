@@ -10,8 +10,26 @@ struct CloudConsentSheet: View {
     let produces: String
     /// What is sent to it, one sentence.
     let sends: String
+    /// The normalized destination receiving the data, when it is configurable.
+    let destination: String?
     let onEnable: () -> Void
     let onCancel: () -> Void
+
+    init(
+        providerName: String,
+        produces: String,
+        sends: String,
+        destination: String? = nil,
+        onEnable: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.providerName = providerName
+        self.produces = produces
+        self.sends = sends
+        self.destination = destination
+        self.onEnable = onEnable
+        self.onCancel = onCancel
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -27,6 +45,18 @@ struct CloudConsentSheet: View {
                 .font(.callout)
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let destination, !destination.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Destination")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(destination)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
+            }
 
             Text("You're acknowledging this once for \(produces). You can switch back to a local provider at any time.")
                 .font(.caption)

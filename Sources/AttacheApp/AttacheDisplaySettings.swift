@@ -447,7 +447,10 @@ enum AttachePreferenceKey {
     static let cloudConsentPresentation = "attache.cloudConsentPresentation"
     static let cloudConsentPresentationProviders = "attache.cloudConsentPresentationProviders"
     static let cloudConsentPresentationMigrationDone = "attache.cloudConsentPresentationMigrationDone"
+    // Legacy global voice flag, consumed once by AppModel's scoped migration.
     static let cloudConsentVoice = "attache.cloudConsentVoice"
+    static let cloudConsentVoiceScopes = "attache.cloudConsentVoiceScopes"
+    static let cloudConsentVoiceMigrationDone = "attache.cloudConsentVoiceMigrationDone"
     static let ollamaBaseURL = "attache.ollamaBaseURL"
     static let customBaseURL = "attache.customBaseURL"
     // Opt-in auto-fallback chain (INF-258/D5), conversation role only.

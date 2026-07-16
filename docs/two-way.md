@@ -213,7 +213,8 @@ Two-way has five intentionally separate verification layers:
    starts a deterministic local OpenAI-compatible provider, asks the personality
    to stage a Codex instruction through `stage_agent_instruction`, drives the
    first-use enable sheet and confirmation, verifies a second explicit handoff
-   obeys the direct-send policy, waits for real Codex to answer, and audits the
+   still requires native confirmation even when Tell Agent direct-send is
+   enabled, waits for real Codex to answer, and audits the
    stored origin, source wording, exact structured payload, frozen target, and
    delivery checkpoints. It also asks what Codex said, verifies that question uses
    `read_session_transcript` without staging another instruction, and reports the
@@ -222,14 +223,14 @@ Two-way has five intentionally separate verification layers:
    tagging so success depends on Codex's watched answer, not a presentation-model
    paraphrase. It still uses real Codex auth/network, but it does not require
    xAI, Claude, Anthropic, OpenAI, Groq, or Ollama credentials.
-4. **Real Codex personality routing canary:**
-   `scripts/codex-personality-routing-canary.sh` runs the production
-   conversation prompt and CLI tool bridge against the real Codex personality
-   brain. It uses the exact explicit artifact-delegation wording from the July
-   10 incident and fails unless the first app tool selected is
-   `stage_agent_instruction` with the requested report context. This closes the
-   intent-classification gap that the deterministic personality provider cannot
-   exercise. It runs as part of the opt-in Codex release-readiness extras.
+4. **Codex personality isolation canary:**
+   `scripts/codex-personality-routing-canary.sh` loads legacy `codex_cli`
+   personality settings through the production service and proves they fail
+   before compilation, subprocess launch, or app-tool execution. Codex CLI's
+   read-only sandbox does not disable native file-reading tools, so it is not an
+   eligible personality backend. This canary runs as part of the opt-in Codex
+   release-readiness extras, while the direct and staged two-way gates continue
+   to exercise Codex as an explicit agent destination.
 5. **Direct Claude Code round trip:** `scripts/claude-two-way-smoke.sh`
    (INF-257/E2) is the Claude analog of layer 2. It copies only the
    `claudeAiOauth` portion of the real Claude credentials (Keychain item
@@ -260,14 +261,17 @@ be handed off under the user's configured confirmation policy.
 
 Personality tools are provider-neutral. HTTP providers that support the
 OpenAI-style `tool_calls` protocol receive the normal structured tool schema.
-CLI-backed personalities such as `claude_cli` and `codex_cli` still run the
-vendor CLI with its native filesystem/tools disabled, but Attaché exposes its own
-bounded app tools through a JSON bridge in the prompt and parses that response
-before executing anything. That means every personality provider can request
+The `claude_cli` personality provider runs Claude Code with its native tools,
+settings, MCP servers, skills, slash commands, and session persistence disabled.
+Codex CLI cannot currently make the equivalent native-tool guarantee, so Attaché
+keeps it available as an agent source and reverse-send destination but refuses
+to use it for personality inference. Attaché exposes its own bounded app tools
+through a JSON bridge in the prompt and parses that response before executing
+anything. That means every enabled personality provider can request
 `stage_agent_instruction`, `read_session_transcript`, transcript search,
-working-directory listing, file reads rooted in the attached session, and
-Attaché-local session renames without giving the CLI subprocess direct tool
-access.
+working-directory listing, and file reads rooted in the attached session
+without giving the CLI subprocess direct tool access. Session renames remain
+an explicit app-owned action and are not exposed to the personality model.
 
 The provider canaries are separate: `scripts/provider-canaries.sh` always runs a
 deterministic local OpenAI-compatible provider as a free positive control, then
@@ -280,38 +284,43 @@ mandatory. The individual wrappers are `scripts/xai-tool-calling-canary.sh`,
 `scripts/ollama-tool-calling-canary.sh`, and
 `scripts/local-provider-tool-calling-canary.sh`.
 
-Pre-release coverage adds ten opt-in gates through
+Pre-release coverage adds eleven opt-in gates through
 `scripts/release-readiness-smoke.sh`:
 
-1. `scripts/release-install-smoke.sh` builds a candidate, wraps it in a temporary
+1. `scripts/context-smoke.sh` fails closed over the production and Core context
+   test matrix, verifies real XCTest counts, captures and verifies packaged
+   production-broker HTTP and CLI payloads for every request role, drives the
+   packaged context-management UI, runs deliberate mutation checks, and checks
+   all repository docs links.
+2. `scripts/release-install-smoke.sh` builds a candidate, wraps it in a temporary
    DMG, installs it into a temp Applications directory, verifies the installed
    bundle, and launches that installed app with the UI smoke driver.
-2. `scripts/upgrade-from-stable-smoke.sh` builds the stable baseline from
+3. `scripts/upgrade-from-stable-smoke.sh` builds the stable baseline from
    `origin/main` (or `ATTACHE_STABLE_REF`), seeds state through the stable app,
    installs the current candidate over it, and verifies the candidate still sees
    the pre-upgrade card and settings.
-3. `scripts/provider-canaries.sh` verifies the personality tool-calling contract
+4. `scripts/provider-canaries.sh` verifies the personality tool-calling contract
    across local and configured hosted providers.
-4. `scripts/codex-two-way-safety-smoke.sh` proves approval-like send-to-agent
+5. `scripts/codex-two-way-safety-smoke.sh` proves approval-like send-to-agent
    payloads are refused before confirmation and never reach a transcript.
-5. `scripts/agent-destination-smoke.sh` configures a text-only CLI personality,
+6. `scripts/agent-destination-smoke.sh` configures a text-only CLI personality,
    focuses a disposable Codex session, switches the live conversation to Tell
    Agent, proves the frozen target is visible, proves Attaché opens the
    send-to-agent confirmation path without provider-side tool calls or host-side
    phrase matching, and proves the destination resets to Ask Attaché after one
    turn.
-6. `scripts/conversation-feedback-smoke.sh` starts a deterministic local
+7. `scripts/conversation-feedback-smoke.sh` starts a deterministic local
    personality provider, presses the visible live Ask Attaché send button, proves
    the text field clears, proves a thinking indicator appears while the provider
    is delayed, proves audio-prep feedback appears, proves the reply starts
    through karaoke captions, and proves the reply is filed as a replayable card.
-7. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
+8. `scripts/no-key-first-run-smoke.sh` proves a fresh no-key profile stays on the
    local Ollama default, seeds no cloud credentials, and still files a card.
-8. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event
+9. `scripts/macos-lifecycle-smoke.sh` proves launch, quit, relaunch, local event
    server recovery, and Settings still work.
-9. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
+10. `scripts/load-smoke.sh` indexes many fake Codex sessions, files many local
    cards, and verifies Command-K plus inbox search remain responsive.
-10. `scripts/two-way-negative-path-smoke.sh` proves the three negative-path
+11. `scripts/two-way-negative-path-smoke.sh` proves the three negative-path
     invariants above end to end against disposable fake Codex sessions: a
     delivery failure (fake codex exits nonzero) shows the stderr tail in the
     call status and logs `failed`; a queued send against a session kept

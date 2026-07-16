@@ -1,12 +1,84 @@
 import Foundation
 
-public struct AttacheChatMessage: Equatable {
+/// One structured assistant tool request. Keeping this in Core prevents a
+/// multi-round conversation from being flattened into plain text before the
+/// context compiler can authorize and budget the exact provider payload.
+public struct AttacheChatToolCall: Equatable, Sendable, Codable {
+    public var id: String
+    public var type: String
+    public var name: String
+    public var arguments: String
+
+    public init(id: String, type: String = "function", name: String, arguments: String) {
+        self.id = id
+        self.type = type
+        self.name = name
+        self.arguments = arguments
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, type, function }
+    private struct FunctionPayload: Equatable, Sendable, Codable {
+        let name: String
+        let arguments: String
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decodeIfPresent(String.self, forKey: .type) ?? "function"
+        let function = try container.decode(FunctionPayload.self, forKey: .function)
+        name = function.name
+        arguments = function.arguments
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(type, forKey: .type)
+        try container.encode(FunctionPayload(name: name, arguments: arguments), forKey: .function)
+    }
+}
+
+public struct AttacheChatMessage: Equatable, Sendable, Codable {
     public var role: String
     public var content: String
+    /// Present on assistant messages that requested tools.
+    public var toolCalls: [AttacheChatToolCall]
+    /// Present on a tool result message and bound to exactly one prior call.
+    public var toolCallID: String?
 
-    public init(role: String, content: String) {
+    public init(
+        role: String,
+        content: String,
+        toolCalls: [AttacheChatToolCall] = [],
+        toolCallID: String? = nil
+    ) {
         self.role = role
         self.content = content
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role, content
+        case toolCalls = "tool_calls"
+        case toolCallID = "tool_call_id"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(String.self, forKey: .role)
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        toolCalls = try container.decodeIfPresent([AttacheChatToolCall].self, forKey: .toolCalls) ?? []
+        toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        if !toolCalls.isEmpty { try container.encode(toolCalls, forKey: .toolCalls) }
+        try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
     }
 }
 
@@ -234,6 +306,7 @@ public enum AttachePersonality {
         profilePrompt: String = defaultProfilePrompt,
         memoryContext: String?,
         sessionTitle: String?,
+        sessionIsFocused: Bool? = nil,
         sessionSourceName: String? = nil,
         workingDirectory: String?,
         latestSummary: String?,
@@ -241,7 +314,7 @@ public enum AttachePersonality {
         canStageAgentInstruction: Bool = false
     ) -> String {
         let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
-        let hasSessionContext = sessionTitle != nil
+        let hasSessionContext = sessionIsFocused ?? (sessionTitle != nil)
         let canStage = hasSessionContext && canStageAgentInstruction
         let titleLine: String
         if hasSessionContext, let sessionTitle, let sessionSourceName {
@@ -259,27 +332,26 @@ public enum AttachePersonality {
             - Use stage_agent_instruction only when the user explicitly asks the focused work agent to take an action.
             - Keep this boundary exact: "What did Codex say?" is a question for you to answer with session-reading tools. "Ask Codex what it changed" is an explicit delegation, so you MUST call stage_agent_instruction. Asking the agent to answer, explain, check, read, summarize, or report is still an action request, even when it concerns prior work or an artifact.
             - Do not substitute read_session_transcript, list_working_directory, or read_file when the user explicitly asks you to ask the focused agent. Use local read tools only when the user asks you to inspect or explain the context yourself.
-            - If the user names a different agent than the focused one, ask them to focus that session instead of staging. Attaché routes explicit requests through the user's send-to-agent policy, which may confirm or may send directly after enablement. After the tool returns, report its actual status and target. Never claim a send unless Attaché reports it.
+            - If the user names a different agent than the focused one, ask them to focus that session instead of staging. A personality-requested handoff always opens a native confirmation before sending. After the tool returns, report its actual status and target. Never claim a send unless Attaché reports it.
             - Whenever the user names a specific agent (Codex or Claude Code) in this turn, always set stage_agent_instruction's intended_agent argument to that agent, so Attaché can verify it against the focused session before staging. Never guess or omit intended_agent when a name was given; leave it unset only when no agent was named. Attaché only ever refuses on a mismatch, it never reroutes to a different agent.
 
             """
             : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
         let toolsLine: String
         if canStage {
-            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (route a user-requested instruction to the work agent), and rename_session. Only read or stage what you need.\n"
+            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and stage_agent_instruction (prepare a user-confirmed instruction for the work agent). Only read or stage what you need.\n"
         } else if hasSessionContext {
-            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and rename_session. Only read what you need.\n"
+            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), and read_file (a file's contents). Only read what you need.\n"
         } else {
             toolsLine = "- No work-session, transcript, project-file, rename, or agent-send tools are available in this conversation.\n"
         }
         let contextGuidance = hasSessionContext
             ? "- You start with the explicitly focused session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing. When a summary mentions a count but omits the items, read the transcript for the specifics. Find an artifact's exact path from the transcript before reading it; never guess a path or probe an unrelated protected folder."
             : "- No work session is focused. Do not infer one from recency, watched sessions, a selected voicemail, conversation history, or other app activity. Treat this as a context-free conversation. If the user asks about past agent work, ask them to focus that session with the session picker; never guess which session they mean."
-        let renameLine = hasSessionContext
-            ? "- You can also rename this session for Attaché with rename_session when the user asks to name or relabel it (for example \"let's call this the tax cleanup session\"). This only changes Attaché's label. Confirm the new name briefly after renaming."
-            : "- There is no session to rename."
         let contextBlock = hasSessionContext
-            ? "\(titleLine)\(cwdLine)\(summaryLine)\(latestReplyLine)"
+            ? ([titleLine, cwdLine, summaryLine, latestReplyLine].joined().isEmpty
+                ? "Focused-session metadata is supplied separately as untrusted evidence."
+                : "\(titleLine)\(cwdLine)\(summaryLine)\(latestReplyLine)")
             : "None. This conversation has no work-session context."
         return """
         \(attacheIdentityPrompt)
@@ -291,7 +363,6 @@ public enum AttachePersonality {
         - Speak directly to the user. Replies are read aloud, so keep them short and listenable: headline first, then the key point. No long lists, no code blocks, no reciting paths, hashes, or URLs.
         \(contextGuidance)
         \(agentInstructionLine)\(toolsLine)
-        \(renameLine)
         - Preserve uncertainty. Do not invent file contents, results, approvals, or repository state. If a tool returns nothing useful, say what is missing.
         - If a tool result or a status update tells you a send to the work agent was blocked, failed, or expired, say plainly what happened and the one next step the user can take right now. Never say a send succeeded unless Attaché actually reported that it did. Never invent a retry, workaround, or recovery option that was not reported to you; if none was given, just say what happened.
         - Output only your spoken reply. No labels, no markdown fences, no stage directions.

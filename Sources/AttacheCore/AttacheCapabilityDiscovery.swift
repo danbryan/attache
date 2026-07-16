@@ -23,14 +23,26 @@ public enum AttacheCapabilityParser {
         return value
     }
 
+    /// JSONSerialization may surface an untrusted numeric field as `Double`.
+    /// A direct `Int(double)` traps for non-finite or out-of-range values, so
+    /// capability metadata must use an exact, failable conversion before the
+    /// normal plausibility bounds are applied.
+    static func integerValue(_ value: Any?) -> Int? {
+        if value is Bool { return nil }
+        if let integer = value as? Int { return integer }
+        guard let double = value as? Double,
+              double.isFinite else { return nil }
+        return Int(exactly: double)
+    }
+
     // MARK: - Codex local model cache
 
     /// Parse a Codex local model-cache entry. Expected shape (fields optional):
     /// `context_window`, `slug`/`fingerprint`, `reasoning_levels`, `max_output_tokens`,
     /// `fetched_at` (epoch or ISO8601). Missing fields surface as unknown.
     public static func parseCodexCache(_ json: [String: Any]) -> AttacheModelCapabilityProfile? {
-        let context = sanitizeContextWindow((json["context_window"] as? Int) ?? (json["context_window"] as? Double).map(Int.init))
-        let output = sanitizeOutputLimit((json["max_output_tokens"] as? Int) ?? (json["max_output_tokens"] as? Double).map(Int.init))
+        let context = sanitizeContextWindow(integerValue(json["context_window"]))
+        let output = sanitizeOutputLimit(integerValue(json["max_output_tokens"]))
         let reasoningLevels = (json["reasoning_levels"] as? [String]) ?? []
         let supportsReasoning = !reasoningLevels.isEmpty
         let fingerprint = (json["fingerprint"] as? String) ?? (json["slug"] as? String)
@@ -87,16 +99,14 @@ public enum AttacheCapabilityParser {
     static func ollamaContextLength(from modelInfo: [String: Any]) -> Int? {
         // Ollama nests architecture under keys like "llama.context_length".
         for (key, value) in modelInfo where key.hasSuffix(".context_length") {
-            if let n = value as? Int { return n }
-            if let d = value as? Double { return Int(d) }
+            if let n = integerValue(value) { return n }
         }
-        if let n = modelInfo["context_length"] as? Int { return n }
-        return nil
+        return integerValue(modelInfo["context_length"])
     }
 
     /// Ollama's `parameters` field is a string like "num_ctx 8192\nnum_batch 512".
     static func ollamaNumCtx(from show: [String: Any]) -> Int? {
-        if let n = (show["num_ctx"] as? Int) ?? (show["num_ctx"] as? Double).map(Int.init) { return n }
+        if let n = integerValue(show["num_ctx"]) { return n }
         guard let parameters = show["parameters"] as? String else { return nil }
         for line in parameters.components(separatedBy: .newlines) {
             let parts = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,14 +138,12 @@ public enum AttacheCapabilityParser {
     /// `max_output_tokens`/`max_completion_tokens`.
     public static func parseHostedModel(_ json: [String: Any], now: Date = Date()) -> AttacheModelCapabilityProfile? {
         let context = sanitizeContextWindow(
-            (json["context_window"] as? Int)
-                ?? (json["max_context"] as? Int)
-                ?? (json["context_window"] as? Double).map(Int.init)
+            integerValue(json["context_window"])
+                ?? integerValue(json["max_context"])
         )
         let output = sanitizeOutputLimit(
-            (json["max_output_tokens"] as? Int)
-                ?? (json["max_completion_tokens"] as? Int)
-                ?? (json["max_output_tokens"] as? Double).map(Int.init)
+            integerValue(json["max_output_tokens"])
+                ?? integerValue(json["max_completion_tokens"])
         )
         let reasoningLevels = (json["supported_reasoning_efforts"] as? [String]) ?? []
         let supportsReasoning = !reasoningLevels.isEmpty
@@ -165,7 +173,7 @@ public enum AttacheCapabilityParser {
 
 /// A cached capability record: the profile plus when it was recorded and the
 /// parser version that produced it, so staleness and lineage forks are visible.
-public struct AttacheCapabilityCacheRecord: Equatable, Sendable {
+public struct AttacheCapabilityCacheRecord: Equatable, Codable, Sendable {
     public let profile: AttacheModelCapabilityProfile
     public let recordedAt: Date
     public let parserVersion: Int
@@ -225,5 +233,22 @@ public final class AttacheCapabilityCache: @unchecked Sendable {
     public func count() -> Int {
         lock.lock(); defer { lock.unlock() }
         return records.count
+    }
+
+    /// Content-free snapshot for a local last-known cache. Keys contain only
+    /// normalized endpoint/model identity and values contain numeric capability
+    /// metadata, never prompts, API keys, or response bodies.
+    public func snapshot() -> [String: AttacheCapabilityCacheRecord] {
+        lock.lock(); defer { lock.unlock() }
+        return records
+    }
+
+    /// Restore only records produced by the current parser lineage. Endpoint,
+    /// alias, and fingerprint isolation remains encoded in each dictionary key.
+    public func restore(_ persisted: [String: AttacheCapabilityCacheRecord]) {
+        lock.lock(); defer { lock.unlock() }
+        records = persisted.filter {
+            $0.value.parserVersion == AttacheCapabilityParser.parserVersion
+        }
     }
 }

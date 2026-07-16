@@ -86,8 +86,9 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
 
     private let speechFileSynthesizer = NSSpeechSynthesizer()
     private var speechConfiguration = AttacheSpeechConfiguration.systemDefault
-    /// A creator audition can temporarily use a draft voice. The live app's
-    /// configuration is restored on every completion, failure, or cancellation.
+    var configuredSpeechProvider: AttacheSpeechProvider { speechConfiguration.provider }
+    /// A creator audition or local-only card can temporarily use another voice.
+    /// The live configuration is restored on completion, failure, or cancellation.
     private var previewRestoreConfiguration: AttacheSpeechConfiguration?
     /// Time-stretch applied at the player, so it works for every voice engine,
     /// costs no re-synthesis, and the caption clock (which reads the player's
@@ -271,8 +272,17 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         speechFileSynthesizer.setVoice(nil)
     }
 
-    func play(_ card: VoicemailCard, startTimeMs: Int = 0) {
+    func play(
+        _ card: VoicemailCard,
+        startTimeMs: Int = 0,
+        configuration: AttacheSpeechConfiguration? = nil
+    ) {
         stop()
+        if let configuration {
+            let liveConfiguration = speechConfiguration
+            applyVoiceConfiguration(configuration)
+            previewRestoreConfiguration = liveConfiguration
+        }
         cleanExpiredAudioCache(force: false)
         isBusy = true
         activeIsPreview = false
@@ -422,8 +432,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         }
     }
 
-    func replay(_ card: VoicemailCard) {
-        play(card)
+    func replay(_ card: VoicemailCard, configuration: AttacheSpeechConfiguration? = nil) {
+        play(card, configuration: configuration)
     }
 
     func preview(_ text: String) {
@@ -596,8 +606,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         timeline = .empty
         cleanupGeneratedAudio()
 
+        restoreVoiceAfterPreviewIfNeeded()
         if wasPreview {
-            restoreVoiceAfterPreviewIfNeeded()
             onPreviewFinished?()
         } else if credibleCardFinish, let cardID {
             onFinished?(cardID, true)
@@ -765,8 +775,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         cleanupGeneratedAudio()
 
         // Report the failure so the live queue can keep the card unread and advance.
+        restoreVoiceAfterPreviewIfNeeded()
         if wasPreview {
-            restoreVoiceAfterPreviewIfNeeded()
             onPreviewFinished?()
         } else if let cardID {
             onFinished?(cardID, false)

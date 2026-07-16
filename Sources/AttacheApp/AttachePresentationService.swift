@@ -2,78 +2,95 @@ import AttacheCore
 import Foundation
 import os
 
+private final class AttacheInferenceAccumulator: @unchecked Sendable {
+    private var inferences: [AttacheInferenceMetadata] = []
+    private let requestID: String
+
+    init(requestID: String) {
+        self.requestID = requestID
+    }
+
+    func record(_ inference: AttacheInferenceMetadata) {
+        inferences.append(inference)
+    }
+
+    func aggregate(appending inference: AttacheInferenceMetadata? = nil) -> AttacheInferenceMetadata? {
+        var values = inferences
+        if let inference { values.append(inference) }
+        return AttacheInferenceMetadata.aggregating(values, requestID: requestID)
+    }
+}
+
 final class AttachePresentationService {
     private let defaults: UserDefaults
     private let environment: [String: String]
-    private let memoryStore: AttacheMemoryStore
+    private let requestBroker: AttacheProductionRequestBroker
 
     init(
         defaults: UserDefaults = .standard,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        requestBroker: AttacheProductionRequestBroker = AttacheProductionRequestBroker()
     ) {
         self.defaults = defaults
         self.environment = environment
-        self.memoryStore = AttacheMemoryStore(environment: environment)
+        self.requestBroker = requestBroker
     }
 
     func prepare(
         _ event: NormalizedEvent,
-        personality: Personality?,
-        profilePrompt: String,
-        completion: @escaping (NormalizedEvent) -> Void
+        snapshot: AttacheRequestSnapshot,
+        completion: @escaping (AttachePreparedEventResult) -> Void
     ) {
+        precondition(snapshot.role == .presentation)
         if environment["ATTACHE_FORCE_PLAIN_READBACK"] == "1" {
-            completion(Self.eventWithPlainReadbackPresentation(
-                event,
-                strategy: "plain-readback-forced"
+            completion(Self.preparedResult(
+                event: Self.eventWithPlainReadbackPresentation(
+                    event,
+                    strategy: "plain-readback-forced"
+                ),
+                inference: .noModel(snapshot: snapshot)
+            ))
+            return
+        }
+        guard SourceKind.liveAgentRawValues.contains(event.source),
+              let attempt = frozenAttempt(snapshot: snapshot) else {
+            completion(Self.preparedResult(
+                event: Self.eventWithPlainReadbackPresentation(
+                    event,
+                    strategy: "plain-readback-personality-unavailable"
+                ),
+                inference: .noModel(snapshot: snapshot)
             ))
             return
         }
 
-        let unresolvedSettings = AttachePresentationSettings.load(
-            role: .presentation,
-            defaults: defaults,
-            environment: environment,
-            resolveSecrets: false
+        let prompt = AttachePersonality.presentationPrompt(
+            for: event,
+            profilePrompt: snapshot.profilePrompt,
+            memoryContext: nil,
+            spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
         )
 
-        guard unresolvedSettings.llmEnabled else {
-            completion(Self.eventWithPlainReadbackPresentation(event))
-            return
-        }
-
-        guard unresolvedSettings.hasProviderConfiguration,
-              SourceKind.liveAgentRawValues.contains(event.source) else {
-            completion(Self.eventWithPlainReadbackPresentation(
-                event,
-                strategy: "plain-readback-personality-unavailable"
-            ))
-            return
-        }
-
         Task {
-            let settings = AttachePresentationSettings.load(role: .presentation, defaults: defaults, environment: environment)
-            guard settings.isConfigured else {
-                await MainActor.run {
-                    completion(Self.eventWithPlainReadbackPresentation(
-                        event,
-                        strategy: "plain-readback-personality-unavailable"
-                    ))
-                }
-                return
-            }
-
-            let presentedEvent: NormalizedEvent
+            let prepared: AttachePreparedEventResult
             do {
-                let memorySnapshot = memoryStore.loadSnapshot()
-                presentedEvent = try await Self.eventWithLLMPresentation(
-                    event,
-                    settings: settings,
-                    memorySnapshot: memorySnapshot,
-                    profilePrompt: profilePrompt,
-                    personality: personality,
-                    spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+                let response = try await requestBroker.perform(
+                    snapshot: snapshot,
+                    attempt: attempt,
+                    messages: prompt.messages,
+                    messageSources: AttacheProductionRequestBroker.prebuiltMessageSources(
+                        snapshot: snapshot,
+                        messages: prompt.messages
+                    )
                 )
+                let event = try Self.eventWithLLMPresentation(
+                    event,
+                    prompt: prompt,
+                    response: response,
+                    attempt: attempt,
+                    snapshot: snapshot
+                )
+                prepared = Self.preparedResult(event: event, inference: response.metadata)
             } catch {
                 var failed = Self.eventWithPlainReadbackPresentation(
                     event,
@@ -86,20 +103,24 @@ final class AttachePresentationService {
                 // classifier the live call's recovery menu uses (D1); this only
                 // reads the failure, it never offers a switch/retry action here
                 // (that only exists where a retry loop is possible).
-                let presentationError = error as? AttachePresentationError
+                let rootError = Self.underlyingBrokerError(error)
+                let presentationError = rootError as? AttachePresentationError
                 let recovery = ConversationRecovery.classify(
                     errorMessage: error.localizedDescription,
                     failedPrompt: "",
                     httpStatus: presentationError?.httpStatus,
-                    urlErrorCode: presentationError?.urlErrorCode ?? (error as? URLError)?.code,
-                    isCLIProvider: settings.provider.isCLI
+                    urlErrorCode: presentationError?.urlErrorCode ?? (rootError as? URLError)?.code,
+                    isCLIProvider: attempt.provider.isCLI
                 )
                 failed.metadata["companion_presentation_error_category"] = recovery.category.rawValue
-                presentedEvent = failed
+                prepared = Self.preparedResult(
+                    event: failed,
+                    inference: Self.failureInference(error, snapshot: snapshot)
+                )
             }
 
             await MainActor.run {
-                completion(presentedEvent)
+                completion(prepared)
             }
         }
     }
@@ -107,147 +128,133 @@ final class AttachePresentationService {
     func answerFollowUpQuestion(
         card: VoicemailCard,
         danQuestion: String,
-        personality: Personality?,
-        profilePrompt: String,
+        snapshot: AttacheRequestSnapshot,
+        requestIsActive: (() async -> Bool)? = nil,
         completion: @escaping (Result<AttacheFollowUpAnswerResult, Error>) -> Void
     ) {
-        let fallback = Self.fallbackFollowUpAnswer(
+        precondition(snapshot.role == .followUp || snapshot.role == .liveFollowUp)
+        if snapshot.role == .liveFollowUp {
+            guard let focused = snapshot.focusedSession,
+                  card.externalSessionID == focused.sessionID else {
+                completion(.failure(AttachePresentationError.unauthorizedContext))
+                return
+            }
+        }
+        let noModel = AttacheInferenceMetadata.noModel(snapshot: snapshot)
+        var fallback = Self.fallbackFollowUpAnswer(
             card: card,
-            danQuestion: danQuestion
+            danQuestion: danQuestion,
+            inference: noModel
         )
-        let unresolvedSettings = AttachePresentationSettings.load(
-            role: .conversation,
-            defaults: defaults,
-            environment: environment,
-            resolveSecrets: false
-        )
-
-        guard unresolvedSettings.llmEnabled,
-              unresolvedSettings.hasProviderConfiguration,
-              SourceKind.liveAgentRawValues.contains(card.sourceKind) else {
+        guard SourceKind.liveAgentRawValues.contains(card.sourceKind),
+              let attempt = frozenAttempt(snapshot: snapshot) else {
             completion(.success(fallback))
             return
         }
+        let prompt = AttachePersonality.followUpPrompt(
+            for: card,
+            danQuestion: danQuestion,
+            profilePrompt: snapshot.profilePrompt,
+            memoryContext: nil,
+            spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+        )
 
         Task {
-            let settings = AttachePresentationSettings.load(role: .conversation, defaults: defaults, environment: environment)
-            guard settings.isConfigured else {
-                await MainActor.run {
-                    completion(.success(fallback))
-                }
-                return
-            }
-
             do {
-                let memorySnapshot = memoryStore.loadSnapshot()
-                let prompt = AttachePersonality.followUpPrompt(
-                    for: card,
-                    danQuestion: danQuestion,
-                    profilePrompt: profilePrompt,
-                    memoryContext: memorySnapshot.context,
-                    spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+                let response = try await requestBroker.perform(
+                    snapshot: snapshot,
+                    attempt: attempt,
+                    messages: prompt.messages,
+                    messageSources: AttacheProductionRequestBroker.prebuiltMessageSources(
+                        snapshot: snapshot,
+                        messages: prompt.messages
+                    ),
+                    requestIsActive: requestIsActive
                 )
-                let content = try await Self.requestChatCompletion(messages: prompt.messages, settings: settings)
-                let answer = Self.sanitizeFollowUpAnswerOutput(content)
-                guard !answer.isEmpty else {
-                    throw AttachePresentationError.emptyResponse
-                }
+                let answer = Self.sanitizeFollowUpAnswerOutput(response.content)
+                guard !answer.isEmpty else { throw AttachePresentationError.emptyResponse }
                 let result = AttacheFollowUpAnswerResult(
                     answerText: answer,
                     strategy: "attache-personality-llm",
-                    model: settings.model,
+                    model: attempt.model,
                     rawContextCharacterCount: prompt.rawContextCharacterCount,
                     truncatedContext: prompt.truncatedRawContext,
-                    errorDescription: nil
+                    errorDescription: nil,
+                    inference: response.metadata
                 )
-                await MainActor.run {
-                    completion(.success(result))
-                }
+                await MainActor.run { completion(.success(result)) }
             } catch {
-                var failed = fallback
-                failed.strategy = "deterministic-follow-up-fallback-after-llm-error"
-                failed.errorDescription = error.localizedDescription
-                // Structural detail alongside the text (INF-254), so a caller
-                // can classify via ConversationRecovery.classify and offer a
-                // Switch model / Retry affordance the same way the live call
-                // already does, instead of degrading silently.
-                let presentationError = error as? AttachePresentationError
-                failed.errorHTTPStatus = presentationError?.httpStatus
-                failed.errorURLErrorCode = presentationError?.urlErrorCode ?? (error as? URLError)?.code
-                let failedResult = failed
-                await MainActor.run {
-                    completion(.success(failedResult))
-                }
+                fallback.strategy = "deterministic-follow-up-fallback-after-llm-error"
+                fallback.errorDescription = error.localizedDescription
+                fallback.inference = Self.failureInference(error, snapshot: snapshot)
+                let rootError = Self.underlyingBrokerError(error)
+                let presentationError = rootError as? AttachePresentationError
+                fallback.errorHTTPStatus = presentationError?.httpStatus
+                fallback.errorURLErrorCode = presentationError?.urlErrorCode ?? (rootError as? URLError)?.code
+                let result = fallback
+                await MainActor.run { completion(.success(result)) }
             }
         }
     }
 
-    /// Multi-turn voice conversation with the personality. Sends the full message
-    /// history plus the session-reading tools, runs the tool-call loop (executing
-    /// each requested tool via `executeTool`), and returns the final spoken reply.
-    /// - Parameter settingsOverride: when non-nil, used verbatim instead of
-    ///   loading `.conversation` role settings from defaults (INF-258/D5):
-    ///   the opt-in auto-fallback chain hands this call a specific provider
-    ///   already resolved by `AppModel` (`AttachePresentationSettings.forFallback`),
-    ///   for just this call, without touching any persisted per-role default.
-    ///   `nil` (the default) is byte-for-byte the original behavior.
+    /// Multi-round personality conversation. Every provider-bound round,
+    /// including corrective CLI rounds and the final no-tools round, goes back
+    /// through the production broker and `ContextCompiler`.
+    @discardableResult
     func converse(
+        snapshot: AttacheRequestSnapshot,
         messages: [AttacheChatMessage],
         allowSessionContextTools: Bool,
         allowAgentInstructionTool: Bool = false,
+        allowMemoryProposalTool: Bool = false,
+        allowSessionDiscoveryTool: Bool = false,
+        allowExhaustiveReviewTool: Bool = false,
         settingsOverride: AttachePresentationSettings? = nil,
+        requestIsActive: @escaping () async -> Bool = { true },
+        attemptDidCompile: ((AttacheInferenceMetadata) async -> Void)? = nil,
         executeTool: @escaping (String, String) async -> String,
         completion: @escaping (Result<AttacheConversationReply, Error>) -> Void
-    ) {
-        if let settingsOverride {
-            guard settingsOverride.llmEnabled, settingsOverride.hasProviderConfiguration else {
-                completion(.failure(AttachePresentationError.notConfigured))
-                return
-            }
-            Task {
-                guard settingsOverride.isConfigured else {
-                    await MainActor.run { completion(.failure(AttachePresentationError.notConfigured)) }
-                    return
-                }
-                do {
-                    let reply = try await Self.runConversation(
-                        messages: messages,
-                        allowSessionContextTools: allowSessionContextTools,
-                        allowAgentInstructionTool: allowAgentInstructionTool,
-                        settings: settingsOverride,
-                        executeTool: executeTool
-                    )
-                    await MainActor.run { completion(.success(reply)) }
-                } catch {
-                    await MainActor.run { completion(.failure(error)) }
-                }
-            }
-            return
+    ) -> Task<Void, Never> {
+        precondition(snapshot.role == .conversation)
+        if allowSessionContextTools && !snapshot.session.isFocused {
+            completion(.failure(AttachePresentationError.invalidResponse))
+            return Task {}
         }
 
-        let unresolved = AttachePresentationSettings.load(
-            role: .conversation,
-            defaults: defaults,
-            environment: environment,
-            resolveSecrets: false
-        )
-        guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else {
+        let definitions: Data
+        do {
+            definitions = try AttacheProductionRequestBroker.conversationToolDefinitions(
+                allowSessionContextTools: allowSessionContextTools,
+                allowAgentInstructionTool: allowAgentInstructionTool,
+                allowMemoryProposalTool: allowMemoryProposalTool,
+                allowSessionDiscoveryTool: allowSessionDiscoveryTool,
+                allowExhaustiveReviewTool: allowExhaustiveReviewTool
+            )
+        } catch {
+            completion(.failure(error))
+            return Task {}
+        }
+        guard let attempt = frozenAttempt(
+            snapshot: snapshot,
+            settingsOverride: settingsOverride,
+            toolDefinitionsJSON: definitions
+        ) else {
             completion(.failure(AttachePresentationError.notConfigured))
-            return
+            return Task {}
         }
+        let finalAttempt = attempt.withoutTools()
+        let offeredToolNames = Self.toolNames(in: definitions)
 
-        Task {
-            let settings = AttachePresentationSettings.load(role: .conversation, defaults: defaults, environment: environment)
-            guard settings.isConfigured else {
-                await MainActor.run { completion(.failure(AttachePresentationError.notConfigured)) }
-                return
-            }
+        return Task {
             do {
-                let reply = try await Self.runConversation(
+                let reply = try await runConversation(
+                    snapshot: snapshot,
                     messages: messages,
-                    allowSessionContextTools: allowSessionContextTools,
-                    allowAgentInstructionTool: allowAgentInstructionTool,
-                    settings: settings,
+                    attempt: attempt,
+                    finalAttempt: finalAttempt,
+                    offeredToolNames: offeredToolNames,
+                    requestIsActive: requestIsActive,
+                    attemptDidCompile: attemptDidCompile,
                     executeTool: executeTool
                 )
                 await MainActor.run { completion(.success(reply)) }
@@ -257,106 +264,272 @@ final class AttachePresentationService {
         }
     }
 
-    private static func runConversation(
+    private func runConversation(
+        snapshot: AttacheRequestSnapshot,
         messages: [AttacheChatMessage],
-        allowSessionContextTools: Bool,
-        allowAgentInstructionTool: Bool,
-        settings: AttachePresentationSettings,
+        attempt: AttacheFrozenModelAttempt,
+        finalAttempt: AttacheFrozenModelAttempt,
+        offeredToolNames: Set<String>,
+        requestIsActive: @escaping () async -> Bool,
+        attemptDidCompile: ((AttacheInferenceMetadata) async -> Void)?,
         executeTool: @escaping (String, String) async -> String
     ) async throws -> AttacheConversationReply {
-        var payloadMessages: [[String: Any]] = messages.map { ["role": $0.role, "content": $0.content] }
-        let tools = conversationTools(
-            allowSessionContextTools: allowSessionContextTools,
-            allowAgentInstructionTool: allowAgentInstructionTool
+        var payloadMessages = messages
+        var payloadSources = AttacheProductionRequestBroker.prebuiltMessageSources(
+            snapshot: snapshot,
+            messages: messages
         )
-        let maxToolRounds = 8   // room to page/search across a long session (INF-165)
-        // Sticky across rounds: if any round in this conversation attempted and
-        // lost a CLI tool call (INF-243), the final reply still flags it even
-        // though a later round produced the text the user actually hears.
         var toolCallLost = false
+        let inferenceAccumulator = AttacheInferenceAccumulator(
+            requestID: snapshot.requestID
+        )
 
-        for _ in 0..<maxToolRounds {
-            let result = try await requestChat(
+        for _ in 0..<8 {
+            try await Self.requireActiveConversation(requestIsActive)
+            var response = try await performConversationRound(
+                snapshot: snapshot,
+                attempt: attempt,
                 messages: payloadMessages,
-                tools: tools.isEmpty ? nil : tools,
-                settings: settings
+                messageSources: payloadSources,
+                accumulator: inferenceAccumulator,
+                attemptDidCompile: attemptDidCompile,
+                requestIsActive: requestIsActive
             )
-            if result.toolCallLost { toolCallLost = true }
-            // A provider must not be able to manufacture access by returning a
-            // tool call that was never offered. Fail closed before invoking the
-            // app-level executor, even if the provider ignores the request schema.
-            if !allowSessionContextTools, !result.toolCalls.isEmpty {
-                throw AttachePresentationError.invalidResponse
+            try await Self.requireActiveConversation(requestIsActive)
+
+            if attempt.provider.isCLI,
+               !offeredToolNames.isEmpty,
+               response.toolCalls.isEmpty,
+               Self.cliTextIndicatesAttemptedToolCall(response.content) {
+                var correctiveMessages = response.compiledMessages
+                let attemptedToolText = AttacheChatMessage(role: "assistant", content: response.content)
+                let correctiveInstruction = AttacheChatMessage(role: "user", content: Self.cliCorrectiveRetryPrompt)
+                correctiveMessages.append(attemptedToolText)
+                correctiveMessages.append(correctiveInstruction)
+                var correctiveSources = payloadSources
+                correctiveSources.append(AttachePrebuiltMessageSource(
+                    message: attemptedToolText,
+                    source: .recentDirectChatTurns
+                ))
+                correctiveSources.append(AttachePrebuiltMessageSource(
+                    message: correctiveInstruction,
+                    source: .safetyPolicy
+                ))
+                try await Self.requireActiveConversation(requestIsActive)
+                response = try await performConversationRound(
+                    snapshot: snapshot,
+                    attempt: attempt,
+                    messages: correctiveMessages,
+                    messageSources: correctiveSources,
+                    accumulator: inferenceAccumulator,
+                    attemptDidCompile: attemptDidCompile,
+                    requestIsActive: requestIsActive
+                )
+                try await Self.requireActiveConversation(requestIsActive)
+                payloadSources = correctiveSources
+                if response.toolCalls.isEmpty { toolCallLost = true }
             }
-            if result.toolCalls.isEmpty {
-                let text = sanitizeFollowUpAnswerOutput(result.content)
-                guard !text.isEmpty else { throw AttachePresentationError.emptyResponse }
-                return AttacheConversationReply(text: text, toolCallLost: toolCallLost)
+
+            guard response.toolCalls.allSatisfy({ offeredToolNames.contains($0.name) }) else {
+                throw Self.conversationFailure(
+                    AttachePresentationError.invalidResponse,
+                    accumulator: inferenceAccumulator
+                )
             }
-            payloadMessages.append([
-                "role": "assistant",
-                "content": result.content,
-                "tool_calls": result.toolCalls.map { call in
-                    ["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.arguments]]
+            if response.toolCalls.isEmpty {
+                let text = Self.sanitizeFollowUpAnswerOutput(response.content)
+                guard !text.isEmpty else {
+                    throw Self.conversationFailure(
+                        AttachePresentationError.emptyResponse,
+                        accumulator: inferenceAccumulator
+                    )
                 }
-            ])
-            for call in result.toolCalls {
+                return AttacheConversationReply(
+                    text: text,
+                    toolCallLost: toolCallLost,
+                    inference: inferenceAccumulator.aggregate() ?? response.metadata
+                )
+            }
+
+            payloadMessages = response.compiledMessages
+            let assistantToolCall = AttacheChatMessage(
+                role: "assistant",
+                content: response.content,
+                toolCalls: response.toolCalls
+            )
+            payloadMessages.append(assistantToolCall)
+            payloadSources.append(AttachePrebuiltMessageSource(
+                message: assistantToolCall,
+                source: .recentDirectChatTurns
+            ))
+            for call in response.toolCalls {
                 AttacheLog.presentation.info(
                     "conversation tool requested name=\(call.name, privacy: .public) argument_chars=\(call.arguments.count)"
                 )
-                // Bound each tool call so a stalled tool can't hang the turn; the
-                // model gets a structured timeout result and keeps going.
-                let toolResult = await withTimeout(seconds: 10) {
+                try await Self.requireActiveConversation(requestIsActive)
+                let result = await withTimeout(seconds: 10) {
                     await executeTool(call.name, call.arguments)
                 } onTimeout: {
                     "The \(call.name) tool did not respond in time. Answer from what you already have and tell the user you could not check that in time."
                 }
-                AttacheLog.presentation.info(
-                    "conversation tool completed name=\(call.name, privacy: .public) result_chars=\(toolResult.count)"
+                try await Self.requireActiveConversation(requestIsActive)
+                let toolResult = AttacheChatMessage(
+                    role: "tool",
+                    content: result,
+                    toolCallID: call.id
                 )
-                payloadMessages.append(["role": "tool", "tool_call_id": call.id, "content": toolResult])
+                payloadMessages.append(toolResult)
+                let resultSource = Self.toolResultSource(for: call.name)
+                payloadSources.append(AttachePrebuiltMessageSource(
+                    message: toolResult,
+                    source: resultSource,
+                    authorization: resultSource.requiresFocusedSessionAuthorization
+                        ? snapshot.session
+                        : .contextFree
+                ))
             }
         }
 
-        // Tool budget spent: force a final answer with no further tool calls.
-        let final = try await requestChat(messages: payloadMessages, tools: nil, settings: settings)
-        if final.toolCallLost { toolCallLost = true }
-        let text = sanitizeFollowUpAnswerOutput(final.content)
-        guard !text.isEmpty else { throw AttachePresentationError.emptyResponse }
-        return AttacheConversationReply(text: text, toolCallLost: toolCallLost)
+        let finalMessages = attempt.provider.isCLI
+            ? AttacheProductionRequestBroker.removingCLIToolBridge(
+                from: payloadMessages,
+                toolDefinitionsJSON: attempt.toolDefinitionsJSON
+            )
+            : payloadMessages
+        try await Self.requireActiveConversation(requestIsActive)
+        let response = try await performConversationRound(
+            snapshot: snapshot,
+            attempt: finalAttempt,
+            messages: finalMessages,
+            messageSources: payloadSources,
+            accumulator: inferenceAccumulator,
+            attemptDidCompile: attemptDidCompile,
+            requestIsActive: requestIsActive
+        )
+        try await Self.requireActiveConversation(requestIsActive)
+        guard response.toolCalls.isEmpty else {
+            throw Self.conversationFailure(
+                AttachePresentationError.invalidResponse,
+                accumulator: inferenceAccumulator
+            )
+        }
+        let text = Self.sanitizeFollowUpAnswerOutput(response.content)
+        guard !text.isEmpty else {
+            throw Self.conversationFailure(
+                AttachePresentationError.emptyResponse,
+                accumulator: inferenceAccumulator
+            )
+        }
+        return AttacheConversationReply(
+            text: text,
+            toolCallLost: toolCallLost,
+            inference: inferenceAccumulator.aggregate() ?? response.metadata
+        )
     }
 
-    /// One-shot raw completion for background classification (used by both
-    /// the inbox recap and topic tagging; callers pass their own role so each
-    /// can pick its own model, see INF-247). Returns `nil` when the role's LLM
-    /// isn't configured at all (expected, not an error), so callers can bail
-    /// cheaply instead of spinning. Throws (INF-254) when it IS configured
-    /// but the request itself failed, so callers can classify the failure via
-    /// `ConversationRecovery.classify` instead of it vanishing into a
-    /// swallowed `try?`.
+    /// Bind provider-visible tool output to the authority of the tool that
+    /// produced it. Session transcript and project-file evidence may never be
+    /// relabeled as a generic context-free tool result in a later round.
+    static func toolResultSource(for toolName: String) -> AttacheContextItemSource {
+        switch toolName {
+        case "read_session_transcript", "search_session_transcript":
+            return .retrievedTranscriptEvidence
+        case "list_working_directory", "read_file":
+            return .retrievedFileEvidence
+        default:
+            return .toolResults
+        }
+    }
+
+    private func performConversationRound(
+        snapshot: AttacheRequestSnapshot,
+        attempt: AttacheFrozenModelAttempt,
+        messages: [AttacheChatMessage],
+        messageSources: [AttachePrebuiltMessageSource],
+        accumulator: AttacheInferenceAccumulator,
+        attemptDidCompile: ((AttacheInferenceMetadata) async -> Void)?,
+        requestIsActive: @escaping () async -> Bool
+    ) async throws -> AttacheBrokerResponse {
+        do {
+            let response = try await requestBroker.perform(
+                snapshot: snapshot,
+                attempt: attempt,
+                messages: messages,
+                messageSources: messageSources,
+                attemptDidCompile: { compiled in
+                    guard let aggregate = accumulator.aggregate(appending: compiled) else { return }
+                    await attemptDidCompile?(aggregate)
+                },
+                requestIsActive: requestIsActive
+            )
+            accumulator.record(response.metadata)
+            return response
+        } catch let failure as AttacheBrokerAttemptFailure {
+            throw AttacheBrokerAttemptFailure(
+                underlying: failure.underlying,
+                inference: accumulator.aggregate(appending: failure.inference)
+                    ?? failure.inference
+            )
+        } catch {
+            throw Self.conversationFailure(error, accumulator: accumulator)
+        }
+    }
+
+    private static func conversationFailure(
+        _ error: Error,
+        accumulator: AttacheInferenceAccumulator
+    ) -> Error {
+        guard let inference = accumulator.aggregate() else { return error }
+        return AttacheBrokerAttemptFailure(underlying: error, inference: inference)
+    }
+
+    private static func requireActiveConversation(
+        _ requestIsActive: () async -> Bool
+    ) async throws {
+        try Task.checkCancellation()
+        guard await requestIsActive() else { throw CancellationError() }
+        try Task.checkCancellation()
+    }
+
+    /// One-shot completion for recap, topic tagging, preview, or another
+    /// explicitly frozen role. A missing model is a truthful no-model result,
+    /// not a fabricated model receipt.
     func complete(
+        snapshot: AttacheRequestSnapshot,
         system: String,
         user: String,
-        role: ModelRole,
-        settingsOverride: AttachePresentationSettings? = nil
-    ) async throws -> String? {
-        let settings: AttachePresentationSettings
-        if let settingsOverride {
-            guard settingsOverride.llmEnabled, settingsOverride.hasProviderConfiguration else { return nil }
-            settings = settingsOverride
-        } else {
-            let unresolved = AttachePresentationSettings.load(role: role, defaults: defaults, environment: environment, resolveSecrets: false)
-            guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else { return nil }
-            settings = AttachePresentationSettings.load(role: role, defaults: defaults, environment: environment)
+        settingsOverride: AttachePresentationSettings? = nil,
+        systemSources: [AttacheContextItemSource]? = nil,
+        userSources: [AttacheContextItemSource]? = nil,
+        requestIsActive: (() async -> Bool)? = nil
+    ) async throws -> AttacheCompletionResult {
+        guard let attempt = frozenAttempt(snapshot: snapshot, settingsOverride: settingsOverride) else {
+            return AttacheCompletionResult(text: nil, inference: .noModel(snapshot: snapshot))
         }
-        guard settings.isConfigured else { return nil }
-        return try await Self.requestChatCompletion(
-            messages: [
-                AttacheChatMessage(role: "system", content: system),
-                AttacheChatMessage(role: "user", content: user)
-            ],
-            settings: settings
+        let systemMessage = AttacheChatMessage(role: "system", content: system)
+        let userMessage = AttacheChatMessage(role: "user", content: user)
+        let messages = [systemMessage, userMessage]
+        let messageSources: [AttachePrebuiltMessageSource]
+        if systemSources != nil || userSources != nil {
+            messageSources = (systemSources ?? []).map {
+                AttachePrebuiltMessageSource(message: systemMessage, source: $0)
+            } + (userSources ?? []).map {
+                AttachePrebuiltMessageSource(message: userMessage, source: $0)
+            }
+        } else {
+            messageSources = AttacheProductionRequestBroker.prebuiltMessageSources(
+                snapshot: snapshot,
+                messages: messages
+            )
+        }
+        let response = try await requestBroker.perform(
+            snapshot: snapshot,
+            attempt: attempt,
+            messages: messages,
+            messageSources: messageSources,
+            requestIsActive: requestIsActive
         )
+        return AttacheCompletionResult(text: response.content, inference: response.metadata)
     }
 
     /// Whether the given role's LLM is configured enough to make background
@@ -367,85 +540,109 @@ final class AttachePresentationService {
         return unresolved.llmEnabled && unresolved.hasProviderConfiguration
     }
 
-    static func conversationTools(
-        allowSessionContextTools: Bool,
-        allowAgentInstructionTool: Bool
-    ) -> [[String: Any]] {
-        guard allowSessionContextTools else { return [] }
-        var tools: [[String: Any]] = [
-            ["type": "function", "function": [
-                "name": "read_session_transcript",
-                "description": "Read more of the attached session than the latest update. With no arguments, returns the opening turns plus the most recent turns (middle omitted, marked). Pass start_turn to page from a specific turn number (turns are labeled TURN n/total); pair with search_session_transcript to locate an earlier turn. Do not assume anything not shown was never discussed.",
-                "parameters": [
-                    "type": "object",
-                    "properties": [
-                        "start_turn": ["type": "integer", "description": "1-indexed turn number to start paging from. Omit for the opening+recent overview."],
-                        "max_chars": ["type": "integer", "description": "Max characters of transcript to return (default 12000)."]
-                    ]
-                ] as [String: Any]
-            ]],
-            ["type": "function", "function": [
-                "name": "search_session_transcript",
-                "description": "Search the whole attached session transcript for a term and get back matching turn numbers with snippets. Use this to find where something was discussed, then read_session_transcript with that start_turn.",
-                "parameters": [
-                    "type": "object",
-                    "properties": ["query": ["type": "string", "description": "Text to search for in the session's turns."]],
-                    "required": ["query"]
-                ] as [String: Any]
-            ]],
-            ["type": "function", "function": [
-                "name": "list_working_directory",
-                "description": "List the files in the session's working directory to see what exists before reading. Do not use this to hunt for an artifact when its exact path can be found in the session transcript, and do not probe unrelated protected folders.",
-                "parameters": ["type": "object", "properties": [String: Any]()] as [String: Any]
-            ]],
-            ["type": "function", "function": [
-                "name": "read_file",
-                "description": "Read a file inside the session's working directory. Use an exact path learned from session context or transcript search; never guess a Desktop, Documents, or other protected-folder path.",
-                "parameters": [
-                    "type": "object",
-                    "properties": ["path": ["type": "string", "description": "Path relative to the working directory."]],
-                    "required": ["path"]
-                ] as [String: Any]
-            ]],
-            ["type": "function", "function": [
-                "name": "rename_session",
-                "description": "Set the Attaché-local name for the attached work session (does not rename it in Codex). Use when the user asks to name or rename this session, e.g. \"let's call this the tax cleanup session\".",
-                "parameters": [
-                    "type": "object",
-                    "properties": ["name": ["type": "string", "description": "The new short, descriptive name. Empty string resets to the Codex name."]],
-                    "required": ["name"]
-                ] as [String: Any]
-            ]]
-        ]
-        if allowAgentInstructionTool {
-            tools.append(["type": "function", "function": [
-                "name": "stage_agent_instruction",
-                "description": "Route an action to the focused work agent only when the user explicitly asks that agent to act. 'What did Codex say?' stays with Attaché, but 'Ask Codex what it changed' MUST use this tool. Asking the agent to answer, explain, check, read, summarize, or report is an action even when it concerns prior work or an artifact. Do not substitute local read tools for an explicit handoff, and do not redirect a request naming a different agent. Attaché applies the user's send policy, safety filter, and frozen session target. Whenever the user names a specific agent (Codex or Claude Code), set intended_agent to that agent so Attaché can verify it against the focused session before staging; never guess or omit intended_agent when a name was given.",
-                "parameters": [
-                    "type": "object",
-                    "properties": [
-                        "instruction": ["type": "string", "description": "The concise instruction to send to the work agent after the user confirms."],
-                        "intended_agent": [
-                            "type": "string",
-                            "enum": ["codex", "claude_code"],
-                            "description": "The agent the user explicitly named to receive this instruction. Always set this when the user names a specific agent; omit only when no agent was named. Attaché uses this solely to verify it matches the focused session; it never reroutes on a mismatch, only refuses."
-                        ]
-                    ],
-                    "required": ["instruction"]
-                ] as [String: Any]
-            ]])
+    /// Resolve secrets, endpoint, model, reasoning, capability, and strategy
+    /// synchronously. No `Task` is created until this immutable value exists.
+    private func frozenAttempt(
+        snapshot: AttacheRequestSnapshot,
+        settingsOverride: AttachePresentationSettings? = nil,
+        toolDefinitionsJSON: Data = Data()
+    ) -> AttacheFrozenModelAttempt? {
+        let settings: AttachePresentationSettings
+        if let settingsOverride {
+            guard settingsOverride.llmEnabled,
+                  settingsOverride.hasProviderConfiguration,
+                  settingsOverride.isConfigured else { return nil }
+            settings = settingsOverride
+        } else {
+            guard let frozen = snapshot.modelSettings,
+                  frozen.llmEnabled,
+                  frozen.hasProviderConfiguration,
+                  frozen.isConfigured else { return nil }
+            settings = frozen
         }
-        return tools
+        guard settings.provider.supportsSafePersonalityInference else {
+            // Persisted/exported Codex CLI personalities remain decodable, but
+            // cannot reach compilation or transport until the CLI can disable
+            // its native file-reading tools.
+            return nil
+        }
+        let consentScope = PresentationConsentScope(
+            provider: settings.provider,
+            endpoint: settings.baseURL.absoluteString
+        )
+        if consentScope.egress.isRemoteService {
+            let consented = Set(
+                defaults.array(forKey: AttachePreferenceKey.cloudConsentPresentationProviders)
+                    as? [String] ?? []
+            )
+            guard consented.contains(consentScope.storageKey) else {
+                // Fail closed before capability lookup, compiler work, CLI
+                // launch, transport creation, or any other egress-capable step.
+                return nil
+            }
+        }
+        let capability = AttachePresentationModelService.capabilityProfile(
+            provider: settings.provider,
+            baseURLText: settings.baseURL.absoluteString,
+            modelID: settings.model
+        )
+        return AttacheFrozenModelAttempt(
+            role: snapshot.role,
+            settings: settings,
+            capability: capability,
+            strategy: snapshot.contextStrategy,
+            toolDefinitionsJSON: toolDefinitionsJSON
+        )
     }
 
-    private struct ConversationChatResult {
-        var content: String
-        var toolCalls: [ConversationToolCall]
-        // Set when a CLI personality attempted a tool call (INF-243) that never
-        // recovered into a valid directive, even after the one corrective retry.
-        // The turn still degrades into a spoken answer; this only flags that a
-        // tool call was attempted and lost so a caller can surface it.
-        var toolCallLost: Bool = false
+    private static func underlyingBrokerError(_ error: Error) -> Error {
+        (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
+    }
+
+    private static func failureInference(
+        _ error: Error,
+        snapshot: AttacheRequestSnapshot
+    ) -> AttacheInferenceMetadata {
+        (error as? AttacheBrokerAttemptFailure)?.inference ?? .noModel(snapshot: snapshot)
+    }
+
+    private static func modelRole(for role: AttacheRequestRole) -> ModelRole {
+        switch role {
+        case .recap:
+            return .recap
+        case .topicTagging:
+            return .tagging
+        case .conversation, .followUp, .liveFollowUp:
+            return .conversation
+        case .presentation, .anotherTake, .preview:
+            return .presentation
+        }
+    }
+
+    private static func toolNames(in definitions: Data) -> Set<String> {
+        guard !definitions.isEmpty,
+              let tools = try? JSONSerialization.jsonObject(with: definitions) as? [[String: Any]] else {
+            return []
+        }
+        return Set(tools.compactMap { tool in
+            (tool["function"] as? [String: Any])?["name"] as? String
+        })
+    }
+
+    static func conversationTools(
+        allowSessionContextTools: Bool,
+        allowAgentInstructionTool: Bool,
+        allowMemoryProposalTool: Bool = false,
+        allowSessionDiscoveryTool: Bool = false,
+        allowExhaustiveReviewTool: Bool = false
+    ) -> [[String: Any]] {
+        AttacheProductionRequestBroker.conversationToolObjects(
+            allowSessionContextTools: allowSessionContextTools,
+            allowAgentInstructionTool: allowAgentInstructionTool,
+            allowMemoryProposalTool: allowMemoryProposalTool,
+            allowSessionDiscoveryTool: allowSessionDiscoveryTool,
+            allowExhaustiveReviewTool: allowExhaustiveReviewTool
+        )
     }
 
     struct CLIToolCallDirective: Equatable {
@@ -453,133 +650,13 @@ final class AttachePresentationService {
         var arguments: String
     }
 
-    private struct ConversationToolCall {
-        var id: String
-        var name: String
-        var arguments: String
-    }
-
-    private static func requestChat(
-        messages: [[String: Any]],
-        tools: [[String: Any]]?,
-        settings: AttachePresentationSettings
-    ) async throws -> ConversationChatResult {
-        if settings.provider.isCLI, let tool = settings.provider.cliTool {
-            // The CLI has no OpenAI tool-call wire protocol, and we still run its
-            // native tools disabled. Attaché tools are exposed through a narrow JSON
-            // bridge in the prompt and executed by the app after parsing.
-            var chatMessages = messages.compactMap { message -> AttacheChatMessage? in
-                guard let role = message["role"] as? String,
-                      let content = message["content"] as? String else { return nil }
-                return AttacheChatMessage(role: role, content: content)
-            }
-            if let tools, !tools.isEmpty {
-                chatMessages.insert(cliToolBridgeMessage(tools: tools), at: 0)
-            }
-            let model = CLILanguageModel(
-                tool: tool, model: settings.model,
-                reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier
-            )
-            let text = try await model.complete(messages: chatMessages)
-            let toolsOffered = tools?.isEmpty == false
-            let resolution = await resolveCLIToolCall(text: text, toolsOffered: toolsOffered) {
-                var retryMessages = chatMessages
-                retryMessages.append(AttacheChatMessage(role: "assistant", content: text))
-                retryMessages.append(AttacheChatMessage(role: "user", content: cliCorrectiveRetryPrompt))
-                return try await model.complete(messages: retryMessages)
-            }
-            return ConversationChatResult(
-                content: resolution.directives.isEmpty ? text : "",
-                toolCalls: resolution.directives.map {
-                    ConversationToolCall(id: "cli-\(UUID().uuidString)", name: $0.name, arguments: $0.arguments)
-                },
-                toolCallLost: resolution.toolCallLost
-            )
-        }
-        var url = settings.baseURL
-        if !url.path.hasSuffix("/chat/completions") {
-            url = url.appendingPathComponent("chat/completions")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 120
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !settings.apiKey.isEmpty, NetworkSecurity.allowsBearer(url) {
-            request.setValue("Bearer \(settings.apiKey)", forHTTPHeaderField: "Authorization")
-        }
-
-        var payload: [String: Any] = [
-            "model": settings.model,
-            "temperature": 0.6,
-            "messages": messages
-        ]
-        if let tools, !tools.isEmpty {
-            payload["tools"] = tools
-        }
-        if settings.provider.supportsReasoningEffort,
-           let reasoningEffort = reasoningEffortPayloadValue(
-                settings.reasoningEffort,
-                provider: settings.provider
-           ) {
-            payload["reasoning_effort"] = reasoningEffort
-        }
-        if settings.provider.supportsServiceTier,
-           let serviceTier = normalizedServiceTier(settings.serviceTier) {
-            payload["service_tier"] = serviceTier
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await URLSession.shared.data(for: request)
-        } catch let urlError as URLError {
-            throw AttachePresentationError.transport(urlError)
-        }
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AttachePresentationError.invalidResponse
-        }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw AttachePresentationError.httpStatus(httpResponse.statusCode, body)
-        }
-
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let message = (object?["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any]
-        let content = message?["content"] as? String ?? ""
-        var calls: [ConversationToolCall] = []
-        if let toolCalls = message?["tool_calls"] as? [[String: Any]] {
-            for toolCall in toolCalls {
-                guard let id = toolCall["id"] as? String,
-                      let function = toolCall["function"] as? [String: Any],
-                      let name = function["name"] as? String else {
-                    continue
-                }
-                let arguments = function["arguments"] as? String ?? "{}"
-                calls.append(ConversationToolCall(id: id, name: name, arguments: arguments))
-            }
-        }
-        return ConversationChatResult(content: content, toolCalls: calls)
-    }
-
     static func cliToolBridgeMessage(tools: [[String: Any]]) -> AttacheChatMessage {
-        let descriptions = tools.compactMap { tool -> String? in
-            guard let function = tool["function"] as? [String: Any],
-                  let name = function["name"] as? String else { return nil }
-            let description = (function["description"] as? String) ?? ""
-            return "- \(name): \(description)"
-        }.joined(separator: "\n")
-        return AttacheChatMessage(role: "system", content: """
-        Attaché tool bridge:
-        You have access to these Attaché app tools even though this CLI run has its own native tools disabled:
-        \(descriptions)
-
-        To call a tool, reply with exactly one JSON object and no prose:
-        {"companion_tool_call":{"name":"tool_name","arguments":{}}}
-
-        Use one tool call at a time. After Attaché returns a tool result, either call another tool with the same JSON format or answer the user normally.
-        """)
+        let data = (try? JSONSerialization.data(
+            withJSONObject: tools,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )) ?? Data("[]".utf8)
+        return AttacheProductionRequestBroker.cliToolBridgeMessage(toolDefinitionsJSON: data)
+            ?? AttacheChatMessage(role: "system", content: "Attaché tool bridge: no tools are available.")
     }
 
     static func parseCLIToolDirectives(in text: String) -> [CLIToolCallDirective] {
@@ -749,22 +826,25 @@ final class AttachePresentationService {
         return presented
     }
 
+    private static func preparedResult(
+        event: NormalizedEvent,
+        inference: AttacheInferenceMetadata
+    ) -> AttachePreparedEventResult {
+        var persisted = event
+        if let receipt = inference.receiptView.encodedMetadataValue() {
+            persisted.metadata[AttacheContextReceiptView.metadataKey] = receipt
+        }
+        return AttachePreparedEventResult(event: persisted, inference: inference)
+    }
+
     private static func eventWithLLMPresentation(
         _ event: NormalizedEvent,
-        settings: AttachePresentationSettings,
-        memorySnapshot: AttacheMemorySnapshot,
-        profilePrompt: String,
-        personality: Personality?,
-        spokenLanguageName: String? = nil
-    ) async throws -> NormalizedEvent {
-        let prompt = AttachePersonality.presentationPrompt(
-            for: event,
-            profilePrompt: profilePrompt,
-            memoryContext: memorySnapshot.context,
-            spokenLanguageName: spokenLanguageName
-        )
-        let content = try await requestChatCompletion(messages: prompt.messages, settings: settings)
-        let response = splitCardSummary(content)
+        prompt: AttachePresentationPrompt,
+        response brokerResponse: AttacheBrokerResponse,
+        attempt: AttacheFrozenModelAttempt,
+        snapshot: AttacheRequestSnapshot
+    ) throws -> NormalizedEvent {
+        let response = splitCardSummary(brokerResponse.content)
 
         guard !response.spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AttachePresentationError.emptyResponse
@@ -784,90 +864,26 @@ final class AttachePresentationService {
         // Metadata keys remain backward compatible, but new strategy values use
         // the current product vocabulary.
         presented.metadata["companion_presentation_strategy"] = "attache-personality-llm"
-        presented.metadata["companion_llm_provider"] = settings.provider.rawValue
-        presented.metadata["companion_llm_model"] = settings.model
-        presented.metadata["companion_llm_base_url"] = settings.baseURL.absoluteString
-        if let personality {
-            presented.metadata["companion_personality_id"] = personality.id
-            presented.metadata["companion_personality_name"] = personality.name
-        }
-        presented.metadata["companion_personality_profile"] = personality?.id ?? "default"
-        presented.metadata["companion_memory_file"] = memorySnapshot.fileURL.path
-        presented.metadata["companion_memory_context_chars"] = String(memorySnapshot.context?.count ?? 0)
+        presented.metadata["companion_llm_provider"] = attempt.provider.rawValue
+        presented.metadata["companion_llm_model"] = attempt.model
+        presented.metadata["companion_llm_base_url"] = attempt.endpoint.absoluteString
+        presented.metadata["companion_personality_id"] = snapshot.personality.id
+        presented.metadata["companion_personality_name"] = snapshot.personality.name
+        presented.metadata["companion_personality_profile"] = snapshot.personality.id
+        presented.metadata["companion_memory_context_chars"] = String(
+            snapshot.contextItems
+                .filter { $0.source == .durableMemory }
+                .reduce(0) { $0 + $1.content.count }
+        )
         presented.metadata["companion_raw_output_chars"] = String(prompt.rawOutputCharacterCount)
         presented.metadata["companion_raw_output_truncated"] = prompt.truncatedRawOutput ? "true" : "false"
-        if let errorDescription = memorySnapshot.errorDescription {
-            presented.metadata["companion_memory_error"] = errorDescription
+        if let receipt = brokerResponse.metadata.receiptView.encodedMetadataValue() {
+            presented.metadata[AttacheContextReceiptView.metadataKey] = receipt
         }
-        if let reasoningEffort = settings.reasoningEffort, !reasoningEffort.isEmpty {
+        if let reasoningEffort = attempt.reasoningEffort, !reasoningEffort.isEmpty {
             presented.metadata["companion_llm_reasoning_effort"] = reasoningEffort
         }
         return presented
-    }
-
-    private static func requestChatCompletion(
-        messages: [AttacheChatMessage],
-        settings: AttachePresentationSettings
-    ) async throws -> String {
-        if settings.provider.isCLI, let tool = settings.provider.cliTool {
-            return try await CLILanguageModel(
-                tool: tool, model: settings.model,
-                reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier
-            ).complete(messages: messages)
-        }
-        var url = settings.baseURL
-        if !url.path.hasSuffix("/chat/completions") {
-            url = url.appendingPathComponent("chat/completions")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 120
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !settings.apiKey.isEmpty, NetworkSecurity.allowsBearer(url) {
-            request.setValue("Bearer \(settings.apiKey)", forHTTPHeaderField: "Authorization")
-        }
-
-        var payload: [String: Any] = [
-            "model": settings.model,
-            "temperature": 0.6,
-            "messages": messages.map { message in
-                [
-                    "role": message.role,
-                    "content": message.content
-                ]
-            }
-        ]
-        if settings.provider.supportsReasoningEffort,
-           let reasoningEffort = reasoningEffortPayloadValue(
-                settings.reasoningEffort,
-                provider: settings.provider
-           ) {
-            payload["reasoning_effort"] = reasoningEffort
-        }
-        if settings.provider.supportsServiceTier,
-           let serviceTier = normalizedServiceTier(settings.serviceTier) {
-            payload["service_tier"] = serviceTier
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await URLSession.shared.data(for: request)
-        } catch let urlError as URLError {
-            throw AttachePresentationError.transport(urlError)
-        }
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw AttachePresentationError.invalidResponse
-        }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw AttachePresentationError.httpStatus(httpResponse.statusCode, body)
-        }
-
-        let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
-        return decoded.choices.first?.message.content ?? ""
     }
 
     /// Produce an "another take" of an existing card in a target personality's
@@ -880,44 +896,56 @@ final class AttachePresentationService {
         original: VoicemailCard,
         targetPersonality: Personality,
         priorPersonalityName: String,
-        completion: @escaping (NormalizedEvent?) -> Void
+        authorization: AnotherTakeRequestAuthorization,
+        snapshot: AttacheRequestSnapshot,
+        completion: @escaping (AttachePreparedEventResult?) -> Void
     ) {
-        let unresolved = AttachePresentationSettings.load(
-            role: .presentation, defaults: defaults, environment: environment, resolveSecrets: false
-        )
-        guard unresolved.llmEnabled, unresolved.hasProviderConfiguration else {
+        precondition(snapshot.role == .anotherTake)
+        // Another Take is explicit, card-scoped authorization. A watched or
+        // merely recent card must never reach the model through personality
+        // selection alone (INF-336).
+        guard authorization.authorizes(original),
+              snapshot.personality.id == targetPersonality.id,
+              let attempt = frozenAttempt(snapshot: snapshot) else {
             completion(nil)
             return
         }
+        let prompt = AttachePersonality.anotherTakePrompt(
+            sourceText: original.rawText,
+            priorTake: original.spokenText,
+            priorPersonalityName: priorPersonalityName,
+            targetProfilePrompt: snapshot.profilePrompt,
+            memoryContext: nil,
+            spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+        )
+
         Task {
-            let settings = AttachePresentationSettings.load(role: .presentation, defaults: defaults, environment: environment)
-            guard settings.isConfigured else {
-                await MainActor.run { completion(nil) }
-                return
-            }
             do {
-                let memory = memoryStore.loadSnapshot()
-                let prompt = AttachePersonality.anotherTakePrompt(
-                    sourceText: original.rawText,
-                    priorTake: original.spokenText,
-                    priorPersonalityName: priorPersonalityName,
-                    targetProfilePrompt: targetPersonality.prompt,
-                    memoryContext: memory.context,
-                    spokenLanguageName: Self.spokenLanguageName(defaults: defaults)
+                let response = try await requestBroker.perform(
+                    snapshot: snapshot,
+                    attempt: attempt,
+                    messages: prompt.messages,
+                    messageSources: AttacheProductionRequestBroker.prebuiltMessageSources(
+                        snapshot: snapshot,
+                        messages: prompt.messages
+                    )
                 )
-                let content = try await Self.requestChatCompletion(messages: prompt.messages, settings: settings)
-                let parsed = Self.splitCardSummary(content)
+                let parsed = Self.splitCardSummary(response.content)
                 guard !parsed.spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw AttachePresentationError.emptyResponse
                 }
-                let presented = Self.anotherTakeEvent(
+                var presented = Self.anotherTakeEvent(
                     from: original,
                     targetPersonality: targetPersonality,
                     summary: parsed.summary,
                     spoken: parsed.spokenText,
                     needsDecision: parsed.needsDecision
                 )
-                await MainActor.run { completion(presented) }
+                if let receipt = response.metadata.receiptView.encodedMetadataValue() {
+                    presented.metadata[AttacheContextReceiptView.metadataKey] = receipt
+                }
+                let result = Self.preparedResult(event: presented, inference: response.metadata)
+                await MainActor.run { completion(result) }
             } catch {
                 await MainActor.run { completion(nil) }
             }
@@ -1001,7 +1029,8 @@ final class AttachePresentationService {
 
     private static func fallbackFollowUpAnswer(
         card: VoicemailCard,
-        danQuestion: String
+        danQuestion: String,
+        inference: AttacheInferenceMetadata
     ) -> AttacheFollowUpAnswerResult {
         let trimmedQuestion = danQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = card.summary.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1023,7 +1052,8 @@ final class AttachePresentationService {
             model: nil,
             rawContextCharacterCount: card.rawText.count,
             truncatedContext: false,
-            errorDescription: nil
+            errorDescription: nil,
+            inference: inference
         )
     }
 
@@ -1143,6 +1173,16 @@ final class AttachePresentationService {
     }
 }
 
+struct AttachePreparedEventResult: Equatable {
+    var event: NormalizedEvent
+    var inference: AttacheInferenceMetadata
+}
+
+struct AttacheCompletionResult: Equatable {
+    var text: String?
+    var inference: AttacheInferenceMetadata
+}
+
 struct AttacheFollowUpAnswerResult: Equatable {
     var answerText: String
     var strategy: String
@@ -1150,6 +1190,7 @@ struct AttacheFollowUpAnswerResult: Equatable {
     var rawContextCharacterCount: Int
     var truncatedContext: Bool
     var errorDescription: String?
+    var inference: AttacheInferenceMetadata
     /// Structural detail behind `errorDescription` (INF-254), present only
     /// when `strategy == "deterministic-follow-up-fallback-after-llm-error"`.
     /// Lets a caller classify the failure via `ConversationRecovery.classify`
@@ -1167,6 +1208,7 @@ struct AttacheFollowUpAnswerResult: Equatable {
 struct AttacheConversationReply: Equatable {
     var text: String
     var toolCallLost: Bool = false
+    var inference: AttacheInferenceMetadata
 }
 
 /// The independent LLM consumers that can each select their own
@@ -1377,6 +1419,7 @@ struct AttachePresentationSettings: Equatable {
 enum AttachePresentationError: LocalizedError {
     case emptyResponse
     case invalidResponse
+    case unauthorizedContext
     case httpStatus(Int, String)
     case notConfigured
     case transport(URLError)
@@ -1387,6 +1430,8 @@ enum AttachePresentationError: LocalizedError {
             return "LLM response was empty."
         case .invalidResponse:
             return "LLM response was not HTTP."
+        case .unauthorizedContext:
+            return "The focused session authorization changed. Focus the session and try again."
         case .httpStatus(let status, let body):
             let clipped = String(body.prefix(300))
             return "LLM request failed with HTTP \(status): \(clipped)"
@@ -1402,6 +1447,15 @@ enum AttachePresentationError: LocalizedError {
     /// non-HTTP errors.
     var httpStatus: Int? {
         if case .httpStatus(let status, _) = self { return status }
+        return nil
+    }
+
+    /// Unmodified provider response body for structural safety classification.
+    /// It is never logged or persisted; callers use it only to distinguish
+    /// context-window and authentication failures from retryable transport
+    /// failures (INF-337).
+    var responseBody: String? {
+        if case .httpStatus(_, let body) = self { return body }
         return nil
     }
 

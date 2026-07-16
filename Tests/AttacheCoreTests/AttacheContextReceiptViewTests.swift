@@ -119,6 +119,47 @@ final class AttacheContextReceiptViewTests: XCTestCase {
         XCTAssertFalse(summary.isFullyCovered, "staged processing is not fully covered")
     }
 
+    func testOmittedAndTruncatedSourcesAreNotFullyCovered() {
+        for disposition in [
+            AttacheReceiptSourceDisposition.omitted,
+            .truncated
+        ] {
+            let summary = AttacheReceiptAttemptSummary(
+                attemptNumber: 1,
+                isFallback: false,
+                modelSummary: AttacheReceiptModelSummary(
+                    provider: "ollama",
+                    model: "qwen3",
+                    reasoningLevel: nil,
+                    strategyKind: "automatic",
+                    estimatedInputTokens: 500,
+                    effectiveBudget: 8_000,
+                    outputReserve: nil,
+                    toolReserve: nil,
+                    capabilityProvenance: "providerMetadata",
+                    capabilityFreshness: nil
+                ),
+                sourceSummaries: [
+                    AttacheReceiptSourceSummary(
+                        source: "retrievedTranscriptEvidence",
+                        count: 1,
+                        disposition: disposition,
+                        omissionReason: "budget"
+                    )
+                ],
+                totalEstimatedTokens: 500,
+                stagedProcessingRequired: false,
+                focusedSessionDisplay: nil,
+                recompiledForFallback: false
+            )
+
+            XCTAssertFalse(
+                summary.isFullyCovered,
+                "\(disposition.rawValue) evidence must not be described as fully covered"
+            )
+        }
+    }
+
     func testNonStagedIsFullyCovered() {
         let summary = AttacheReceiptAttemptSummary(
             attemptNumber: 1, isFallback: false,

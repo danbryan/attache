@@ -31,7 +31,7 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         XCTAssertEqual(model.pendingInstruction?.targetDisplayName, "Agent Send Test")
     }
 
-    func testDirectPolicySendsImmediatelyAfterSessionIsEnabled() async throws {
+    func testDirectPolicyPersistsConfirmationBeforeReturning() throws {
         _ = NSApplication.shared
         let defaults = UserDefaults.standard
         let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
@@ -41,7 +41,6 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         model.twoWay.setEnabled(true, sessionID: sessionID)
 
         model.requestSendToAgent("reply exactly DIRECT_CONFIRM")
-        try await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertNil(model.pendingInstruction)
         XCTAssertEqual(model.intakeStatus, "Sending to Agent Send Test when the session is quiet…")
@@ -313,6 +312,44 @@ final class AppModelAgentInstructionSendTests: XCTestCase {
         XCTAssertNotNil(model.pendingInstruction)
         XCTAssertEqual(model.twoWay.log.first?.state, .pending)
         XCTAssertEqual(model.twoWay.log.first?.text, "reply exactly MATCHING_AGENT")
+    }
+
+    func testEffectLedgerPreventsFallbackFromStagingOrSendingTwice() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+        let sessionID = try seedWatchedSession(policy: .directAfterSessionEnable, defaults: defaults)
+        let model = try AppModel(store: CardStore.inMemory())
+        model.twoWay.setEnabled(true, sessionID: sessionID)
+        let target = AgentSendTarget(
+            sessionID: sessionID,
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Agent Send Test",
+            workingDirectory: nil
+        )
+        let ledger = ConversationTurnEffectLedger()
+
+        _ = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"reply exactly ONCE","intended_agent":"codex"}"#,
+            target: target,
+            sourceUtterance: "send once",
+            effectLedger: ledger
+        )
+        let firstInstruction = try XCTUnwrap(model.twoWay.log.first)
+        XCTAssertNil(firstInstruction.confirmedAt)
+        XCTAssertEqual(model.pendingInstruction?.id, firstInstruction.id)
+
+        let replayMessage = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"reply exactly ONCE","intended_agent":"codex"}"#,
+            target: target,
+            sourceUtterance: "send once",
+            effectLedger: ledger
+        )
+
+        XCTAssertEqual(model.twoWay.log.count, 1)
+        XCTAssertEqual(model.twoWay.log.first?.id, firstInstruction.id)
+        XCTAssertTrue(replayMessage.contains("not staged, confirmed, or delivered again"))
     }
 
     /// The core safety case: the model names a different, currently-watched

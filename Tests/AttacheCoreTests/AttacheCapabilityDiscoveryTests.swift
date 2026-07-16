@@ -113,6 +113,26 @@ final class AttacheCapabilityDiscoveryTests: XCTestCase {
         XCTAssertEqual(profile?.architecturalMaximum, 32768)
     }
 
+    func testHostedOutOfRangeFloatingPointLimitsAreDroppedWithoutTrapping() {
+        let profile = AttacheCapabilityParser.parseHostedModel([
+            "context_window": Double.greatestFiniteMagnitude,
+            "max_output_tokens": Double.infinity
+        ])
+
+        XCTAssertNil(profile?.architecturalMaximum)
+        XCTAssertNil(profile?.outputLimit)
+    }
+
+    func testOllamaOutOfRangeFloatingPointLimitsAreDroppedWithoutTrapping() {
+        let profile = AttacheCapabilityParser.parseOllama(show: [
+            "num_ctx": Double.greatestFiniteMagnitude,
+            "model_info": ["llama.context_length": Double.greatestFiniteMagnitude]
+        ])
+
+        XCTAssertNil(profile?.architecturalMaximum)
+        XCTAssertNil(profile?.configuredRuntimeLimit)
+    }
+
     // MARK: - Cache isolation by endpoint and fingerprint (acceptance: no accidental sharing, alias changes)
 
     func testTwoEndpointsSameModelDoNotShareCache() {

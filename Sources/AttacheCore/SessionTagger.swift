@@ -1,8 +1,9 @@
 import Foundation
 
-/// Pure helpers for LLM topic tagging: builds the batch classification prompt and
-/// parses the model's JSON back into id → tag. The network call and persistence
-/// live in the app layer; this part is deterministic and unit-tested.
+/// Pure helpers for session topic tagging. Production tagging is local and
+/// deterministic so background indexing never sends an unfocused transcript,
+/// title, or working directory to a model. The legacy prompt/parser helpers
+/// remain for compatibility tests and imported tag workflows.
 public enum SessionTagger {
     /// One session handed to the tagger: enough to name a topic, no more.
     public struct Item: Equatable {
@@ -85,12 +86,67 @@ public enum SessionTagger {
         return joined.count > charLimit ? String(joined.prefix(charLimit)).trimmingCharacters(in: .whitespaces) : joined
     }
 
+    /// Produce a useful local topic from app-indexed metadata. Existing topic
+    /// labels win when their words appear in the title, which avoids creating
+    /// near-duplicates. Otherwise the first one or two informative title words
+    /// are used, followed by a project-name fallback. Session snippets are not
+    /// needed and never leave the indexing process.
+    public static func localTag(
+        for item: Item,
+        knownTags: [String] = []
+    ) -> String {
+        let titleWords = words(in: item.title)
+        let titleSet = Set(titleWords)
+        let matchingKnown = knownTags.compactMap { raw -> (tag: String, score: Int)? in
+            let tag = normalizeTag(raw)
+            let tagWords = words(in: tag)
+            guard !tag.isEmpty, !tagWords.isEmpty else { return nil }
+            let score = Set(tagWords).intersection(titleSet).count
+            return score > 0 ? (tag, score) : nil
+        }.sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            if $0.tag.count != $1.tag.count { return $0.tag.count < $1.tag.count }
+            return $0.tag < $1.tag
+        }
+        if let known = matchingKnown.first?.tag { return known }
+
+        let informative = titleWords.filter { !localTagStopWords.contains($0) }
+        let titleTag = normalizeTag(informative.prefix(2).joined(separator: " "))
+        if !titleTag.isEmpty { return titleTag }
+
+        if let project = item.project {
+            let projectTag = normalizeTag(
+                words(in: project)
+                    .filter { !localTagStopWords.contains($0) }
+                    .prefix(2)
+                    .joined(separator: " ")
+            )
+            if !projectTag.isEmpty { return projectTag }
+        }
+        return "General"
+    }
+
     // MARK: - Helpers
 
     private static func sanitizeLine(_ text: String) -> String {
         text.replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let localTagStopWords: Set<String> = [
+        "a", "an", "and", "the", "to", "for", "of", "on", "in", "with",
+        "add", "build", "check", "create", "fix", "help", "implement",
+        "investigate", "make", "new", "redo", "remove", "review", "update",
+        "audit", "chat", "conversation", "session", "task", "work", "working"
+    ]
+
+    private static func words(in text: String) -> [String] {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { !$0.isEmpty }
     }
 
     /// Extract the first top-level JSON array substring from a noisy response.

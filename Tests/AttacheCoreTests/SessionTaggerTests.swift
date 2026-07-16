@@ -42,4 +42,18 @@ final class SessionTaggerTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Daily Brief"))
         XCTAssertFalse(prompt.contains(String(repeating: "a", count: 400)))
     }
+
+    func testLocalTaggingUsesMetadataWithoutSnippetOrModel() {
+        let item = SessionTagger.Item(
+            id: "one",
+            title: "Fix personality manager layout",
+            snippet: "private transcript text that must not affect the label",
+            project: "Attaché"
+        )
+        XCTAssertEqual(SessionTagger.localTag(for: item), "Personality Manager")
+        XCTAssertEqual(
+            SessionTagger.localTag(for: item, knownTags: ["Personality"]),
+            "Personality"
+        )
+    }
 }

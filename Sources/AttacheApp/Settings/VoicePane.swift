@@ -178,12 +178,20 @@ struct VoicePane: View {
         }
         .onAppear { model.refreshMicrophoneDevices() }
         .sheet(item: $pendingCloudEngine) { engine in
+            let requestedXAIBaseURL = engine == .xai ? model.xaiBaseURL : nil
             CloudConsentSheet(
                 providerName: engine.title,
                 produces: "speech",
                 sends: "your agent's recap text",
+                destination: model.voiceConsentDestination(
+                    for: engine,
+                    xaiBaseURL: requestedXAIBaseURL
+                ),
                 onEnable: {
-                    model.cloudConsentVoiceAcknowledged = true
+                    model.acknowledgeCloudVoiceConsent(
+                        for: engine,
+                        xaiBaseURL: requestedXAIBaseURL
+                    )
                     model.speechProvider = engine
                     pendingCloudEngine = nil
                 },
@@ -198,7 +206,10 @@ struct VoicePane: View {
             set: { engine in
                 if engine != model.speechProvider,
                    engine.sendsToCloud,
-                   !model.cloudConsentVoiceAcknowledged {
+                   !model.cloudVoiceConsentAcknowledged(
+                       for: engine,
+                       xaiBaseURL: engine == .xai ? model.xaiBaseURL : nil
+                   ) {
                     pendingCloudEngine = engine
                 } else {
                     model.speechProvider = engine

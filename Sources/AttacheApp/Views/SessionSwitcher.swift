@@ -56,7 +56,12 @@ struct SessionCommandPalette: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search name, content, or describe it…", text: $query)
+                TextField(
+                    model.modelSessionDiscoveryPicker == nil
+                        ? "Search name, content, or describe it…"
+                        : "Choose a matching session or refine the search…",
+                    text: $query
+                )
                     .textFieldStyle(.plain)
                     .typoSection(.regular)
                     .focused($fieldFocused)
@@ -144,10 +149,17 @@ struct SessionCommandPalette: View {
             // key; assigning in the same pass silently loses focus.
             DispatchQueue.main.async { fieldFocused = true }
             watchedIDsAtOpen = Set(model.attachedTargets.keys)
+            if let discovery = model.modelSessionDiscoveryPicker {
+                query = discovery.query
+            }
             model.refreshSessionIndex()
             recompute()
         }
-        .onExitCommand { isVisible = false }
+        .onExitCommand {
+            model.dismissModelSessionDiscoveryPicker()
+            isVisible = false
+        }
+        .onDisappear { model.dismissModelSessionDiscoveryPicker() }
         .onChange(of: query) { _ in recompute() }
         .onChange(of: grouping) { _ in recompute() }
         .onChange(of: includeArchived) { _ in recompute() }
@@ -156,6 +168,12 @@ struct SessionCommandPalette: View {
         .onChange(of: sourceFilter) { _ in recompute() }
         .onChange(of: model.attachedTargets.count) { _ in recompute() }
         .onChange(of: model.unreadCount) { _ in recompute() }
+        .onChange(of: model.modelSessionDiscoveryPicker?.token) { _ in
+            if let discovery = model.modelSessionDiscoveryPicker {
+                query = discovery.query
+            }
+            recompute()
+        }
         .alert("Rename for Attaché", isPresented: renamePresented) {
             TextField("Name", text: $renameText)
             Button("Save") {
@@ -210,8 +228,23 @@ struct SessionCommandPalette: View {
     }
 
     private func recompute() {
-        hits = model.searchSessions(query, includeArchived: includeArchived)
-            .filter { sourceFilter == nil || $0.record.sourceKind == sourceFilter }
+        if let discovery = model.modelSessionDiscoveryPicker,
+           query.trimmingCharacters(in: .whitespacesAndNewlines)
+            == discovery.query.trimmingCharacters(in: .whitespacesAndNewlines) {
+            hits = discovery.orderedResults.filter {
+                (includeArchived || !$0.record.archived)
+                    && (sourceFilter == nil || $0.record.sourceKind == sourceFilter)
+            }
+        } else {
+            if model.modelSessionDiscoveryPicker != nil {
+                // Editing the model-proposed query turns this into an ordinary
+                // Command-K search. Selection remains explicit, but no stale
+                // discovery token can authorize a row from the new query.
+                model.dismissModelSessionDiscoveryPicker()
+            }
+            hits = model.searchSessions(query, includeArchived: includeArchived)
+                .filter { sourceFilter == nil || $0.record.sourceKind == sourceFilter }
+        }
         groups = buildGroups(from: hits)
         if selectedID == nil || !flatHits.contains(where: { $0.record.id == selectedID }) {
             selectedID = flatHits.first?.record.id
@@ -517,12 +550,18 @@ struct SessionCommandPalette: View {
     }
 
     private func selectTop() {
-        if let first = hits.first { attach(first) }
+        if let first = flatHits.first { attach(first) }
     }
 
     private func attach(_ hit: SessionSearchHit) {
-        model.attachToSearchHit(hit)
-        isVisible = false
+        if let discovery = model.modelSessionDiscoveryPicker {
+            if model.focusDiscoveredSession(token: discovery.token, row: hit) {
+                isVisible = false
+            }
+        } else {
+            model.attachToSearchHit(hit)
+            isVisible = false
+        }
     }
 }
 

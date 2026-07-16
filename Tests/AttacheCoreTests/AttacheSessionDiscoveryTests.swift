@@ -76,7 +76,7 @@ final class AttacheSessionDiscoveryTests: XCTestCase {
         let service = try makeService()
         let request = AttacheSessionDiscoveryRequest(
             query: AttacheSessionDiscoveryQuery(text: "router DNS forwarding"),
-            triggeringUserTurn: "find the router DNS session"
+            triggeringUserTurn: "find the router DNS forwarding session"
         )
         let (_, validIDs) = AttacheSessionDiscoveryCoordinator.search(request: request, service: service)
         let selected = AttacheSessionDiscoverySelection(
@@ -89,6 +89,26 @@ final class AttacheSessionDiscoveryTests: XCTestCase {
         )
         XCTAssertEqual(grant.session.sessionID, "sess-a")
         XCTAssertEqual(grant.epoch.value, 2, "epoch advances on focus grant")
+        XCTAssertEqual(grant.session.displayTitle, "Router DNS forwarding fix")
+        XCTAssertEqual(grant.session.workingDirectory, "/Users/dan/code/bare-metal")
+        XCTAssertEqual(grant.session.authorizationEpoch, grant.epoch)
+    }
+
+    func testSelectionCannotForgeAppOwnedMetadata() throws {
+        let service = try makeService()
+        let request = AttacheSessionDiscoveryRequest(
+            query: AttacheSessionDiscoveryQuery(text: "router DNS forwarding"),
+            triggeringUserTurn: "find the router DNS forwarding session"
+        )
+        let (_, candidates) = AttacheSessionDiscoveryCoordinator.search(request: request, service: service)
+        let forged = AttacheSessionDiscoverySelection(
+            sessionID: "sess-a", sourceKind: "claude",
+            displayTitle: "Forged", workingDirectory: "/etc"
+        )
+        let grant = try AttacheSessionDiscoveryCoordinator.validateSelection(
+            forged, candidates: candidates, currentEpoch: AttacheFocusEpoch(8)
+        )
+        XCTAssertEqual(grant.session.sourceKind, "codex")
         XCTAssertEqual(grant.session.displayTitle, "Router DNS forwarding fix")
         XCTAssertEqual(grant.session.workingDirectory, "/Users/dan/code/bare-metal")
     }
@@ -204,7 +224,7 @@ final class AttacheSessionDiscoveryTests: XCTestCase {
         let service = try makeService()
         let request = AttacheSessionDiscoveryRequest(
             query: AttacheSessionDiscoveryQuery(text: "zzz-no-such-topic"),
-            triggeringUserTurn: "find a session about zzz"
+            triggeringUserTurn: "find a session about zzz no such topic"
         )
         let (result, validIDs) = AttacheSessionDiscoveryCoordinator.search(request: request, service: service)
         XCTAssertTrue(result.noMatches)
@@ -246,7 +266,7 @@ final class AttacheSessionDiscoveryTests: XCTestCase {
         )
         let (_, validIDs) = AttacheSessionDiscoveryCoordinator.search(request: request, service: service)
         let commandKIDs = Set(commandK.map { $0.sessionID })
-        XCTAssertEqual(validIDs, commandKIDs, "both paths use the same service and ranking")
+        XCTAssertEqual(validIDs.sessionIDs, commandKIDs, "both paths use the same service and ranking")
     }
 
     // Criterion 7: no result title, snippet, path, or transcript appears in
@@ -256,7 +276,7 @@ final class AttacheSessionDiscoveryTests: XCTestCase {
         let service = try makeService()
         let request = AttacheSessionDiscoveryRequest(
             query: AttacheSessionDiscoveryQuery(text: "tax 1120-S reconciliation"),
-            triggeringUserTurn: "find the tax session"
+            triggeringUserTurn: "find the tax 1120-S reconciliation session"
         )
         let (result, _) = AttacheSessionDiscoveryCoordinator.search(request: request, service: service)
         // The entire model-visible payload is result + guidance. Assert no
@@ -293,5 +313,29 @@ final class AttacheSessionDiscoveryTests: XCTestCase {
             selection, validSessionIDs: validIDs, currentEpoch: grant1.epoch
         )
         XCTAssertEqual(grant2.epoch.value, 7, "epoch advances on each grant")
+    }
+
+    func testModelCannotProbeAnUnrelatedTranscriptKeyword() throws {
+        let service = try makeService()
+        let request = AttacheSessionDiscoveryRequest(
+            query: AttacheSessionDiscoveryQuery(text: "bryanlabs forwarding"),
+            triggeringUserTurn: "Find the personality session from last week."
+        )
+
+        XCTAssertThrowsError(
+            try AttacheSessionDiscoveryCoordinator.validateRequest(request)
+        ) { error in
+            XCTAssertEqual(
+                error as? AttacheSessionDiscoveryError,
+                .queryNotGroundedInUserTurn
+            )
+        }
+        let (result, candidates) = AttacheSessionDiscoveryCoordinator.search(
+            request: request,
+            service: service
+        )
+        XCTAssertEqual(result.matchCount, 0)
+        XCTAssertTrue(candidates.isEmpty)
+        XCTAssertTrue(result.guidance.contains("user's request"))
     }
 }

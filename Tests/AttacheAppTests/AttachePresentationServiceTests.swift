@@ -1,3 +1,4 @@
+import AttacheCore
 import XCTest
 @testable import AttacheApp
 
@@ -8,6 +9,64 @@ import XCTest
 /// `HTTP 400: This model does not support 'reasoning_effort'`. The fix folds
 /// `"none"` into the same "omit the field" bucket as `"default"`.
 final class AttachePresentationServiceTests: XCTestCase {
+    func testLiveFollowUpRefusesContextFreeSessionHistory() {
+        let service = AttachePresentationService(environment: [:])
+        let card = testCard(externalSessionID: "focused-session")
+        let snapshot = AttacheRequestSnapshot(
+            role: .liveFollowUp,
+            personality: Personality.builtIns[0],
+            profilePrompt: "Test",
+            userInput: "What changed?",
+            session: .contextFree,
+            modelSettings: nil,
+            contextItems: [],
+            contextStrategy: .automatic
+        )
+        let completed = expectation(description: "authorization rejected")
+
+        service.answerFollowUpQuestion(card: card, danQuestion: "What changed?", snapshot: snapshot) { result in
+            guard case .failure(let error) = result,
+                  case .unauthorizedContext = error as? AttachePresentationError else {
+                XCTFail("Expected unauthorizedContext, got \(result)")
+                completed.fulfill()
+                return
+            }
+            completed.fulfill()
+        }
+
+        wait(for: [completed], timeout: 1)
+    }
+
+    func testLiveFollowUpPromptIsBoundToFocusedSessionEvidence() {
+        let focused = AttacheFocusedSession(
+            sessionID: "focused-session",
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Focused",
+            workingDirectory: "/tmp/project",
+            authorizationEpoch: AttacheFocusEpoch(7)
+        )
+        let snapshot = AttacheRequestSnapshot(
+            role: .liveFollowUp,
+            personality: Personality.builtIns[0],
+            profilePrompt: "Test",
+            userInput: "What changed?",
+            session: .focused(focused),
+            modelSettings: nil,
+            contextItems: [],
+            contextStrategy: .automatic
+        )
+        let message = AttacheChatMessage(role: "user", content: "Stored session evidence and question")
+
+        let sources = AttacheProductionRequestBroker.prebuiltMessageSources(
+            snapshot: snapshot,
+            messages: [message]
+        )
+
+        let evidence = sources.first { $0.source == .retrievedTranscriptEvidence }
+        XCTAssertEqual(evidence?.message, message)
+        XCTAssertEqual(evidence?.authorization, .focused(focused))
+    }
+
     func testNoneIsOmittedJustLikeDefault() {
         XCTAssertNil(AttachePresentationService.normalizedReasoningEffort("none"))
         XCTAssertNil(AttachePresentationService.normalizedReasoningEffort("default"))
@@ -43,5 +102,16 @@ final class AttachePresentationServiceTests: XCTestCase {
 
     func testExplicitNoneStaysOmittedForProvidersWithoutThatContract() {
         XCTAssertNil(AttachePresentationService.reasoningEffortPayloadValue("none", provider: .groq))
+    }
+
+    private func testCard(externalSessionID: String) -> VoicemailCard {
+        VoicemailCard(
+            id: "card", sourceID: "source", sourceKind: SourceKind.codex.rawValue,
+            sourceDisplayName: "Codex", sessionID: "session", externalSessionID: externalSessionID,
+            projectPath: "/tmp/project", sessionTitle: "Focused", kind: .update,
+            rawText: "Private stored session history", summary: "Private history",
+            spokenText: "Private history", status: .heard, createdAt: Date(), heardAt: Date(),
+            metadataJSON: "{}", durationMs: 0, alignment: nil
+        )
     }
 }

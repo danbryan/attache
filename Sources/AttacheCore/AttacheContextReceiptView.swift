@@ -1,7 +1,7 @@
 import Foundation
 
 /// The disposition of one source category in the receipt (INF-325).
-public enum AttacheReceiptSourceDisposition: String, Equatable, Sendable {
+public enum AttacheReceiptSourceDisposition: String, Equatable, Sendable, Codable {
     case included
     case omitted
     case truncated
@@ -11,7 +11,7 @@ public enum AttacheReceiptSourceDisposition: String, Equatable, Sendable {
 /// One source category summary in the receipt (INF-325). Content-free: names
 /// the source, the count, the disposition, and the omission reason. Never the
 /// source text.
-public struct AttacheReceiptSourceSummary: Equatable, Sendable {
+public struct AttacheReceiptSourceSummary: Equatable, Sendable, Codable {
     public let source: String
     public let count: Int
     public let disposition: AttacheReceiptSourceDisposition
@@ -26,7 +26,7 @@ public struct AttacheReceiptSourceSummary: Equatable, Sendable {
 }
 
 /// Model and strategy summary for one attempt (INF-325). Content-free.
-public struct AttacheReceiptModelSummary: Equatable, Sendable {
+public struct AttacheReceiptModelSummary: Equatable, Sendable, Codable {
     public let provider: String
     public let model: String
     public let reasoningLevel: String?
@@ -59,7 +59,7 @@ public struct AttacheReceiptModelSummary: Equatable, Sendable {
 /// Safe focused-session display metadata (INF-325). Shows the frozen session
 /// title, source kind, and authorization time. Never includes hidden searched
 /// or watched sessions.
-public struct AttacheReceiptFocusedSessionDisplay: Equatable, Sendable {
+public struct AttacheReceiptFocusedSessionDisplay: Equatable, Sendable, Codable {
     public let displayTitle: String
     public let sourceKind: String
     public let authorizationTime: Date
@@ -72,7 +72,7 @@ public struct AttacheReceiptFocusedSessionDisplay: Equatable, Sendable {
 }
 
 /// One attempt summary (primary or fallback) in the receipt (INF-325).
-public struct AttacheReceiptAttemptSummary: Equatable, Sendable {
+public struct AttacheReceiptAttemptSummary: Equatable, Sendable, Codable {
     public let attemptNumber: Int
     public let isFallback: Bool
     public let modelSummary: AttacheReceiptModelSummary
@@ -98,19 +98,21 @@ public struct AttacheReceiptAttemptSummary: Equatable, Sendable {
         self.recompiledForFallback = recompiledForFallback
     }
 
-    /// True when the attempt is fully covered (no staged or omitted items)
-    /// (INF-325). A staged or incomplete review cannot appear as fully
+    /// True when the attempt is fully covered (no staged, omitted, or
+    /// truncated items) (INF-325). An incomplete review cannot appear as fully
     /// covered.
     public var isFullyCovered: Bool {
         !stagedProcessingRequired
-            && sourceSummaries.allSatisfy { $0.disposition != .staged }
+            && sourceSummaries.allSatisfy { $0.disposition == .included }
     }
 }
 
 /// The full receipt view for one model-backed card (INF-325). Tied to the
 /// actual compiled attempt(s). Content-free. Stores only the metadata needed
 /// to keep history accurate.
-public struct AttacheContextReceiptView: Equatable, Sendable {
+public struct AttacheContextReceiptView: Equatable, Sendable, Codable {
+    public static let metadataKey = "attache_context_receipt_v1"
+
     public let cardID: String
     public let attempts: [AttacheReceiptAttemptSummary]
     public let noModelContext: Bool
@@ -131,6 +133,39 @@ public struct AttacheContextReceiptView: Equatable, Sendable {
 
     /// The successful fallback attempt (INF-325).
     public var fallbackAttempt: AttacheReceiptAttemptSummary? { attempts.first { $0.isFallback } }
+
+    /// The compiler runs before a voicemail card exists. Rebinding preserves
+    /// the content-free attempt metadata while associating it with the stable
+    /// card id assigned by `CardStore`.
+    public func bound(to cardID: String) -> AttacheContextReceiptView {
+        AttacheContextReceiptView(cardID: cardID, attempts: attempts, noModelContext: noModelContext)
+    }
+
+    public func encodedMetadataValue() -> String? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(self) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    public static func decodeMetadataValue(_ value: String) -> AttacheContextReceiptView? {
+        guard let data = value.data(using: .utf8) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(AttacheContextReceiptView.self, from: data)
+    }
+}
+
+public extension VoicemailCard {
+    /// Receipt persisted with this exact card. Malformed or legacy metadata is
+    /// ignored instead of exposing raw JSON in the UI.
+    var contextReceipt: AttacheContextReceiptView? {
+        guard let encoded = metadataObject[AttacheContextReceiptView.metadataKey] as? String,
+              let receipt = AttacheContextReceiptView.decodeMetadataValue(encoded) else {
+            return nil
+        }
+        return receipt.bound(to: id)
+    }
 }
 
 /// The pure receipt builder (INF-325). Builds a content-free receipt view from
@@ -143,19 +178,34 @@ public enum AttacheContextReceiptBuilder {
         cardID: String,
         primaryCompiled: CompiledModelRequest,
         fallbackAttempt: AttacheFallbackAttempt? = nil,
-        authorizationTime: Date = Date(timeIntervalSince1970: 1_700_000_000)
+        authorizationTime: Date = Date(timeIntervalSince1970: 1_700_000_000),
+        reasoningLevel: String? = nil,
+        capabilityProvenance: String = "unknown",
+        capabilityFreshness: Date? = nil,
+        focusedSession: AttacheFocusedSession? = nil,
+        memorySelectionReceipt: [AttacheMemoryReceiptEntry] = []
     ) -> AttacheContextReceiptView {
         var attempts: [AttacheReceiptAttemptSummary] = []
         let primary = buildAttempt(
             compiled: primaryCompiled, attemptNumber: 1, isFallback: false,
-            recompiledForFallback: false, authorizationTime: authorizationTime
+            recompiledForFallback: false, authorizationTime: authorizationTime,
+            reasoningLevel: reasoningLevel,
+            capabilityProvenance: capabilityProvenance,
+            capabilityFreshness: capabilityFreshness,
+            focusedSession: focusedSession,
+            memorySelectionReceipt: memorySelectionReceipt
         )
         attempts.append(primary)
         if let fallback = fallbackAttempt {
             let fallbackSummary = buildAttempt(
                 compiled: fallback.compiledRequest, attemptNumber: fallback.attemptNumber,
                 isFallback: true, recompiledForFallback: true,
-                authorizationTime: authorizationTime
+                authorizationTime: authorizationTime,
+                reasoningLevel: reasoningLevel,
+                capabilityProvenance: capabilityProvenance,
+                capabilityFreshness: capabilityFreshness,
+                focusedSession: focusedSession,
+                memorySelectionReceipt: memorySelectionReceipt
             )
             attempts.append(fallbackSummary)
         }
@@ -170,21 +220,42 @@ public enum AttacheContextReceiptBuilder {
 
     static func buildAttempt(
         compiled: CompiledModelRequest, attemptNumber: Int, isFallback: Bool,
-        recompiledForFallback: Bool, authorizationTime: Date
+        recompiledForFallback: Bool, authorizationTime: Date,
+        reasoningLevel: String?, capabilityProvenance: String,
+        capabilityFreshness: Date?, focusedSession: AttacheFocusedSession?,
+        memorySelectionReceipt: [AttacheMemoryReceiptEntry]
     ) -> AttacheReceiptAttemptSummary {
         let receipt = compiled.receipt
         let model = compiled.modelIdentity
         let modelSummary = AttacheReceiptModelSummary(
             provider: model.provider, model: model.requestedModel,
-            reasoningLevel: nil, strategyKind: receipt.strategyKind,
+            reasoningLevel: reasoningLevel, strategyKind: receipt.strategyKind,
             estimatedInputTokens: receipt.totalEstimatedTokens,
             effectiveBudget: compiled.budgetPlan.effectiveHardLimit,
-            outputReserve: nil, toolReserve: nil,
-            capabilityProvenance: "providerMetadata",
-            capabilityFreshness: nil
+            outputReserve: compiled.budgetPlan.outputReserve,
+            toolReserve: compiled.budgetPlan.toolReserve,
+            capabilityProvenance: capabilityProvenance,
+            capabilityFreshness: capabilityFreshness.map(ISO8601DateFormatter().string(from:))
         )
-        let sourceSummaries = buildSourceSummaries(receipt: receipt)
-        let focusedDisplay: AttacheReceiptFocusedSessionDisplay? = nil
+        var sourceSummaries = buildSourceSummaries(receipt: receipt)
+        for memory in memorySelectionReceipt {
+            let identifier = "memory:\(memory.memoryID)"
+            guard !sourceSummaries.contains(where: { $0.source == identifier }) else { continue }
+            sourceSummaries.append(AttacheReceiptSourceSummary(
+                source: identifier,
+                count: 1,
+                disposition: memory.disposition == .included ? .included : .omitted,
+                omissionReason: memory.omissionReason
+            ))
+        }
+        sourceSummaries.sort { $0.source < $1.source }
+        let focusedDisplay = focusedSession.map {
+            AttacheReceiptFocusedSessionDisplay(
+                displayTitle: $0.displayTitle,
+                sourceKind: $0.sourceKind,
+                authorizationTime: authorizationTime
+            )
+        }
         return AttacheReceiptAttemptSummary(
             attemptNumber: attemptNumber, isFallback: isFallback,
             modelSummary: modelSummary, sourceSummaries: sourceSummaries,
@@ -196,24 +267,41 @@ public enum AttacheContextReceiptBuilder {
     }
 
     static func buildSourceSummaries(receipt: ContextReceipt) -> [AttacheReceiptSourceSummary] {
-        let includedCounts = countBySource(receipt.includedSources)
-        let omittedCounts = countBySource(receipt.omittedSources)
-        let truncatedCounts = countBySource(receipt.truncatedSources)
-        let allSources = Set(includedCounts.keys).union(omittedCounts.keys).union(truncatedCounts.keys)
-        return allSources.sorted().map { source in
+        let includedCounts = countBySource(receipt.includedSourceIdentifiers ?? receipt.includedSources)
+        let omittedCounts = countBySource(receipt.omittedSourceIdentifiers ?? receipt.omittedSources)
+        let truncatedCounts = countBySource(receipt.truncatedSourceIdentifiers ?? receipt.truncatedSources)
+        let allSources = Set(includedCounts.keys)
+            .union(omittedCounts.keys)
+            .union(truncatedCounts.keys)
+        var summaries: [AttacheReceiptSourceSummary] = []
+        for source in allSources.sorted() {
             if let count = includedCounts[source] {
-                return AttacheReceiptSourceSummary(source: source, count: count, disposition: .included)
+                summaries.append(AttacheReceiptSourceSummary(
+                    source: source,
+                    count: count,
+                    disposition: .included
+                ))
             }
             if let count = truncatedCounts[source] {
-                return AttacheReceiptSourceSummary(source: source, count: count, disposition: .truncated, omissionReason: "budget")
+                summaries.append(AttacheReceiptSourceSummary(
+                    source: source,
+                    count: count,
+                    disposition: .truncated,
+                    omissionReason: "budget"
+                ))
             }
             if let count = omittedCounts[source] {
                 let reason = receipt.stagedProcessingRequired ? "awaiting exhaustive processing" : "budget"
                 let disposition: AttacheReceiptSourceDisposition = receipt.stagedProcessingRequired ? .staged : .omitted
-                return AttacheReceiptSourceSummary(source: source, count: count, disposition: disposition, omissionReason: reason)
+                summaries.append(AttacheReceiptSourceSummary(
+                    source: source,
+                    count: count,
+                    disposition: disposition,
+                    omissionReason: reason
+                ))
             }
-            return AttacheReceiptSourceSummary(source: source, count: 0, disposition: .omitted, omissionReason: "unknown")
         }
+        return summaries
     }
 
     static func countBySource(_ sources: [String]) -> [String: Int] {

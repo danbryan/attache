@@ -18,14 +18,20 @@ struct AttacheVoiceOption: Identifiable, Equatable {
 }
 
 enum AttacheVoiceCatalog {
+    // NSSpeechSynthesizer's registry is process-cached but enumerating and
+    // reading every voice's attributes can still take several seconds. Cache
+    // the raw catalog once; freshOptions() remains the explicit helper-process
+    // path for detecting voices installed after launch.
+    private static let installedOptions: [AttacheVoiceOption] =
+        NSSpeechSynthesizer.availableVoices.map(option)
+
     static func options() -> [AttacheVoiceOption] {
         // QA affordance: render the compact-only experience (onboarding
         // guidance box, recommendations) without deleting installed voices.
         // The --print-voices helper inherits the environment, so download
         // detection stays consistent with the simulated catalog.
         let hidePremium = ProcessInfo.processInfo.environment["ATTACHE_COMPACT_VOICES_ONLY"] != nil
-        return NSSpeechSynthesizer.availableVoices
-            .map(option)
+        return installedOptions
             .filter { !hidePremium || (!$0.id.contains(".premium.") && !$0.id.contains(".enhanced.")) }
             .sorted { lhs, rhs in
                 if lhs.localeIdentifier == "en_US", rhs.localeIdentifier != "en_US" { return true }

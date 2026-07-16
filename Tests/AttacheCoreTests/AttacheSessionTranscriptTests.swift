@@ -99,4 +99,45 @@ final class AttacheSessionTranscriptTests: XCTestCase {
         XCTAssertTrue(text!.contains("LAST_QUESTION"), "recent context must be present")
         XCTAssertTrue(text!.contains("omitted"), "the gap must be marked so the model knows the middle is missing")
     }
+
+    func testStreamingEnumerationCrossesChunkBoundariesExactlyOnce() throws {
+        let filler = String(repeating: "x", count: 400)
+        let lines = (1...1_000).map { claudeAssistant("stream turn \($0) \(filler)") }
+        let url = try tempFile(lines)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var ordinals: [Int] = []
+        var texts: [String] = []
+        XCTAssertTrue(AttacheSessionReader.enumerateTurns(fromFileURL: url) { ordinal, turn in
+            ordinals.append(ordinal)
+            texts.append(turn.text)
+            return true
+        })
+
+        XCTAssertEqual(ordinals, Array(1...1_000))
+        XCTAssertTrue(texts.first?.hasPrefix("stream turn 1 ") == true)
+        XCTAssertTrue(texts.last?.hasPrefix("stream turn 1000 ") == true)
+    }
+
+    func testStreamingSkipsOversizedLineAndResumesAtNextTurn() throws {
+        let oversized = claudeAssistant(String(repeating: "x", count: 2_000))
+        let later = claudeUser("RECOVERED_AFTER_OVERSIZED_LINE")
+        let url = try tempFile([oversized, later])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var located: [(ordinal: Int, text: String, offset: Int, length: Int)] = []
+        XCTAssertTrue(AttacheSessionReader.streamLocatedTurns(
+            fromFileURL: url,
+            maxLineBytes: 256
+        ) { ordinal, turn, offset, length in
+            located.append((ordinal, turn.text, offset, length))
+            return true
+        })
+
+        XCTAssertEqual(located.count, 1)
+        XCTAssertEqual(located[0].ordinal, 1)
+        XCTAssertEqual(located[0].text, "RECOVERED_AFTER_OVERSIZED_LINE")
+        XCTAssertEqual(located[0].offset, oversized.utf8.count + 1)
+        XCTAssertEqual(located[0].length, later.utf8.count)
+    }
 }

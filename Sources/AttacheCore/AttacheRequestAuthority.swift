@@ -43,12 +43,47 @@ public struct AttacheFocusedSession: Equatable, Sendable {
     public let sourceKind: String
     public let displayTitle: String
     public let workingDirectory: String?
+    /// The focus grant that authorized this session. Session IDs can be reused
+    /// or rediscovered, so identity alone is not authority. A request may use
+    /// session evidence only when this epoch also matches exactly.
+    public let authorizationEpoch: AttacheFocusEpoch
 
-    public init(sessionID: String, sourceKind: String, displayTitle: String, workingDirectory: String?) {
+    public init(
+        sessionID: String,
+        sourceKind: String,
+        displayTitle: String,
+        workingDirectory: String?,
+        authorizationEpoch: AttacheFocusEpoch = AttacheFocusEpoch(0)
+    ) {
         self.sessionID = sessionID
         self.sourceKind = sourceKind
         self.displayTitle = displayTitle
         self.workingDirectory = workingDirectory
+        self.authorizationEpoch = authorizationEpoch
+    }
+
+    /// Exact authorization identity. Display metadata is deliberately not part
+    /// of the authority key, but it must come from an app-owned discovery
+    /// result rather than model/user supplied fields.
+    public func hasSameAuthorization(as other: AttacheFocusedSession) -> Bool {
+        sessionID == other.sessionID
+            && sourceKind == other.sourceKind
+            && authorizationEpoch == other.authorizationEpoch
+    }
+}
+
+public extension AttacheSessionAuthorization {
+    /// True only when both values authorize the same source, session, and
+    /// monotonic focus grant. Context-free values match each other only.
+    func exactlyMatches(_ other: AttacheSessionAuthorization) -> Bool {
+        switch (self, other) {
+        case (.contextFree, .contextFree):
+            return true
+        case (.focused(let lhs), .focused(let rhs)):
+            return lhs.hasSameAuthorization(as: rhs)
+        default:
+            return false
+        }
     }
 }
 
@@ -114,16 +149,18 @@ public enum AttacheRequestAuthority {
         return (fallbackID, fallbackPrompt)
     }
 
-    /// True when a role is allowed to see focused-session context. Topic tagging
-    /// is deliberately neutral: it may run, but it never inherits a focused
-    /// session's evidence or another personality's context.
+    /// True when a role is allowed to see focused-session context. Ordinary
+    /// presentation, voicemail follow-up, preview, and another-take requests
+    /// carry only their explicitly frozen payload. They may never inherit a
+    /// work session merely because a caller attached focused authorization.
+    /// Recap is retained for the explicit, user-started exhaustive-review path.
     public static func roleMayUseSessionContext(_ role: AttacheRequestRole, authorization: AttacheSessionAuthorization) -> Bool {
         guard authorization.isFocused else { return false }
         switch role {
-        case .topicTagging:
-            return false
-        case .presentation, .conversation, .recap, .followUp, .liveFollowUp, .anotherTake, .preview:
+        case .conversation, .liveFollowUp, .recap:
             return true
+        case .presentation, .followUp, .anotherTake, .preview, .topicTagging:
+            return false
         }
     }
 }

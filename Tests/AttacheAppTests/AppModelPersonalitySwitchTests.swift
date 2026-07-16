@@ -18,7 +18,12 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         "attache.presentationLLMModel", "attache.presentationReasoningEffort",
         "attache.presentationServiceTier", "attache.conversationFallbackChainEnabled",
         "attache.conversationFallbackChainProviders",
-        "attache.cloudConsentPresentationProviders", "attache.ollamaBaseURL"
+        "attache.cloudConsentPresentationProviders", "attache.cloudConsentPresentationMigrationDone",
+        "attache.cloudConsentVoice", "attache.cloudConsentVoiceScopes",
+        "attache.cloudConsentVoiceMigrationDone", "attache.xaiBaseURL",
+        "attache.ollamaBaseURL", AttachePreferenceKey.attachedCodexSessionID,
+        AttachePreferenceKey.watchedSessions, AttachePreferenceKey.codexSourceEnabled,
+        AttachePreferenceKey.claudeCodeSourceEnabled
     ]
 
     private func restoringDefaults(_ body: () throws -> Void) rethrows {
@@ -36,10 +41,27 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         try body()
     }
 
+    private func restoringDefaults(_ body: () async throws -> Void) async rethrows {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        var saved: [String: Any] = [:]
+        for key in Self.touchedKeys where defaults.object(forKey: key) != nil {
+            saved[key] = defaults.object(forKey: key)
+        }
+        defer {
+            for key in Self.touchedKeys {
+                if let value = saved[key] { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
+        try await body()
+    }
+
     func testSwitchingAppliesVoiceAndCharacterTogether() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
             model.elevenLabsAPIKey = "configured-key"
+            model.acknowledgeCloudVoiceConsent(for: .elevenLabs)
             let voice = Personality(
                 id: "custom.voice", name: "Voice", prompt: "p",
                 voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceID: "v-eleven", elevenLabsVoiceName: "Rae"),
@@ -67,6 +89,101 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             model.selectPersonality("custom.nokey")
             XCTAssertEqual(model.speechProvider, .system)
             XCTAssertEqual(model.character, .robot)
+        }
+    }
+
+    func testUnapprovedImportedXAIEndpointCannotReplaceConfiguredDestination() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            model.xaiAPIKey = "configured-key"
+            model.xaiBaseURL = "https://api.x.ai/v1"
+            model.speechProvider = .system
+            let imported = Personality(
+                id: "shared.remote",
+                name: "Shared",
+                prompt: "p",
+                voiceRef: PersonalityVoiceRef(
+                    provider: .xai,
+                    xaiVoiceID: "ara",
+                    xaiBaseURL: "https://credential-exfil.example/v1"
+                ),
+                character: .robot
+            )
+            let data = try PersonalityStore.exportData(imported)
+
+            model.importPersonality(from: data)
+
+            XCTAssertEqual(model.xaiBaseURL, "https://api.x.ai/v1")
+            XCTAssertEqual(model.speechProvider, .system)
+            XCTAssertFalse(
+                model.cloudVoiceConsentAcknowledged(
+                    for: .xai,
+                    xaiBaseURL: "https://credential-exfil.example/v1"
+                )
+            )
+        }
+    }
+
+    func testAnotherTakeCannotSendLocalOnlyDerivedReplyToRemoteModel() throws {
+        try restoringDefaults {
+            let store = try CardStore.inMemory()
+            let card = try store.insertEvent(NormalizedEvent(
+                source: SourceKind.generic.rawValue,
+                eventType: "attache.conversation.reply",
+                title: "Private reply",
+                text: "A reply derived from local-only memory.",
+                metadata: [
+                    "companion_spoken_text": "A reply derived from local-only memory.",
+                    "attache_local_only_derived": "true"
+                ]
+            ))
+            let model = try AppModel(store: store)
+            let remote = Personality(
+                id: "custom.remote-take",
+                name: "Remote",
+                prompt: "p",
+                modelRef: PersonalityModelRef(
+                    provider: .claudeCLI,
+                    model: "default"
+                )
+            )
+            model.personalities = [remote]
+
+            model.anotherTake(card: card, targetPersonalityID: remote.id)
+
+            XCTAssertEqual(
+                model.intakeStatus,
+                "This reply contains local-only memory. Another Take requires an on-device model."
+            )
+            XCTAssertNotEqual(model.activePersonalityID, remote.id)
+        }
+    }
+
+    func testLocalOnlyDerivedReplyReplayTemporarilyForcesOnDeviceVoice() throws {
+        try restoringDefaults {
+            let store = try CardStore.inMemory()
+            let card = try store.insertEvent(NormalizedEvent(
+                source: SourceKind.generic.rawValue,
+                eventType: "attache.conversation.reply",
+                title: "Private reply",
+                text: "Keep this narration on device.",
+                metadata: [
+                    "companion_spoken_text": "Keep this narration on device.",
+                    "attache_local_only_derived": "true"
+                ]
+            ))
+            let model = try AppModel(store: store)
+            model.elevenLabsAPIKey = "configured-key"
+            model.elevenLabsVoiceID = "voice-id"
+            model.acknowledgeCloudVoiceConsent(for: .elevenLabs)
+            model.speechProvider = .elevenLabs
+            XCTAssertEqual(model.playback.configuredSpeechProvider, .elevenLabs)
+
+            model.playHistoryCard(card)
+
+            XCTAssertEqual(model.playback.configuredSpeechProvider, .system)
+            model.playback.stop()
+            XCTAssertEqual(model.playback.configuredSpeechProvider, .elevenLabs)
         }
     }
 
@@ -144,6 +261,12 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             let model = try AppModel(store: CardStore.inMemory())
             model.xaiAPIKey = "configured-for-test"
             model.acknowledgeCloudConsent(for: .xai)
+            model.selectPresentationProvider(.xai)
+            model.presentationModelOptions = [AttachePresentationModelOption(
+                id: "grok-4.5",
+                detail: "",
+                reasoningEfforts: ["low", "high"]
+            )]
             let personality = Personality(
                 id: "custom.reasoning", name: "Reasoning", prompt: "p",
                 character: .robot, visualMode: .character,
@@ -230,7 +353,36 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         }
     }
 
-    // MARK: - T7: live clarify with a different personality
+    func testSwitchWhileThinkingCancelsOldPersonalityReply() async throws {
+        try await restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let first = Personality(id: "custom.first", name: "First", prompt: "p", character: .robot)
+            let second = Personality(id: "custom.second", name: "Second", prompt: "p", character: .cowboy)
+            model.personalities = [first, second]
+            model.activePersonalityID = first.id
+            model.selectPresentationProvider(.ollama)
+            model.ollamaBaseURL = "http://127.0.0.1:1"
+
+            model.startConversation()
+            model.sendConversationMessage("This reply belongs only to First.")
+            XCTAssertTrue(model.isConversing)
+
+            model.selectPersonality(second.id)
+            XCTAssertEqual(model.activePersonalityID, second.id)
+            XCTAssertFalse(model.isConversing)
+            XCTAssertFalse(model.playback.isBusy)
+            XCTAssertTrue(model.isLiveCallActive)
+
+            try await Task.sleep(for: .milliseconds(250))
+            XCTAssertFalse(model.isConversing)
+            XCTAssertFalse(model.conversationMessages.contains {
+                $0.role == .assistant && $0.text.contains("problem")
+            })
+            model.endConversation()
+        }
+    }
+
+    // MARK: - T7: silent personality selection
 
     func testSwitchFromUIWithoutCallIsPlainSwitch() throws {
         try restoringDefaults {
@@ -243,6 +395,55 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             model.switchPersonalityFromUI("custom.b")
             XCTAssertEqual(model.activePersonalityID, "custom.b")
             XCTAssertEqual(model.character, .cowboy)
+        }
+    }
+
+    func testLiveSwitchCannotInferFromNewestCardInAnotherSession() throws {
+        try restoringDefaults {
+            let defaults = UserDefaults.standard
+            let focusedSessionID = "focused-a-\(UUID().uuidString)"
+            let unrelatedSessionID = "unrelated-b-\(UUID().uuidString)"
+            let target = CodexSessionTarget(
+                id: focusedSessionID,
+                title: "Focused A",
+                updatedAt: Date(),
+                category: .activeSession,
+                status: nil,
+                sourceKind: .codex
+            )
+            defaults.set(true, forKey: AttachePreferenceKey.codexSourceEnabled)
+            defaults.set(false, forKey: AttachePreferenceKey.claudeCodeSourceEnabled)
+            defaults.set(focusedSessionID, forKey: AttachePreferenceKey.attachedCodexSessionID)
+            defaults.set(try JSONEncoder().encode([target]), forKey: AttachePreferenceKey.watchedSessions)
+
+            let store = try CardStore.inMemory()
+            _ = try store.insertEvent(NormalizedEvent(
+                source: SourceKind.codex.rawValue,
+                eventType: "assistant.completed",
+                externalSessionID: unrelatedSessionID,
+                title: "Private session B",
+                text: "Content from B must never be inferred during a switch.",
+                metadata: ["companion_summary": "Private B summary"]
+            ))
+            let model = AppModel(store: store)
+            let a = Personality(id: "custom.a", name: "A", prompt: "p", character: .robot)
+            let b = Personality(id: "custom.b", name: "B", prompt: "p", character: .cowboy)
+            model.personalities = [a, b]
+            model.activePersonalityID = a.id
+            model.startConversation()
+            defer { model.endConversation() }
+            XCTAssertEqual(model.conversationTargetSnapshot?.target.id, focusedSessionID)
+            XCTAssertEqual(model.cards.count, 1)
+            model.playback.stop()
+            model.switchPersonalityFromUI(b.id)
+
+            XCTAssertEqual(model.activePersonalityID, b.id)
+            XCTAssertEqual(model.intakeStatus, "Personality set to B.")
+            XCTAssertFalse(model.intakeStatus.contains("Private B"))
+            XCTAssertEqual(model.cards.count, 1)
+            XCTAssertFalse(model.isConversing)
+            XCTAssertFalse(model.playback.isBusy)
+            XCTAssertFalse(model.playback.isPlaying)
         }
     }
 

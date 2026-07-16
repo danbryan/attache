@@ -6,7 +6,8 @@ final class AttacheProgressiveTranscriptToolsTests: XCTestCase {
 
     private let session = AttacheFocusedSession(
         sessionID: "sess-1", sourceKind: "codex",
-        displayTitle: "Test Session", workingDirectory: "/tmp/proj"
+        displayTitle: "Test Session", workingDirectory: "/tmp/proj",
+        authorizationEpoch: AttacheFocusEpoch(1)
     )
     private let epoch = AttacheFocusEpoch(1)
 
@@ -293,6 +294,49 @@ final class AttacheProgressiveTranscriptToolsTests: XCTestCase {
             return XCTFail("expired authorization should fail")
         }
         XCTAssertEqual(error, .authorizationExpired, "expired epoch returns no content")
+    }
+
+    func testMissingCurrentSessionFailsClosed() {
+        var reserve = makeReserve()
+        let result = AttacheProgressiveTranscriptTools.search(
+            focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+            currentSessionID: nil, query: "answer", turns: makeTurns(3), reserve: &reserve
+        )
+        XCTAssertEqual(try? result.get(), nil)
+        guard case .failure(let error) = result else { return XCTFail("must fail") }
+        XCTAssertEqual(error, .noFocusedSession)
+    }
+
+    func testContinuationLocatorRejectsTranscriptMutation() {
+        var original = makeTurns(3)
+        original[0] = AttacheTranscriptTurn(
+            ordinal: 0,
+            role: "user",
+            content: String(repeating: "continuation ", count: 500)
+        )
+        var reserve = makeReserve()
+        let policy = makePolicy()
+        let first = AttacheProgressiveTranscriptTools.readRange(
+            focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+            currentSessionID: "sess-1", turnOrdinal: 0, charStart: 0,
+            maxChars: 20, turns: original, expectedContentHash: nil,
+            reserve: &reserve, policy: policy
+        )
+        guard case .success(let page) = first, let locator = page.continuationLocator else {
+            return XCTFail("expected continuation")
+        }
+        let mutated = [AttacheTranscriptTurn(ordinal: 0, role: "user", content: original[0].content)]
+            + [AttacheTranscriptTurn(ordinal: 1, role: "assistant", content: "mutated")]
+            + [original[2]]
+        var nextReserve = makeReserve()
+        let next = AttacheProgressiveTranscriptTools.readRange(
+            focusedSession: session, currentEpoch: epoch, currentSessionID: "sess-1",
+            locator: locator, maxChars: 20, turns: mutated,
+            reserve: &nextReserve, policy: policy
+        )
+        guard case .failure(.transcriptVersionMismatch) = next else {
+            return XCTFail("mutated transcript must invalidate locator")
+        }
     }
 
     // Budget exhaustion stops further reads.

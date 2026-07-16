@@ -18,7 +18,7 @@ public enum AttacheMemoryProposalMode: String, Equatable, Sendable, Codable {
 /// A proposed memory record before acceptance (INF-324). The model proposes;
 /// local policy decides whether anything is stored. Carries provenance so the
 /// user can review where it came from.
-public struct AttacheMemoryProposal: Equatable, Sendable {
+public struct AttacheMemoryProposal: Codable, Equatable, Sendable {
     public let id: String
     public let statement: String
     public let type: AttacheMemoryType
@@ -108,12 +108,17 @@ public enum AttacheMemoryProposalValidator {
     /// proposal must not be stored, or nil if it passes validation.
     public static func validate(_ proposal: AttacheMemoryProposal) -> AttacheMemoryProposalRejection? {
         let lower = proposal.statement.lowercased()
+        // Financial account data gets its precise reason before the broader
+        // secret filter, including unlabeled SSNs, cards, routing numbers, and
+        // IBANs detected structurally.
+        if financialMarkers.contains(where: { lower.contains($0) })
+            || AttacheMemorySecretFilter.containsFinancialAccountData(proposal.statement) {
+            return .financialAccount
+        }
         // Secrets and credentials.
         if AttacheMemorySecretFilter.shouldReject(proposal.statement) {
             return secretPatterns.contains { lower.contains($0) } ? .credential : .secret
         }
-        // Financial account data.
-        if financialMarkers.contains(where: { lower.contains($0) }) { return .financialAccount }
         // Inferred protected traits.
         if protectedTraitMarkers.contains(where: { lower.contains($0) }) {
             // Only reject if it's inferred/guessed, not if the user stated it.
@@ -172,7 +177,14 @@ public enum AttacheMemoryProposalProcessor {
         // Automatic: persist low-sensitivity high-confidence.
         // Sensitive or ambiguous still require confirmation.
         if mode == .automatic {
-            if proposal.sensitivity == .low && proposal.confidence == .authoritative {
+            // A model can propose a memory but can never authorize its own
+            // durable write, even if it marks the proposal authoritative or
+            // clears a confirmation flag. Automatic writes are limited to
+            // explicit user-originated records that do not require review.
+            if !proposal.requiresConfirmation,
+               proposal.sourceKind != .modelProposed,
+               proposal.sensitivity == .low,
+               proposal.confidence == .authoritative {
                 let record = AttacheMemoryRecord(
                     id: proposal.id, statement: proposal.statement,
                     type: proposal.type, scope: proposal.scope,
@@ -239,8 +251,13 @@ public enum AttacheMemoryConsolidator {
             var group: [AttacheMemoryRecord] = [active[i]]
             for j in (i+1)..<active.count {
                 if used.contains(active[j].id) { continue }
-                let overlap = AttacheMemorySelector.lexicalOverlap(active[i].statement, active[j].statement)
-                if overlap >= 0.5 && active[i].statement != active[j].statement {
+                let overlap = AttacheMemorySelector.lexicalOverlap(
+                    AttacheMemorySelector.removingNegation(from: active[i].statement),
+                    AttacheMemorySelector.removingNegation(from: active[j].statement)
+                )
+                if overlap >= 0.4,
+                   AttacheMemorySelector.hasNegation(active[i].statement)
+                    != AttacheMemorySelector.hasNegation(active[j].statement) {
                     group.append(active[j])
                     used.insert(active[j].id)
                 }

@@ -2,6 +2,21 @@ import XCTest
 @testable import AttacheApp
 
 final class PlaybackReliabilityTests: XCTestCase {
+    func testInboxReloadNeverPreSynthesizesUnplayedVoicemail() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appModel = try String(contentsOf: root.appendingPathComponent(
+            "Sources/AttacheApp/AppModel.swift"
+        ))
+
+        XCTAssertFalse(
+            appModel.contains("prepareAudioCache(for:"),
+            "Off-call voicemail synthesis must begin only after Play, Preview, catch-up, or live delivery."
+        )
+    }
+
     func testSmokeMuteIsScopedToExplicitEnvironmentFlag() {
         XCTAssertTrue(SpeechPlaybackController.shouldMuteAudioOutput(environment: [
             "ATTACHE_UI_TEST_MUTE_AUDIO": "1"

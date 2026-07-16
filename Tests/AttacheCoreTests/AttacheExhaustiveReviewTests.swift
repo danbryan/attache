@@ -167,6 +167,82 @@ final class AttacheExhaustiveReviewTests: XCTestCase {
         let canResume = AttacheExhaustiveReviewCoordinator.resume(&ledger, currentSourceVersion: "v2")
         XCTAssertFalse(canResume, "version mismatch prevents resume")
         XCTAssertEqual(ledger.overallStatus, .stale, "stale on version mismatch")
+        XCTAssertTrue(ledger.entries.filter(\.isEligible).allSatisfy { $0.status == .stale },
+                      "completed checkpoints are stale too")
+    }
+
+    func testEpisodeKeyedMutationInvalidatesOnlyChangedEntry() {
+        let map = makeMap(episodes: 2)
+        var ledger = AttacheExhaustiveReviewCoordinator.buildLedger(from: map, sourceVersion: "v1")
+        ledger.entries[0].markComplete(receiptID: "r0")
+        ledger.entries[1].markComplete(receiptID: "r1")
+        ledger.updateOverallStatus()
+        var hashes = Dictionary(uniqueKeysWithValues: ledger.entries.map { ($0.episodeID, $0.sourceHash) })
+        hashes[ledger.entries[1].episodeID] = "mutated"
+        XCTAssertFalse(AttacheExhaustiveReviewCoordinator.applySourceMutation(
+            ledger: &ledger, currentHashesByEpisode: hashes, currentSourceVersion: "v1"
+        ))
+        XCTAssertEqual(ledger.entries[0].status, .complete)
+        XCTAssertEqual(ledger.entries[1].status, .stale)
+        XCTAssertEqual(ledger.overallStatus, .stale)
+    }
+
+    func testLargeCapabilityProducesLargerReviewStages() {
+        let map = makeMap(episodes: 20)
+        let small = AttacheExhaustiveReviewCoordinator.buildPlan(
+            map: map, modelKey: "small",
+            capability: AttacheModelCapabilityProfile(architecturalMaximum: 8_000, confidence: .authoritative, provenance: .providerMetadata),
+            strategy: .maximumCoverage, egressClass: "local"
+        )
+        let large = AttacheExhaustiveReviewCoordinator.buildPlan(
+            map: map, modelKey: "large",
+            capability: AttacheModelCapabilityProfile(architecturalMaximum: 1_000_000, confidence: .authoritative, provenance: .providerMetadata),
+            strategy: .maximumCoverage, egressClass: "local"
+        )
+        XCTAssertLessThanOrEqual(large.estimatedCallCount, small.estimatedCallCount)
+        XCTAssertGreaterThanOrEqual(large.stages.first?.estimatedTokens ?? 0, small.stages.first?.estimatedTokens ?? 0)
+    }
+
+    func testFrozenEvidenceTokenEstimatesDriveStageBoundaries() {
+        let map = makeMap(episodes: 4)
+        let legacy = AttacheExhaustiveReviewCoordinator.buildPlan(
+            map: map,
+            modelKey: "small",
+            capability: AttacheModelCapabilityProfile(architecturalMaximum: 8_000),
+            strategy: .efficient,
+            egressClass: "loopback"
+        )
+        let measured = AttacheExhaustiveReviewCoordinator.buildPlan(
+            map: map,
+            modelKey: "small",
+            capability: AttacheModelCapabilityProfile(architecturalMaximum: 8_000),
+            strategy: .efficient,
+            egressClass: "loopback",
+            estimatedTokensByEpisode: Dictionary(
+                uniqueKeysWithValues: map.episodes.map { ($0.episodeID, 2_000) }
+            )
+        )
+
+        XCTAssertEqual(legacy.estimatedCallCount, 1)
+        XCTAssertEqual(measured.estimatedCallCount, 4)
+        XCTAssertTrue(measured.stages.allSatisfy { $0.estimatedTokens == 2_000 })
+    }
+
+    func testSingleOversizedExactRangeIsNeverPlacedInAProviderStage() {
+        let map = makeMap(episodes: 2)
+        let plan = AttacheExhaustiveReviewCoordinator.buildPlan(
+            map: map,
+            modelKey: "small",
+            capability: AttacheModelCapabilityProfile(architecturalMaximum: 8_000),
+            strategy: .efficient,
+            egressClass: "loopback",
+            estimatedTokensByEpisode: ["ep-0": 12_000, "ep-1": 500]
+        )
+
+        XCTAssertEqual(plan.oversizedEpisodeIDs, ["ep-0"])
+        XCTAssertFalse(plan.stages.flatMap(\.episodeIDs).contains("ep-0"))
+        XCTAssertTrue(plan.stages.flatMap(\.episodeIDs).contains("ep-1"))
+        XCTAssertTrue(plan.stages.allSatisfy { $0.estimatedTokens <= plan.maxStageInputTokens })
     }
 
     // Criterion 8: focus/personality/model switch does not mutate in-flight.

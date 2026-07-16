@@ -130,11 +130,17 @@ final class AttachePresentationErrorRelayTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = AttachePresentationService(defaults: defaults, environment: [
+        let environment = [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": "attache-error-relay-smoke"
-        ])
+        ]
+        let modelSettings = AttachePresentationSettings.load(
+            role: .conversation,
+            defaults: defaults,
+            environment: environment
+        )
+        let service = AttachePresentationService(defaults: defaults, environment: environment)
 
         // The same conversationSystemPrompt AppModel builds for a live call,
         // including the new error-behavior block (unconditionally present;
@@ -148,9 +154,32 @@ final class AttachePresentationErrorRelayTests: XCTestCase {
             canStageAgentInstruction: true
         )
         let user = "Tell Claude Code to reply exactly \(mismatchToken) and do not use tools."
+        let focusedSession = AttacheFocusedSession(
+            sessionID: "error-relay-focused-codex",
+            sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Weekly Codex Improvement Review",
+            workingDirectory: "/tmp/attache-error-relay-smoke",
+            authorizationEpoch: AttacheFocusEpoch(1)
+        )
+        let personality = Personality(
+            id: "error-relay-personality",
+            name: "Attaché",
+            prompt: AttachePersonality.defaultProfilePrompt
+        )
+        let snapshot = AttacheRequestSnapshot(
+            role: .conversation,
+            personality: personality,
+            profilePrompt: personality.prompt,
+            userInput: user,
+            session: .focused(focusedSession),
+            modelSettings: modelSettings,
+            contextItems: [],
+            contextStrategy: .automatic
+        )
 
         let result: Result<AttacheConversationReply, Error> = await withCheckedContinuation { continuation in
             service.converse(
+                snapshot: snapshot,
                 messages: [
                     AttacheChatMessage(role: "system", content: system),
                     AttacheChatMessage(role: "user", content: user)

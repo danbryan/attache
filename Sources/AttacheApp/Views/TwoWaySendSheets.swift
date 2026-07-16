@@ -21,7 +21,7 @@ struct TwoWayEnableSheet: View {
             Text("This turns on send-to-agent for this session. Attaché will deliver instructions you confirm back into the agent by resuming it, acting with your own agent permissions. It waits until the session is quiet, sends one at a time, and never approves permissions or tool use on the agent's behalf.")
                 .font(.callout).fixedSize(horizontal: false, vertical: true)
             Text(directSendEnabled
-                 ? "This first instruction still asks for final confirmation. After that, your Settings choice sends future Tell Agent turns and explicit personality handoffs for this session without the final sheet."
+                 ? "This first instruction still asks for final confirmation. After that, your Settings choice can send explicit Tell Agent turns directly. Ask Attaché handoffs always keep the final confirmation sheet."
                  : "Every send still asks you to confirm first. You can turn this off for the session at any time.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {

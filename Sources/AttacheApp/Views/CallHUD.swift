@@ -39,6 +39,9 @@ extension AttacheRootView {
         VStack(alignment: .leading, spacing: 8) {
             callDestinationPicker
 
+            ContextOverflowRecoveryBanner()
+            ExhaustiveReviewSurface()
+
             if model.conversationDestination == .agent {
                 Label(
                     agentDestinationLabel,

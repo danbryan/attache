@@ -30,7 +30,7 @@ let onlyFlows = ProcessInfo.processInfo.environment["SMOKE_ONLY"]
 func enabled(_ flow: String) -> Bool {
     let key = flow.lowercased()
     if let onlyFlows { return onlyFlows.contains(key) }
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22", "context"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -1207,13 +1207,17 @@ if enabled("f8") {
         }
     }
 
-    run.step("f8-personality-codex-two-way", "enabled Ask Attaché handoff sends directly without a final sheet") {
+    run.step("f8-personality-codex-two-way", "enabled Ask Attaché handoff still requires native confirmation") {
         try sendConversationPrompt(directPrompt)
-        Thread.sleep(forTimeInterval: 2)
-        let confirmation = (try mainWindow()).firstDescendant(containing: "Send this to")
-        guard confirmation == nil else {
-            throw SmokeError(message: "direct personality handoff unexpectedly opened a final confirmation sheet")
+        _ = try waitForElement("second personality confirmation sheet", in: try mainWindow(),
+                               containing: directToken, timeout: 20)
+        let confirm = try waitForElement("second Send to agent confirmation button", in: try mainWindow(),
+                                         role: kAXButtonRole as String, exactly: "Send to agent",
+                                         timeout: 12)
+        guard confirm.press() else {
+            throw SmokeError(message: "AXPress failed on second Send to agent confirmation: \(confirm.summary)")
         }
+        try waitForElementGone("second confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
         try waitUntil("direct personality handoff to persist the exact structured payload", timeout: 20, interval: 0.5) {
             let query = "SELECT COUNT(*) FROM instructions WHERE session_id='\(sessionID)' AND origin='personality_tool' AND source_utterance LIKE '%\(directToken)%' AND text='Reply exactly \(directToken). Do not use tools.';"
             guard let output = try? runShell("sqlite3 \"$HOME/Library/Application Support/Attache/Attache.sqlite\" \"\(query)\"") else {
@@ -1795,9 +1799,38 @@ if enabled("f10") {
         _ = try waitForElement("hide xAI API key", in: try mainWindow(), role: kAXButtonRole as String, exactly: "Hide xAI API key")
     }
 
-    run.step("f10-no-key-first-run", "skip path reaches the idle dock") {
-        let skip = try waitForElement("skip button", in: try mainWindow(), role: kAXButtonRole as String, containing: "Skip for now")
-        guard skip.press() else { throw SmokeError(message: "AXPress failed on \(skip.summary)") }
+    run.step("f10-no-key-first-run", "onboarding exposes an explicit keyboard-operable memory choice") {
+        let next = try waitForElement(
+            "Continue to character step",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Continue"
+        )
+        guard next.press() else { throw SmokeError(message: "AXPress failed on \(next.summary)") }
+        _ = try waitForElement("character onboarding step", in: try mainWindow(), containing: "Pick a character")
+        _ = try waitForElement("first-run memory choice", in: try mainWindow(), containing: "First-run memory choice")
+        let off = try waitForElement(
+            "Off memory choice",
+            in: try mainWindow(),
+            role: kAXRadioButtonRole as String,
+            exactly: "Off"
+        )
+        guard off.setFocused() else {
+            throw SmokeError(message: "memory choice is not keyboard focusable: \(off.summary)")
+        }
+        app.key(Key.space)
+        _ = try waitForElement("selected Off memory choice", in: try mainWindow(), containing: "Off")
+
+        let finish = try waitForElement(
+            "Finish welcome button",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Finish welcome"
+        )
+        guard finish.isEnabled, finish.press() else {
+            throw SmokeError(message: "Finish should enable after the explicit memory choice: \(finish.summary)")
+        }
+        try waitForElementGone("onboarding sheet", in: try mainWindow(), containing: "Pick a character")
         _ = try waitForElement("voicemail dock button", in: try mainWindow(),
                                role: kAXButtonRole as String, containing: "Open inbox")
     }
@@ -1809,6 +1842,23 @@ if enabled("f10") {
         try selectSettingsSection("Personalities", paneMarker: "Create character")
         _ = try waitForElement("active Attaché character", in: try settingsWindow(), containing: "Attaché", timeout: 8)
         _ = try waitForElement("default local model id", in: try settingsWindow(), containing: "qwen3:7b", timeout: 8)
+    }
+
+    run.step("f10-no-key-first-run", "context and memory controls remain usable at the minimum Settings size") {
+        let window = try settingsWindow()
+        guard window.setSize(CGSize(width: 740, height: 480)) else {
+            throw SmokeError(message: "could not resize Settings for context-management narrow-layout verification")
+        }
+        try selectSettingsSection("Context", paneMarker: "Choose how Attaché balances evidence")
+        _ = try waitForElement("default context strategy", in: window, containing: "Default context strategy")
+        _ = try waitForElement("automatic context explanation", in: window, containing: "balances evidence and speed automatically")
+
+        try selectSettingsSection("Memory", paneMarker: "Remembering")
+        _ = try waitForElement("memory mode", in: window, containing: "Memory mode")
+        _ = try waitForElement("local memory privacy explanation", in: window, containing: "Memory stays local by default")
+        _ = try waitForElement("structured memory empty state", in: window, containing: "No structured memories yet")
+        _ = try waitForElement("memory import action", in: window, role: kAXButtonRole as String, exactly: "Import structured memory")
+        _ = try waitForElement("memory export action", in: window, role: kAXButtonRole as String, exactly: "Export structured memory")
     }
 
     run.step("f10-no-key-first-run", "cloud integration rows are present and no secret account is seeded") {
@@ -2658,6 +2708,7 @@ if enabled("personality") {
         _ = try waitForElement("new personality affordance", in: studio, containing: "Write a new personality")
         _ = try waitForElement("voice choice", in: studio, containing: "Character voice engine")
         _ = try waitForElement("model choice", in: studio, containing: "Character model provider")
+        _ = try waitForElement("context strategy choice", in: studio, containing: "Character context strategy")
         _ = try waitForElement("sprite help", in: studio, containing: "Learn about custom sprites")
         try waitForElementGone("legacy follow app voice", in: studio, containing: "Follow the app voice", timeout: 1)
         try waitForElementGone("legacy follow app model", in: studio, containing: "Follow the app's main model", timeout: 1)
@@ -2705,6 +2756,13 @@ if enabled("personality") {
         _ = prompt.setFocused()
         let customPrompt = "Speak like a calm navigator. Lead with the outcome and keep every update to two sentences."
         if !prompt.setValue(customPrompt) { app.type(customPrompt) }
+
+        let contextStrategy = try waitForElement(
+            "character context strategy",
+            in: try personalityStudioWindow(),
+            containing: "Character context strategy"
+        )
+        try selectPopup(contextStrategy, item: "Efficient")
 
         let save = try waitForElement(
             "creator save button",
@@ -2774,6 +2832,201 @@ if enabled("personality") {
         app.key(Key.returnKey)
         try waitForElementGone("character switcher after named selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
         _ = try waitForElement("active character in dock", in: try mainWindow(), containing: "Active character Smoke Character")
+    }
+}
+
+// MARK: Context-management release surface. This flow is opt-in because it
+// requires a disposable fake Codex home and ATTACHE_UI_TEST-only state seeded
+// by scripts/context-ui-smoke.sh. The production-wiring XCTest remains a
+// separate hard assertion, so these deterministic fixtures cannot conceal an
+// unwired overflow or exhaustive-review path.
+
+if enabled("context") {
+    let environment = ProcessInfo.processInfo.environment
+    let discoveryNonce = environment["ATTACHE_CONTEXT_SMOKE_NONCE"] ?? ""
+    let discoverySessionID = environment["ATTACHE_CONTEXT_SMOKE_SESSION_ID"] ?? ""
+
+    run.step("context-ui", "fixture and disposable discovery session are explicit") {
+        guard environment["ATTACHE_CONTEXT_SMOKE_FIXTURES"] == "1" else {
+            throw SmokeError(message: "ATTACHE_CONTEXT_SMOKE_FIXTURES=1 is required")
+        }
+        guard !discoveryNonce.isEmpty, !discoverySessionID.isEmpty else {
+            throw SmokeError(message: "context smoke discovery identifiers are required")
+        }
+    }
+
+    run.step("context-ui", "session discovery is searchable without granting focus") {
+        try dismissOnboardingIfPresent()
+        app.key(Key.k, command: true)
+        let search = try waitForElement(
+            "context session discovery search",
+            in: try mainWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search name"
+        )
+        _ = search.setFocused()
+        if !search.setValue(discoveryNonce) { app.type(discoveryNonce) }
+        _ = try waitForElement("discovered synthetic session", in: try mainWindow(), timeout: 30) { element in
+            element.matches(discoverySessionID)
+                && element.actionNames.contains(kAXPressAction as String)
+        }
+        app.key(Key.escape)
+        try waitForElementGone(
+            "context discovery search",
+            in: try mainWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search name"
+        )
+    }
+
+    run.step("context-ui", "global strategy and capability controls are keyboard reachable") {
+        app.key(Key.comma, command: true)
+        try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+        try selectSettingsSection("Context", paneMarker: "Choose how Attaché balances evidence")
+        let picker = try waitForElement(
+            "default context strategy",
+            in: try settingsWindow(),
+            role: kAXPopUpButtonRole as String,
+            exactly: "Default context strategy"
+        )
+        try selectPopup(picker, item: "Efficient")
+        try waitUntil("Efficient context strategy selection", timeout: 5) {
+            picker.stringValue.contains("Efficient")
+        }
+        let advanced = try waitForElement(
+            "advanced context settings",
+            in: try settingsWindow(),
+            containing: "Advanced context settings"
+        )
+        guard advanced.press() else {
+            throw SmokeError(message: "advanced context disclosure is not actionable: \(advanced.summary)")
+        }
+        _ = try waitForElement(
+            "context capability summary",
+            in: try settingsWindow(),
+            containing: "Context capability summary"
+        )
+    }
+
+    run.step("context-ui", "memory review, correction, privacy, and deletion controls are labeled") {
+        try selectSettingsSection("Memory", paneMarker: "Remembering")
+        let window = try settingsWindow()
+        _ = try waitForElement("memory mode", in: window, containing: "Memory mode")
+        _ = try waitForElement("memory privacy promise", in: window, containing: "Memory stays local by default")
+        _ = try waitForElement("pending memory", in: window, containing: "Pending Standing instruction memory")
+        _ = try waitForElement("edit pending memory", in: window, exactly: "Edit suggested memory")
+        _ = try waitForElement("save pending memory", in: window, role: kAXButtonRole as String, exactly: "Save suggested memory")
+        _ = try waitForElement("dismiss pending memory", in: window, role: kAXButtonRole as String, exactly: "Dismiss suggested memory")
+        _ = try waitForElement("never remember type", in: window, role: kAXButtonRole as String, containing: "Never suggest Standing instruction memories")
+        _ = try waitForElement("saved memory", in: window, containing: "Saved Preference memory")
+        _ = try waitForElement("forget saved memory", in: window, role: kAXButtonRole as String, exactly: "Forget saved memory")
+        _ = try waitForElement("import structured memory", in: window, role: kAXButtonRole as String, exactly: "Import structured memory")
+        _ = try waitForElement("export structured memory", in: window, role: kAXButtonRole as String, exactly: "Export structured memory")
+        _ = try waitForElement("delete all structured memory", in: window, role: kAXButtonRole as String, exactly: "Delete all structured memory")
+        app.key(Key.escape)
+        try waitUntil("settings window closes", timeout: 8) { (try? settingsWindow()) == nil }
+    }
+
+    run.step("context-ui", "persisted fallback receipt expands to redacted details") {
+        app.key(Key.y, command: true)
+        let search = try waitForElement(
+            "history search field",
+            in: try mainWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search history"
+        )
+        _ = search.setFocused()
+        if !search.setValue("Context smoke receipt") { app.type("Context smoke receipt") }
+        _ = try waitForElement("context receipt card", in: try mainWindow(), containing: "Context smoke receipt")
+        let receipt = try waitForElement(
+            "context receipt disclosure",
+            in: try mainWindow(),
+            exactly: "Show context receipt"
+        )
+        guard receipt.press() else {
+            throw SmokeError(message: "context receipt disclosure is not actionable: \(receipt.summary)")
+        }
+        _ = try waitForElement("fallback receipt details", in: try mainWindow(), containing: "Fallback attempt 2")
+        _ = try waitForElement(
+            "redacted diagnostic action",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Copy redacted context diagnostic"
+        )
+        // The first Escape belongs to the receipt popover; the second closes
+        // History itself. Pressing only once made this assertion dependent on
+        // whichever SwiftUI surface won Escape dispatch.
+        app.key(Key.escape)
+        app.key(Key.escape)
+        try waitForElementGone(
+            "history search field",
+            in: try mainWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search history"
+        )
+    }
+
+    run.step("context-ui", "overflow recovery preserves explicit retry choices") {
+        app.key(Key.l, command: true)
+        _ = try waitForElement("context-free boundary", in: try mainWindow(), containing: "No work session context")
+        _ = try waitForElement(
+            "context overflow recovery",
+            in: try mainWindow(),
+            exactly: "Context limit reached. Your message is preserved and has not been retried."
+        )
+        _ = try waitForElement(
+            "automatic context retry",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Retry preserved message with Automatic context"
+        )
+        _ = try waitForElement(
+            "efficient context retry",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Retry preserved message with Efficient context"
+        )
+        _ = try waitForElement(
+            "dismiss overflow recovery",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Dismiss context overflow recovery"
+        )
+    }
+
+    run.step("context-ui", "exhaustive review preview, cancel, and resume controls are reachable") {
+        _ = try waitForElement(
+            "exhaustive review preview",
+            in: try mainWindow(),
+            containing: "Exhaustive review for Synthetic context smoke session"
+        )
+        let start = try waitForElement(
+            "start exhaustive review",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Start exhaustive review"
+        )
+        guard start.press() else { throw SmokeError(message: "Start exhaustive review is not actionable") }
+        let cancel = try waitForElement(
+            "cancel exhaustive review",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Cancel exhaustive review"
+        )
+        guard cancel.press() else { throw SmokeError(message: "Cancel exhaustive review is not actionable") }
+        _ = try waitForElement(
+            "resume exhaustive review",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Resume exhaustive review"
+        )
+        let hangUp = try waitForElement(
+            "hang up context smoke call",
+            in: try mainWindow(),
+            role: kAXButtonRole as String,
+            containing: "Hang up"
+        )
+        _ = hangUp.press()
     }
 }
 

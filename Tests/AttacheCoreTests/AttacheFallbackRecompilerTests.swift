@@ -37,6 +37,7 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
             fallbackModel: fallbackModel,
             fallbackCapability: makeProfile(context: 8_000),
             strategy: .automatic,
+            fallbackRequestIsRemote: false,
             effectTracker: AttacheToolEffectTracker(),
             attemptNumber: 1
         )
@@ -53,12 +54,17 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
     // Criterion 2: 8K primary to 1M fallback may use the larger model's
     // strategy/capacity.
     func testSmallToLargeUsesLargerCapacity() throws {
-        let snapshot = makeInput(model: fallbackModel)
+        let focused = AttacheSessionAuthorization.focused(AttacheFocusedSession(
+            sessionID: "large", sourceKind: "codex", displayTitle: "Large",
+            workingDirectory: nil
+        ))
+        let snapshot = makeInput(model: fallbackModel, session: focused)
         var largeItems = basicItems()
         for i in 0..<20 {
             largeItems.append(AttacheContextItem(
                 source: .retrievedTranscriptEvidence,
                 content: String(repeating: "evidence \(i) ", count: 5_000),
+                authorization: focused,
                 priority: 50, treatment: .exactOnly
             ))
         }
@@ -67,6 +73,7 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
             fallbackModel: primaryModel,
             fallbackCapability: makeProfile(context: 1_000_000),
             strategy: .maximumCoverage,
+            fallbackRequestIsRemote: false,
             effectTracker: AttacheToolEffectTracker(),
             attemptNumber: 1
         )
@@ -84,6 +91,7 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
             fallbackModel: fallbackModel,
             fallbackCapability: makeProfile(context: 32_000),
             strategy: .automatic,
+            fallbackRequestIsRemote: false,
             effectTracker: AttacheToolEffectTracker(),
             attemptNumber: 1
         )
@@ -99,6 +107,7 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
             fallbackModel: fallbackModel,
             fallbackCapability: makeProfile(context: 32_000),
             strategy: .automatic,
+            fallbackRequestIsRemote: false,
             effectTracker: AttacheToolEffectTracker(),
             attemptNumber: 1
         )
@@ -141,6 +150,7 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
             fallbackModel: fallbackModel,
             fallbackCapability: makeProfile(context: 32_000),
             strategy: .automatic,
+            fallbackRequestIsRemote: false,
             effectTracker: tracker,
             attemptNumber: 1
         )
@@ -209,6 +219,7 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
             fallbackModel: fallbackModel,
             fallbackCapability: makeProfile(context: 32_000),
             strategy: .automatic,
+            fallbackRequestIsRemote: false,
             effectTracker: AttacheToolEffectTracker(),
             attemptNumber: 1
         )
@@ -224,6 +235,7 @@ final class AttacheFallbackRecompilerTests: XCTestCase {
             fallbackModel: fallbackModel,
             fallbackCapability: makeProfile(context: 8_000),
             strategy: .efficient,
+            fallbackRequestIsRemote: false,
             effectTracker: AttacheToolEffectTracker(),
             attemptNumber: 1
         )

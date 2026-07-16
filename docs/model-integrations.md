@@ -41,10 +41,12 @@ Attaché does not include LM Studio presets; Ollama is the supported local path.
 
 ## Codex CLI
 
-Install and sign in to the [Codex CLI](https://github.com/openai/codex). Attaché
-detects the executable in common macOS locations and uses a sandboxed,
-ephemeral, read-only `codex exec` process for personality work. The CLI remains
-responsible for account authentication and model access.
+Codex remains a supported local agent source and reverse-send destination, but
+it is not currently offered as a personality model. Codex CLI's read-only
+sandbox prevents writes but does not guarantee that native file-reading tools
+are disabled. Attaché therefore refuses to send personality prompts to that
+subprocess. Existing imports that name `codex_cli` still decode, but must be
+changed to Claude subscription, an API provider, or Ollama before saving.
 
 ## Claude Code
 

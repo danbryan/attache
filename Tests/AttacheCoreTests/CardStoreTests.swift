@@ -2,6 +2,29 @@ import AttacheCore
 import XCTest
 
 final class CardStoreTests: XCTestCase {
+    func testInMemoryStoreExposesAnExplicitNonFilesystemIdentity() throws {
+        let store = try CardStore.inMemory()
+        XCTAssertTrue(store.isInMemory)
+        XCTAssertEqual(store.databasePath, ":memory:")
+    }
+
+    func testInsertBindsCompiledReceiptToStableCardIDAndPersistsIt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-card-receipt-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try CardStore(databaseURL: root.appendingPathComponent("cards.sqlite"))
+        let pending = AttacheContextReceiptView(cardID: "pending-request", attempts: [], noModelContext: true)
+        var event = EventNormalizer.simulatedEvent(projectPath: "/tmp/receipt")
+        event.metadata[AttacheContextReceiptView.metadataKey] = try XCTUnwrap(pending.encodedMetadataValue())
+
+        let inserted = try store.insertEvent(event)
+        let reloaded = try store.fetchCard(id: inserted.id)
+
+        XCTAssertEqual(reloaded.contextReceipt?.cardID, inserted.id)
+        XCTAssertEqual(reloaded.contextReceipt?.noModelContext, true)
+        XCTAssertNotEqual(reloaded.contextReceipt?.cardID, "pending-request")
+    }
+
     func testConcurrentInstructionReadsAndWritesSerializePreparedStatements() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("attache-card-store-concurrency-\(UUID().uuidString)", isDirectory: true)

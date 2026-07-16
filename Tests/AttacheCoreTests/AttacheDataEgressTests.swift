@@ -139,6 +139,31 @@ final class AttacheDataEgressTests: XCTestCase {
         XCTAssertEqual(AttacheDataEgressClassifier.endpointLocality("http://172.32.0.1"), .remote)
     }
 
+    func testDNSNamesCannotMasqueradeAsPrivateIPRanges() {
+        for host in [
+            "127.evil.example",
+            "10.evil.example",
+            "172.16.evil.example",
+            "192.168.evil.example",
+            "169.254.evil.example",
+            "fcloud.example",
+            "fdomain.example"
+        ] {
+            XCTAssertEqual(
+                AttacheDataEgressClassifier.endpointLocality("https://\(host)/v1"),
+                .remote,
+                "\(host) is a DNS name, not a private address literal"
+            )
+        }
+    }
+
+    func testIPv6PrivateRangesRequireValidAddressLiterals() {
+        XCTAssertEqual(AttacheDataEgressClassifier.endpointLocality("http://[fd00::1]:11434"), .localNetwork)
+        XCTAssertEqual(AttacheDataEgressClassifier.endpointLocality("http://[fc00::abcd]"), .localNetwork)
+        XCTAssertEqual(AttacheDataEgressClassifier.endpointLocality("http://[febf::1]"), .localNetwork)
+        XCTAssertEqual(AttacheDataEgressClassifier.endpointLocality("http://[fec0::1]"), .remote)
+    }
+
     func testHTTPSRemoteHosts() {
         XCTAssertEqual(AttacheDataEgressClassifier.endpointLocality("https://api.x.ai/v1"), .remote)
         XCTAssertEqual(AttacheDataEgressClassifier.endpointLocality("https://api.groq.com/openai/v1"), .remote)

@@ -2,6 +2,14 @@ import XCTest
 @testable import AttacheApp
 
 final class CloudConsentTests: XCTestCase {
+    func testBearerCredentialsRequireHTTPSOrHTTPLoopback() {
+        XCTAssertTrue(NetworkSecurity.allowsBearer(URL(string: "https://api.example/v1")!))
+        XCTAssertTrue(NetworkSecurity.allowsBearer(URL(string: "http://127.0.0.1:11434/v1")!))
+        XCTAssertFalse(NetworkSecurity.allowsBearer(URL(string: "http://api.example/v1")!))
+        XCTAssertFalse(NetworkSecurity.allowsBearer(URL(string: "ftp://localhost/voice")!))
+        XCTAssertFalse(NetworkSecurity.allowsBearer(URL(string: "file://localhost/tmp/key")!))
+    }
+
     func testLoopbackHostsAreLocal() {
         XCTAssertTrue(NetworkSecurity.isLoopbackHost("127.0.0.1"))
         XCTAssertTrue(NetworkSecurity.isLoopbackHost("localhost"))

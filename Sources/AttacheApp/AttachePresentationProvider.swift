@@ -45,6 +45,19 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
 
     var isCLI: Bool { cliTool != nil }
 
+    /// Only providers whose subprocess/API boundary can prevent the model from
+    /// reading host files are eligible for personality inference. Codex CLI's
+    /// current `read-only` sandbox prevents writes but still exposes arbitrary
+    /// user-readable files through native tools, so keep the persisted enum case
+    /// for import/backward compatibility while refusing to offer or execute it.
+    var supportsSafePersonalityInference: Bool {
+        self != .codexCLI
+    }
+
+    static var personalityInferenceCases: [Self] {
+        allCases.filter(\.supportsSafePersonalityInference)
+    }
+
     var defaultBaseURL: String {
         switch self {
         case .xai: return "https://api.x.ai/v1"

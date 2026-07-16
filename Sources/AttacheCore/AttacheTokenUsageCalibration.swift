@@ -245,6 +245,7 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
 
     /// Record a sample's ratio (INF-318). Bounds the stored sample count.
     public mutating func record(_ ratio: Double) {
+        guard ratio.isFinite, ratio > 0 else { return }
         ratios.append(ratio)
         if ratios.count > maxSamples {
             ratios.removeFirst(ratios.count - maxSamples)
@@ -258,8 +259,7 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
     /// implausibly optimistic corrections.
     public func computeCorrection() -> AttacheCalibrationCorrection {
         guard isActionable else { return .unactionable }
-        let sorted = ratios.sorted()
-        let median = sorted[sorted.count / 2]
+        let median = aggregateMedianRatio
         let clamped = min(max(median, 0.5), 1.5)
         let error = abs(clamped - 1.0)
         return AttacheCalibrationCorrection(
@@ -282,6 +282,20 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
         "lineage-\(key.hashValue)"
     }
 
+    /// The aggregate median is persisted even before the lineage becomes
+    /// actionable. Persisting `computeCorrection().factor` used to replace the
+    /// first four observations with 1.0, so a relaunch could never accumulate
+    /// enough faithful evidence to calibrate.
+    var aggregateMedianRatio: Double {
+        guard !ratios.isEmpty else { return 1.0 }
+        let sorted = ratios.sorted()
+        let middle = sorted.count / 2
+        if sorted.count.isMultiple(of: 2) {
+            return (sorted[middle - 1] + sorted[middle]) / 2
+        }
+        return sorted[middle]
+    }
+
     public func diagnostics() -> AttacheCalibrationDiagnostics {
         let correction = computeCorrection()
         return AttacheCalibrationDiagnostics(
@@ -299,13 +313,14 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
 /// authoritative runtime/provider capacity, or changes Custom values.
 public enum AttacheTokenUsageCalibrator {
 
-    public static let estimatorVersion = "attache.fallback-estimator.v1"
+    public static let estimatorVersion = "attache.fallback-estimator.v2"
 
     /// Record a usage sample into a lineage (INF-318).
     public static func record(
         _ sample: AttacheProviderUsageSample,
         into lineage: inout AttacheCalibrationLineage
     ) {
+        guard sample.modelIdentityKey == lineage.modelIdentityKey else { return }
         lineage.record(sample.estimateRatio)
     }
 
@@ -365,7 +380,12 @@ public enum AttacheTokenUsageCalibrator {
 /// messages, excerpts, tool results, filenames, queries, memory, or transcript
 /// text. 0600 file permissions.
 public final class AttacheCalibrationStore: @unchecked Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
+    private static let minimumActionableSamples = 5
+    private static let maximumAggregateSamples = 100
+    private static let histogramBucketCount = 101
+    private static let minimumRatio = 0.5
+    private static let maximumRatio = 1.5
     private let dbURL: URL
     private var handle: OpaquePointer?
     private let lock = NSRecursiveLock()
@@ -386,12 +406,12 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
             return
         }
         chmod(dbURL.path, 0o600)
-        execute("PRAGMA journal_mode = WAL;")
-        execute("PRAGMA synchronous = NORMAL;")
-        execute("""
+        _ = execute("PRAGMA journal_mode = WAL;")
+        _ = execute("PRAGMA synchronous = NORMAL;")
+        _ = execute("""
         CREATE TABLE IF NOT EXISTS calibration_meta (key TEXT PRIMARY KEY, value TEXT);
         """)
-        execute("""
+        _ = execute("""
         CREATE TABLE IF NOT EXISTS calibration_lineages (
             model_identity_key TEXT PRIMARY KEY,
             lineage_id TEXT NOT NULL,
@@ -401,7 +421,12 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
             is_actionable INTEGER NOT NULL DEFAULT 0
         );
         """)
+        // Version 2 adds a fixed-size aggregate histogram. It preserves a
+        // robust median across launches without storing individual requests or
+        // raw samples. ALTER failure simply means the column already exists.
+        _ = execute("ALTER TABLE calibration_lineages ADD COLUMN ratio_histogram TEXT NOT NULL DEFAULT '';")
         upsertMeta("schema_version", "\(Self.currentSchemaVersion)")
+        hardenPermissions()
     }
 
     /// Save a lineage's aggregate state (INF-318). Only aggregate stats, never
@@ -410,11 +435,12 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
     public func save(_ lineage: AttacheCalibrationLineage) -> Bool {
         lock.lock(); defer { lock.unlock() }
         guard let handle else { return false }
-        let correction = lineage.computeCorrection()
+        let median = min(max(lineage.aggregateMedianRatio, Self.minimumRatio), Self.maximumRatio)
+        let histogram = Self.histogram(for: lineage.ratios)
         let sql = """
         INSERT OR REPLACE INTO calibration_lineages
-        (model_identity_key, lineage_id, ratio_count, median_ratio, last_update, is_actionable)
-        VALUES (?,?,?,?,?,?);
+        (model_identity_key, lineage_id, ratio_count, median_ratio, last_update, is_actionable, ratio_histogram)
+        VALUES (?,?,?,?,?,?,?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
@@ -422,14 +448,91 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         sqlite3_bind_text(stmt, 1, lineage.modelIdentityKey, -1, transient)
         sqlite3_bind_text(stmt, 2, lineage.lineageID, -1, transient)
         sqlite3_bind_int64(stmt, 3, Int64(lineage.sampleCount))
-        sqlite3_bind_double(stmt, 4, correction.factor)
+        sqlite3_bind_double(stmt, 4, median)
         if let update = lineage.lastUpdate {
             sqlite3_bind_double(stmt, 5, update.timeIntervalSince1970)
         } else {
             sqlite3_bind_null(stmt, 5)
         }
-        sqlite3_bind_int(stmt, 6, correction.isActionable ? 1 : 0)
-        return sqlite3_step(stmt) == SQLITE_DONE
+        sqlite3_bind_int(stmt, 6, lineage.isActionable ? 1 : 0)
+        sqlite3_bind_text(stmt, 7, Self.encodeHistogram(histogram), -1, transient)
+        let saved = sqlite3_step(stmt) == SQLITE_DONE
+        hardenPermissions()
+        return saved
+    }
+
+    /// Record one numeric provider observation into a persisted aggregate
+    /// lineage. The storage key includes the estimator version, so changing the
+    /// fallback algorithm never reuses ratios measured against an older one.
+    /// The fixed histogram is periodically decayed at its bound and contains no
+    /// content, paths, queries, prompts, or individual sample history.
+    @discardableResult
+    public func record(_ sample: AttacheProviderUsageSample) -> Bool {
+        guard sample.estimatedInputTokens > 0,
+              sample.actualInputTokens > 0,
+              sample.estimateRatio.isFinite else { return false }
+        lock.lock(); defer { lock.unlock() }
+        guard let handle else { return false }
+
+        let key = Self.storageKey(
+            modelIdentityKey: sample.modelIdentityKey,
+            estimatorVersion: sample.estimatorVersion
+        )
+        var lineageID = AttacheCalibrationLineage.newLineageID(for: key)
+        var histogram = Array(repeating: 0, count: Self.histogramBucketCount)
+
+        let select = "SELECT lineage_id, ratio_count, median_ratio, ratio_histogram FROM calibration_lineages WHERE model_identity_key = ?;"
+        var selectStatement: OpaquePointer?
+        if sqlite3_prepare_v2(handle, select, -1, &selectStatement, nil) == SQLITE_OK {
+            sqlite3_bind_text(selectStatement, 1, key, -1, transient)
+            if sqlite3_step(selectStatement) == SQLITE_ROW {
+                lineageID = stringColumn(selectStatement, 0)
+                let existingCount = Int(sqlite3_column_int64(selectStatement, 1))
+                let existingMedian = sqlite3_column_double(selectStatement, 2)
+                let encoded = stringColumn(selectStatement, 3)
+                if let decoded = Self.decodeHistogram(encoded) {
+                    histogram = decoded
+                } else if existingCount > 0 {
+                    histogram[Self.bucketIndex(for: existingMedian)] = existingCount
+                }
+            }
+        }
+        sqlite3_finalize(selectStatement)
+
+        if histogram.reduce(0, +) >= Self.maximumAggregateSamples {
+            histogram = histogram.map { $0 / 2 }
+        }
+        histogram[Self.bucketIndex(for: sample.estimateRatio)] += 1
+        let count = histogram.reduce(0, +)
+        let median = Self.medianRatio(in: histogram)
+
+        let upsert = """
+        INSERT OR REPLACE INTO calibration_lineages
+        (model_identity_key, lineage_id, ratio_count, median_ratio, last_update, is_actionable, ratio_histogram)
+        VALUES (?,?,?,?,?,?,?);
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, upsert, -1, &statement, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, key, -1, transient)
+        sqlite3_bind_text(statement, 2, lineageID, -1, transient)
+        sqlite3_bind_int64(statement, 3, Int64(count))
+        sqlite3_bind_double(statement, 4, median)
+        sqlite3_bind_double(statement, 5, sample.timestamp.timeIntervalSince1970)
+        sqlite3_bind_int(statement, 6, count >= Self.minimumActionableSamples ? 1 : 0)
+        sqlite3_bind_text(statement, 7, Self.encodeHistogram(histogram), -1, transient)
+        let saved = sqlite3_step(statement) == SQLITE_DONE
+        hardenPermissions()
+        return saved
+    }
+
+    public static func storageKey(
+        modelIdentityKey: String,
+        estimatorVersion: String
+    ) -> String {
+        "\(modelIdentityKey)|estimator:\(estimatorVersion)"
     }
 
     /// Load a lineage's diagnostics (INF-318). Content-free.
@@ -446,7 +549,7 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         let lineageID = stringColumn(stmt, 1)
         let count = Int(sqlite3_column_int64(stmt, 2))
         let median = sqlite3_column_double(stmt, 3)
-        let lastUpdate: Date? = sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+        let lastUpdate: Date? = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
         let actionable = sqlite3_column_int(stmt, 5) == 1
         return AttacheCalibrationDiagnostics(
             modelIdentityKey: identityKey, lineageID: lineageID,
@@ -474,7 +577,7 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
 
     public func deleteAll() {
         lock.lock(); defer { lock.unlock() }
-        execute("DELETE FROM calibration_lineages;")
+        _ = execute("DELETE FROM calibration_lineages;")
     }
 
     private func stringColumn(_ stmt: OpaquePointer?, _ index: Int32) -> String {
@@ -484,7 +587,7 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
 
     private func upsertMeta(_ key: String, _ value: String) {
         let escaped = value.replacingOccurrences(of: "'", with: "''")
-        execute("INSERT OR REPLACE INTO calibration_meta (key, value) VALUES ('\(key)', '\(escaped)');")
+        _ = execute("INSERT OR REPLACE INTO calibration_meta (key, value) VALUES ('\(key)', '\(escaped)');")
     }
 
     private func execute(_ sql: String) -> Bool {
@@ -493,5 +596,55 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         let result = sqlite3_exec(handle, sql, nil, nil, &error)
         if error != nil { sqlite3_free(error) }
         return result == SQLITE_OK
+    }
+
+    private static func histogram(for ratios: [Double]) -> [Int] {
+        var histogram = Array(repeating: 0, count: histogramBucketCount)
+        for ratio in ratios where ratio.isFinite && ratio > 0 {
+            histogram[bucketIndex(for: ratio)] += 1
+        }
+        return histogram
+    }
+
+    private static func bucketIndex(for ratio: Double) -> Int {
+        let clamped = min(max(ratio, minimumRatio), maximumRatio)
+        let position = (clamped - minimumRatio) / (maximumRatio - minimumRatio)
+        return min(histogramBucketCount - 1, max(0, Int((position * Double(histogramBucketCount - 1)).rounded())))
+    }
+
+    private static func medianRatio(in histogram: [Int]) -> Double {
+        let total = histogram.reduce(0, +)
+        guard total > 0 else { return 1.0 }
+        // Use the upper median for an even aggregate. When the distribution
+        // straddles two buckets, the conservative side wins.
+        let target = total / 2
+        var cumulative = 0
+        for (index, count) in histogram.enumerated() {
+            cumulative += count
+            if cumulative > target {
+                let fraction = Double(index) / Double(histogramBucketCount - 1)
+                return minimumRatio + fraction * (maximumRatio - minimumRatio)
+            }
+        }
+        return 1.0
+    }
+
+    private static func encodeHistogram(_ histogram: [Int]) -> String {
+        histogram.map(String.init).joined(separator: ",")
+    }
+
+    private static func decodeHistogram(_ encoded: String) -> [Int]? {
+        let values = encoded.split(separator: ",", omittingEmptySubsequences: false)
+            .compactMap { Int($0) }
+        guard values.count == histogramBucketCount,
+              values.allSatisfy({ $0 >= 0 }) else { return nil }
+        return values
+    }
+
+    private func hardenPermissions() {
+        for path in [dbURL.path, dbURL.path + "-wal", dbURL.path + "-shm"]
+        where FileManager.default.fileExists(atPath: path) {
+            chmod(path, 0o600)
+        }
     }
 }

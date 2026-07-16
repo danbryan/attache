@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Where a model request's context actually goes (INF-307). Consent and privacy
 /// copy must describe this accurately: a locally launched CLI that sends prompts
@@ -145,47 +146,52 @@ public enum AttacheDataEgressClassifier {
         guard let host = host(from: endpoint) else { return .unknown }
         let lower = host.lowercased()
         if lower == "localhost" { return .loopback }
-        if lower.hasPrefix("127.") { return .loopback }
-        if lower == "::1" { return .loopback }
-        if lower == "0.0.0.0" { return .loopback }
-        if lower.hasPrefix("[::1]") { return .loopback }
         if lower.hasSuffix(".local") { return .localNetwork }
-        if lower.hasPrefix("10.") { return .localNetwork }
-        if lower.hasPrefix("192.168.") { return .localNetwork }
-        if isPrivate172(host: lower) { return .localNetwork }
-        if lower.hasPrefix("169.254.") { return .localNetwork }
-        if lower.hasPrefix("fe80:") { return .localNetwork } // IPv6 link-local
-        if lower.hasPrefix("fc") || lower.hasPrefix("fd") { return .localNetwork } // IPv6 ULA
+
+        // CIDR rules apply only to syntactically complete IP literals. Prefix
+        // checks alone let ordinary DNS names such as `127.evil.example` or
+        // `fdomain.example` masquerade as local and bypass remote consent.
+        if let bytes = ipv4Bytes(lower) {
+            if bytes[0] == 127 || bytes == [0, 0, 0, 0] { return .loopback }
+            if bytes[0] == 10
+                || (bytes[0] == 192 && bytes[1] == 168)
+                || (bytes[0] == 172 && (16...31).contains(bytes[1]))
+                || (bytes[0] == 169 && bytes[1] == 254) {
+                return .localNetwork
+            }
+            return .remote
+        }
+        if let bytes = ipv6Bytes(lower) {
+            let isLoopback = bytes.dropLast().allSatisfy { $0 == 0 } && bytes.last == 1
+            if isLoopback { return .loopback }
+            let isLinkLocal = bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80 // fe80::/10
+            let isUniqueLocal = (bytes[0] & 0xfe) == 0xfc // fc00::/7
+            return (isLinkLocal || isUniqueLocal) ? .localNetwork : .remote
+        }
         return .remote
     }
 
     /// Extract a host from a URL string, tolerating schemes and ports.
     static func host(from endpoint: String) -> String? {
-        var text = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip a scheme.
-        if let schemeEnd = text.range(of: "://") {
-            text = String(text[schemeEnd.upperBound...])
-        }
-        // Stop at the first path/query.
-        for sep in ["/", "?", "#"] {
-            if let i = text.firstIndex(of: Character(sep)) {
-                text = String(text[..<i])
-            }
-        }
-        // Strip a port (but keep IPv6 brackets handled above).
-        if let colon = text.lastIndex(of: ":"), !text.contains("[") {
-            text = String(text[..<colon])
-        }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let candidate = trimmed.contains("://") ? trimmed : "attache://\(trimmed)"
+        guard let components = URLComponents(string: candidate),
+              let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty else { return nil }
+        return host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
     }
 
-    /// True for hosts in 172.16.0.0 – 172.31.255.255 (the private /12 range).
-    static func isPrivate172(host: String) -> Bool {
-        guard host.hasPrefix("172.") else { return false }
-        let parts = host.split(separator: ".")
-        guard parts.count >= 2, let second = Int(parts[1]) else { return false }
-        return second >= 16 && second <= 31
+    private static func ipv4Bytes(_ host: String) -> [UInt8]? {
+        var address = in_addr()
+        guard host.withCString({ inet_pton(AF_INET, $0, &address) }) == 1 else { return nil }
+        return withUnsafeBytes(of: &address) { Array($0) }
+    }
+
+    private static func ipv6Bytes(_ host: String) -> [UInt8]? {
+        var address = in6_addr()
+        guard host.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else { return nil }
+        return withUnsafeBytes(of: &address) { Array($0) }
     }
 }
 

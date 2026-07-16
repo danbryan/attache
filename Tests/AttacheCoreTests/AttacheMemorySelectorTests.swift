@@ -41,6 +41,12 @@ final class AttacheMemorySelectorTests: XCTestCase {
         let selection = AttacheMemorySelector.select(query: query, records: [unrelated, relevant], now: now)
         XCTAssertTrue(selection.candidates.first?.record.id == "m1",
                       "relevant record beats unrelated recent record")
+        XCTAssertFalse(selection.candidates.contains { $0.record.id == "m2" },
+                       "recency alone never injects an unrelated memory")
+        XCTAssertEqual(
+            selection.receipt.first { $0.memoryID == "m2" }?.omissionReason,
+            "not-relevant"
+        )
     }
 
     // Criterion 2: scope, personality visibility, status, confidence,
@@ -115,7 +121,7 @@ final class AttacheMemorySelectorTests: XCTestCase {
     // false single fact.
     func testConflictingRecordsLabeled() {
         let r1 = record(id: "m1", statement: "User prefers terse summaries", updatedAt: now)
-        let r2 = record(id: "m2", statement: "User prefers terse summary style", updatedAt: now.addingTimeInterval(-60))
+        let r2 = record(id: "m2", statement: "User does not prefer terse summaries", updatedAt: now.addingTimeInterval(-60))
         let selection = AttacheMemorySelector.select(query: makeQuery(), records: [r1, r2], now: now)
         XCTAssertGreaterThan(selection.conflicts.count, 0, "conflict detected")
         let conflict = selection.conflicts.first!
@@ -123,6 +129,15 @@ final class AttacheMemorySelectorTests: XCTestCase {
         // Both records appear, not silently choosing one.
         XCTAssertTrue(selection.candidates.contains { $0.conflictGroupID != nil },
                       "at least one candidate is conflict-labeled")
+        let rendered = selection.candidates.map(AttacheMemorySelector.renderAsContextItem)
+        XCTAssertTrue(rendered.contains { $0.content.contains("other saved memories disagree") })
+    }
+
+    func testSimilarParaphrasesAreNotMisclassifiedAsAConflict() {
+        let r1 = record(id: "m1", statement: "User prefers terse summaries", updatedAt: now)
+        let r2 = record(id: "m2", statement: "User prefers terse summary style", updatedAt: now.addingTimeInterval(-60))
+        let selection = AttacheMemorySelector.select(query: makeQuery(), records: [r1, r2], now: now)
+        XCTAssertTrue(selection.conflicts.isEmpty)
     }
 
     // Criterion 5: prompt-injection-like memory text remains data and cannot

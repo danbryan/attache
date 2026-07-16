@@ -76,6 +76,28 @@ final class SessionFTSIndexTests: XCTestCase {
         XCTAssertTrue(index.search("charlie").contains { $0.sessionID == "a" })
     }
 
+    func testReadablePlainTextFileFallsBackToRecordDigest() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("attache-fts-plain-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("plain.log")
+        try "plain source text that is not JSONL".write(
+            to: source,
+            atomically: true,
+            encoding: .utf8
+        )
+        let index = SessionFTSIndex(databaseURL: directory.appendingPathComponent("fts.sqlite"))
+        index.index(records: [makeRecord(
+            id: "plain",
+            title: "Plain transcript",
+            content: "digest fallback periwinkle marker",
+            filePath: source.path
+        )])
+
+        XCTAssertTrue(index.search("periwinkle").contains { $0.sessionID == "plain" })
+    }
+
     // Acceptance 3: truncation re-indexes safely.
     func testTruncationReindexesAndOldTailNoLongerMatches() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
@@ -188,6 +210,54 @@ final class SessionFTSIndexTests: XCTestCase {
         // Diagnostics carry no content.
         let diag = index.diagnostics()
         XCTAssertGreaterThan(diag.chunkCount, 0)
+    }
+
+    func testDatabaseArtifactsStayPrivateAndWipeTruncatesEvidence() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("attache-fts-private-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let db = directory.appendingPathComponent("SessionFTS.sqlite")
+        let marker = "wipe-evidence-cinnabar-\(UUID().uuidString)"
+        let index = SessionFTSIndex(databaseURL: db)
+        index.index(records: [makeRecord(
+            id: "private-artifacts",
+            title: "Private artifacts",
+            content: marker
+        )])
+        XCTAssertFalse(index.search(marker).isEmpty)
+
+        let artifacts = [
+            db,
+            URL(fileURLWithPath: db.path + "-wal"),
+            URL(fileURLWithPath: db.path + "-shm")
+        ]
+        let existingBeforeWipe = artifacts.filter {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
+        XCTAssertFalse(existingBeforeWipe.isEmpty)
+        for artifact in existingBeforeWipe {
+            let attributes = try FileManager.default.attributesOfItem(atPath: artifact.path)
+            let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+            XCTAssertEqual(permissions.intValue & 0o777, 0o600, artifact.lastPathComponent)
+        }
+
+        index.wipe()
+        XCTAssertTrue(index.search(marker).isEmpty)
+        XCTAssertEqual(index.diagnostics().chunkCount, 0)
+        for artifact in artifacts where FileManager.default.fileExists(atPath: artifact.path) {
+            let attributes = try FileManager.default.attributesOfItem(atPath: artifact.path)
+            let permissions = try XCTUnwrap(attributes[.posixPermissions] as? NSNumber)
+            XCTAssertEqual(permissions.intValue & 0o777, 0o600, artifact.lastPathComponent)
+            let bytes = try Data(contentsOf: artifact)
+            XCTAssertFalse(
+                String(decoding: bytes, as: UTF8.self).contains(marker),
+                "wipe must not leave searchable evidence in \(artifact.lastPathComponent)"
+            )
+            if artifact.path.hasSuffix("-wal") {
+                XCTAssertEqual(bytes.count, 0, "wipe must checkpoint and truncate the WAL")
+            }
+        }
     }
 
     // Acceptance 6: searching is side-effect-free (it does not alter focus or

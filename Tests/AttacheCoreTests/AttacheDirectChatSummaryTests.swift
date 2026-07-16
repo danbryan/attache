@@ -283,6 +283,34 @@ final class AttacheDirectChatSummaryTests: XCTestCase {
         XCTAssertNotEqual(turn1.contentHash, turn3.contentHash, "different content -> different hash")
     }
 
+    func testSegmentHashIncludesContentAndCallBoundary() {
+        let a = AttacheDirectChatSegment(
+            id: "s", startTurnIndex: 0, endTurnIndex: 0,
+            turnIDs: ["t"], sourceContentHashes: ["hash-a"], callID: "call-a"
+        )
+        let changedContent = AttacheDirectChatSegment(
+            id: "s", startTurnIndex: 0, endTurnIndex: 0,
+            turnIDs: ["t"], sourceContentHashes: ["hash-b"], callID: "call-a"
+        )
+        let changedCall = AttacheDirectChatSegment(
+            id: "s", startTurnIndex: 0, endTurnIndex: 0,
+            turnIDs: ["t"], sourceContentHashes: ["hash-a"], callID: "call-b"
+        )
+        XCTAssertNotEqual(a.combinedHash, changedContent.combinedHash)
+        XCTAssertNotEqual(a.combinedHash, changedCall.combinedHash)
+    }
+
+    func testPlannerNeverCrossesHangupBoundary() {
+        let old = AttacheDirectChatTurn(id: "old", role: .user, content: "old call", turnIndex: 0, callID: "call-1")
+        let current = AttacheDirectChatTurn(id: "new", role: .user, content: "new call", turnIndex: 1, callID: "call-2")
+        let plan = AttacheDirectChatSummaryPlanner.plan(
+            turns: [old, current], strategy: .automatic, budgetTokens: 100
+        )
+        XCTAssertEqual(plan.callID, "call-2")
+        XCTAssertFalse(plan.exactSuffixTurnIDs.contains("old"))
+        XCTAssertEqual(plan.exactSuffixTurnIDs, ["new"])
+    }
+
     // Store round-trips a capsule.
     func testStoreRoundTripsCapsule() throws {
         let tmp = FileManager.default.temporaryDirectory
@@ -294,7 +322,7 @@ final class AttacheDirectChatSummaryTests: XCTestCase {
             decisions: ["decide C"], openQuestions: ["q D"],
             corrections: [AttacheDirectChatCorrection(turnIndex: 5, supersedesClaim: "old", correctedClaim: "new")],
             unresolvedCommitments: ["commit E"], summarizerVersion: "v1",
-            modelIdentityKey: "ollama|qwen3", receipt: makeReceipt()
+            modelIdentityKey: "ollama|qwen3", receipt: makeReceipt(), callID: "call-roundtrip"
         )
         XCTAssertTrue(store.add(capsule))
         let restored = store.list().first
@@ -303,7 +331,52 @@ final class AttacheDirectChatSummaryTests: XCTestCase {
         XCTAssertEqual(restored?.decisions, ["decide C"])
         XCTAssertEqual(restored?.corrections.first?.correctedClaim, "new")
         XCTAssertEqual(restored?.sourceHash, "hash-A")
+        XCTAssertEqual(restored?.callID, "call-roundtrip")
         try? FileManager.default.removeItem(at: tmp)
+    }
+
+    func testStoreSecuresEverySQLiteArtifactAndPurgesCallBytes() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-chat-summary-private-\(UUID().uuidString).sqlite")
+        defer {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: tmp.path + suffix)
+            }
+        }
+        let privateText = "private-direct-chat-marker-\(UUID().uuidString)"
+        let store = AttacheDirectChatSummaryStore(databaseURL: tmp)
+        let capsule = AttacheDirectChatSummaryCapsule(
+            id: "private-cap", segmentID: "seg-private",
+            startTurnIndex: 0, endTurnIndex: 1,
+            sourceHash: "private-hash", establishedFacts: [privateText],
+            decisions: [], openQuestions: [], corrections: [],
+            unresolvedCommitments: [], summarizerVersion: "v1",
+            modelIdentityKey: "local", receipt: makeReceipt(),
+            callID: "crashed-call"
+        )
+        XCTAssertTrue(store.add(capsule))
+
+        var observedArtifacts = 0
+        for suffix in ["", "-wal", "-shm"] {
+            let path = tmp.path + suffix
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            observedArtifacts += 1
+            let attributes = try FileManager.default.attributesOfItem(atPath: path)
+            let permissions = try XCTUnwrap(
+                (attributes[.posixPermissions] as? NSNumber)?.intValue
+            )
+            XCTAssertEqual(permissions & 0o777, 0o600, "private SQLite artifact \(suffix) was too permissive")
+        }
+        XCTAssertGreaterThanOrEqual(observedArtifacts, 1)
+
+        XCTAssertEqual(store.delete(callID: "crashed-call"), 1)
+        let needle = Data(privateText.utf8)
+        for suffix in ["", "-wal", "-shm"] {
+            let path = tmp.path + suffix
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+            XCTAssertNil(bytes.range(of: needle), "deleted direct-chat text remained in \(suffix)")
+        }
     }
 
     // Compile produces messages in capsule-then-suffix order.

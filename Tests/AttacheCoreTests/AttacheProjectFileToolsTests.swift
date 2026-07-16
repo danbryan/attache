@@ -6,7 +6,8 @@ final class AttacheProjectFileToolsTests: XCTestCase {
 
     private let session = AttacheFocusedSession(
         sessionID: "sess-1", sourceKind: "codex",
-        displayTitle: "Test", workingDirectory: "/tmp/proj"
+        displayTitle: "Test", workingDirectory: "/tmp/proj",
+        authorizationEpoch: AttacheFocusEpoch(1)
     )
     private let epoch = AttacheFocusEpoch(1)
 
@@ -25,7 +26,7 @@ final class AttacheProjectFileToolsTests: XCTestCase {
 
     // Criterion 1: unique facts from beginning, middle, and end.
     func testCanReadBeginningMiddleAndEnd() {
-        let file = makeFile(1_000_000)
+        let file = makeFile(100_000)
         var reserve = makeReserve()
         let policy = makePolicy()
         let begin = AttacheProjectFileTools.readRange(
@@ -40,20 +41,20 @@ final class AttacheProjectFileToolsTests: XCTestCase {
         let mid = AttacheProjectFileTools.readRange(
             focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
             currentSessionID: "sess-1", relativePath: "src/main.swift",
-            lineStart: 500_000, maxLines: 10, file: file, expectedContentHash: nil,
+            lineStart: 50_000, maxLines: 10, file: file, expectedContentHash: nil,
             reserve: &reserve, policy: policy
         )
         guard case .success(let m) = mid else { return XCTFail("middle") }
-        XCTAssertTrue(m.content.contains("fact 50000000"))
+        XCTAssertTrue(m.content.contains("fact 5000000"))
 
         let end = AttacheProjectFileTools.readRange(
             focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
             currentSessionID: "sess-1", relativePath: "src/main.swift",
-            lineStart: 999_990, maxLines: 10, file: file, expectedContentHash: nil,
+            lineStart: 99_990, maxLines: 10, file: file, expectedContentHash: nil,
             reserve: &reserve, policy: policy
         )
         guard case .success(let e) = end else { return XCTFail("end") }
-        XCTAssertTrue(e.content.contains("fact 99999000"))
+        XCTAssertTrue(e.content.contains("fact 9999900"))
     }
 
     // Criterion 2: path escape attacks fail closed.
@@ -75,8 +76,46 @@ final class AttacheProjectFileToolsTests: XCTestCase {
         XCTAssertNil(AttacheFilePathGuard.canonicalize("/etc/passwd", workingDirectory: "/tmp/proj"))
     }
 
+    func testSiblingPrefixAndSymlinkEscapeFailClosed() throws {
+        XCTAssertNil(AttacheFilePathGuard.canonicalize("/tmp/proj-evil/file", workingDirectory: "/tmp/proj"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("attache-file-root-\(UUID().uuidString)")
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("attache-file-outside-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("escape")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        XCTAssertNil(AttacheFilePathGuard.canonicalize("escape/secret.txt", workingDirectory: root.path))
+        try? FileManager.default.removeItem(at: root)
+        try? FileManager.default.removeItem(at: outside)
+    }
+
     func testNullByteInjectionFails() {
         XCTAssertNil(AttacheFilePathGuard.canonicalize("src/\0../etc", workingDirectory: "/tmp/proj"))
+    }
+
+    func testMissingCurrentSessionFailsClosed() {
+        let file = makeFile(10)
+        let result = AttacheProjectFileTools.inspect(
+            focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+            currentSessionID: nil, relativePath: file.relativePath, file: file
+        )
+        guard case .failure(let error) = result else { return XCTFail("must fail") }
+        XCTAssertEqual(error, .noFocusedSession)
+    }
+
+    func testGiantSingleLineIsBoundedIncludingEvidenceWrapper() {
+        let file = AttacheProjectFile(relativePath: "src/main.swift", content: String(repeating: "x", count: 100_000))
+        var reserve = AttacheToolBudgetReserve(totalTokens: 120, perCallCap: 120)
+        let result = AttacheProjectFileTools.readRange(
+            focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+            currentSessionID: "sess-1", relativePath: file.relativePath,
+            lineStart: 1, maxLines: 1, file: file, expectedContentHash: nil,
+            reserve: &reserve, policy: makePolicy()
+        )
+        guard case .success(let page) = result else { return XCTFail("bounded page should succeed") }
+        XCTAssertLessThanOrEqual(AttacheFallbackTokenEstimator().estimate(text: page.content), 120)
+        XCTAssertNotNil(page.continuationLocator)
+        XCTAssertEqual(page.continuationLocator?.charStart, page.locator.charEnd)
     }
 
     func testPathTooLongFails() {
@@ -111,6 +150,118 @@ final class AttacheProjectFileToolsTests: XCTestCase {
             currentSessionID: "sess-1", relativePath: "config.env", file: cred
         )
         guard case .failure(let error) = result else { return XCTFail("credential refused") }
+        XCTAssertEqual(error, .credentialFile)
+    }
+
+    func testSensitiveCredentialPathsAreRefusedWithoutRecognizableTokenText() {
+        let paths = [
+            ".env", ".env.local", ".npmrc", ".pypirc", ".netrc",
+            ".git-credentials", ".aws/credentials", ".ssh/id_ed25519",
+            "config/service-account.json", "certs/client.pem", "certs/client.key"
+        ]
+
+        for path in paths {
+            let file = AttacheProjectFile(relativePath: path, content: "enabled=true")
+            let result = AttacheProjectFileTools.inspect(
+                focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+                currentSessionID: "sess-1", relativePath: path, file: file
+            )
+            guard case .failure(let error) = result else {
+                XCTFail("sensitive path should be refused: \(path)")
+                continue
+            }
+            XCTAssertEqual(error, .credentialFile, path)
+        }
+    }
+
+    func testCredentialScannerCatchesTokenKeysAndProviderFormats() {
+        let samples = [
+            "GITHUB_TOKEN=ghp_012345678901234567890123456789012345",
+            "AUTH_TOKEN=opaque-auth-token-value",
+            "OPENAI_KEY=opaque-openai-value",
+            "SLACK_BOT_TOKEN=xoxb-123456789012-123456789012-abcdefghijklmnop",
+            "NPM_TOKEN=npm_012345678901234567890123456789012345",
+            "token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature123",
+            "Cookie: sessionid=0123456789abcdef",
+            "SESSION_SECRET=0123456789abcdef"
+        ]
+
+        for sample in samples {
+            XCTAssertTrue(
+                AttacheProjectFileTools.containsCredentials(sample),
+                "credential was not detected: \(sample)"
+            )
+        }
+        XCTAssertFalse(
+            AttacheProjectFileTools.containsCredentials(
+                "This session discusses browser cookie preferences without including any values."
+            )
+        )
+    }
+
+    func testCredentialGuardAppliesToSearchAndInitialRangeRead() {
+        let file = AttacheProjectFile(
+            relativePath: "notes.txt",
+            content: "AUTH_TOKEN=opaque-auth-token-value\nordinary notes"
+        )
+        var searchReserve = makeReserve()
+        let search = AttacheProjectFileTools.search(
+            focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+            currentSessionID: "sess-1", relativePath: file.relativePath,
+            query: "ordinary", file: file, reserve: &searchReserve
+        )
+        guard case .failure(let searchError) = search else {
+            return XCTFail("search must not return content from a credential file")
+        }
+        XCTAssertEqual(searchError, .credentialFile)
+
+        var readReserve = makeReserve()
+        let read = AttacheProjectFileTools.readRange(
+            focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+            currentSessionID: "sess-1", relativePath: file.relativePath,
+            lineStart: 1, maxLines: 10, file: file, expectedContentHash: nil,
+            reserve: &readReserve, policy: makePolicy()
+        )
+        guard case .failure(let readError) = read else {
+            return XCTFail("range read must not return content from a credential file")
+        }
+        XCTAssertEqual(readError, .credentialFile)
+    }
+
+    func testCredentialGuardAppliesToContinuationRead() {
+        let file = AttacheProjectFile(
+            relativePath: "notes.txt",
+            content: "header\nNPM_TOKEN=npm_012345678901234567890123456789012345"
+        )
+        let canonical = AttacheFilePathGuard.canonicalize(
+            file.relativePath,
+            workingDirectory: session.workingDirectory!
+        )!
+        let locator = AttacheFileLocator(
+            sessionID: session.sessionID,
+            sourceKind: session.sourceKind,
+            authorizationEpoch: epoch,
+            normalizedPath: canonical,
+            lineStart: 1,
+            lineEnd: 1,
+            charStart: 0,
+            charEnd: 0,
+            contentHash: file.contentHash
+        )
+        var reserve = makeReserve()
+        let result = AttacheProjectFileTools.readRange(
+            focusedSession: session,
+            currentEpoch: epoch,
+            currentSessionID: session.sessionID,
+            locator: locator,
+            maxChars: 100,
+            file: file,
+            reserve: &reserve,
+            policy: makePolicy()
+        )
+        guard case .failure(let error) = result else {
+            return XCTFail("continuation read must not bypass credential detection")
+        }
         XCTAssertEqual(error, .credentialFile)
     }
 
@@ -153,6 +304,25 @@ final class AttacheProjectFileToolsTests: XCTestCase {
         )
         guard case .success(let hits) = result else { return XCTFail("search") }
         XCTAssertLessThanOrEqual(hits.count, AttacheProjectFileTools.maxSearchResults)
+    }
+
+    func testSearchNeverExceedsPerCallOrRemainingTokenBudget() {
+        let content = (1...100).map { i in
+            "query \(i) " + String(repeating: "dense-result ", count: 30)
+        }.joined(separator: "\n")
+        let file = AttacheProjectFile(relativePath: "big.swift", content: content)
+        var reserve = makeReserve(total: 9, cap: 7)
+        let result = AttacheProjectFileTools.search(
+            focusedSession: session, expectedEpoch: epoch, currentEpoch: epoch,
+            currentSessionID: "sess-1", relativePath: "big.swift",
+            query: "query", file: file, reserve: &reserve
+        )
+        guard case .success(let hits) = result else { return XCTFail("search") }
+        let returnedTokens = hits.reduce(0) {
+            $0 + AttacheFallbackTokenEstimator().estimate(text: $1.snippet)
+        }
+        XCTAssertLessThanOrEqual(returnedTokens, 7)
+        XCTAssertEqual(reserve.consumedTokens, returnedTokens)
     }
 
     // Criterion 6: no-focus, different-focus, or expired authorization returns

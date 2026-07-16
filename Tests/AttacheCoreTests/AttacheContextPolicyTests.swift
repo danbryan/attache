@@ -134,6 +134,30 @@ final class AttacheContextPolicyTests: XCTestCase {
         }
     }
 
+    func testNonPositiveInputLimitsFail() {
+        for policy in [
+            AttacheContextCustomPolicy(hardInputLimit: 0),
+            AttacheContextCustomPolicy(effectiveInputLimit: -1)
+        ] {
+            XCTAssertThrowsError(try policy.validate()) { error in
+                guard case .invalidLimit = error as? AttacheContextPolicyError else {
+                    return XCTFail("Expected invalidLimit, got \(error)")
+                }
+            }
+        }
+    }
+
+    func testReserveArithmeticOverflowFailsClosed() {
+        let policy = AttacheContextCustomPolicy(
+            outputReserve: Int.max,
+            toolReserve: Int.max,
+            safetyMargin: Int.max
+        )
+        XCTAssertThrowsError(try policy.validate()) { error in
+            XCTAssertEqual(error as? AttacheContextPolicyError, .reserveTotalOverflow)
+        }
+    }
+
     func testOvercommittedReservesFail() {
         let policy = AttacheContextCustomPolicy(hardInputLimit: 1_000, outputReserve: 500, toolReserve: 500, safetyMargin: 100)
         XCTAssertThrowsError(try policy.validate()) { error in

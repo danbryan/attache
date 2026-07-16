@@ -7,11 +7,14 @@ final class AttacheMemoryProposalsTests: XCTestCase {
     private func proposal(
         id: String = "p1", statement: String, type: AttacheMemoryType = .preference,
         confidence: AttacheCapabilityConfidence = .authoritative,
-        sensitivity: AttacheMemorySensitivity = .low
+        sensitivity: AttacheMemorySensitivity = .low,
+        sourceKind: AttacheMemorySourceKind = .userAuthored,
+        requiresConfirmation: Bool = false
     ) -> AttacheMemoryProposal {
         AttacheMemoryProposal(
             id: id, statement: statement, type: type,
-            confidence: confidence, sensitivity: sensitivity
+            sourceKind: sourceKind, confidence: confidence,
+            sensitivity: sensitivity, requiresConfirmation: requiresConfirmation
         )
     }
 
@@ -164,7 +167,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
         let p = proposal(statement: "User prefers terse summaries")
         let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
         if case .autoStored(let record) = disposition {
-            XCTAssertEqual(record.sourceKind, .modelProposed)
+            XCTAssertEqual(record.sourceKind, .userAuthored)
             XCTAssertEqual(record.scope, .global)
             XCTAssertEqual(record.confidence, .authoritative)
             XCTAssertEqual(record.sensitivity, .low)
@@ -172,6 +175,17 @@ final class AttacheMemoryProposalsTests: XCTestCase {
         } else {
             XCTFail("should auto-store")
         }
+    }
+
+    func testModelProposalAlwaysRequiresConfirmationEvenIfItClaimsAuthority() {
+        let p = proposal(
+            statement: "User prefers terse summaries",
+            sourceKind: .modelProposed,
+            requiresConfirmation: false
+        )
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        if case .queuedForReview = disposition { return }
+        XCTFail("A model cannot authorize its own durable write")
     }
 
     // Criterion 7: turning Off stops proposals immediately.
@@ -230,9 +244,15 @@ final class AttacheMemoryProposalsTests: XCTestCase {
     // Consolidation: contradiction detection.
     func testContradictionDetection() {
         let r1 = AttacheMemoryRecord(id: "m1", statement: "User prefers terse summaries", type: .preference)
-        let r2 = AttacheMemoryRecord(id: "m2", statement: "User prefers terse summary style", type: .preference)
+        let r2 = AttacheMemoryRecord(id: "m2", statement: "User does not prefer terse summaries", type: .preference)
         let contradictions = AttacheMemoryConsolidator.detectContradictions([r1, r2])
         XCTAssertGreaterThan(contradictions.count, 0, "contradiction detected")
+    }
+
+    func testParaphraseIsNotAContradiction() {
+        let r1 = AttacheMemoryRecord(id: "m1", statement: "User prefers terse summaries", type: .preference)
+        let r2 = AttacheMemoryRecord(id: "m2", statement: "User prefers terse summary style", type: .preference)
+        XCTAssertTrue(AttacheMemoryConsolidator.detectContradictions([r1, r2]).isEmpty)
     }
 
     // Consolidation: stale time-sensitive detection.

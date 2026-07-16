@@ -2,6 +2,13 @@ import XCTest
 @testable import AttacheApp
 
 final class AttachePresentationModelServiceTests: XCTestCase {
+    func testModelDiscoveryRedirectPolicyRefusesUnclassifiedDestination() {
+        var redirected = URLRequest(url: URL(string: "https://unclassified.example/v1/models")!)
+        redirected.setValue("Bearer MODEL_DISCOVERY_SECRET", forHTTPHeaderField: "Authorization")
+
+        XCTAssertNil(AttacheNoRedirectDelegate.redirectedRequest(redirected))
+    }
+
     func testUnknownCodexModelKeepsReasoningChoices() {
         let efforts = AttachePresentationModelService.fallbackReasoningEfforts(
             provider: .codexCLI,
@@ -12,39 +19,43 @@ final class AttachePresentationModelServiceTests: XCTestCase {
         XCTAssertFalse(efforts.contains("none"))
     }
 
-    func testGrok45SupportsPerPersonalityReasoningChoices() {
+    func testGrok45NameAloneDoesNotInventReasoningChoices() {
         let efforts = AttachePresentationModelService.fallbackReasoningEfforts(
             provider: .xai,
             modelID: "grok-4.5"
         )
 
-        XCTAssertEqual(efforts, ["low", "medium", "high"])
+        XCTAssertEqual(efforts, [])
     }
 
-    func testGrok43AllowsReasoningToBeDisabled() {
+    func testGrok43NameAloneDoesNotInventReasoningChoices() {
         let efforts = AttachePresentationModelService.fallbackReasoningEfforts(
             provider: .xai,
             modelID: "grok-4.3"
         )
 
-        XCTAssertEqual(efforts, ["none", "low", "medium", "high"])
+        XCTAssertEqual(efforts, [])
     }
 
     func testXAICatalogReasoningLevelsAreAuthoritativePerModel() throws {
-        let data = Data(#"{"models":[{"id":"grok-4.5","supported_reasoning_efforts":["low","high"]},{"id":"grok-4.3","supported_reasoning_efforts":["none","medium"]}]}"#.utf8)
+        let data = Data(#"{"models":[{"id":"grok-4.5","context_window":131072,"max_output_tokens":8192,"supported_reasoning_efforts":["low","high"]},{"id":"grok-4.3","supported_reasoning_efforts":["none","medium"]}]}"#.utf8)
 
         let options = try AttachePresentationModelService.parseXAILanguageModels(data)
 
         XCTAssertEqual(options.first { $0.id == "grok-4.5" }?.reasoningEfforts, ["low", "high"])
+        XCTAssertEqual(options.first { $0.id == "grok-4.5" }?.capabilityProfile.declaredInputCeiling, 131_072)
+        XCTAssertEqual(options.first { $0.id == "grok-4.5" }?.capabilityProfile.outputLimit, 8_192)
+        XCTAssertEqual(options.first { $0.id == "grok-4.5" }?.capabilityProfile.provenance, .providerMetadata)
         XCTAssertEqual(options.first { $0.id == "grok-4.3" }?.reasoningEfforts, ["none", "medium"])
+        XCTAssertTrue(options.first { $0.id == "grok-4.3" }?.capabilityProfile.isUnknown == true)
     }
 
-    func testXAICatalogUsesDocumentedReasoningWhenSchemaDoesNotAdvertiseIt() throws {
+    func testXAICatalogDisablesReasoningWhenSchemaDoesNotAdvertiseIt() throws {
         let data = Data(#"{"models":[{"id":"grok-4.5"},{"id":"unknown-future-model"}]}"#.utf8)
 
         let options = try AttachePresentationModelService.parseXAILanguageModels(data)
 
-        XCTAssertEqual(options.first { $0.id == "grok-4.5" }?.reasoningEfforts, ["low", "medium", "high"])
+        XCTAssertEqual(options.first { $0.id == "grok-4.5" }?.reasoningEfforts, [])
         XCTAssertEqual(options.first { $0.id == "unknown-future-model" }?.reasoningEfforts, [])
     }
 

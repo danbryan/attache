@@ -94,6 +94,20 @@ final class AttacheTokenUsageCalibrationTests: XCTestCase {
         try? FileManager.default.removeItem(at: tmp)
     }
 
+    func testStorePreservesPreActionableAggregateInsteadOfReplacingItWithOne() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-calibration-\(UUID().uuidString).sqlite")
+        let store = AttacheCalibrationStore(databaseURL: tmp)
+        var lineage = AttacheCalibrationLineage(modelIdentityKey: "ollama|early")
+        for _ in 0..<4 { lineage.record(1.3) }
+        XCTAssertTrue(store.save(lineage))
+        let diagnostics = try XCTUnwrap(store.diagnostics(for: "ollama|early"))
+        XCTAssertEqual(diagnostics.sampleCount, 4)
+        XCTAssertFalse(diagnostics.isActionable)
+        XCTAssertEqual(diagnostics.correctionFactor, 1.3, accuracy: 0.001)
+        try? FileManager.default.removeItem(at: tmp)
+    }
+
     // Criterion 3: data is isolated by endpoint and model fingerprint.
     func testIsolatedByIdentity() {
         var lineageA = AttacheCalibrationLineage(modelIdentityKey: "ollama|qwen3")
@@ -220,6 +234,117 @@ final class AttacheTokenUsageCalibrationTests: XCTestCase {
         XCTAssertNotNil(diag)
         XCTAssertEqual(diag?.sampleCount, 6)
         XCTAssertTrue(diag?.isActionable ?? false)
+        XCTAssertEqual(
+            try XCTUnwrap(diag?.lastUpdate).timeIntervalSince1970,
+            try XCTUnwrap(lineage.lastUpdate).timeIntervalSince1970,
+            accuracy: 0.001
+        )
+        try? FileManager.default.removeItem(at: tmp)
+    }
+
+    func testPersistedAggregateAccumulatesAcrossStoreReopenWithoutRawSamples() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-calibration-\(UUID().uuidString).sqlite")
+        let identity = "ollama@http://127.0.0.1|qwen3"
+        let estimatorVersion = "fallback-v2"
+        let key = AttacheCalibrationStore.storageKey(
+            modelIdentityKey: identity,
+            estimatorVersion: estimatorVersion
+        )
+
+        for index in 0..<3 {
+            let store = AttacheCalibrationStore(databaseURL: tmp)
+            XCTAssertTrue(store.record(AttacheProviderUsageSample(
+                modelIdentityKey: identity,
+                estimatorVersion: estimatorVersion,
+                strategyKind: "automatic",
+                role: "conversation",
+                estimatedInputTokens: 1_000,
+                actualInputTokens: 1_250,
+                actualOutputTokens: 50,
+                timestamp: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)),
+                receiptID: "receipt-\(index)"
+            )))
+        }
+        let reopened = AttacheCalibrationStore(databaseURL: tmp)
+        for index in 3..<5 {
+            XCTAssertTrue(reopened.record(AttacheProviderUsageSample(
+                modelIdentityKey: identity,
+                estimatorVersion: estimatorVersion,
+                strategyKind: "automatic",
+                role: "conversation",
+                estimatedInputTokens: 1_000,
+                actualInputTokens: 1_250,
+                actualOutputTokens: 50,
+                timestamp: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)),
+                receiptID: "receipt-\(index)"
+            )))
+        }
+        let diagnostics = try XCTUnwrap(reopened.diagnostics(for: key))
+        XCTAssertEqual(diagnostics.sampleCount, 5)
+        XCTAssertTrue(diagnostics.isActionable)
+        XCTAssertEqual(diagnostics.correctionFactor, 1.25, accuracy: 0.011)
+        XCTAssertEqual(
+            try XCTUnwrap(diagnostics.lastUpdate).timeIntervalSince1970,
+            1_800_000_004,
+            accuracy: 0.001
+        )
+
+        let keys = reopened.dumpAllKeys().joined(separator: "|")
+        XCTAssertFalse(keys.contains("receipt-"))
+        try? FileManager.default.removeItem(at: tmp)
+        try? FileManager.default.removeItem(atPath: tmp.path + "-wal")
+        try? FileManager.default.removeItem(atPath: tmp.path + "-shm")
+    }
+
+    func testEstimatorVersionsHaveIndependentPersistedLineages() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-calibration-\(UUID().uuidString).sqlite")
+        let store = AttacheCalibrationStore(databaseURL: tmp)
+        for version in ["v1", "v2"] {
+            let actual = version == "v1" ? 1_400 : 1_100
+            for index in 0..<5 {
+                XCTAssertTrue(store.record(AttacheProviderUsageSample(
+                    modelIdentityKey: "same-model",
+                    estimatorVersion: version,
+                    strategyKind: "automatic",
+                    role: "conversation",
+                    estimatedInputTokens: 1_000,
+                    actualInputTokens: actual,
+                    actualOutputTokens: 10,
+                    timestamp: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)),
+                    receiptID: "\(version)-\(index)"
+                )))
+            }
+        }
+        let v1 = try XCTUnwrap(store.diagnostics(for: AttacheCalibrationStore.storageKey(
+            modelIdentityKey: "same-model", estimatorVersion: "v1"
+        )))
+        let v2 = try XCTUnwrap(store.diagnostics(for: AttacheCalibrationStore.storageKey(
+            modelIdentityKey: "same-model", estimatorVersion: "v2"
+        )))
+        XCTAssertEqual(v1.correctionFactor, 1.4, accuracy: 0.011)
+        XCTAssertEqual(v2.correctionFactor, 1.1, accuracy: 0.011)
+        try? FileManager.default.removeItem(at: tmp)
+    }
+
+    func testInvalidRatiosAreRejectedInsteadOfPoisoningAggregate() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-calibration-\(UUID().uuidString).sqlite")
+        let store = AttacheCalibrationStore(databaseURL: tmp)
+        XCTAssertFalse(store.record(AttacheProviderUsageSample(
+            modelIdentityKey: "model",
+            estimatorVersion: "v2",
+            strategyKind: "automatic",
+            role: "conversation",
+            estimatedInputTokens: 0,
+            actualInputTokens: 100,
+            actualOutputTokens: 0,
+            receiptID: "invalid"
+        )))
+        XCTAssertNil(store.diagnostics(for: AttacheCalibrationStore.storageKey(
+            modelIdentityKey: "model", estimatorVersion: "v2"
+        )))
         try? FileManager.default.removeItem(at: tmp)
     }
 

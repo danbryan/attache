@@ -109,6 +109,26 @@ public struct AttacheCoverageLedger: Equatable, Sendable {
         }
     }
 
+    /// A source-version change invalidates every checkpoint, including entries
+    /// previously marked complete. Keeping completed entries across versions
+    /// can produce a false exhaustive claim from mixed source snapshots.
+    public mutating func markAllStale() {
+        for i in entries.indices where entries[i].isEligible {
+            entries[i].markStale()
+        }
+        overallStatus = .stale
+    }
+
+    public mutating func invalidateMutatedEntries(currentHashesByEpisode: [String: String]) {
+        for i in entries.indices where entries[i].isEligible {
+            guard currentHashesByEpisode[entries[i].episodeID] == entries[i].sourceHash else {
+                entries[i].markStale()
+                continue
+            }
+        }
+        updateOverallStatus()
+    }
+
     /// Cancel all pending and processing entries (INF-329).
     public mutating func cancelAllPendingAndProcessing() {
         for i in entries.indices {
@@ -154,14 +174,22 @@ public struct AttacheExhaustiveReviewPlan: Equatable, Sendable {
     public let egressClass: String
     public let stages: [AttacheReviewStage]
     public let estimatedCallCount: Int
+    public let maxStageInputTokens: Int
+    public let oversizedEpisodeIDs: [String]
 
-    public init(sessionID: String, modelKey: String, strategyKind: String, egressClass: String, stages: [AttacheReviewStage], estimatedCallCount: Int) {
+    public init(
+        sessionID: String, modelKey: String, strategyKind: String,
+        egressClass: String, stages: [AttacheReviewStage], estimatedCallCount: Int,
+        maxStageInputTokens: Int, oversizedEpisodeIDs: [String] = []
+    ) {
         self.sessionID = sessionID
         self.modelKey = modelKey
         self.strategyKind = strategyKind
         self.egressClass = egressClass
         self.stages = stages
         self.estimatedCallCount = estimatedCallCount
+        self.maxStageInputTokens = maxStageInputTokens
+        self.oversizedEpisodeIDs = oversizedEpisodeIDs
     }
 }
 
@@ -247,23 +275,39 @@ public enum AttacheExhaustiveReviewCoordinator {
         modelKey: String,
         capability: AttacheModelCapabilityProfile,
         strategy: AttacheContextStrategy,
-        egressClass: String
+        egressClass: String,
+        /// Conservative provider-bound size for each episode, calculated from
+        /// the frozen evidence when available. Callers without the raw source
+        /// may omit this and retain the legacy turn-count estimate.
+        estimatedTokensByEpisode: [String: Int] = [:]
     ) -> AttacheExhaustiveReviewPlan {
         let eligibleEpisodes = map.episodes.filter { !$0.isExcluded }
-        let budgetPerStage: Int
+        let ceiling = capability.declaredInputCeiling ?? ContextBudgetPlanner.unknownCapacityEnvelope
+        let coverageFraction: Double
         switch strategy.kind {
-        case .efficient: budgetPerStage = 2_000
-        case .automatic: budgetPerStage = 4_000
-        case .maximumCoverage: budgetPerStage = 8_000
-        case .custom: budgetPerStage = 4_000
+        case .efficient: coverageFraction = 0.35
+        case .automatic: coverageFraction = 0.55
+        case .maximumCoverage: coverageFraction = 0.80
+        case .custom: coverageFraction = 0.65
         }
+        let customLimit = strategy.custom?.effectiveInputLimit ?? strategy.custom?.hardInputLimit
+        let effectiveCeiling = min(ceiling, customLimit ?? ceiling)
+        let budgetPerStage = max(512, Int(Double(effectiveCeiling) * coverageFraction))
         // Group episodes into stages by estimated token cost.
         var stages: [AttacheReviewStage] = []
         var currentEpisodes: [String] = []
         var currentTokens = 0
         var stageNumber = 1
+        var oversizedEpisodeIDs: [String] = []
         for episode in eligibleEpisodes {
-            let episodeTokens = episode.turnCount * 100 // rough estimate
+            let episodeTokens = max(
+                1,
+                estimatedTokensByEpisode[episode.episodeID] ?? episode.turnCount * 100
+            )
+            guard episodeTokens <= budgetPerStage else {
+                oversizedEpisodeIDs.append(episode.episodeID)
+                continue
+            }
             if currentTokens + episodeTokens > budgetPerStage && !currentEpisodes.isEmpty {
                 stages.append(AttacheReviewStage(stageNumber: stageNumber, episodeIDs: currentEpisodes, estimatedTokens: currentTokens))
                 currentEpisodes = []
@@ -279,7 +323,9 @@ public enum AttacheExhaustiveReviewCoordinator {
         return AttacheExhaustiveReviewPlan(
             sessionID: map.sessionID, modelKey: modelKey,
             strategyKind: strategy.kind.rawValue, egressClass: egressClass,
-            stages: stages, estimatedCallCount: stages.count
+            stages: stages, estimatedCallCount: stages.count,
+            maxStageInputTokens: budgetPerStage,
+            oversizedEpisodeIDs: oversizedEpisodeIDs
         )
     }
 
@@ -320,8 +366,7 @@ public enum AttacheExhaustiveReviewCoordinator {
     ) -> Bool {
         // If the source version changed, the checkpoints are stale.
         guard ledger.sourceVersion == currentSourceVersion else {
-            ledger.markAllNonCompleteStale()
-            ledger.updateOverallStatus()
+            ledger.markAllStale()
             return false
         }
         // Pending entries can resume. Completed entries are not repeated.
@@ -337,6 +382,31 @@ public enum AttacheExhaustiveReviewCoordinator {
         ledger.entries.filter { entry in
             entry.isCovered && !currentHashes.contains(entry.sourceHash)
         }.map { $0.episodeID }
+    }
+
+    /// Mutation-safe episode keyed comparison. A set of hashes loses episode
+    /// identity and cannot distinguish swaps or duplicate hashes.
+    public static func detectSourceMutation(
+        ledger: AttacheCoverageLedger,
+        currentHashesByEpisode: [String: String]
+    ) -> [String] {
+        ledger.entries.filter { entry in
+            entry.isEligible && currentHashesByEpisode[entry.episodeID] != entry.sourceHash
+        }.map { $0.episodeID }
+    }
+
+    @discardableResult
+    public static func applySourceMutation(
+        ledger: inout AttacheCoverageLedger,
+        currentHashesByEpisode: [String: String],
+        currentSourceVersion: String
+    ) -> Bool {
+        guard ledger.sourceVersion == currentSourceVersion else {
+            ledger.markAllStale()
+            return false
+        }
+        ledger.invalidateMutatedEntries(currentHashesByEpisode: currentHashesByEpisode)
+        return ledger.overallStatus != .stale
     }
 
     /// Check if a frozen identity matches the current state (INF-329). A
@@ -363,9 +433,11 @@ public enum AttacheExhaustiveReviewCoordinator {
         callCount: Int,
         fallbackCount: Int
     ) -> AttacheExhaustiveReviewResult {
+        var verifiedLedger = ledger
+        verifiedLedger.updateOverallStatus()
         var coveredRanges: [AttacheCapsuleCitation] = []
         var omittedRanges: [String] = []
-        for entry in ledger.entries {
+        for entry in verifiedLedger.entries {
             if entry.isCovered {
                 coveredRanges.append(AttacheCapsuleCitation(
                     startTurnOrdinal: entry.startTurnOrdinal,
@@ -377,8 +449,8 @@ public enum AttacheExhaustiveReviewCoordinator {
             }
         }
         return AttacheExhaustiveReviewResult(
-            status: ledger.overallStatus,
-            coveragePercentage: ledger.coveragePercentage,
+            status: verifiedLedger.overallStatus,
+            coveragePercentage: verifiedLedger.coveragePercentage,
             coveredRanges: coveredRanges,
             callCount: callCount,
             fallbackCount: fallbackCount,

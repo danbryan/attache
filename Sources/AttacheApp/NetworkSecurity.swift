@@ -3,11 +3,12 @@ import Foundation
 enum NetworkSecurity {
     /// Only attach a Bearer credential when the destination is https or loopback,
     /// so a misconfigured base URL can't leak an API key in cleartext to a
-    /// third-party or attacker-controlled host. Local model servers (Ollama,
-    /// Ollama runs over http on loopback and carries no key, so it is allowed.
+    /// third-party or attacker-controlled host. Ollama runs over HTTP on
+    /// loopback and carries no key, so that local endpoint is allowed.
     static func allowsBearer(_ url: URL) -> Bool {
-        if url.scheme?.lowercased() == "https" { return true }
-        return isLoopbackHost(url.host)
+        let scheme = url.scheme?.lowercased()
+        if scheme == "https" { return true }
+        return scheme == "http" && isLoopbackHost(url.host)
     }
 
     /// True for the loopback hosts local model servers such as Ollama,

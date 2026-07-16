@@ -140,6 +140,9 @@ struct Personality: Identifiable, Codable, Equatable {
     /// personality references policy; it does not duplicate mutable detected
     /// capability facts. `nil` means fall back to the global default strategy.
     var contextStrategy: AttacheContextStrategy?
+    /// A visible, non-blocking explanation when an older Custom strategy could
+    /// not be recovered safely. The invalid values are never applied silently.
+    var contextStrategyMigrationNotice: String?
 
     init(
         id: String,
@@ -152,7 +155,8 @@ struct Personality: Identifiable, Codable, Equatable {
         modelRef: PersonalityModelRef? = nil,
         playbackSpeed: Double? = nil,
         accentColorHex: String? = nil,
-        contextStrategy: AttacheContextStrategy? = nil
+        contextStrategy: AttacheContextStrategy? = nil,
+        contextStrategyMigrationNotice: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -165,11 +169,13 @@ struct Personality: Identifiable, Codable, Equatable {
         self.playbackSpeed = playbackSpeed
         self.accentColorHex = accentColorHex
         self.contextStrategy = contextStrategy
+        self.contextStrategyMigrationNotice = contextStrategyMigrationNotice
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, prompt, isBuiltIn, voiceRef, character, visualMode
         case modelRef, playbackSpeed, accentColorHex, contextStrategy
+        case contextStrategyMigrationNotice
         case legacyCharacter = "petCharacter"
     }
 
@@ -186,7 +192,22 @@ struct Personality: Identifiable, Codable, Equatable {
         modelRef = try container.decodeIfPresent(PersonalityModelRef.self, forKey: .modelRef)
         playbackSpeed = try container.decodeIfPresent(Double.self, forKey: .playbackSpeed)
         accentColorHex = try container.decodeIfPresent(String.self, forKey: .accentColorHex)
-        contextStrategy = try container.decodeIfPresent(AttacheContextStrategy.self, forKey: .contextStrategy)
+        let decodedContextStrategy = try container.decodeIfPresent(
+            AttacheContextStrategy.self,
+            forKey: .contextStrategy
+        )
+        let decodedMigrationNotice = try container.decodeIfPresent(
+            String.self,
+            forKey: .contextStrategyMigrationNotice
+        )
+        if let decodedContextStrategy, !Self.contextStrategyIsValid(decodedContextStrategy) {
+            contextStrategy = nil
+            contextStrategyMigrationNotice = decodedMigrationNotice
+                ?? "This character had an incomplete Custom context profile. Attaché restored the app default so unsafe limits are never applied silently."
+        } else {
+            contextStrategy = decodedContextStrategy
+            contextStrategyMigrationNotice = decodedMigrationNotice
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -202,10 +223,45 @@ struct Personality: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(playbackSpeed, forKey: .playbackSpeed)
         try container.encodeIfPresent(accentColorHex, forKey: .accentColorHex)
         try container.encodeIfPresent(contextStrategy, forKey: .contextStrategy)
+        try container.encodeIfPresent(
+            contextStrategyMigrationNotice,
+            forKey: .contextStrategyMigrationNotice
+        )
+    }
+
+    private static func contextStrategyIsValid(_ strategy: AttacheContextStrategy) -> Bool {
+        guard strategy.kind == .custom else { return true }
+        guard let custom = strategy.custom else { return false }
+        do {
+            try custom.validate()
+            return true
+        } catch {
+            return false
+        }
     }
 }
 
 extension Personality {
+    /// Create a user-owned copy without dropping any part of the character's
+    /// loadout. In particular, nil still means “inherit the app context
+    /// strategy,” while every named or valid Custom override is preserved.
+    func duplicated(withID id: String, name: String? = nil) -> Personality {
+        Personality(
+            id: id,
+            name: name ?? "\(self.name) Copy",
+            prompt: prompt,
+            isBuiltIn: false,
+            voiceRef: voiceRef,
+            character: character,
+            visualMode: visualMode,
+            modelRef: modelRef,
+            playbackSpeed: playbackSpeed,
+            accentColorHex: accentColorHex,
+            contextStrategy: contextStrategy,
+            contextStrategyMigrationNotice: contextStrategyMigrationNotice
+        )
+    }
+
     static let defaultActiveID = "builtin.bigPicture"
 
     private static let builtInModel = PersonalityModelRef(

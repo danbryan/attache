@@ -321,6 +321,7 @@ struct HistoryOverlay: View {
                 .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
+            ContextReceiptDisclosure(responseID: card.id, style: .compact)
             Image(systemName: "play.circle.fill").typoIcon(size: 16)
                 .foregroundStyle(active ? model.theme.signatureColor : Color.secondary.opacity(0.6))
         }
@@ -331,7 +332,7 @@ struct HistoryOverlay: View {
             if hovering { hoveredID = card.id } else if hoveredID == card.id { hoveredID = nil }
         }
         .onTapGesture { play(card) }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Replay \(rowTitle(for: card))")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { play(card) }

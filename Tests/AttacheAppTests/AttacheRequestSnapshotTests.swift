@@ -77,9 +77,10 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         XCTAssertNil(snapshot.focusedSession)
     }
 
-    /// A focused session freezes its identity into the snapshot. A later
-    /// selection cannot mutate the already-captured value.
-    func testFocusedSnapshotFreezesSessionIdentity() throws {
+    /// Persisted UI focus alone is not authority when the session is absent
+    /// from the current app-owned index. This prevents stale defaults or a
+    /// fabricated watched-session record from granting transcript access.
+    func testUnindexedPersistedFocusRemainsContextFree() throws {
         _ = NSApplication.shared
         let defaults = UserDefaults.standard
         let snapshot = ConversationContextDefaultsSnapshot(keys: freshDefaultsKeys(), defaults: defaults)
@@ -101,20 +102,14 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         model.startConversation()
         defer { model.endConversation() }
         XCTAssertEqual(model.conversationTargetSnapshot?.target.id, sessionID)
+        XCTAssertNil(model.conversationTargetSnapshot?.focusedSession)
 
         let captured = model.captureRequestSnapshot(role: .conversation, userInput: "status")
-        guard case .focused(let focused) = captured.session else {
-            XCTFail("Expected a focused session authorization")
-            return
-        }
-        XCTAssertEqual(focused.sessionID, sessionID)
-        XCTAssertEqual(focused.displayTitle, "Frozen session")
-        XCTAssertEqual(focused.sourceKind, SourceKind.codex.rawValue)
+        XCTAssertEqual(captured.session, .contextFree)
 
-        // A later selection (different attached session) must not mutate the
-        // frozen snapshot even if live state changes.
+        // A later mutable default cannot retroactively alter the frozen value.
         defaults.set("a-different-session", forKey: AttachePreferenceKey.attachedCodexSessionID)
-        XCTAssertEqual(captured.focusedSession?.sessionID, sessionID)
+        XCTAssertEqual(captured.session, .contextFree)
     }
 
     /// Every user-facing role captures the selected personality. Topic tagging
@@ -136,5 +131,164 @@ final class AttacheRequestSnapshotTests: XCTestCase {
             sessionID: "s", sourceKind: "codex", displayTitle: "T", workingDirectory: nil
         ))
         XCTAssertFalse(AttacheRequestAuthority.roleMayUseSessionContext(.topicTagging, authorization: focused))
+    }
+
+    /// A LAN model is local for consent copy, but it is remote for a memory
+    /// marked `localOnly`: the prompt leaves this Mac. The snapshot boundary
+    /// must filter that memory before compilation or transport.
+    func testLANModelExcludesLocalOnlyMemoryFromCapturedSnapshot() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.automatic, explicit: false)
+
+        let statement = "I prefer ultramarine tangerine combinations."
+        let arguments = #"{"statement":"I prefer ultramarine tangerine combinations.","type":"preference","scope":"global","scope_value":"global","sensitivity":"low","egress":"localOnly"}"#
+        let disposition = model.applyMemoryProposalTool(
+            arguments: arguments,
+            sourceUtterance: statement,
+            personalityID: model.activePersonality?.id ?? "attache",
+            sourceLocator: "test:lan-memory-egress"
+        )
+        XCTAssertTrue(disposition.contains("saved"), disposition)
+
+        func ollamaSettings(_ endpoint: String) -> AttachePresentationSettings {
+            AttachePresentationSettings(
+                llmEnabled: true,
+                provider: .ollama,
+                baseURL: URL(string: endpoint)!,
+                apiKey: "",
+                apiKeySecretRef: "",
+                model: "test-model",
+                reasoningEffort: nil,
+                serviceTier: nil,
+                profilePrompt: ""
+            )
+        }
+
+        let loopback = model.captureRequestSnapshot(
+            role: .conversation,
+            userInput: statement,
+            settingsOverride: ollamaSettings("http://127.0.0.1:11434/v1")
+        )
+        XCTAssertTrue(loopback.contextItems.contains { $0.content.contains(statement) })
+
+        let lan = model.captureRequestSnapshot(
+            role: .conversation,
+            userInput: statement,
+            settingsOverride: ollamaSettings("http://192.168.50.25:11434/v1")
+        )
+        XCTAssertFalse(lan.contextItems.contains { $0.content.contains(statement) })
+        XCTAssertTrue(lan.memorySelectionReceipt.contains {
+            $0.disposition == .omitted && $0.omissionReason == "local-only-egress"
+        })
+    }
+
+    func testStaleConversationAuthorizationBlocksMemoryRenameAndAgentSendAtMutationPoint() async throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        model.startConversation()
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+        model.endConversation()
+
+        let sentinel = "stale boundary memory \(UUID().uuidString)"
+        let memoryResult = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"stale boundary memory","type":"preference","scope":"global","scope_value":"global","sensitivity":"low","egress":"localOnly"}"#,
+            sourceUtterance: sentinel,
+            personalityID: model.activePersonality?.id ?? "attache",
+            sourceLocator: "test:stale-effect",
+            authorization: authorization
+        )
+        XCTAssertTrue(memoryResult.contains("canceled"), memoryResult)
+
+        let renameResult = await model.applyRenameTool(
+            arguments: #"{"name":"MUST NOT RENAME"}"#,
+            sessionID: "stale-session",
+            effectLedger: ConversationTurnEffectLedger(),
+            authorization: authorization
+        )
+        XCTAssertTrue(renameResult.contains("canceled"), renameResult)
+        XCTAssertNil(model.sessionRenames["stale-session"])
+
+        let sendResult = await model.applyStageAgentInstructionTool(
+            arguments: #"{"instruction":"MUST NOT SEND"}"#,
+            target: AgentSendTarget(
+                sessionID: "stale-session",
+                sourceKind: SourceKind.codex.rawValue,
+                displayTitle: "Stale session",
+                workingDirectory: nil
+            ),
+            sourceUtterance: "send it",
+            effectLedger: ConversationTurnEffectLedger(),
+            authorization: authorization
+        )
+        XCTAssertTrue(sendResult.contains("canceled"), sendResult)
+        XCTAssertNil(model.pendingInstruction)
+        XCTAssertTrue(model.twoWay.log.isEmpty)
+
+        model.startConversation()
+        let later = model.captureRequestSnapshot(role: .conversation, userInput: sentinel)
+        model.endConversation()
+        XCTAssertFalse(later.contextItems.contains { $0.content.contains(sentinel) })
+    }
+
+    func testContextOverflowPublishesExplicitRetryWithoutAutoFallbackAndExpiresAtHangup() async throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let state = AttacheContextUIState.shared
+        state.dismissOverflowRecovery()
+        defer { state.dismissOverflowRecovery() }
+
+        model.startConversation()
+        let settings = AttachePresentationSettings(
+            llmEnabled: true,
+            provider: .ollama,
+            baseURL: URL(string: "http://127.0.0.1:11434/v1")!,
+            apiKey: "",
+            apiKeySecretRef: "",
+            model: "frozen-overflow-model",
+            reasoningEffort: "low",
+            serviceTier: nil,
+            profilePrompt: ""
+        )
+        let draft = "Preserve this exact overflow draft."
+        let snapshot = model.captureRequestSnapshot(
+            role: .conversation,
+            userInput: draft,
+            settingsOverride: settings
+        )
+        model.handleConversationFailure(
+            AttacheContextCompilerError.preEgressOverflow(
+                userDraft: draft,
+                requestedTokens: 65_000,
+                hardLimit: 64_000
+            ),
+            failedPrompt: draft,
+            attemptedProvider: .ollama,
+            frozenSnapshot: snapshot,
+            attemptedSettings: settings
+        )
+        await Task.yield()
+
+        XCTAssertEqual(state.overflowRecovery?.preservedDraft, draft)
+        XCTAssertEqual(model.conversationDraft, draft)
+        XCTAssertEqual(model.conversationFallbackHopCount, 0)
+
+        let efficient = snapshot.retryingOverflow(with: .efficient)
+        XCTAssertEqual(efficient.contextStrategy, .efficient)
+        XCTAssertEqual(efficient.requestID, snapshot.requestID)
+        XCTAssertEqual(efficient.userInput, snapshot.userInput)
+        XCTAssertEqual(efficient.session, snapshot.session)
+        XCTAssertEqual(efficient.modelSettings, snapshot.modelSettings)
+        XCTAssertEqual(efficient.contextItems, snapshot.contextItems)
+
+        model.endConversation()
+        state.retryOverflow(using: .efficient)
+        await Task.yield()
+        XCTAssertFalse(model.conversationActive)
+        XCTAssertFalse(model.isConversing)
     }
 }

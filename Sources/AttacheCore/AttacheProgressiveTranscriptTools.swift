@@ -10,14 +10,24 @@ public struct AttacheTranscriptLocator: Equatable, Sendable {
     public let charStart: Int
     public let charEnd: Int
     public let contentHash: String
+    public let authorizationEpoch: AttacheFocusEpoch
+    /// Hash of the ordered transcript turn hashes at locator creation time.
+    public let contentVersion: String
 
-    public init(sessionID: String, sourceKind: String, turnOrdinal: Int, charStart: Int, charEnd: Int, contentHash: String) {
+    public init(
+        sessionID: String, sourceKind: String, turnOrdinal: Int,
+        charStart: Int, charEnd: Int, contentHash: String,
+        authorizationEpoch: AttacheFocusEpoch = AttacheFocusEpoch(0),
+        contentVersion: String = ""
+    ) {
         self.sessionID = sessionID
         self.sourceKind = sourceKind
         self.turnOrdinal = turnOrdinal
         self.charStart = charStart
         self.charEnd = charEnd
         self.contentHash = contentHash
+        self.authorizationEpoch = authorizationEpoch
+        self.contentVersion = contentVersion
     }
 
     public var coveredRange: String { "turn \(turnOrdinal) chars \(charStart)..\(charEnd)" }
@@ -29,6 +39,8 @@ public enum AttacheTranscriptToolError: Error, Equatable, Sendable {
     case noFocusedSession
     case authorizationExpired
     case sessionIdentityMismatch(expected: String, actual: String)
+    case sourceKindMismatch(expected: String, actual: String)
+    case transcriptVersionMismatch(expected: String, actual: String)
     case staleLocator(expectedHash: String, actualHash: String)
     case deletedLog
     case budgetExhausted
@@ -131,6 +143,29 @@ public struct AttacheTranscriptRangeRead: Equatable, Sendable {
 /// hang-up, deleted file, or replaced log fails closed.
 public enum AttacheTranscriptAuthorizationGuard {
 
+    public static func validate(
+        focusedSession: AttacheFocusedSession?,
+        expectedEpoch: AttacheFocusEpoch,
+        currentEpoch: AttacheFocusEpoch,
+        currentSession: AttacheFocusedSession?
+    ) -> Result<Void, AttacheTranscriptToolError> {
+        guard let frozen = focusedSession, let current = currentSession else {
+            return .failure(.noFocusedSession)
+        }
+        guard expectedEpoch == currentEpoch,
+              frozen.authorizationEpoch == expectedEpoch,
+              current.authorizationEpoch == currentEpoch else {
+            return .failure(.authorizationExpired)
+        }
+        guard frozen.sessionID == current.sessionID else {
+            return .failure(.sessionIdentityMismatch(expected: frozen.sessionID, actual: current.sessionID))
+        }
+        guard frozen.sourceKind == current.sourceKind else {
+            return .failure(.sourceKindMismatch(expected: frozen.sourceKind, actual: current.sourceKind))
+        }
+        return .success(())
+    }
+
     /// Validate that the focused session is still the one the tool was
     /// authorized for, and that the epoch has not advanced (INF-320).
     public static func validate(
@@ -145,7 +180,13 @@ public enum AttacheTranscriptAuthorizationGuard {
         guard expectedEpoch == currentEpoch else {
             return .failure(.authorizationExpired)
         }
-        if let currentID = currentSessionID, currentID != session.sessionID {
+        guard session.authorizationEpoch == expectedEpoch else {
+            return .failure(.authorizationExpired)
+        }
+        guard let currentID = currentSessionID else {
+            return .failure(.noFocusedSession)
+        }
+        if currentID != session.sessionID {
             return .failure(.sessionIdentityMismatch(expected: session.sessionID, actual: currentID))
         }
         return .success(())
@@ -183,7 +224,7 @@ public enum AttacheProgressiveTranscriptTools {
         let sortedTurns = turns.sorted { $0.ordinal < $1.ordinal }
         let head = Array(sortedTurns.prefix(outlineTurnCount)).map { outlineLine($0) }
         let tail = Array(sortedTurns.suffix(outlineTurnCount)).map { outlineLine($0) }
-        let version = AttacheTranscriptTurn.hash(sortedTurns.map { $0.contentHash }.joined(separator: "|"))
+        let version = contentVersion(for: sortedTurns)
         let start = sortedTurns.first?.timestamp ?? Date(timeIntervalSince1970: 0)
         let end = sortedTurns.last?.timestamp ?? Date(timeIntervalSince1970: 0)
         return .success(AttacheTranscriptInspection(
@@ -217,6 +258,7 @@ public enum AttacheProgressiveTranscriptTools {
         }
         guard let session = focusedSession else { return .failure(.noFocusedSession) }
         if reserve.isExhausted { return .failure(.budgetExhausted) }
+        let version = contentVersion(for: turns)
         let queryTokens = AttacheMemorySelector.lexicalOverlap(query, "") // just tokenizes
         _ = queryTokens
         let scored = turns.map { turn -> (turn: AttacheTranscriptTurn, score: Double) in
@@ -233,7 +275,9 @@ public enum AttacheProgressiveTranscriptTools {
                 sessionID: session.sessionID, sourceKind: session.sourceKind,
                 turnOrdinal: entry.turn.ordinal, charStart: 0,
                 charEnd: min(entry.turn.content.count, 200),
-                contentHash: entry.turn.contentHash
+                contentHash: entry.turn.contentHash,
+                authorizationEpoch: expectedEpoch,
+                contentVersion: version
             )
             hits.append(AttacheTranscriptSearchHit(
                 locator: locator, snippet: snippet, rank: entry.score,
@@ -256,6 +300,7 @@ public enum AttacheProgressiveTranscriptTools {
         maxChars: Int?,
         turns: [AttacheTranscriptTurn],
         expectedContentHash: String?,
+        expectedContentVersion: String? = nil,
         reserve: inout AttacheToolBudgetReserve,
         policy: AttacheToolBudgetPolicy
     ) -> Result<AttacheTranscriptRangeRead, AttacheTranscriptToolError> {
@@ -269,6 +314,10 @@ public enum AttacheProgressiveTranscriptTools {
         }
         guard let session = focusedSession else { return .failure(.noFocusedSession) }
         if reserve.isExhausted { return .failure(.budgetExhausted) }
+        let currentVersion = contentVersion(for: turns)
+        if let expectedContentVersion, expectedContentVersion != currentVersion {
+            return .failure(.transcriptVersionMismatch(expected: expectedContentVersion, actual: currentVersion))
+        }
         guard let turn = turns.first(where: { $0.ordinal == turnOrdinal }) else {
             return .failure(.turnOutOfRange(requested: turnOrdinal, available: turns.count))
         }
@@ -280,7 +329,16 @@ public enum AttacheProgressiveTranscriptTools {
         let start = max(charStart, 0)
         let limit = AttacheToolBudgetEnforcer.clampMaxChars(maxChars, reserve: reserve, policy: policy)
         let availableContent = String(turn.content.dropFirst(start))
-        let included = String(availableContent.prefix(limit))
+        let requested = String(availableContent.prefix(limit))
+        let prefix = "[Evidence (untrusted transcript), turn \(turnOrdinal), chars \(start).."
+        let suffix = "]"
+        let included = boundedEvidenceContent(
+            requested,
+            prefix: prefix,
+            suffix: suffix,
+            reserve: reserve
+        )
+        if included.isEmpty, !requested.isEmpty { return .failure(.budgetExhausted) }
         let charEnd = start + included.count
         let truncation: AttacheTranscriptTruncation
         let continuation: AttacheTranscriptLocator?
@@ -292,24 +350,96 @@ public enum AttacheProgressiveTranscriptTools {
             continuation = AttacheTranscriptLocator(
                 sessionID: session.sessionID, sourceKind: session.sourceKind,
                 turnOrdinal: turnOrdinal, charStart: charEnd, charEnd: charEnd,
-                contentHash: turn.contentHash
+                contentHash: turn.contentHash,
+                authorizationEpoch: expectedEpoch,
+                contentVersion: currentVersion
             )
         }
-        // Account for the consumed tokens.
-        let tokens = AttacheFallbackTokenEstimator().estimate(text: included)
-        _ = reserve.consume(tokens)
         let locator = AttacheTranscriptLocator(
             sessionID: session.sessionID, sourceKind: session.sourceKind,
             turnOrdinal: turnOrdinal, charStart: start, charEnd: charEnd,
-            contentHash: turn.contentHash
+            contentHash: turn.contentHash,
+            authorizationEpoch: expectedEpoch,
+            contentVersion: currentVersion
         )
         // Quoted evidence: the content is wrapped so it is never treated as
         // instructions.
-        let quoted = "[Evidence turn \(turnOrdinal) chars \(start)..\(charEnd): \(included)]"
+        let quoted = "\(prefix)\(charEnd): \(included)\(suffix)"
+        _ = reserve.consume(AttacheFallbackTokenEstimator().estimate(text: quoted))
         return .success(AttacheTranscriptRangeRead(
             locator: locator, content: quoted, truncation: truncation,
             continuationLocator: continuation
         ))
+    }
+
+    /// Read exactly the range named by a prior locator. All locator authority
+    /// and version fields are revalidated before any content is returned.
+    public static func readRange(
+        focusedSession: AttacheFocusedSession?,
+        currentEpoch: AttacheFocusEpoch,
+        currentSessionID: String?,
+        locator: AttacheTranscriptLocator,
+        maxChars: Int?,
+        turns: [AttacheTranscriptTurn],
+        reserve: inout AttacheToolBudgetReserve,
+        policy: AttacheToolBudgetPolicy
+    ) -> Result<AttacheTranscriptRangeRead, AttacheTranscriptToolError> {
+        guard locator.authorizationEpoch == currentEpoch else {
+            return .failure(.authorizationExpired)
+        }
+        guard let session = focusedSession else { return .failure(.noFocusedSession) }
+        guard locator.sessionID == session.sessionID else {
+            return .failure(.sessionIdentityMismatch(expected: locator.sessionID, actual: session.sessionID))
+        }
+        guard locator.sourceKind == session.sourceKind else {
+            return .failure(.sourceKindMismatch(expected: locator.sourceKind, actual: session.sourceKind))
+        }
+        return readRange(
+            focusedSession: session,
+            expectedEpoch: locator.authorizationEpoch,
+            currentEpoch: currentEpoch,
+            currentSessionID: currentSessionID,
+            turnOrdinal: locator.turnOrdinal,
+            charStart: locator.charStart,
+            maxChars: maxChars,
+            turns: turns,
+            expectedContentHash: locator.contentHash,
+            expectedContentVersion: locator.contentVersion,
+            reserve: &reserve,
+            policy: policy
+        )
+    }
+
+    public static func contentVersion(for turns: [AttacheTranscriptTurn]) -> String {
+        let ordered = turns.sorted { $0.ordinal < $1.ordinal }
+        return AttacheTranscriptTurn.hash(ordered.map { "\($0.ordinal):\($0.contentHash)" }.joined(separator: "|"))
+    }
+
+    private static func boundedEvidenceContent(
+        _ content: String,
+        prefix: String,
+        suffix: String,
+        reserve: AttacheToolBudgetReserve
+    ) -> String {
+        let estimator = AttacheFallbackTokenEstimator()
+        let allowance = min(reserve.remainingTokens, reserve.perCallCap)
+        guard allowance > estimator.estimate(text: prefix + suffix) else { return "" }
+        var low = 0
+        var high = content.count
+        var best = ""
+        while low <= high {
+            let count = (low + high) / 2
+            let candidate = String(content.prefix(count))
+            // Reserve digits and punctuation for the final charEnd value.
+            let wrapped = prefix + String(count + 1_000_000_000) + ": " + candidate + suffix
+            if estimator.estimate(text: wrapped) <= allowance {
+                best = candidate
+                low = count + 1
+            } else {
+                high = count - 1
+            }
+        }
+        return best
     }
 
     /// Outline line for a turn (INF-320). Content-free summary for the

@@ -34,6 +34,26 @@ final class AttacheSessionMapTests: XCTestCase {
         XCTAssertEqual(seenOrdinals.count, 100, "all 100 turns covered")
     }
 
+    func testStructuralEpisodeBoundsSplitAFlatTranscriptWithoutLosingTurns() {
+        let turns = (0..<40).map { index in
+            AttacheSessionMapTurn(
+                ordinal: index,
+                role: "assistant",
+                content: String(repeating: "x", count: 2_000),
+                timestamp: Date(timeIntervalSince1970: Double(index))
+            )
+        }
+        let map = AttacheSessionMapBuilder.build(
+            sessionID: "flat", sourceKind: "codex", turns: turns
+        )
+
+        XCTAssertTrue(map.diagnostics().isComplete)
+        XCTAssertGreaterThan(map.episodes.count, 1)
+        XCTAssertTrue(map.episodes.allSatisfy {
+            $0.turnCount <= AttacheSessionMapBuilder.maxTurnsPerEpisode
+        })
+    }
+
     // Criterion 2: appending a short tail does not rebuild unchanged early
     // episodes.
     func testAppendDoesNotRebuildEarlyEpisodes() {

@@ -99,6 +99,18 @@ public enum AttacheCapabilityConfidence: String, Codable, Equatable, Sendable, C
 /// fact, not user policy. Runtime/provider facts can never overwrite Custom
 /// policy, and Custom policy can never overwrite this record (INF-305).
 public struct AttacheModelCapabilityProfile: Equatable, Codable, Sendable {
+    public static let unknown = AttacheModelCapabilityProfile(
+        architecturalMaximum: nil,
+        configuredRuntimeLimit: nil,
+        outputLimit: nil,
+        estimatorFamily: nil,
+        supportsReasoning: false,
+        reasoningLevels: [],
+        freshness: nil,
+        confidence: .unknown,
+        provenance: .unknown
+    )
+
     /// Architectural maximum context window in tokens. `nil` means unknown.
     public let architecturalMaximum: Int?
     /// A configured runtime cap the provider enforces, if any.
@@ -140,7 +152,7 @@ public struct AttacheModelCapabilityProfile: Equatable, Codable, Sendable {
 
     /// Unknown capacity is represented explicitly, never as a guessed number.
     public var isUnknown: Bool {
-        architecturalMaximum == nil && provenance == .unknown
+        architecturalMaximum == nil && configuredRuntimeLimit == nil
     }
 
     /// True when the evidence is too old to trust without re-checking. A nil
@@ -235,6 +247,12 @@ public struct AttacheContextCustomPolicy: Equatable, Codable, Sendable {
     /// `AttacheContextPolicyError` for negative/zero reserves, an effective limit
     /// above the hard limit, or reserves that overcommit the hard cap.
     public func validate() throws {
+        if let hardInputLimit, hardInputLimit <= 0 {
+            throw AttacheContextPolicyError.invalidLimit(field: "hardInputLimit", value: hardInputLimit)
+        }
+        if let effectiveInputLimit, effectiveInputLimit <= 0 {
+            throw AttacheContextPolicyError.invalidLimit(field: "effectiveInputLimit", value: effectiveInputLimit)
+        }
         if outputReserve < 0 {
             throw AttacheContextPolicyError.negativeReserve(field: "outputReserve", value: outputReserve)
         }
@@ -251,8 +269,13 @@ public struct AttacheContextCustomPolicy: Equatable, Codable, Sendable {
         if let hard = hardInputLimit, let effective = effectiveInputLimit, effective > hard {
             throw AttacheContextPolicyError.effectiveExceedsHard(effective: effective, hard: hard)
         }
+        let outputAndTools = outputReserve.addingReportingOverflow(toolReserve)
+        let allReserves = outputAndTools.partialValue.addingReportingOverflow(safetyMargin)
+        if outputAndTools.overflow || allReserves.overflow {
+            throw AttacheContextPolicyError.reserveTotalOverflow
+        }
         if let hard = hardInputLimit {
-            let committed = outputReserve + toolReserve + safetyMargin
+            let committed = allReserves.partialValue
             if committed >= hard {
                 throw AttacheContextPolicyError.overcommittedReserves(committed: committed, hard: hard)
             }
@@ -308,14 +331,18 @@ public struct AttacheStagedThresholds: Equatable, Codable, Sendable {
 // MARK: - Errors
 
 public enum AttacheContextPolicyError: Error, Equatable, LocalizedError {
+    case invalidLimit(field: String, value: Int)
     case negativeReserve(field: String, value: Int)
     case zeroReserve(field: String)
     case effectiveExceedsHard(effective: Int, hard: Int)
     case overcommittedReserves(committed: Int, hard: Int)
+    case reserveTotalOverflow
     case invalidThreshold(field: String, value: Int)
 
     public var errorDescription: String? {
         switch self {
+        case .invalidLimit(let field, let value):
+            return "\(field) is \(value); context limits must be positive. Set a positive token count or leave it unset."
         case .negativeReserve(let field, let value):
             return "\(field) is \(value); reserves cannot be negative. Set it to a positive number of tokens."
         case .zeroReserve(let field):
@@ -324,6 +351,8 @@ public enum AttacheContextPolicyError: Error, Equatable, LocalizedError {
             return "effectiveInputLimit (\(effective)) is above hardInputLimit (\(hard)). Lower the effective limit or raise the hard cap."
         case .overcommittedReserves(let committed, let hard):
             return "output + tool + safety reserves (\(committed)) meet or exceed hardInputLimit (\(hard)). Lower a reserve or raise the hard cap."
+        case .reserveTotalOverflow:
+            return "output + tool + safety reserves are too large to calculate safely. Lower one or more reserves."
         case .invalidThreshold(let field, let value):
             return "\(field) is \(value); staging thresholds must be positive. Set a positive character count."
         }

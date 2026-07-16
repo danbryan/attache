@@ -28,6 +28,7 @@ public final class CardStore: @unchecked Sendable {
     private var db: OpaquePointer?
     private let databaseURL: URL
     private let audioAssetsURL: URL
+    private let usesInMemoryDatabase: Bool
     /// A store is normally driven from the main actor, but async delivery can
     /// resume on a cooperative executor while watcher work reaches the same
     /// connection. SQLite's connection mutex does not make reusing one prepared
@@ -56,6 +57,7 @@ public final class CardStore: @unchecked Sendable {
     private init(databaseURL: URL, audioAssetsURL: URL?, inMemory: Bool) throws {
         self.databaseURL = databaseURL
         self.audioAssetsURL = audioAssetsURL ?? databaseURL.deletingLastPathComponent().appendingPathComponent("audio-assets", isDirectory: true)
+        self.usesInMemoryDatabase = inMemory
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         if !inMemory {
@@ -85,7 +87,8 @@ public final class CardStore: @unchecked Sendable {
         try CardStore(databaseURL: AttacheAppSupport.databaseURL())
     }
 
-    public var databasePath: String { databaseURL.path }
+    public var databasePath: String { usesInMemoryDatabase ? ":memory:" : databaseURL.path }
+    public var isInMemory: Bool { usesInMemoryDatabase }
     public var audioAssetsPath: String { audioAssetsURL.path }
 
     public func insertEvent(
@@ -93,7 +96,7 @@ public final class CardStore: @unchecked Sendable {
         status initialStatus: CardStatus = .unread,
         heardAt initialHeardAt: Date? = nil
     ) throws -> VoicemailCard {
-        let event = try EventNormalizer.normalize(rawEvent)
+        var event = try EventNormalizer.normalize(rawEvent)
         let now = Date()
         // Order by when the agent wrote the turn, not when we finished processing
         // it, so a slow presentation call can't reorder the inbox (INF-163).
@@ -114,7 +117,6 @@ public final class CardStore: @unchecked Sendable {
         let durationMs = CaptionAlignmentBuilder.estimatedDurationMs(for: spokenText)
         let alignment = CaptionAlignmentBuilder.fallback(text: spokenText, durationMs: durationMs)
         let alignmentJSON = try encodeJSON(alignment)
-        let metadataJSON = EventNormalizer.metadataJSON(for: event)
         // Deterministic id: the same agent turn arriving via the watcher and the
         // HTTP hook (or a client retry) collapses to one card instead of doubling.
         let cardID = PipelineOrdering.stableCardID(
@@ -123,6 +125,15 @@ public final class CardStore: @unchecked Sendable {
             sourceTime: sourceTimeString,
             content: event.text
         )
+        // The request is compiled before the stable card id exists. Bind the
+        // content-free receipt here, inside the same normalized event that is
+        // persisted, so history cannot associate it with another response.
+        if let encoded = event.metadata[AttacheContextReceiptView.metadataKey],
+           let receipt = AttacheContextReceiptView.decodeMetadataValue(encoded),
+           let rebound = receipt.bound(to: cardID).encodedMetadataValue() {
+            event.metadata[AttacheContextReceiptView.metadataKey] = rebound
+        }
+        let metadataJSON = EventNormalizer.metadataJSON(for: event)
         if let existing = try? fetchCard(id: cardID) {
             return existing
         }

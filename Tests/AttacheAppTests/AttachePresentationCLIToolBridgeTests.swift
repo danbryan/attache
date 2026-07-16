@@ -3,6 +3,29 @@ import XCTest
 @testable import AttacheApp
 
 final class AttachePresentationCLIToolBridgeTests: XCTestCase {
+    func testSessionToolResultsKeepTheirFocusedEvidenceClassification() {
+        XCTAssertEqual(
+            AttachePresentationService.toolResultSource(for: "read_session_transcript"),
+            .retrievedTranscriptEvidence
+        )
+        XCTAssertEqual(
+            AttachePresentationService.toolResultSource(for: "search_session_transcript"),
+            .retrievedTranscriptEvidence
+        )
+        XCTAssertEqual(
+            AttachePresentationService.toolResultSource(for: "read_file"),
+            .retrievedFileEvidence
+        )
+        XCTAssertEqual(
+            AttachePresentationService.toolResultSource(for: "list_working_directory"),
+            .retrievedFileEvidence
+        )
+        XCTAssertEqual(
+            AttachePresentationService.toolResultSource(for: "propose_memory"),
+            .toolResults
+        )
+    }
+
     func testContextFreeConversationOffersNoSessionOrAgentTools() {
         let tools = AttachePresentationService.conversationTools(
             allowSessionContextTools: false,
@@ -286,14 +309,10 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
         XCTAssertFalse(resolution.toolCallLost)
     }
 
-    /// Opt-in live canary for the judgment boundary a deterministic provider
-    /// cannot exercise. It uses the production conversation prompt, production
-    /// CLI tool bridge, and the phrasing from the July 10 routing incident.
-    func testLiveCodexRoutesExplicitArtifactDelegationToAgentTool() async throws {
-        guard ProcessInfo.processInfo.environment["ATTACHE_LIVE_CODEX_ROUTING_TEST"] == "1" else {
-            throw XCTSkip("Set ATTACHE_LIVE_CODEX_ROUTING_TEST=1 to run the real Codex routing canary.")
-        }
-
+    /// Persisted legacy settings must stop before compilation, CLI launch, or
+    /// tool execution. Codex CLI's read-only sandbox still permits native file
+    /// reads, so it is not a safe personality inference transport.
+    func testCodexPersonalityInferenceFailsClosedBeforeToolExecution() async throws {
         let suiteName = "AttacheLiveCodexRoutingCanary-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             return XCTFail("Could not create isolated defaults for the live routing canary.")
@@ -301,55 +320,68 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let model = ProcessInfo.processInfo.environment["ATTACHE_LIVE_CODEX_MODEL"] ?? "default"
-        let service = AttachePresentationService(defaults: defaults, environment: [
+        let environment = [
             "ATTACHE_LLM_PROVIDER": "codex_cli",
-            "ATTACHE_LLM_MODEL": model,
+            "ATTACHE_LLM_MODEL": "default",
             "ATTACHE_REASONING_EFFORT": "low"
-        ])
-        let recorder = LiveToolCallRecorder()
-        let system = AttachePersonality.conversationSystemPrompt(
-            memoryContext: nil,
-            sessionTitle: "Weekly Codex Improvement Review",
-            sessionSourceName: "Codex",
-            workingDirectory: "/tmp/attache-routing-canary",
-            latestSummary: "Three improvements were completed and an HTML report was generated.",
-            latestAgentReply: "The detailed results are in the HTML report.",
-            canStageAgentInstruction: true
+        ]
+        let modelSettings = AttachePresentationSettings.load(
+            role: .conversation,
+            defaults: defaults,
+            environment: environment
         )
-        let user = "Could you just ask Codex to tell you the items from the artifact and then report it to me? Describe the three improvements from the HTML report in detail."
+        let consentScope = PresentationConsentScope(
+            provider: modelSettings.provider,
+            endpoint: modelSettings.baseURL.absoluteString
+        )
+        defaults.set(
+            [consentScope.storageKey],
+            forKey: AttachePreferenceKey.cloudConsentPresentationProviders
+        )
+        let service = AttachePresentationService(defaults: defaults, environment: environment)
+        let recorder = LiveToolCallRecorder()
+        let user = "Untrusted prompt that must never reach Codex CLI."
+        let snapshot = AttacheRequestSnapshot(
+            requestID: "live-cli-routing-canary",
+            role: .conversation,
+            personality: Personality(
+                id: "live-cli-routing-canary",
+                name: "Attaché",
+                prompt: AttachePersonality.defaultProfilePrompt
+            ),
+            profilePrompt: AttachePersonality.defaultProfilePrompt,
+            userInput: user,
+            session: .contextFree,
+            modelSettings: modelSettings,
+            contextItems: [],
+            contextStrategy: .automatic
+        )
 
         let result: Result<AttacheConversationReply, Error> = await withCheckedContinuation { continuation in
             service.converse(
+                snapshot: snapshot,
                 messages: [
-                    AttacheChatMessage(role: "system", content: system),
+                    AttacheChatMessage(role: "system", content: "System"),
                     AttacheChatMessage(role: "user", content: user)
                 ],
-                allowSessionContextTools: true,
+                allowSessionContextTools: false,
                 allowAgentInstructionTool: true,
                 executeTool: { name, arguments in
                     await recorder.append(name: name, arguments: arguments)
-                    if name == "stage_agent_instruction" {
-                        return "Attaché opened the per-message confirmation sheet. Nothing has been sent yet."
-                    }
-                    return "This tool is unavailable in the routing canary. Follow the user's explicit delegation request."
+                    return "unexpected tool execution"
                 },
                 completion: { continuation.resume(returning: $0) }
             )
         }
-        _ = try result.get()
-
+        guard case .failure(let error) = result else {
+            return XCTFail("Codex personality inference unexpectedly succeeded")
+        }
+        guard let presentationError = error as? AttachePresentationError,
+              case .notConfigured = presentationError else {
+            return XCTFail("unexpected refusal error: \(error)")
+        }
         let calls = await recorder.calls
-        XCTAssertEqual(calls.first?.name, "stage_agent_instruction", "The real personality chose \(calls.first?.name ?? "no tool") before the explicit agent handoff.")
-        let arguments = calls.first?.arguments ?? ""
-        // Substring, not exact phrase: this is the model's own live paraphrase
-        // of the request, and it reliably references the improvements without
-        // always saying the literal word "three" (e.g. "the improvements" or
-        // "several improvements"). The routing decision above is the safety-
-        // relevant assertion; this only checks the instruction carries the
-        // right subject matter, not the model's exact wording choice.
-        XCTAssertTrue(arguments.localizedCaseInsensitiveContains("improvement"), "Instruction argument did not reference the improvements: \(arguments)")
-        XCTAssertTrue(arguments.localizedCaseInsensitiveContains("HTML report"), "Instruction argument did not reference the HTML report: \(arguments)")
+        XCTAssertTrue(calls.isEmpty)
     }
 }
 

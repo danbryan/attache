@@ -176,6 +176,7 @@ public enum AttacheFallbackRecompiler {
         fallbackModel: ModelIdentity,
         fallbackCapability: AttacheModelCapabilityProfile,
         strategy: AttacheContextStrategy,
+        fallbackRequestIsRemote: Bool,
         effectTracker: AttacheToolEffectTracker,
         attemptNumber: Int
     ) throws -> AttacheFallbackAttempt {
@@ -188,7 +189,13 @@ public enum AttacheFallbackRecompiler {
             role: snapshot.role,
             profilePrompt: snapshot.profilePrompt,
             memoryContext: snapshot.memoryContext,
-            session: snapshot.session
+            session: snapshot.session,
+            requestIsRemote: fallbackRequestIsRemote,
+            prebuiltMessages: snapshot.prebuiltMessages,
+            prebuiltMessageSources: snapshot.prebuiltMessageSources,
+            prebuiltProtectedSources: snapshot.prebuiltProtectedSources,
+            serializedToolDefinitions: snapshot.serializedToolDefinitions,
+            serializedBridgeWrapper: snapshot.serializedBridgeWrapper
         )
         let compiled = try ContextCompiler.compile(
             input: fallbackInput, items: items,

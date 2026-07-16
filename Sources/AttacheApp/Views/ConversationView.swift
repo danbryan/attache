@@ -111,15 +111,20 @@ struct ConversationView: View {
     private func bubble(_ turn: ConversationTurn) -> some View {
         HStack {
             if turn.role == .user { Spacer(minLength: 44) }
-            Text(turn.text)
-                .typoBody()
-                .foregroundStyle(turn.role == .user ? Color.white : Color.primary.opacity(0.92))
-                .textSelection(.enabled)
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(
-                    turn.role == .user ? AnyShapeStyle(accent) : AnyShapeStyle(Color.primary.opacity(0.08)),
-                    in: RoundedRectangle(cornerRadius: 13)
-                )
+            VStack(alignment: .leading, spacing: 7) {
+                Text(turn.text)
+                    .typoBody()
+                    .foregroundStyle(turn.role == .user ? Color.white : Color.primary.opacity(0.92))
+                    .textSelection(.enabled)
+                if turn.role == .assistant {
+                    ContextReceiptDisclosure(responseID: turn.id)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(
+                turn.role == .user ? AnyShapeStyle(accent) : AnyShapeStyle(Color.primary.opacity(0.08)),
+                in: RoundedRectangle(cornerRadius: 13)
+            )
             if turn.role == .assistant { Spacer(minLength: 44) }
         }
     }

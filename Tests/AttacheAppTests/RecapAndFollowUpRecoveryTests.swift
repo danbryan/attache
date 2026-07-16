@@ -9,7 +9,7 @@ import XCTest
 /// (INF-244). These tests cover the two pieces that only show up wired
 /// end-to-end:
 ///
-/// 1. `AttachePresentationService.complete(role:)` used to swallow every
+/// 1. `AttachePresentationService.complete(snapshot:)` used to swallow every
 ///    failure behind `try?`; it now throws so a caller can classify it via
 ///    `ConversationRecovery.classify`, while still returning `nil` (not an
 ///    error) when the role simply isn't configured.
@@ -121,7 +121,7 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         throw XCTSkip("mock personality server did not become ready in time")
     }
 
-    // MARK: - complete(role:) throws structurally instead of swallowing (recap/tagging)
+    // MARK: - complete(snapshot:) throws structurally instead of swallowing (recap/tagging)
 
     func testCompleteThrowsWithStructuralHTTPStatusOnUsageLimit() async throws {
         let nonce = "complete-throws-\(UUID().uuidString.prefix(8))"
@@ -135,17 +135,26 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = AttachePresentationService(defaults: defaults, environment: [
+        let environment = [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": "attache-recap-default"
-        ])
+        ]
+        let settings = AttachePresentationSettings.load(
+            role: .recap, defaults: defaults, environment: environment
+        )
+        let service = AttachePresentationService(defaults: defaults, environment: environment)
 
         do {
-            _ = try await service.complete(system: "system prompt", user: "user prompt", role: .recap)
-            XCTFail("expected complete(role:) to throw on a 429 usage-limit response")
+            _ = try await service.complete(
+                snapshot: requestSnapshot(role: .recap, userInput: "user prompt", modelSettings: settings),
+                system: "system prompt",
+                user: "user prompt"
+            )
+            XCTFail("expected complete(snapshot:) to throw on a 429 usage-limit response")
         } catch {
-            let presentationError = error as? AttachePresentationError
+            let rootError = (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
+            let presentationError = rootError as? AttachePresentationError
             XCTAssertEqual(presentationError?.httpStatus, 429, "the thrown error must carry the structural HTTP status so ConversationRecovery.classify can use it")
         }
     }
@@ -170,14 +179,22 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
 
         // Simulates the recap recovery menu having switched the `.recap`
         // role's override to the model the mock will actually answer.
-        let service = AttachePresentationService(defaults: defaults, environment: [
+        let environment = [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": recoveryModel
-        ])
+        ]
+        let settings = AttachePresentationSettings.load(
+            role: .recap, defaults: defaults, environment: environment
+        )
+        let service = AttachePresentationService(defaults: defaults, environment: environment)
 
-        let text = try await service.complete(system: "system prompt", user: "user prompt", role: .recap)
-        XCTAssertEqual(text, "ATTACHE_RECOVERY_SUCCEEDED_\(nonce)")
+        let result = try await service.complete(
+            snapshot: requestSnapshot(role: .recap, userInput: "user prompt", modelSettings: settings),
+            system: "system prompt",
+            user: "user prompt"
+        )
+        XCTAssertEqual(result.text, "ATTACHE_RECOVERY_SUCCEEDED_\(nonce)")
     }
 
     func testLegacyDisabledSummaryPreferenceIsIgnored() {
@@ -211,11 +228,15 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = AttachePresentationService(defaults: defaults, environment: [
+        let environment = [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": "attache-followup-default"
-        ])
+        ]
+        let settings = AttachePresentationSettings.load(
+            role: .conversation, defaults: defaults, environment: environment
+        )
+        let service = AttachePresentationService(defaults: defaults, environment: environment)
 
         let card = VoicemailCard(
             id: "card-1", sourceID: "source-1", sourceKind: SourceKind.codex.rawValue,
@@ -225,16 +246,26 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             spokenText: "Finished the migration.", status: .unread, createdAt: Date(), heardAt: nil,
             metadataJSON: "{}", durationMs: 0, alignment: nil
         )
+        let snapshot = requestSnapshot(
+            role: .followUp,
+            userInput: "What changed?",
+            modelSettings: settings
+        )
 
         let result: AttacheFollowUpAnswerResult = await withCheckedContinuation { continuation in
-            service.answerFollowUpQuestion(card: card, danQuestion: "What changed?", personality: nil, profilePrompt: AttachePersonality.defaultProfilePrompt) { result in
+            service.answerFollowUpQuestion(
+                card: card,
+                danQuestion: "What changed?",
+                snapshot: snapshot
+            ) { result in
                 switch result {
                 case .success(let answer): continuation.resume(returning: answer)
                 case .failure(let error):
                     XCTFail("answerFollowUpQuestion must never resolve .failure; got \(error)")
                     continuation.resume(returning: AttacheFollowUpAnswerResult(
                         answerText: "", strategy: "unexpected-failure", model: nil,
-                        rawContextCharacterCount: 0, truncatedContext: false, errorDescription: nil
+                        rawContextCharacterCount: 0, truncatedContext: false, errorDescription: nil,
+                        inference: .noModel(snapshot: snapshot)
                     ))
                 }
             }
@@ -242,6 +273,8 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
 
         XCTAssertEqual(result.strategy, "deterministic-follow-up-fallback-after-llm-error")
         XCTAssertEqual(result.errorHTTPStatus, 429, "the fallback must carry the structural HTTP status so the caller can classify it via ConversationRecovery.classify instead of re-parsing errorDescription text")
+        XCTAssertFalse(result.inference.receiptView.noModelContext)
+        XCTAssertNotNil(result.inference.contextReceipt)
     }
 
     // MARK: - Role-scoped recovery switches persist to their own role, not the global keys
@@ -354,15 +387,23 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(true, forKey: AttachePreferenceKey.presentationLLMEnabled)
 
-        let service = AttachePresentationService(defaults: defaults, environment: [
+        let environment = [
             "ATTACHE_LLM_PROVIDER": "ollama",
             "ATTACHE_LLM_BASE_URL": "http://127.0.0.1:\(server.port)/v1",
             "ATTACHE_LLM_MODEL": "attache-tagging-default"
-        ])
+        ]
+        let settings = AttachePresentationSettings.load(
+            role: .tagging, defaults: defaults, environment: environment
+        )
+        let service = AttachePresentationService(defaults: defaults, environment: environment)
 
         var taggingFailureCount = 0
         do {
-            _ = try await service.complete(system: "system", user: "user", role: .tagging)
+            _ = try await service.complete(
+                snapshot: requestSnapshot(role: .topicTagging, userInput: "user", modelSettings: settings),
+                system: "system",
+                user: "user"
+            )
             XCTFail("expected the tagging request to fail against the usage-limit mock")
         } catch {
             // Mirrors AppModel.tagUntaggedSessions' catch branch: skip silently
@@ -370,6 +411,27 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             taggingFailureCount += 1
         }
         XCTAssertEqual(taggingFailureCount, 1)
+    }
+
+    private func requestSnapshot(
+        role: AttacheRequestRole,
+        userInput: String,
+        modelSettings: AttachePresentationSettings
+    ) -> AttacheRequestSnapshot {
+        AttacheRequestSnapshot(
+            role: role,
+            personality: Personality(
+                id: "recovery-test",
+                name: "Recovery Test",
+                prompt: AttachePersonality.defaultProfilePrompt
+            ),
+            profilePrompt: AttachePersonality.defaultProfilePrompt,
+            userInput: userInput,
+            session: .contextFree,
+            modelSettings: modelSettings,
+            contextItems: [],
+            contextStrategy: .automatic
+        )
     }
 }
 

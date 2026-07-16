@@ -74,7 +74,16 @@ public final class CodexSessionScanner: SessionScanner {
     public func makeRecord(for file: ScannedFile, priorTopicTag: String?, contentCap: Int) -> SessionRecord {
         let meta = indexTitles[file.id]
         let indexTitle = meta?.title
-        let parsed = Self.readSessionFile(file.url, contentCap: contentCap)
+        // The desktop index already owns the user-visible title for nearly all
+        // Codex sessions. Read only enough of those files to capture session
+        // metadata; the background FTS pass streams searchable turns later.
+        // Sessions without an indexed title still get the larger prefix so a
+        // first-user-message fallback can be derived.
+        let parsed = Self.readSessionFile(
+            file.url,
+            contentCap: indexTitle == nil ? contentCap : 0,
+            byteCap: indexTitle == nil ? 262_144 : 16_384
+        )
         let title = indexTitle ?? parsed.firstUserMessage ?? "Session \(file.id.prefix(8))"
         return SessionRecord(
             id: file.id,

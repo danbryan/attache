@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SQLite3
 
@@ -49,7 +50,7 @@ public enum AttacheMemoryStatus: String, Codable, Equatable, Sendable, CaseItera
 
 /// One structured durable memory record (INF-310). Cites its origin via
 /// `sourceLocator` but does not authorize the origin session.
-public struct AttacheMemoryRecord: Equatable, Sendable, Codable {
+public struct AttacheMemoryRecord: Equatable, Sendable, Codable, Identifiable {
     public let id: String
     public var statement: String
     public var type: AttacheMemoryType
@@ -94,11 +95,11 @@ public struct AttacheMemoryRecord: Equatable, Sendable, Codable {
 
     /// True when this record is visible to the given personality id, respecting
     /// scope policy (INF-310).
-    public func isVisible(to personalityID: String?) -> Bool {
+    public func isVisible(to personalityID: String?, topic: String? = nil) -> Bool {
         switch scope {
         case .global: return true
         case .personality(let scoped): return scoped == personalityID
-        case .topic: return true
+        case .topic(let scoped): return scoped == topic
         }
     }
 
@@ -123,10 +124,20 @@ public struct AttacheMemoryDiagnostics: Equatable, Sendable {
     }
 }
 
+public struct AttacheMemoryImportResult: Equatable, Sendable {
+    public let imported: Int
+    public let rejected: Int
+
+    public init(imported: Int, rejected: Int) {
+        self.imported = imported
+        self.rejected = rejected
+    }
+}
+
 /// Rejects statements that look like secrets, private reasoning, or raw
 /// transcripts so they never enter the ledger (INF-310).
 public enum AttacheMemorySecretFilter {
-    static let secretPatterns: [String] = [
+    public static let secretPatterns: [String] = [
         "api_key", "apikey", "api-key", "access_token", "auth_token", "secret",
         "password", "bearer ", "sk-", "xoxb", "xoxp", "ghp_", "gho_", "private_key",
         "-----begin", "aws_secret", "stripe_sk", "reasoning_content"
@@ -137,7 +148,139 @@ public enum AttacheMemorySecretFilter {
     public static func shouldReject(_ statement: String) -> Bool {
         let lower = statement.lowercased()
         if secretPatterns.contains(where: { lower.contains($0) }) { return true }
+        return containsFinancialAccountData(statement)
+            || containsCredentialLikeToken(statement)
+    }
+
+    /// Detect account identifiers even when a proposal omits helpful labels.
+    /// The checks use structural validation where one exists, such as Luhn,
+    /// ABA routing checksum, and IBAN mod-97, and otherwise require an explicit
+    /// financial marker next to a digit sequence.
+    public static func containsFinancialAccountData(_ statement: String) -> Bool {
+        if matches(#"(?<!\d)\d{3}[ -]?\d{2}[ -]?\d{4}(?!\d)"#, in: statement) {
+            return true
+        }
+
+        for candidate in digitCandidates(in: statement, minimum: 13, maximum: 19)
+        where luhnValid(candidate) {
+            return true
+        }
+
+        for candidate in digitCandidates(in: statement, minimum: 9, maximum: 9)
+        where abaRoutingValid(candidate) {
+            return true
+        }
+
+        if containsValidIBAN(statement) { return true }
+
+        let lower = statement.lowercased()
+        let accountMarkers = [
+            "account number", "bank account", "routing number", "routing #",
+            "aba number", "iban", "swift account", "acct number", "acct #"
+        ]
+        return accountMarkers.contains(where: { lower.contains($0) })
+            && matches(#"(?<!\d)\d(?:[ -]?\d){3,}(?!\d)"#, in: statement)
+    }
+
+    /// Detect unlabeled token-shaped material. Long natural-language words do
+    /// not qualify: a candidate must mix letters and digits and have high
+    /// character entropy, or have a credential-specific structure such as JWT.
+    public static func containsCredentialLikeToken(_ statement: String) -> Bool {
+        if matches(#"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{8,})?\b"#, in: statement) {
+            return true
+        }
+        for candidate in regexMatches(
+            #"(?<![A-Za-z0-9])[A-Za-z0-9+/_=-]{24,}(?![A-Za-z0-9])"#,
+            in: statement
+        ) {
+            let hasLetter = candidate.rangeOfCharacter(from: .letters) != nil
+            let hasDigit = candidate.rangeOfCharacter(from: .decimalDigits) != nil
+            if hasLetter, hasDigit, shannonEntropy(candidate) >= 3.5 {
+                return true
+            }
+        }
         return false
+    }
+
+    private static func regexMatches(_ pattern: String, in value: String) -> [String] {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return expression.matches(in: value, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: value) else { return nil }
+            return String(value[swiftRange])
+        }
+    }
+
+    private static func matches(_ pattern: String, in value: String) -> Bool {
+        !regexMatches(pattern, in: value).isEmpty
+    }
+
+    private static func digitCandidates(
+        in value: String,
+        minimum: Int,
+        maximum: Int
+    ) -> [String] {
+        regexMatches(#"(?<!\d)\d(?:[ -]?\d){8,18}(?!\d)"#, in: value)
+            .map { $0.filter(\.isNumber) }
+            .filter { $0.count >= minimum && $0.count <= maximum }
+    }
+
+    private static func luhnValid(_ digits: String) -> Bool {
+        guard digits.count >= 13, digits.count <= 19 else { return false }
+        let values = digits.compactMap(\.wholeNumberValue)
+        guard values.count == digits.count else { return false }
+        let sum = values.reversed().enumerated().reduce(0) { total, pair in
+            let (index, value) = pair
+            if index.isMultiple(of: 2) { return total + value }
+            let doubled = value * 2
+            return total + (doubled > 9 ? doubled - 9 : doubled)
+        }
+        return sum > 0 && sum.isMultiple(of: 10)
+    }
+
+    private static func abaRoutingValid(_ digits: String) -> Bool {
+        let values = digits.compactMap(\.wholeNumberValue)
+        guard values.count == 9, values.contains(where: { $0 != 0 }) else { return false }
+        let checksum = 3 * (values[0] + values[3] + values[6])
+            + 7 * (values[1] + values[4] + values[7])
+            + values[2] + values[5] + values[8]
+        return checksum.isMultiple(of: 10)
+    }
+
+    private static func containsValidIBAN(_ statement: String) -> Bool {
+        for raw in regexMatches(#"(?i)(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){10,30}(?![A-Z0-9])"#, in: statement) {
+            let compact = raw.uppercased().filter { !$0.isWhitespace }
+            guard compact.count >= 15, compact.count <= 34 else { continue }
+            let rearranged = compact.dropFirst(4) + compact.prefix(4)
+            var remainder = 0
+            var valid = true
+            for scalar in rearranged.unicodeScalars {
+                let piece: String
+                if scalar.value >= 48, scalar.value <= 57 {
+                    piece = String(Character(scalar))
+                } else if scalar.value >= 65, scalar.value <= 90 {
+                    piece = String(scalar.value - 55)
+                } else {
+                    valid = false
+                    break
+                }
+                for digit in piece.compactMap(\.wholeNumberValue) {
+                    remainder = (remainder * 10 + digit) % 97
+                }
+            }
+            if valid, remainder == 1 { return true }
+        }
+        return false
+    }
+
+    private static func shannonEntropy(_ value: String) -> Double {
+        guard !value.isEmpty else { return 0 }
+        let counts = Dictionary(grouping: value, by: { $0 }).mapValues(\.count)
+        let length = Double(value.count)
+        return counts.values.reduce(0) { entropy, count in
+            let probability = Double(count) / length
+            return entropy - probability * log2(probability)
+        }
     }
 }
 
@@ -153,25 +296,35 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
 
     public init(databaseURL: URL) {
         self.dbURL = databaseURL
-        openOrCreate()
+        _ = openOrCreate()
     }
 
     deinit { if let handle { sqlite3_close(handle) } }
 
-    private func openOrCreate() {
+    @discardableResult
+    private func openOrCreate() -> Bool {
         lock.lock(); defer { lock.unlock() }
-        try? FileManager.default.createDirectory(at: dbURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if sqlite3_open(dbURL.path, &handle) != SQLITE_OK {
-            handle = nil
-            return
+        do {
+            try FileManager.default.createDirectory(
+                at: dbURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+        } catch {
+            return false
         }
-        chmod(dbURL.path, 0o600)
-        execute("PRAGMA journal_mode = WAL;")
-        execute("PRAGMA synchronous = NORMAL;")
-        execute("""
+        if sqlite3_open(dbURL.path, &handle) != SQLITE_OK {
+            if let handle { sqlite3_close(handle) }
+            handle = nil
+            return false
+        }
+        guard chmod(dbURL.path, 0o600) == 0,
+              execute("PRAGMA journal_mode = WAL;"),
+              execute("PRAGMA synchronous = NORMAL;"),
+              execute("PRAGMA secure_delete = ON;"),
+              execute("""
         CREATE TABLE IF NOT EXISTS memory_meta (key TEXT PRIMARY KEY, value TEXT);
-        """)
-        execute("""
+        """),
+              execute("""
         CREATE TABLE IF NOT EXISTS memories (
             id TEXT PRIMARY KEY,
             statement TEXT NOT NULL,
@@ -189,7 +342,17 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
             status TEXT NOT NULL,
             superseded_by_id TEXT
         );
-        """)
+        """),
+              // Repair databases created by the first implementation, which
+              // preserved remote egress on migrated/imported rows. A native
+              // per-record promotion creates a userConfirmed replacement, so
+              // imported provenance is always safe to downgrade here.
+              execute("UPDATE memories SET egress = 'localOnly' WHERE source_kind = 'imported' AND egress != 'localOnly';") else {
+            if let handle { sqlite3_close(handle) }
+            handle = nil
+            return false
+        }
+        return secureArtifactPermissions()
     }
 
     // MARK: - CRUD
@@ -200,7 +363,7 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
         guard !AttacheMemorySecretFilter.shouldReject(record.statement) else { return false }
         guard let handle else { return false }
         let sql = """
-        INSERT OR REPLACE INTO memories
+        INSERT INTO memories
         (id, statement, type, scope, scope_value, source_kind, source_locator, confidence,
          sensitivity, egress, created_at, updated_at, last_used_at, status, superseded_by_id)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
@@ -227,10 +390,38 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
         return records
     }
 
+    /// Record that a bounded selection actually entered a request snapshot.
+    /// This is diagnostics only and never affects authorization or relevance.
+    @discardableResult
+    public func markUsed(_ ids: [String], at date: Date = Date()) -> Bool {
+        let unique = Array(Set(ids))
+        guard !unique.isEmpty else { return true }
+        lock.lock(); defer { lock.unlock() }
+        guard let handle, beginTransaction() else { return false }
+        var shouldCommit = false
+        defer { if !shouldCommit { rollback() } }
+        let sql = "UPDATE memories SET last_used_at = ? WHERE id = ? AND status = 'active';"
+        for id in unique {
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else {
+                sqlite3_finalize(stmt)
+                return false
+            }
+            sqlite3_bind_double(stmt, 1, date.timeIntervalSince1970)
+            sqlite3_bind_text(stmt, 2, id, -1, memoryTransient)
+            let result = sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+            guard result == SQLITE_DONE else { return false }
+        }
+        guard commit(), secureArtifactPermissions() else { return false }
+        shouldCommit = true
+        return true
+    }
+
     /// List records visible to a personality, respecting scope and egress policy.
-    public func list(forPersonality personalityID: String?, egress: AttacheMemoryEgress? = nil) -> [AttacheMemoryRecord] {
+    public func list(forPersonality personalityID: String?, topic: String? = nil, egress: AttacheMemoryEgress? = nil) -> [AttacheMemoryRecord] {
         list(activeOnly: true).filter { record in
-            guard record.isVisible(to: personalityID) else { return false }
+            guard record.isVisible(to: personalityID, topic: topic) else { return false }
             if let egress, record.egress != egress { return false }
             return true
         }
@@ -241,28 +432,95 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
     @discardableResult
     public func supersede(oldID: String, with newRecord: AttacheMemoryRecord) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let handle else { return false }
-        beginTransaction()
-        execute("UPDATE memories SET status = 'superseded', superseded_by_id = '\(escape(newRecord.id))', updated_at = \(Date().timeIntervalSince1970) WHERE id = '\(escape(oldID))';")
+        guard handle != nil, oldID != newRecord.id,
+              !AttacheMemorySecretFilter.shouldReject(newRecord.statement),
+              beginTransaction() else { return false }
+        var shouldCommit = false
+        defer { if !shouldCommit { rollback() } }
+        guard scalarInt("SELECT COUNT(*) FROM memories WHERE id = '\(escape(oldID))' AND status = 'active';") == 1 else {
+            return false
+        }
         var updated = newRecord
         updated.supersededByID = nil
-        let added = add(updated)
-        commit()
-        return added
+        guard addInternal(updated) else { return false }
+        guard execute("UPDATE memories SET status = 'superseded', superseded_by_id = '\(escape(newRecord.id))', updated_at = \(Date().timeIntervalSince1970) WHERE id = '\(escape(oldID))' AND status = 'active';"),
+              sqlite3_changes(handle) == 1,
+              commit() else { return false }
+        shouldCommit = true
+        return true
     }
 
     /// Forget a record: mark it forgotten so it leaves active retrieval without
     /// destroying the audit trail.
-    public func forget(_ id: String) {
+    @discardableResult
+    public func forget(_ id: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        execute("UPDATE memories SET status = 'forgotten', updated_at = \(Date().timeIntervalSince1970) WHERE id = '\(escape(id))';")
+        guard execute("UPDATE memories SET status = 'forgotten', updated_at = \(Date().timeIntervalSince1970) WHERE id = '\(escape(id))' AND status = 'active';") else {
+            return false
+        }
+        return sqlite3_changes(handle) == 1
     }
 
-    /// Delete all records and reset the ledger.
-    public func deleteAll() {
+    /// Undo a forget without inserting a duplicate primary key. Only a
+    /// currently forgotten row can be restored, and the same secret boundary
+    /// still applies to defense against corrupt legacy rows.
+    @discardableResult
+    public func restore(_ id: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        execute("DELETE FROM memories;")
-        execute("DELETE FROM memory_meta WHERE key = 'migration_version';")
+        guard let record = list(activeOnly: false).first(where: { $0.id == id }),
+              record.status == .forgotten,
+              !AttacheMemorySecretFilter.shouldReject(record.statement) else { return false }
+        guard execute("UPDATE memories SET status = 'active', superseded_by_id = NULL, updated_at = \(Date().timeIntervalSince1970) WHERE id = '\(escape(id))' AND status = 'forgotten';") else {
+            return false
+        }
+        return sqlite3_changes(handle) == 1
+    }
+
+    /// Delete all records and reset the ledger. Success means the prior database
+    /// and every SQLite sidecar were physically removed, a fresh restrictive
+    /// database was created, the migration tombstone was persisted, and no
+    /// memory rows remain. Callers must retain their visible state on failure.
+    @discardableResult
+    public func deleteAll() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let handle,
+              sqlite3_wal_checkpoint_v2(
+                handle, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil
+              ) == SQLITE_OK,
+              sqlite3_close(handle) == SQLITE_OK else {
+            return false
+        }
+        self.handle = nil
+
+        let fm = FileManager.default
+        let artifacts = sqliteArtifactURLs
+        do {
+            for url in artifacts where fm.fileExists(atPath: url.path) {
+                try fm.removeItem(at: url)
+            }
+        } catch {
+            // Keep the ledger usable for a later retry when deletion was only
+            // partially possible. Never claim erasure from this path.
+            _ = openOrCreate()
+            return false
+        }
+        guard artifacts.allSatisfy({ !fm.fileExists(atPath: $0.path) }),
+              openOrCreate() else { return false }
+
+        // Delete All is also a migration tombstone. Without this marker the
+        // next launch would re-import the preserved legacy Markdown and
+        // resurrect data the user explicitly deleted.
+        guard execute("INSERT OR REPLACE INTO memory_meta (key, value) VALUES ('migration_version', '\(Self.currentMigrationVersion)');"),
+              scalarInt("SELECT COUNT(*) FROM memories;") == 0,
+              isMigrated,
+              secureArtifactPermissions() else { return false }
+        if let reopenedHandle = self.handle,
+           sqlite3_wal_checkpoint_v2(
+            reopenedHandle, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil
+           ) != SQLITE_OK {
+            return false
+        }
+        return scalarInt("SELECT COUNT(*) FROM memories;") == 0 && isMigrated
     }
 
     /// Export all records as JSON.
@@ -271,6 +529,60 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try? encoder.encode(records)
+    }
+
+    /// Import a user-selected JSON export. Imported records keep their type,
+    /// scope, sensitivity, and egress policy, but never retain an external ID,
+    /// source authority, status, or supersession link. Every accepted entry is
+    /// revalidated locally before one atomic transaction commits.
+    public func importRecords(from data: Data) -> AttacheMemoryImportResult? {
+        guard let decoded = try? JSONDecoder().decode([AttacheMemoryRecord].self, from: data),
+              decoded.count <= 10_000 else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        guard beginTransaction() else { return nil }
+        var imported = 0
+        var rejected = 0
+        var stagedStatements = list(activeOnly: true).map(\.statement)
+        for candidate in decoded {
+            let statement = candidate.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !statement.isEmpty,
+                  statement.count <= 10_000,
+                  !AttacheMemorySecretFilter.shouldReject(statement),
+                  !stagedStatements.contains(where: {
+                      AttacheMemorySelector.lexicalOverlap($0, statement) > 0.85
+                  }) else {
+                rejected += 1
+                continue
+            }
+            let record = AttacheMemoryRecord(
+                id: "imported.\(UUID().uuidString)",
+                statement: statement,
+                type: candidate.type,
+                scope: candidate.scope,
+                sourceKind: .imported,
+                sourceLocator: nil,
+                confidence: .authoritative,
+                sensitivity: candidate.sensitivity,
+                // Import is permission to add local records, not blanket
+                // permission for every imported statement to leave the Mac.
+                // Remote promotion remains a native per-record action.
+                egress: .localOnly,
+                createdAt: Date(),
+                updatedAt: Date(),
+                status: .active
+            )
+            guard addInternal(record) else {
+                rollback()
+                return nil
+            }
+            stagedStatements.append(statement)
+            imported += 1
+        }
+        guard commit() else {
+            rollback()
+            return nil
+        }
+        return AttacheMemoryImportResult(imported: imported, rejected: rejected)
     }
 
     // MARK: - Migration
@@ -286,27 +598,48 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
             return 0 // already migrated
         }
         let entries = AttachePersonality.parsedMemoryEntries(from: markdown)
-        guard !entries.isEmpty else {
-            execute("INSERT OR REPLACE INTO memory_meta (key, value) VALUES ('migration_version', '\(Self.currentMigrationVersion)');")
+        guard beginTransaction() else { return 0 }
+        var committed = false
+        defer { if !committed { rollback() } }
+        guard let initialCount = scalarInt("SELECT COUNT(*) FROM memories;") else {
             return 0
         }
-        beginTransaction()
         var created = 0
         for entry in entries {
+            // The legacy free-form file could contain material that the new
+            // structured-memory safety contract forbids. Preserve the file in
+            // the verified backup, but never promote a detected secret or
+            // private-reasoning fragment into the active ledger.
+            guard !AttacheMemorySecretFilter.shouldReject(entry) else { continue }
             let record = AttacheMemoryRecord(
-                id: "migrated.\(UUID().uuidString.prefix(8))",
+                id: "migrated.\(UUID().uuidString)",
                 statement: entry,
                 type: .preference,
                 scope: .global,
                 sourceKind: .imported,
                 confidence: .authoritative,
                 sensitivity: .low,
+                // Migration must not silently turn historical free-form text
+                // into remote-disclosure authority. Users may promote an
+                // individual record later through the native Memory UI.
                 egress: .localOnly
             )
-            if addInternal(record) { created += 1 }
+            guard addInternal(record) else { return 0 }
+            created += 1
         }
-        execute("INSERT OR REPLACE INTO memory_meta (key, value) VALUES ('migration_version', '\(Self.currentMigrationVersion)');")
-        commit()
+        guard scalarInt("SELECT COUNT(*) FROM memories;") == initialCount + created else {
+            return 0
+        }
+        let sourceHash = SHA256.hash(data: Data(markdown.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        guard execute("INSERT OR REPLACE INTO memory_meta (key, value) VALUES ('migration_source_hash', '\(sourceHash)');"),
+              execute("INSERT OR REPLACE INTO memory_meta (key, value) VALUES ('migration_record_count', '\(created)');"),
+              execute("INSERT OR REPLACE INTO memory_meta (key, value) VALUES ('migration_version', '\(Self.currentMigrationVersion)');"),
+              commit() else {
+            return 0
+        }
+        committed = true
         return created
     }
 
@@ -334,8 +667,32 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
 
     // MARK: - SQLite helpers
 
-    private func beginTransaction() { execute("BEGIN TRANSACTION;") }
-    private func commit() { execute("COMMIT;") }
+    private var sqliteArtifactURLs: [URL] {
+        [
+            dbURL,
+            URL(fileURLWithPath: dbURL.path + "-wal"),
+            URL(fileURLWithPath: dbURL.path + "-shm")
+        ]
+    }
+
+    /// SQLite creates WAL/SHM lazily. Every artifact that currently exists must
+    /// be private to the user before the ledger is considered usable or erased.
+    private func secureArtifactPermissions() -> Bool {
+        let fm = FileManager.default
+        for url in sqliteArtifactURLs where fm.fileExists(atPath: url.path) {
+            guard chmod(url.path, 0o600) == 0,
+                  let attributes = try? fm.attributesOfItem(atPath: url.path),
+                  let raw = (attributes[.posixPermissions] as? NSNumber)?.intValue,
+                  raw & 0o777 == 0o600 else {
+                return false
+            }
+        }
+        return true
+    }
+
+    @discardableResult private func beginTransaction() -> Bool { execute("BEGIN IMMEDIATE TRANSACTION;") }
+    @discardableResult private func commit() -> Bool { execute("COMMIT;") }
+    private func rollback() { _ = execute("ROLLBACK;") }
 
     @discardableResult
     private func execute(_ sql: String) -> Bool {
@@ -350,7 +707,7 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
         guard !AttacheMemorySecretFilter.shouldReject(record.statement) else { return false }
         guard let handle else { return false }
         let sql = """
-        INSERT OR REPLACE INTO memories
+        INSERT INTO memories
         (id, statement, type, scope, scope_value, source_kind, source_locator, confidence,
          sensitivity, egress, created_at, updated_at, last_used_at, status, superseded_by_id)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
@@ -375,7 +732,10 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
         else { sqlite3_bind_null(stmt, 7) }
         sqlite3_bind_text(stmt, 8, record.confidence.rawValue, -1, memoryTransient)
         sqlite3_bind_text(stmt, 9, record.sensitivity.rawValue, -1, memoryTransient)
-        sqlite3_bind_text(stmt, 10, record.egress.rawValue, -1, memoryTransient)
+        let storedEgress: AttacheMemoryEgress = record.sourceKind == .imported
+            ? .localOnly
+            : record.egress
+        sqlite3_bind_text(stmt, 10, storedEgress.rawValue, -1, memoryTransient)
         sqlite3_bind_double(stmt, 11, record.createdAt.timeIntervalSince1970)
         sqlite3_bind_double(stmt, 12, record.updatedAt.timeIntervalSince1970)
         if let lastUsed = record.lastUsedAt { sqlite3_bind_double(stmt, 13, lastUsed.timeIntervalSince1970) }

@@ -23,7 +23,6 @@ struct IntegrationsPane: View {
         Provider(id: "groq", name: "Groq", powers: "Model", hasKey: true, hasEndpoint: false, guide: .groq),
         Provider(id: "ollama", name: "Ollama", powers: "Model · local", hasKey: false, hasEndpoint: true, guide: .ollama),
         Provider(id: "custom", name: "OpenAI-compatible", powers: "Model", hasKey: true, hasEndpoint: true, guide: .openAICompatible),
-        Provider(id: "codex", name: "Codex CLI", powers: "Model · subscription", hasKey: false, hasEndpoint: false, guide: .codexCLI),
         Provider(id: "claude", name: "Claude Code", powers: "Model · subscription", hasKey: false, hasEndpoint: false, guide: .claudeCode),
         Provider(id: "ondevice", name: "On-device (Apple)", powers: "Voice", hasKey: false, hasEndpoint: false, guide: .onDeviceVoice)
     ]
@@ -93,7 +92,7 @@ struct IntegrationsPane: View {
                 set: { model.directAgentSendEnabled = $0 }
             ))
             .accessibilityLabel("Skip final send confirmation")
-            Text("After you enable send-to-agent for a session, explicit Tell Agent turns and personality handoffs from Ask Attaché send directly. The first-use enable prompt, frozen target, and safety filter still apply.")
+            Text("After you enable send-to-agent for a session, explicit Tell Agent turns can send directly. Ask Attaché handoffs always show the exact message and frozen target for confirmation because model tool calls can be influenced by session evidence.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

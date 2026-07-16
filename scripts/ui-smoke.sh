@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # UI smoke harness entry point (INF-156). Builds the app and the AX driver,
-# packages an unsigned test app, switches to fresh-user state, drives the five
+# packages an unsigned test app, switches to fresh-user state, drives the six
 # core flows headed, and restores the user's state afterward.
 #
 # Usage:
@@ -12,7 +12,7 @@ set -euo pipefail
 #
 # Opt-in release/network/load flows are intentionally excluded from the default
 # suite:
-#   scripts/release-readiness-smoke.sh       nine pre-release gates
+#   scripts/release-readiness-smoke.sh       eleven pre-release gates
 #   scripts/agent-destination-smoke.sh       explicit Tell Agent staging
 #   scripts/conversation-feedback-smoke.sh   live Ask Attaché send feedback
 #   scripts/conversation-recovery-smoke.sh   usage-limit model recovery
@@ -25,9 +25,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> Building driver and app"
-swift build >/dev/null
-SIGN_APP=0 scripts/package-app.sh >/dev/null
+if [[ "${ATTACHE_UI_SMOKE_SKIP_BUILD_PACKAGE:-0}" == "1" ]]; then
+  echo "==> Reusing prebuilt driver and packaged app"
+  [[ -x "$ROOT/.build/debug/AttacheUISmoke" ]] || {
+    echo "error: ATTACHE_UI_SMOKE_SKIP_BUILD_PACKAGE=1 but the driver is missing" >&2
+    exit 1
+  }
+  [[ -x "$ROOT/dist/Attache.app/Contents/MacOS/Attache" ]] || {
+    echo "error: ATTACHE_UI_SMOKE_SKIP_BUILD_PACKAGE=1 but the packaged app is missing" >&2
+    exit 1
+  }
+else
+  echo "==> Building driver and app"
+  swift build >/dev/null
+  SIGN_APP=0 scripts/package-app.sh >/dev/null
+fi
 
 DRIVER="$ROOT/.build/debug/AttacheUISmoke"
 if [[ ! -x "$DRIVER" ]]; then

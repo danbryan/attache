@@ -6,6 +6,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case appearance
     case voice
     case personalities
+    case context
     case integrations
     case memory
     case about
@@ -17,6 +18,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "Appearance"
         case .voice: return "Voice & Captions"
         case .personalities: return "Personalities"
+        case .context: return "Context"
         case .integrations: return "Integrations"
         case .memory: return "Memory"
         case .about: return "About"
@@ -28,6 +30,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "circle.lefthalf.filled"
         case .voice: return "speaker.wave.2.fill"
         case .personalities: return "theatermasks.fill"
+        case .context: return "rectangle.stack.badge.person.crop"
         case .integrations: return "puzzlepiece.extension.fill"
         case .memory: return "tray.full.fill"
         case .about: return "info.circle.fill"
@@ -78,8 +81,9 @@ struct SettingsView: View {
         case .appearance: appearancePane
         case .voice: VoicePane(model: model)
         case .personalities: PersonalitiesPane(model: model)
+        case .context: ContextSettingsPane(model: model, state: .shared)
         case .integrations: IntegrationsPane(model: model)
-        case .memory: memoryPane
+        case .memory: MemorySettingsPane(model: model, state: .shared)
         case .about: AboutPane()
         }
     }
@@ -198,16 +202,6 @@ struct SettingsView: View {
                 Text("Delivery follows macOS Focus profiles and Do Not Disturb.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var memoryPane: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            paneTitle("Memory")
-            Text("Durable tone, routing, and preference notes Attaché uses quietly. Kept separate from your personalities.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Button("Open Memory File") { model.openAttacheMemoryFile() }
         }
     }
 

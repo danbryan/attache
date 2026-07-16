@@ -67,4 +67,112 @@ final class PersonalityContextStrategyMigrationTests: XCTestCase {
                          "Built-in \(builtin.name) ships with the global default, not a frozen detected profile.")
         }
     }
+
+    func testInvalidLegacyCustomFallsBackToInheritanceWithVisibleNotice() throws {
+        let invalid = Personality(
+            id: "custom.invalid",
+            name: "Legacy custom",
+            prompt: "Speak plainly.",
+            contextStrategy: AttacheContextStrategy(
+                .custom,
+                custom: AttacheContextCustomPolicy(
+                    hardInputLimit: 1_000,
+                    effectiveInputLimit: 2_000,
+                    outputReserve: 700,
+                    toolReserve: 700,
+                    safetyMargin: 200
+                )
+            )
+        )
+
+        let restored = try JSONDecoder().decode(
+            Personality.self,
+            from: JSONEncoder().encode(invalid)
+        )
+
+        XCTAssertNil(restored.contextStrategy, "Unsafe legacy values must never be applied.")
+        XCTAssertNotNil(restored.contextStrategyMigrationNotice)
+        XCTAssertTrue(restored.contextStrategyMigrationNotice?.contains("incomplete Custom") == true)
+    }
+
+    func testDuplicatePreservesInheritanceAndEveryStrategyPreset() {
+        let custom = AttacheContextStrategy(
+            .custom,
+            custom: AttacheContextCustomPolicy(
+                hardInputLimit: 64_000,
+                effectiveInputLimit: 48_000,
+                outputReserve: 4_096,
+                toolReserve: 4_096,
+                safetyMargin: 1_024
+            )
+        )
+        let strategies: [AttacheContextStrategy?] = [
+            nil,
+            .automatic,
+            .maximumCoverage,
+            .efficient,
+            custom
+        ]
+
+        for (index, strategy) in strategies.enumerated() {
+            let source = Personality(
+                id: "source.\(index)",
+                name: "Source",
+                prompt: "p",
+                voiceRef: .systemVoice(Personality.defaultPreferredVoiceID),
+                character: .cowboy,
+                visualMode: .character,
+                modelRef: PersonalityModelRef(
+                    provider: .ollama,
+                    model: "qwen3",
+                    reasoningEffort: "high",
+                    fallbackProviders: [.groq]
+                ),
+                playbackSpeed: 1.2,
+                accentColorHex: "#FFAA00",
+                contextStrategy: strategy
+            )
+
+            let copy = source.duplicated(withID: "copy.\(index)")
+
+            XCTAssertEqual(copy.contextStrategy, strategy)
+            XCTAssertEqual(copy.voiceRef, source.voiceRef)
+            XCTAssertEqual(copy.modelRef, source.modelRef)
+            XCTAssertEqual(copy.playbackSpeed, source.playbackSpeed)
+            XCTAssertFalse(copy.isBuiltIn)
+        }
+    }
+
+    func testPersonalityImportExportRoundTripsNilNamedAndCustomStrategies() throws {
+        let strategies: [AttacheContextStrategy?] = [
+            nil,
+            .automatic,
+            .maximumCoverage,
+            .efficient,
+            AttacheContextStrategy(
+                .custom,
+                custom: AttacheContextCustomPolicy(
+                    hardInputLimit: 32_000,
+                    effectiveInputLimit: 24_000,
+                    outputReserve: 2_048,
+                    toolReserve: 2_048,
+                    safetyMargin: 512
+                )
+            )
+        ]
+
+        for (index, strategy) in strategies.enumerated() {
+            let exported = Personality(
+                id: "export.\(index)",
+                name: "Export",
+                prompt: "p",
+                contextStrategy: strategy
+            )
+            let imported = try JSONDecoder().decode(
+                Personality.self,
+                from: JSONEncoder().encode(exported)
+            )
+            XCTAssertEqual(imported.contextStrategy, strategy)
+        }
+    }
 }

@@ -50,6 +50,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if model.showInMenuBar { setupStatusItem() }
         setupWindow()
         bindModel()
+        // The production memory runtime publishes its initial snapshot from a
+        // main-actor task. Install deterministic AX fixtures on the following
+        // turn so that startup publication cannot erase the smoke state.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            AttacheContextSmokeFixtures.installIfRequested(model: self.model)
+        }
         updateDockBadge()
         requestNotificationPermissionIfUseful()
         model.startEventServer()

@@ -275,7 +275,7 @@ final class AttachePersonalityTests: XCTestCase {
         XCTAssertTrue(prompt.contains("MUST call stage_agent_instruction"))
         XCTAssertTrue(prompt.contains("Do not substitute read_session_transcript"))
         XCTAssertTrue(prompt.contains("If the user names a different agent than the focused one"))
-        XCTAssertTrue(prompt.contains("may confirm or may send directly"))
+        XCTAssertTrue(prompt.contains("always opens a native confirmation"))
         XCTAssertTrue(prompt.contains("Never claim a send unless Attaché reports it"))
         XCTAssertTrue(prompt.contains("always set stage_agent_instruction's intended_agent argument"))
         XCTAssertTrue(prompt.contains("Never guess or omit intended_agent when a name was given"))

@@ -14,8 +14,8 @@ public struct SessionFTSChunk: Equatable, Sendable {
     public let title: String
     public let workingDirectory: String?
     public let chunkOrdinal: Int
-    /// Byte offset of this chunk within the indexed (normalized) content, so a
-    /// hit can be re-read and validated against the raw transcript.
+    /// Byte offset of the authoritative JSONL source line that produced this
+    /// chunk, so a hit can be re-read and validated against the raw transcript.
     public let byteOffset: Int
     public let length: Int
     public let normalizedText: String
@@ -158,31 +158,42 @@ public enum SessionFTSPrivacy {
     /// may encode secrets) rather than readable transcript text.
     static func looksLikeOpaqueBlob(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 120 else { return false }
-        let letters = trimmed.filter { $0.isLetter }
-        let nonAlphanumeric = trimmed.filter { !$0.isLetter && !$0.isNumber }.count
+        let bytes = trimmed.utf8
+        guard bytes.count >= 120 else { return false }
+        var letters = 0
+        var nonAlphanumeric = 0
+        for byte in bytes {
+            switch byte {
+            case 65...90, 97...122:
+                letters += 1
+            case 48...57:
+                break
+            default:
+                nonAlphanumeric += 1
+                if nonAlphanumeric > 2 { return false }
+            }
+        }
         // Long runs of base64/hex with almost no spaces or punctuation.
-        return nonAlphanumeric <= 2 && letters.count >= trimmed.count * 9 / 10
+        return letters >= bytes.count * 9 / 10
     }
 
     /// Returns the searchable text with private/secret lines removed. The raw
     /// transcript is unaffected; this only governs what the index stores.
     public static func normalizedSearchableText(_ content: String) -> String {
-        let lower = content.lowercased()
-        return lower
-            .components(separatedBy: .newlines)
-            .filter { line -> Bool in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return false }
-                if secretLinePatterns.contains(where: { trimmed.contains($0) }) { return false }
-                if looksLikeOpaqueBlob(trimmed) { return false }
-                if let eq = trimmed.firstIndex(of: "=") {
-                    let key = String(trimmed[..<eq]).lowercased()
-                    if secretEnvPattern.contains(where: { key.contains($0) }) { return false }
-                }
-                return true
+        var kept: [String] = []
+        content.enumerateLines { line, _ in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            let lower = trimmed.lowercased()
+            if secretLinePatterns.contains(where: { lower.contains($0) }) { return }
+            if looksLikeOpaqueBlob(lower) { return }
+            if let eq = lower.firstIndex(of: "=") {
+                let key = lower[..<eq]
+                if secretEnvPattern.contains(where: { key.contains($0) }) { return }
             }
-            .joined(separator: "\n")
+            kept.append(lower)
+        }
+        return kept.joined(separator: "\n")
     }
 }
 
@@ -191,8 +202,14 @@ public enum SessionFTSPrivacy {
 /// lookup. Indexing never grants authorization, and a search hit is discovery
 /// metadata, not a focused session.
 public final class SessionFTSIndex: @unchecked Sendable {
-    public static let currentSchemaVersion = 1
+    // Version 2 replaces normalized-digest offsets and prefix-only content with
+    // raw JSONL line locators over the complete streamed transcript.
+    public static let currentSchemaVersion = 2
     private static let maxChunkCharacters = 2_000
+    /// Discovery is a bounded index, not an eager copy of arbitrary giant
+    /// transcript payloads. Exact focused reads still use the reader's 64 MiB
+    /// per-record ceiling on demand.
+    static let maxIndexableJSONLLineBytes = 2 * 1_024 * 1_024
 
     private let dbURL: URL
     private var handle: OpaquePointer?
@@ -222,19 +239,20 @@ public final class SessionFTSIndex: @unchecked Sendable {
     /// the index non-functional but the app keeps running.
     private func openHandle(recovering: Bool) {
         let path = dbURL.path
+        preparePrivateDatabaseFile()
         if sqlite3_open(path, &handle) != SQLITE_OK {
-            handle = nil
+            closeHandle()
             if recovering {
-                // A file SQLite cannot open is corrupt; drop it and try once more.
-                try? FileManager.default.removeItem(at: dbURL)
+                // A file SQLite cannot open is corrupt; drop the complete WAL
+                // artifact family and try once more.
+                removeDatabaseArtifacts()
                 failureCount = 0
+                preparePrivateDatabaseFile()
                 if sqlite3_open(path, &handle) == SQLITE_OK {
-                    chmod(path, 0o600)
-                    execute("PRAGMA journal_mode = WAL;")
-                    execute("PRAGMA synchronous = NORMAL;")
+                    configureOpenHandle()
                     createSchemaIfMissing()
                 } else {
-                    handle = nil
+                    closeHandle()
                     failureCount += 1
                 }
             } else {
@@ -242,9 +260,7 @@ public final class SessionFTSIndex: @unchecked Sendable {
             }
             return
         }
-        chmod(path, 0o600)
-        execute("PRAGMA journal_mode = WAL;")
-        execute("PRAGMA synchronous = NORMAL;")
+        configureOpenHandle()
         // An explicit rebuild request wins over every other branch.
         if scalarInt("SELECT value FROM fts_meta WHERE key = 'needs_rebuild';") != nil {
             recoverAndRebuild()
@@ -306,22 +322,68 @@ public final class SessionFTSIndex: @unchecked Sendable {
         """)
         let version = String(SessionFTSIndex.currentSchemaVersion)
         execute("INSERT OR REPLACE INTO fts_meta (key, value) VALUES ('schema_version', '\(version)');")
+        enforcePrivateArtifactPermissions()
     }
 
     private func recoverAndRebuild() {
-        if let handle { sqlite3_close(handle) }
-        handle = nil
-        try? FileManager.default.removeItem(at: dbURL)
+        closeHandle()
+        removeDatabaseArtifacts()
         failureCount = 0
+        preparePrivateDatabaseFile()
         if sqlite3_open(dbURL.path, &handle) != SQLITE_OK {
-            handle = nil
+            closeHandle()
             failureCount += 1
             return
         }
-        chmod(dbURL.path, 0o600)
+        configureOpenHandle()
+        createSchemaIfMissing()
+    }
+
+    private var databaseArtifactURLs: [URL] {
+        [
+            dbURL,
+            URL(fileURLWithPath: dbURL.path + "-wal"),
+            URL(fileURLWithPath: dbURL.path + "-shm")
+        ]
+    }
+
+    /// Precreate the main DB with private permissions so there is no interval
+    /// where SQLite's default creation mode can expose a transcript index.
+    private func preparePrivateDatabaseFile() {
+        if !FileManager.default.fileExists(atPath: dbURL.path) {
+            _ = FileManager.default.createFile(
+                atPath: dbURL.path,
+                contents: nil,
+                attributes: [.posixPermissions: NSNumber(value: 0o600)]
+            )
+        }
+        enforcePrivateArtifactPermissions()
+    }
+
+    private func configureOpenHandle() {
+        enforcePrivateArtifactPermissions()
+        execute("PRAGMA secure_delete = ON;")
         execute("PRAGMA journal_mode = WAL;")
         execute("PRAGMA synchronous = NORMAL;")
-        createSchemaIfMissing()
+        enforcePrivateArtifactPermissions()
+    }
+
+    private func enforcePrivateArtifactPermissions() {
+        for artifact in databaseArtifactURLs
+            where FileManager.default.fileExists(atPath: artifact.path) {
+            chmod(artifact.path, 0o600)
+        }
+    }
+
+    private func removeDatabaseArtifacts() {
+        for artifact in databaseArtifactURLs {
+            try? FileManager.default.removeItem(at: artifact)
+        }
+    }
+
+    private func closeHandle() {
+        if let handle { sqlite3_close(handle) }
+        handle = nil
     }
 
     /// Mark the index for a full rebuild on the next open. Used when a caller
@@ -329,6 +391,7 @@ public final class SessionFTSIndex: @unchecked Sendable {
     public func markForRebuild() {
         lock.lock(); defer { lock.unlock() }
         execute("INSERT OR REPLACE INTO fts_meta (key, value) VALUES ('needs_rebuild', '1');")
+        enforcePrivateArtifactPermissions()
     }
 
     // MARK: - Indexing
@@ -358,16 +421,23 @@ public final class SessionFTSIndex: @unchecked Sendable {
         // Remove prior chunks for this session before inserting the new set.
         deleteChunks(forSessionID: record.id)
         execute("DELETE FROM session_state WHERE session_id = '\(escapeSQL(record.id))';")
-        let chunks = SessionFTSIndex.chunk(record: record)
-        for chunk in chunks {
-            insertChunk(chunk)
+        let chunkCount: Int
+        if let streamedCount = SessionFTSIndex.enumerateProductionChunks(
+            record: record,
+            handle: { [unowned self] chunk in insertChunk(chunk) }
+        ) {
+            chunkCount = streamedCount
+        } else {
+            let fallback = SessionFTSIndex.chunk(record: record)
+            fallback.forEach(insertChunk)
+            chunkCount = fallback.count
         }
         let now = Date().timeIntervalSince1970
         execute("""
         INSERT OR REPLACE INTO session_state
         (session_id, source_kind, file_path, file_mtime, file_size, chunk_count, indexed_version, last_indexed_at)
         VALUES ('\(escapeSQL(record.id))', '\(escapeSQL(record.sourceKind.rawValue))', '\(escapeSQL(record.filePath))',
-                \(record.fileMtime), \(fileSize), \(chunks.count), \(SessionFTSIndex.currentSchemaVersion), \(now));
+                \(record.fileMtime), \(fileSize), \(chunkCount), \(SessionFTSIndex.currentSchemaVersion), \(now));
         """)
     }
 
@@ -377,6 +447,7 @@ public final class SessionFTSIndex: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         deleteChunks(forSessionID: sessionID)
         execute("DELETE FROM session_state WHERE session_id = '\(escapeSQL(sessionID))';")
+        enforcePrivateArtifactPermissions()
     }
 
     /// Parameterized delete of every chunk belonging to one session. FTS5 MATCH
@@ -398,8 +469,15 @@ public final class SessionFTSIndex: @unchecked Sendable {
     /// Drop every chunk and all bookkeeping (used by the local-data reset path).
     public func wipe() {
         lock.lock(); defer { lock.unlock() }
+        beginTransaction()
         execute("DELETE FROM session_chunks;")
         execute("DELETE FROM session_state;")
+        commit()
+        // Flush overwritten pages into the private main DB, then remove any
+        // residual transcript bytes from the WAL rather than leaving them for
+        // a future automatic checkpoint.
+        execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        enforcePrivateArtifactPermissions()
     }
 
     private func insertChunk(_ chunk: SessionFTSChunk) {
@@ -463,6 +541,104 @@ public final class SessionFTSIndex: @unchecked Sendable {
         }
         flush()
         return chunks
+    }
+
+    /// Production indexing streams the complete transcript and indexes only
+    /// parsed user/assistant text. This avoids both the legacy 8,000-character
+    /// SessionRecord digest cap and a whole-file allocation for very long logs.
+    /// Every stored locator points to the original JSONL line, not normalized
+    /// text. A single giant turn is split into bounded FTS rows while retaining
+    /// the same source locator.
+    /// Stream production chunks to the caller instead of retaining a whole
+    /// session's normalized FTS corpus in memory. `nil` means the source could
+    /// not be opened and the caller should use the bounded record digest.
+    private static func enumerateProductionChunks(
+        record: SessionRecord,
+        handle: (SessionFTSChunk) -> Void
+    ) -> Int? {
+        let sourceURL = URL(fileURLWithPath: record.filePath)
+        var chunkCount = 0
+        var parsedTurnCount = 0
+        let opened = AttacheSessionReader.streamLocatedTurns(
+            fromFileURL: sourceURL,
+            maxLineBytes: maxIndexableJSONLLineBytes
+        ) {
+            _, turn, rawByteOffset, rawByteLength in
+            parsedTurnCount += 1
+            let searchable = SessionFTSPrivacy.normalizedSearchableText(turn.text)
+            var remainder = searchable[...]
+            while !remainder.isEmpty {
+                let end = remainder.index(
+                    remainder.startIndex,
+                    offsetBy: maxChunkCharacters,
+                    limitedBy: remainder.endIndex
+                ) ?? remainder.endIndex
+                let fragment = String(remainder[..<end])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !fragment.isEmpty {
+                    handle(SessionFTSChunk(
+                        sessionID: record.id,
+                        sourceKind: record.sourceKind.rawValue,
+                        title: record.title,
+                        workingDirectory: record.project,
+                        chunkOrdinal: chunkCount,
+                        byteOffset: rawByteOffset,
+                        length: rawByteLength,
+                        normalizedText: fragment,
+                        timestamp: record.updatedAt,
+                        indexingVersion: currentSchemaVersion
+                    ))
+                    chunkCount += 1
+                }
+                remainder = remainder[end...]
+            }
+            return true
+        }
+        guard opened else { return nil }
+        if parsedTurnCount == 0, isReadablePlainTextSource(sourceURL) {
+            // Some scanners supply a readable plain-text digest rather than a
+            // Codex/Claude JSONL transcript. Opening the file successfully is
+            // not evidence that streaming parsed any turns, so preserve that
+            // searchable digest fallback instead of indexing metadata alone.
+            let fallback = chunk(record: record)
+            fallback.forEach(handle)
+            return fallback.count
+        }
+        if chunkCount == 0 {
+            // Keep metadata/title discovery available even for an empty or
+            // entirely privacy-filtered transcript without indexing its raw
+            // content.
+            handle(SessionFTSChunk(
+                sessionID: record.id,
+                sourceKind: record.sourceKind.rawValue,
+                title: record.title,
+                workingDirectory: record.project,
+                chunkOrdinal: 0,
+                byteOffset: 0,
+                length: 0,
+                normalizedText: "",
+                timestamp: record.updatedAt,
+                indexingVersion: currentSchemaVersion
+            ))
+            chunkCount = 1
+        }
+        return chunkCount
+    }
+
+    private static func isReadablePlainTextSource(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 4_096),
+              !data.isEmpty,
+              let prefix = String(data: data, encoding: .utf8) else {
+            return false
+        }
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        // A zero-turn JSONL log may contain tool/reasoning records that are
+        // intentionally ineligible for indexing. Do not reintroduce those via
+        // the digest fallback merely because no user/assistant turn parsed.
+        return !trimmed.hasPrefix("{") && !trimmed.hasPrefix("[")
     }
 
     // MARK: - Query
@@ -561,8 +737,15 @@ public final class SessionFTSIndex: @unchecked Sendable {
         return (mtime, size)
     }
 
-    private func beginTransaction() { execute("BEGIN TRANSACTION;") }
-    private func commit() { execute("COMMIT;") }
+    private func beginTransaction() {
+        execute("BEGIN TRANSACTION;")
+        enforcePrivateArtifactPermissions()
+    }
+
+    private func commit() {
+        execute("COMMIT;")
+        enforcePrivateArtifactPermissions()
+    }
 
     @discardableResult
     private func execute(_ sql: String) -> Bool {

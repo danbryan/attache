@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import AttacheCore
 import Foundation
+import UniformTypeIdentifiers
 
 struct HomeNotice: Equatable, Identifiable {
     enum Kind { case voicemail, mode, info }
@@ -16,6 +17,24 @@ struct ConversationTurn: Identifiable, Equatable {
     let role: Role
     let text: String
     let createdAt: Date
+    /// Assistant output derived from local-only evidence remains local-only.
+    /// User-authored turns default to allowedRemote because sending a later
+    /// turn is the user's explicit disclosure, not an inferred declassification.
+    let egress: AttacheContextItemEgress
+
+    init(
+        id: String,
+        role: Role,
+        text: String,
+        createdAt: Date,
+        egress: AttacheContextItemEgress = .allowedRemote
+    ) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.createdAt = createdAt
+        self.egress = egress
+    }
 }
 
 enum ConversationDestination: String, CaseIterable, Identifiable {
@@ -46,6 +65,11 @@ struct AgentSendTarget: Equatable {
 struct ConversationTargetSnapshot: Equatable {
     let target: CodexSessionTarget
     let workingDirectory: String?
+    /// The app-owned session authorization captured at the moment the call
+    /// starts. It is nil when the catalog target has no current indexed log,
+    /// so an attachment can still receive explicit agent sends without
+    /// accidentally gaining transcript/file-read authority.
+    let focusedSession: AttacheFocusedSession?
 
     var agentSendTarget: AgentSendTarget {
         AgentSendTarget(
@@ -55,6 +79,34 @@ struct ConversationTargetSnapshot: Equatable {
             workingDirectory: workingDirectory
         )
     }
+}
+
+/// Immutable authority for one live-call request. Tool proposals may be
+/// decoded off the main actor, but every effect revalidates this exact pair on
+/// the main actor immediately before claiming or mutating state.
+struct ConversationRequestAuthorization: Equatable, Sendable {
+    let callID: UUID
+    let requestID: UUID
+}
+
+/// App-owned state for a model-requested session search. Rows and the opaque
+/// selection token are visible only to the native picker; the model receives
+/// the content-free `result` value.
+struct ModelSessionDiscoveryPickerState {
+    let token: UUID
+    let query: String
+    let orderedResults: [SessionSearchHit]
+}
+
+/// One explicit whole-session review frozen to a live call, session epoch,
+/// personality, model, strategy, and source version. Replacing the preview
+/// replaces this value atomically; late progress from the prior ID is ignored.
+private struct ActiveExhaustiveReviewContext {
+    let callID: UUID
+    let preparedID: String
+    let runtime: AttacheExhaustiveReviewRuntime
+    let source: SessionContextRuntime.FrozenReviewSource
+    let baseSnapshot: AttacheRequestSnapshot
 }
 
 private struct PendingAgentSend {
@@ -74,6 +126,20 @@ private struct AgentInstructionToolArguments: Decodable {
     private enum CodingKeys: String, CodingKey {
         case instruction
         case intendedAgent = "intended_agent"
+    }
+}
+
+private struct MemoryProposalToolArguments: Decodable {
+    let statement: String
+    let type: String
+    let scope: String
+    let scopeValue: String?
+    let sensitivity: String
+    let egress: String
+
+    private enum CodingKeys: String, CodingKey {
+        case statement, type, scope, sensitivity, egress
+        case scopeValue = "scope_value"
     }
 }
 
@@ -146,10 +212,12 @@ final class AppModel: ObservableObject {
     @Published var followUpText: String = ""
     @Published var followUpStatus: String = "Ask Attaché about this update."
     @Published var followUpAnswerText: String = ""
+    @Published private(set) var followUpReceiptResponseID: String?
     @Published private(set) var isGeneratingFollowUpAnswer: Bool = false
     @Published var liveFollowUpText: String = ""
     @Published var liveFollowUpStatus: String = "Ask Attaché about the current session."
     @Published var liveFollowUpAnswerText: String = ""
+    @Published private(set) var liveFollowUpReceiptResponseID: String?
     @Published private(set) var isGeneratingLiveFollowUpAnswer: Bool = false
     @Published var conversationActive: Bool = false
     @Published private(set) var conversationMessages: [ConversationTurn] = []
@@ -167,6 +235,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var conversationRecoveryConfirmation: String?
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
+    private var pendingAssistantInference: AttacheInferenceMetadata?
+    private var pendingAssistantReplyEgress: AttacheContextItemEgress = .allowedRemote
     /// The live-call phase, derived from `isConversing`, playback state,
     /// mic state, `conversationRecovery`, and the two-way send log by the
     /// pure `CallPhase.derive(from:)` reducer (see `refreshCallPhase()`).
@@ -221,6 +291,10 @@ final class AppModel: ObservableObject {
     }
     private var conversationFallbackState = ConversationFallbackState()
     private var conversationFallbackRetryTimer: Timer?
+    /// One ledger per user turn, retained across every model tool round and an
+    /// automatic provider fallback. A fresh explicit retry creates a new turn
+    /// and therefore a new ledger (INF-337).
+    private(set) var conversationTurnEffectLedger: ConversationTurnEffectLedger?
     /// Every fallback hop this launch, for a future diagnostics snapshot
     /// (`DiagnosticSnapshot.conversationFallbackCount`); mirrors
     /// `taggingFailureCount`'s in-memory-only counter above (spec item 6).
@@ -597,7 +671,7 @@ final class AppModel: ObservableObject {
             refreshPresentationStatus()
         }
     }
-    @Published private(set) var presentationModelOptions: [AttachePresentationModelOption] = []
+    @Published var presentationModelOptions: [AttachePresentationModelOption] = []
     @Published private(set) var presentationModelDiscoveryStatus: String = "Model discovery not checked"
     @Published private(set) var presentationStatus: String = "Presentation LLM not checked"
     // MARK: Per-role model overrides (Settings > Model > Advanced disclosure, INF-253/D3)
@@ -718,6 +792,11 @@ final class AppModel: ObservableObject {
     /// invalidates the identity immediately, so a late HTTP or CLI completion
     /// can never speak after the call has ended or leak into the next call.
     private var conversationRequestTimeoutTimer: Timer?
+    /// Owned task for the current multi-round personality request. Hang-up and
+    /// the hard request deadline cancel it, which stops any later corrective,
+    /// tool-result, or final-answer egress instead of merely hiding its result.
+    private var conversationRequestTask: Task<Void, Never>?
+    private var conversationCompiledInference: (requestID: UUID, inference: AttacheInferenceMetadata)?
     private var activeConversationRequestID: UUID?
     private var activeConversationID: UUID?
     private static let conversationRequestTimeoutSeconds: TimeInterval = 90
@@ -804,13 +883,22 @@ final class AppModel: ObservableObject {
         ProcessInfo.processInfo.environment["ATTACHE_ACTIVITY_SIMULATOR"] == "cycle"
     }
     private static let sessionIndexURL = AttacheAppSupport.supportDirectory().appendingPathComponent("SessionIndex.json")
-    private var sessionIndexer = SessionIndexer(cacheURL: AppModel.sessionIndexURL, scanners: [])
+    // AppModel is frequently constructed with CardStore.inMemory() in unit
+    // tests. Do not even read the user's persisted session cache before init
+    // has learned which store it received. Production replaces this inert
+    // indexer in rebuildSessionIndexer().
+    private var sessionIndexer = SessionIndexer(
+        cacheURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-unconfigured-session-index-\(UUID().uuidString).json"),
+        scanners: []
+    )
     private let sessionIndexQueue = DispatchQueue(label: "com.bryanlabs.attache.sessionindex")
     @Published private(set) var sessionRecords: [SessionRecord] = []
     @Published private(set) var sessionIndexRevision = 0   // bumps on any record change, incl. new tags
     @Published private(set) var isIndexingSessions = false
     @Published private(set) var isTaggingSessions = false
     @Published private(set) var sessionRenames: [String: String] = [:]
+    @Published private(set) var modelSessionDiscoveryPicker: ModelSessionDiscoveryPickerState?
     @Published private(set) var codexSourceEnabled = false
     @Published private(set) var claudeCodeSourceEnabled = false
     private lazy var curatedProjectPaths: [String] = Self.loadCuratedProjectPaths()
@@ -846,6 +934,18 @@ final class AppModel: ObservableObject {
     private let presentationEnvironment: [String: String]
     private let presentationService: AttachePresentationService
     private let attacheMemoryStore: AttacheMemoryStore
+    private var memoryRuntime: AttacheMemoryRuntime!
+    private var directChatRuntime: AttacheDirectChatRuntime!
+    private var sessionContextRuntime: SessionContextRuntime!
+    private var activeExhaustiveReview: ActiveExhaustiveReviewContext?
+    private var exhaustiveReviewTask: Task<Void, Never>?
+    private var exhaustiveReviewExecutionID: UUID?
+    private var exhaustiveReviewProviderExecutionID: UUID?
+    private var exhaustiveReviewRefreshTask: Task<Void, Never>?
+    private var exhaustiveReviewRefreshID: UUID?
+    /// One cumulative evidence reserve per explicit user turn. Automatic
+    /// provider fallback reuses it; a new user turn or hang-up replaces it.
+    private var conversationSessionToolRuntime: SessionContextToolRuntime?
     private var codexSessionRefreshTimer: Timer?
     private var followUpAnswerRequestID: UUID?
     private var liveFollowUpAnswerRequestID: UUID?
@@ -895,11 +995,47 @@ final class AppModel: ObservableObject {
                     intakeStatus = "Saved history is unavailable; running in memory for this session."
                 }
             }
+            let memoryDatabaseURL: URL
+            if self.store.isInMemory {
+                memoryDatabaseURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("attache-memory-\(UUID().uuidString).sqlite")
+            } else {
+                memoryDatabaseURL = URL(fileURLWithPath: self.store.databasePath)
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("AttacheMemory.sqlite")
+            }
+            memoryRuntime = AttacheMemoryRuntime(
+                databaseURL: memoryDatabaseURL,
+                legacySnapshot: attacheMemoryStore.loadSnapshot(),
+                defaults: defaults
+            )
+            let directChatDatabaseURL: URL
+            if self.store.isInMemory {
+                directChatDatabaseURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("attache-direct-chat-\(UUID().uuidString).sqlite")
+            } else {
+                directChatDatabaseURL = URL(fileURLWithPath: self.store.databasePath)
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("DirectChatSummaries.sqlite")
+            }
+            directChatRuntime = AttacheDirectChatRuntime(databaseURL: directChatDatabaseURL)
+            let sessionContextDatabaseURL: URL
+            if self.store.isInMemory {
+                sessionContextDatabaseURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("attache-session-context-\(UUID().uuidString).sqlite")
+            } else {
+                sessionContextDatabaseURL = URL(fileURLWithPath: self.store.databasePath)
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("SessionFTS.sqlite")
+            }
+            sessionContextRuntime = SessionContextRuntime(databaseURL: sessionContextDatabaseURL)
             loadPreferences()
             refreshMicrophoneDevices()
             loadPersonalities()
             refreshPresentationStatus()
-            refreshCodexSessions(updateStatus: false)
+            if !self.store.isInMemory {
+                refreshCodexSessions(updateStatus: false)
+            }
             resetLiveFollowUpAnswerStatus()
             _ = try? self.store.pruneArchivedCards()   // bound growth on launch (INF-170)
             reloadCards()
@@ -914,6 +1050,11 @@ final class AppModel: ObservableObject {
         )
         if let recoveryMessage = twoWay.startupRecoveryMessage {
             intakeStatus = recoveryMessage
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.memoryRuntime.bind(to: .shared)
+            self.bindExhaustiveReviewUI(to: .shared)
         }
         twoWay.onEventDrivenPump = { [weak self] changed in
             self?.handleTwoWayDeliveryChanges(changed)
@@ -950,9 +1091,11 @@ final class AppModel: ObservableObject {
         // micTranscript.$isListening so the pose still reaches the first
         // callPhase refresh.
         micTranscript.applyForcedListeningPoseIfRequested(environment: environment)
-        rebuildSessionIndexer()
-        sessionRecords = filteredEnabledRecords(sessionIndexer.allRecords)
-        refreshSessionIndex()
+        if !self.store.isInMemory {
+            rebuildSessionIndexer()
+            sessionRecords = filteredEnabledRecords(sessionIndexer.allRecords)
+            refreshSessionIndex()
+        }
         codexSessionWatcher.onEvent = { [weak self] event in
             DispatchQueue.main.async {
                 self?.receive(event)
@@ -1006,8 +1149,10 @@ final class AppModel: ObservableObject {
             }
         }
         applyMicConfiguration()
-        updateCodexWatcher()
-        startCodexSessionRefreshTimer()
+        if !self.store.isInMemory {
+            updateCodexWatcher()
+            startCodexSessionRefreshTimer()
+        }
     }
 
     deinit {
@@ -1149,9 +1294,16 @@ final class AppModel: ObservableObject {
 
     private func captureConversationTargetSnapshot() -> ConversationTargetSnapshot? {
         guard let focused = attachedCodexSession else { return nil }
+        synchronizeSessionContextFocus()
+        let authority = sessionContextRuntime.authoritySnapshot().session
+        let authorized = authority?.sessionID == focused.id
+            && authority?.sourceKind == focused.sourceKind.rawValue
+            ? authority
+            : nil
         return ConversationTargetSnapshot(
             target: focused,
-            workingDirectory: workingDirectory(for: focused.id)
+            workingDirectory: workingDirectory(for: focused.id),
+            focusedSession: authorized
         )
     }
 
@@ -1176,30 +1328,172 @@ final class AppModel: ObservableObject {
     /// legacy file store is a migration input, not a runtime authority, so the
     /// selected personality's prompt wins; only an explicit environment override
     /// beats it.
-    func captureRequestSnapshot(role: AttacheRequestRole, userInput: String) -> AttacheRequestSnapshot {
-        let personality = activePersonality ?? Personality.builtIns[0]
-        let target = conversationTargetSnapshot
-        let session: AttacheSessionAuthorization
-        if let target {
-            session = .focused(AttacheFocusedSession(
-                sessionID: target.target.id,
-                sourceKind: target.target.sourceKind.rawValue,
-                displayTitle: target.target.displayTitle,
-                workingDirectory: target.workingDirectory
-            ))
-        } else {
-            session = .contextFree
-        }
-        let memoryContext = attacheMemoryStore.loadSnapshot().context
+    func captureRequestSnapshot(
+        role: AttacheRequestRole,
+        userInput: String,
+        personalityOverride: Personality? = nil,
+        settingsOverride: AttachePresentationSettings? = nil
+    ) -> AttacheRequestSnapshot {
+        let personality = personalityOverride ?? activePersonality ?? Personality.builtIns[0]
+        let session = requestSessionAuthorization(for: role)
         let profilePrompt = resolvedProfilePrompt(for: personality)
+        let contextStrategy = AttacheContextStrategy.resolving(
+            override: personality.contextStrategy,
+            global: AttacheContextUIState.persistedGlobalStrategy(defaults: defaults)
+        )
+        let unresolvedSettings = settingsOverride ?? AttachePresentationSettings.load(
+            role: Self.modelRole(for: role),
+            defaults: defaults,
+            environment: presentationEnvironment,
+            resolveSecrets: false
+        )
+        let requestSettings: AttachePresentationSettings
+        if let settingsOverride {
+            requestSettings = settingsOverride
+        } else if unresolvedSettings.llmEnabled,
+                  unresolvedSettings.hasProviderConfiguration {
+            requestSettings = AttachePresentationSettings.load(
+                role: Self.modelRole(for: role),
+                defaults: defaults,
+                environment: presentationEnvironment
+            )
+        } else {
+            requestSettings = unresolvedSettings
+        }
+        let requestIsRemote = requestSettings.provider
+            .dataEgress(endpoint: requestSettings.baseURL.absoluteString)
+            // Memory's `localOnly` contract means this Mac, not this network.
+            // LAN inference is intentionally consent-light, but it still crosses
+            // the memory egress boundary and must exclude local-only records.
+            .isRemote
+        let consentScope = PresentationConsentScope(
+            provider: requestSettings.provider,
+            endpoint: requestSettings.baseURL.absoluteString
+        )
+        let consentedScopes = Set(
+            defaults.array(forKey: AttachePreferenceKey.cloudConsentPresentationProviders)
+                as? [String] ?? []
+        )
+        let modelSettings = requestSettings.llmEnabled
+            && requestSettings.hasProviderConfiguration
+            && requestSettings.isConfigured
+            && (!consentScope.egress.isRemoteService || consentedScopes.contains(consentScope.storageKey))
+            ? requestSettings
+            : nil
+        var contextItems: [AttacheContextItem] = []
+        var memoryReceipt: [AttacheMemoryReceiptEntry] = []
+        var directChatMessages: [AttacheChatMessage] = []
+        var directChatMessageSources: [AttachePrebuiltMessageSource] = []
+
+        if Self.roleUsesDurableMemory(role) {
+            // A hang-up is a hard boundary. Prior call turns may remain in the
+            // visible UI until the next call starts, but they must not steer
+            // memory retrieval for an off-call voicemail follow-up or any new
+            // request. Only the active call may contribute retrieval terms.
+            let recent = conversationActive
+                && (role == .conversation || role == .liveFollowUp)
+                ? conversationMessages.suffix(8).map(\.text).joined(separator: "\n")
+                : ""
+            let selected = memoryRuntime.contextItems(
+                userTurn: userInput,
+                personalityID: personality.id,
+                explicitTopic: memoryRuntime.explicitTopic(matching: userInput),
+                recentDirectChatContext: recent.isEmpty ? nil : recent,
+                strategy: contextStrategy,
+                memoryBudgetTokens: Self.memoryBudget(for: contextStrategy),
+                requestIsRemote: requestIsRemote
+            )
+            contextItems.append(contentsOf: selected.items)
+            memoryReceipt = selected.receipt
+        }
+
+        if role == .conversation, case .focused = session,
+           let latest = conversationLatestAgentCard,
+           latest.externalSessionID == session.focusedSession?.sessionID {
+            contextItems.append(AttacheContextItem(
+                source: .latestAgentReply,
+                content: latest.rawText,
+                provenance: "focused-latest-reply:\(latest.id)",
+                authorization: session,
+                priority: 700,
+                treatment: .headTailExcerpt
+            ))
+        }
+        if role == .conversation, let callID = activeConversationID {
+            let capability = AttachePresentationModelService.capabilityProfile(
+                provider: requestSettings.provider,
+                baseURLText: requestSettings.baseURL.absoluteString,
+                modelID: requestSettings.model
+            )
+            let directChat = directChatRuntime.capture(
+                turns: conversationMessages,
+                callID: callID,
+                strategy: contextStrategy,
+                capability: capability,
+                userInput: userInput,
+                profilePrompt: profilePrompt
+            )
+            contextItems.append(contentsOf: directChat.summaryItems)
+            directChatMessages = directChat.exactMessages
+            directChatMessageSources = directChat.exactMessageSources
+        }
         return AttacheRequestSnapshot(
             role: role,
             personality: personality,
             profilePrompt: profilePrompt,
-            memoryContext: memoryContext,
             userInput: userInput,
-            session: session
+            session: session,
+            modelSettings: modelSettings,
+            contextItems: contextItems,
+            contextStrategy: contextStrategy,
+            memorySelectionReceipt: memoryReceipt,
+            directChatMessages: directChatMessages,
+            directChatMessageSources: directChatMessageSources
         )
+    }
+
+    private func requestSessionAuthorization(for role: AttacheRequestRole) -> AttacheSessionAuthorization {
+        switch role {
+        case .conversation:
+            return conversationTargetSnapshot?.focusedSession.map(AttacheSessionAuthorization.focused)
+                ?? .contextFree
+        case .liveFollowUp:
+            if let frozen = conversationTargetSnapshot?.focusedSession {
+                return .focused(frozen)
+            }
+            synchronizeSessionContextFocus()
+            guard let focused = sessionContextRuntime.authoritySnapshot().session,
+                  focused.sessionID == attachedCodexSession?.id else { return .contextFree }
+            return .focused(focused)
+        case .presentation, .recap, .followUp, .anotherTake, .preview, .topicTagging:
+            return .contextFree
+        }
+    }
+
+    private static func roleUsesDurableMemory(_ role: AttacheRequestRole) -> Bool {
+        switch role {
+        case .conversation, .followUp, .liveFollowUp: return true
+        case .presentation, .recap, .anotherTake, .preview, .topicTagging: return false
+        }
+    }
+
+    private static func memoryBudget(for strategy: AttacheContextStrategy) -> Int {
+        switch strategy.kind {
+        case .efficient: return 1_024
+        case .automatic: return 2_048
+        case .maximumCoverage: return 4_096
+        case .custom:
+            return min(max(strategy.custom?.effectiveInputLimit.map { $0 / 8 } ?? 2_048, 512), 16_384)
+        }
+    }
+
+    private static func modelRole(for role: AttacheRequestRole) -> ModelRole {
+        switch role {
+        case .recap: return .recap
+        case .topicTagging: return .tagging
+        case .conversation, .followUp, .liveFollowUp: return .conversation
+        case .presentation, .anotherTake, .preview: return .presentation
+        }
     }
 
     var attachedCodexSessionLabel: String {
@@ -1351,13 +1645,22 @@ final class AppModel: ObservableObject {
             // main-thread scan without limit; the inbox shows the most recent
             // window (INF-170).
             cards = try store.fetchCards(limit: Self.maxLoadedCards)
+            let storedReceipts = cards.compactMap { card in
+                card.contextReceipt.map { (card.id, $0) }
+            }
+            if !storedReceipts.isEmpty {
+                Task { @MainActor in
+                    for (cardID, receipt) in storedReceipts {
+                        AttacheContextUIState.shared.publishReceipt(receipt, responseID: cardID)
+                    }
+                }
+            }
             if let cardID {
                 selectedCardID = cardID
             } else if selectedCardID == nil || !cards.contains(where: { $0.id == selectedCardID }) {
                 selectedCardID = cards.first?.id
             }
             loadAttachedSessionHistory()
-            prepareUnreadVoicemailAudio()
         } catch {
             intakeStatus = "Storage read failed: \(error.localizedDescription)"
         }
@@ -1696,9 +1999,13 @@ final class AppModel: ObservableObject {
         // reasoning as `persist` below applies to every mutation here.
         let token = UUID()
         await MainActor.run { composingNarrationTokens[token] = event.source }
-        let profilePrompt = resolvedProfilePrompt(for: personality)
-        let presented: NormalizedEvent = await withCheckedContinuation { continuation in
-            presentationService.prepare(event, personality: personality, profilePrompt: profilePrompt) { presentedEvent in
+        let snapshot = captureRequestSnapshot(
+            role: .presentation,
+            userInput: event.text,
+            personalityOverride: personality
+        )
+        let presented: AttachePreparedEventResult = await withCheckedContinuation { continuation in
+            presentationService.prepare(event, snapshot: snapshot) { presentedEvent in
                 continuation.resume(returning: presentedEvent)
             }
         }
@@ -1708,7 +2015,7 @@ final class AppModel: ObservableObject {
         // a transaction synchronously and re-enter body, overflowing the stack.
         await MainActor.run {
             composingNarrationTokens.removeValue(forKey: token)
-            persist(presented)
+            persist(presented.event)
         }
     }
 
@@ -1791,24 +2098,68 @@ final class AppModel: ObservableObject {
         requiredCallID: UUID? = nil
     ) {
         guard let target = personalities.first(where: { $0.id == targetPersonalityID }) else { return }
-        let priorName = card.producedByPersonalityName ?? activePersonality?.name ?? "Attaché"
+        let explicitAuthorization = AnotherTakeRequestAuthorization.explicit(card: card)
+        guard let currentCard = cards.first(where: { $0.id == card.id }),
+              explicitAuthorization.authorizes(currentCard) else {
+            intakeStatus = "Another Take stopped because that update is no longer available."
+            return
+        }
+        let originalIsLocalOnlyDerived = cardIsLocalOnlyDerived(currentCard)
+        if originalIsLocalOnlyDerived {
+            let provider = target.modelRef?.provider ?? presentationProvider
+            let egress = provider.dataEgress(endpoint: endpointForIntegration(provider))
+            guard !egress.isRemote else {
+                intakeStatus = "This reply contains local-only memory. Another Take requires an on-device model."
+                return
+            }
+        }
+
+        let authorization: AnotherTakeRequestAuthorization
+        if let requiredCallID {
+            guard conversationActive,
+                  activeConversationID == requiredCallID,
+                  let focusedSessionID = conversationTargetSnapshot?.target.id,
+                  currentCard.externalSessionID == focusedSessionID else {
+                intakeStatus = "Another Take stopped because the live session authorization changed."
+                return
+            }
+            authorization = .live(
+                card: currentCard,
+                callID: requiredCallID,
+                focusedSessionID: focusedSessionID
+            )
+        } else {
+            authorization = explicitAuthorization
+        }
+
+        let priorName = currentCard.producedByPersonalityName ?? activePersonality?.name ?? "Attaché"
         selectPersonality(targetPersonalityID)
         intakeStatus = "Getting another take from \(target.name)…"
+        let snapshot = captureRequestSnapshot(
+            role: .anotherTake,
+            userInput: currentCard.rawText,
+            personalityOverride: target
+        )
         presentationService.prepareAnotherTake(
-            original: card,
+            original: currentCard,
             targetPersonality: target,
-            priorPersonalityName: priorName
+            priorPersonalityName: priorName,
+            authorization: authorization,
+            snapshot: snapshot
         ) { [weak self] presented in
             guard let self else { return }
             if let requiredCallID {
                 guard self.conversationActive, self.activeConversationID == requiredCallID else { return }
             }
-            guard let presented else {
+            guard var presented else {
                 self.intakeStatus = "Another take needs a presentation model. Set one up in Settings."
                 return
             }
+            if originalIsLocalOnlyDerived {
+                presented.event.metadata["attache_local_only_derived"] = "true"
+            }
             do {
-                let takeCard = try self.store.insertEvent(presented)
+                let takeCard = try self.store.insertEvent(presented.event)
                 self.reloadCards(select: takeCard.id)
                 self.playInboxCard(takeCard)
                 self.intakeStatus = "Another take from \(target.name)."
@@ -1823,13 +2174,13 @@ final class AppModel: ObservableObject {
         let startProgress = selectedStartProgress
         selectedStartProgress = 0
         let startTimeMs = Int((Double(max(0, card.durationMs)) * startProgress).rounded())
-        playback.play(card, startTimeMs: startTimeMs)
+        playCardRespectingEgress(card, startTimeMs: startTimeMs)
     }
 
     func replaySelected() {
         guard let card = selectedCard else { return }
         selectedStartProgress = 0
-        playback.replay(card)
+        replayCardRespectingEgress(card)
     }
 
     /// The best displayable session name for a card: the live session
@@ -1916,10 +2267,34 @@ final class AppModel: ObservableObject {
         return true
     }
 
+    private func cardIsLocalOnlyDerived(_ card: VoicemailCard) -> Bool {
+        metadataDictionary(for: card)["attache_local_only_derived"] == "true"
+    }
+
+    private func playCardRespectingEgress(_ card: VoicemailCard, startTimeMs: Int = 0) {
+        if cardIsLocalOnlyDerived(card) {
+            playback.play(
+                card,
+                startTimeMs: startTimeMs,
+                configuration: localOnlySpeechConfiguration
+            )
+        } else {
+            playback.play(card, startTimeMs: startTimeMs)
+        }
+    }
+
+    private func replayCardRespectingEgress(_ card: VoicemailCard) {
+        if cardIsLocalOnlyDerived(card) {
+            playback.replay(card, configuration: localOnlySpeechConfiguration)
+        } else {
+            playback.replay(card)
+        }
+    }
+
     func playHistoryCard(_ card: VoicemailCard) {
         selectedCardID = card.id
         selectedStartProgress = 0
-        playback.replay(card)
+        replayCardRespectingEgress(card)
         intakeStatus = "Replaying history for \(card.sessionTitle ?? card.externalSessionID ?? "attached session")."
     }
 
@@ -1929,15 +2304,8 @@ final class AppModel: ObservableObject {
         }
         selectedCardID = card.id
         selectedStartProgress = 0
-        playback.replay(card)
+        replayCardRespectingEgress(card)
         intakeStatus = "Playing voicemail for \(card.sessionTitle ?? card.externalSessionID ?? "General")."
-    }
-
-    private func prepareUnreadVoicemailAudio() {
-        guard audioCacheRetentionMinutes > 0 else { return }
-        for card in unreadCards.prefix(20) {
-            playback.prepareAudioCache(for: card)
-        }
     }
 
     /// One line summarizing the waiting inbox, composed deterministically from
@@ -1995,28 +2363,36 @@ final class AppModel: ObservableObject {
         // off-main.
         let personality = activePersonality
         let profilePrompt = resolvedProfilePrompt(for: personality)
-        let memoryContext = attacheMemoryStore.loadSnapshot().context
         let spokenLanguageName = AttachePresentationService.spokenLanguageName(defaults: defaults)
         let prompt = AttachePersonality.recapPrompt(
             items: summarized.map { recapItem(for: $0) },
             profilePrompt: profilePrompt,
-            memoryContext: memoryContext,
+            memoryContext: nil,
             spokenLanguageName: spokenLanguageName
         )
         let system = prompt.messages.first(where: { $0.role == "system" })?.content ?? ""
         let user = prompt.messages.first(where: { $0.role == "user" })?.content ?? ""
+        let snapshot = captureRequestSnapshot(
+            role: .recap,
+            userInput: user,
+            personalityOverride: personality
+        )
 
         intakeStatus = "Writing your recap…"
 
         Task { [weak self] in
             guard let self else { return }
             do {
-                let recapText = try await self.presentationService.complete(system: system, user: user, role: .recap)
+                let completion = try await self.presentationService.complete(
+                    snapshot: snapshot,
+                    system: system,
+                    user: user
+                )
                 // persist/play mutate @Published state and the store, so hop back
                 // to the main actor before touching either (mutating observed
                 // state off-main re-enters SwiftUI's body and overflows the stack).
                 await MainActor.run {
-                    let trimmed = AttachePersonality.stripDashes(recapText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+                    let trimmed = AttachePersonality.stripDashes(completion.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
                     guard !trimmed.isEmpty else {
                         // The LLM was configured but returned nothing usable: fall
                         // back to the deterministic digest and leave the inbox as
@@ -2024,9 +2400,15 @@ final class AppModel: ObservableObject {
                         // recovery is offered, matching prior behavior exactly.
                         self.playback.preview(self.inboxDigestText(for: summarized))
                         self.intakeStatus = "Recap unavailable; played the quick digest instead."
+                        AttacheContextUIState.shared.publishReceipt(completion.inference.receiptView)
                         return
                     }
-                    self.deliverRecap(trimmed, summarizing: summarized, personality: personality)
+                    self.deliverRecap(
+                        trimmed,
+                        summarizing: summarized,
+                        personality: personality,
+                        inference: completion.inference
+                    )
                 }
             } catch {
                 // The deterministic fallback itself is unchanged (INF-254): still
@@ -2035,14 +2417,18 @@ final class AppModel: ObservableObject {
                 await MainActor.run {
                     self.playback.preview(self.inboxDigestText(for: summarized))
                     self.intakeStatus = "Recap unavailable; played the quick digest instead."
-                    let presentationError = error as? AttachePresentationError
+                    let underlyingError = (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
+                    let presentationError = underlyingError as? AttachePresentationError
                     let recovery = ConversationRecovery.classify(
                         errorMessage: error.localizedDescription,
                         failedPrompt: "",
                         httpStatus: presentationError?.httpStatus,
-                        urlErrorCode: presentationError?.urlErrorCode ?? (error as? URLError)?.code,
+                        urlErrorCode: presentationError?.urlErrorCode ?? (underlyingError as? URLError)?.code,
                         isCLIProvider: self.recapEffectiveProvider.isCLI
                     )
+                    if let attempted = error as? AttacheBrokerAttemptFailure {
+                        AttacheContextUIState.shared.publishReceipt(attempted.inference.receiptView)
+                    }
                     if recovery.offersModelSwitch {
                         self.recapRecovery = recovery
                         self.recapRetryCards = summarized
@@ -2061,7 +2447,8 @@ final class AppModel: ObservableObject {
     private func deliverRecap(
         _ recapText: String,
         summarizing cards: [VoicemailCard],
-        personality: Personality?
+        personality: Personality?,
+        inference: AttacheInferenceMetadata
     ) {
         var metadata: [String: String] = [
             "companion_recap": "1",
@@ -2073,6 +2460,9 @@ final class AppModel: ObservableObject {
         if let personality {
             metadata["companion_personality_id"] = personality.id
             metadata["companion_personality_name"] = personality.name
+        }
+        if let receipt = inference.receiptView.encodedMetadataValue() {
+            metadata[AttacheContextReceiptView.metadataKey] = receipt
         }
         // Attribute the recap to the focused session when there is one, so it
         // files alongside that session's history; otherwise it lives in General.
@@ -2105,7 +2495,7 @@ final class AppModel: ObservableObject {
             // computed spoken text and caption alignment.
             let recapCard = selectedCard?.id == card.id ? (selectedCard ?? card) : card
             selectedStartProgress = 0
-            playback.play(recapCard)
+            playCardRespectingEgress(recapCard)
             intakeStatus = "Playing your recap of \(cards.count) update\(cards.count == 1 ? "" : "s")."
         } catch {
             // Persisting failed: still give the user something by speaking the
@@ -2227,6 +2617,8 @@ final class AppModel: ObservableObject {
             // calls (INF-258/D5 spec item 3): a fresh call always starts back
             // on the primary/configured provider.
             conversationFallbackState.reset()
+            conversationTurnEffectLedger = nil
+            conversationSessionToolRuntime = nil
         }
         conversationActive = true
         if conversationStatus.isEmpty {
@@ -2240,7 +2632,26 @@ final class AppModel: ObservableObject {
     }
 
     func endConversation() {
+        let endingConversationID = activeConversationID
+        let endingReviewID = activeExhaustiveReview?.preparedID
+        exhaustiveReviewRefreshTask?.cancel()
+        exhaustiveReviewRefreshTask = nil
+        exhaustiveReviewRefreshID = nil
+        exhaustiveReviewTask?.cancel()
+        if let endingReview = activeExhaustiveReview {
+            endingReview.runtime.cancel(id: endingReview.preparedID)
+        }
+        exhaustiveReviewTask = nil
+        exhaustiveReviewExecutionID = nil
+        exhaustiveReviewProviderExecutionID = nil
+        activeExhaustiveReview = nil
+        conversationRequestTask?.cancel()
+        conversationRequestTask = nil
+        conversationCompiledInference = nil
         conversationActive = false
+        if let endingConversationID {
+            directChatRuntime.endCall(endingConversationID)
+        }
         activeConversationID = nil
         activeConversationRequestID = nil
         conversationRequestTimeoutTimer?.invalidate()
@@ -2252,13 +2663,24 @@ final class AppModel: ObservableObject {
         conversationFallbackRetryTimer?.invalidate()
         conversationFallbackRetryTimer = nil
         conversationFallbackAnnouncement = nil
+        conversationTurnEffectLedger = nil
+        conversationSessionToolRuntime = nil
+        sessionContextRuntime.advanceRequestBoundary()
         pendingAssistantReply = nil
+        pendingAssistantInference = nil
+        pendingAssistantReplyEgress = .allowedRemote
         expectingReplyAudio = false
         conversationRecovery = nil
         conversationRecoveryConfirmation = nil
         conversationStatus = ""
         conversationDestination = .attache
         conversationTargetSnapshot = nil
+        Task { @MainActor [weak self] in
+            guard self?.activeConversationID == nil
+                    || self?.activeConversationID == endingConversationID else { return }
+            AttacheContextUIState.shared.dismissOverflowRecovery()
+            AttacheContextUIState.shared.dismissExhaustiveReview(id: endingReviewID)
+        }
         micTranscript.stop(status: "")
         // Hanging up silences live narration immediately: stop what's speaking and
         // drop the queued backlog so it doesn't keep talking. The rest stays in the
@@ -2378,6 +2800,10 @@ final class AppModel: ObservableObject {
             return
         }
 
+        // This is a new explicit user turn. Automatic fallback below reuses
+        // this exact ledger; only another explicit turn/retry replaces it.
+        conversationTurnEffectLedger = ConversationTurnEffectLedger()
+        conversationSessionToolRuntime = nil
         isConversing = true
         beginConversationWait()
         performConversationRequest(trimmed)
@@ -2390,65 +2816,149 @@ final class AppModel: ObservableObject {
     /// `sendConversationMessage` calls this once after appending the user's
     /// turn; `announceConversationFallback` below calls it again, with the
     /// same `trimmed` text, once a fallback provider has been chosen.
-    private func performConversationRequest(_ trimmed: String) {
+    private func performConversationRequest(
+        _ trimmed: String,
+        frozenSnapshot: AttacheRequestSnapshot? = nil,
+        frozenSettingsOverride: AttachePresentationSettings? = nil,
+        priorAttemptInference: AttacheInferenceMetadata? = nil
+    ) {
         guard conversationActive, activeConversationID != nil else {
             isConversing = false
             endConversationWait()
             return
         }
-        let snapshot = captureRequestSnapshot(role: .conversation, userInput: trimmed)
         let context = conversationTargetSnapshot
-        let messages = buildConversationMessages(snapshot: snapshot)
-        let sessionID = context?.target.id
-        let workingDirectory = context?.workingDirectory
         let agentTarget = context?.agentSendTarget
         let allowAgentInstructionTool = agentTarget != nil
         // Sticky for the rest of the call (INF-258/D5): once a fallback is
-        // active, every subsequent turn in this call keeps using it, not just
-        // the one retry that triggered it.
+        // active, every subsequent turn in this call keeps using it.
         let fallbackProvider = conversationFallbackState.activeProvider
-        let attemptedProvider = fallbackProvider ?? effectiveRecoveryProvider(for: .conversation)
-        let settingsOverride = fallbackProvider.map(conversationFallbackSettings(for:))
-        let requestID = UUID()
-        activeConversationRequestID = requestID
+        let settingsOverride = frozenSettingsOverride
+            ?? fallbackProvider.map(conversationFallbackSettings(for:))
+        let attemptedProvider = settingsOverride?.provider
+            ?? fallbackProvider
+            ?? effectiveRecoveryProvider(for: .conversation)
+        let snapshot = frozenSnapshot ?? captureRequestSnapshot(
+                role: .conversation,
+                userInput: trimmed,
+                settingsOverride: settingsOverride
+            )
+        let messages = buildConversationMessages(snapshot: snapshot)
+        let allowMemoryProposalTool = AttacheContextUIState.persistedMemoryMode(defaults: defaults)
+            .allowsProposals
+        let allowSessionDiscoveryTool = localAgentSourcesEnabled
+        if conversationSessionToolRuntime == nil,
+           let focusedSession = snapshot.focusedSession {
+            let reserve = snapshot.contextStrategy.kind == .custom
+                ? (snapshot.contextStrategy.custom?.toolReserve ?? 4_096)
+                : 4_096
+            conversationSessionToolRuntime = sessionContextRuntime.makeToolRuntime(
+                frozenSession: focusedSession,
+                strategy: snapshot.contextStrategy,
+                toolReserveTokens: reserve
+            )
+        }
+        // Freeze the tool object into this request closure. Provider fallback
+        // re-enters this method but reuses the same per-turn object and reserve.
+        let sessionTools = conversationSessionToolRuntime
+        let effectLedger: ConversationTurnEffectLedger
+        if let existing = conversationTurnEffectLedger {
+            effectLedger = existing
+        } else {
+            let created = ConversationTurnEffectLedger()
+            conversationTurnEffectLedger = created
+            effectLedger = created
+        }
+        conversationRequestTask?.cancel()
+        conversationCompiledInference = nil
+        guard let authorization = issueConversationRequestAuthorization() else {
+            isConversing = false
+            endConversationWait()
+            return
+        }
+        let requestID = authorization.requestID
         beginConversationRequestDeadline(
             requestID: requestID,
             prompt: trimmed,
-            attemptedProvider: attemptedProvider
+            attemptedProvider: attemptedProvider,
+            frozenSnapshot: snapshot
         )
 
-        presentationService.converse(
+        conversationRequestTask = presentationService.converse(
+            snapshot: snapshot,
             messages: messages,
-            allowSessionContextTools: context != nil,
+            allowSessionContextTools: snapshot.isFocused,
             allowAgentInstructionTool: allowAgentInstructionTool,
+            allowMemoryProposalTool: allowMemoryProposalTool,
+            allowSessionDiscoveryTool: allowSessionDiscoveryTool,
+            allowExhaustiveReviewTool: snapshot.isFocused,
             settingsOverride: settingsOverride,
+            requestIsActive: { [weak self] in
+                guard let self else { return false }
+                return await MainActor.run {
+                    self.conversationRequestIsAuthorized(authorization)
+                }
+            },
+            attemptDidCompile: { [weak self] inference in
+                guard let self else { return }
+                await MainActor.run {
+                    guard self.conversationRequestIsAuthorized(authorization) else { return }
+                    self.conversationCompiledInference = (authorization.requestID, inference)
+                }
+            },
             executeTool: { [weak self] name, arguments in
-                guard context != nil else {
+                guard let self else { return "Attaché is no longer available for that tool call." }
+                guard await MainActor.run(body: {
+                    self.conversationRequestIsAuthorized(authorization)
+                }) else {
+                    return "That conversation request ended, so this tool call was canceled without any side effect."
+                }
+                if name == "propose_memory" {
+                    let callID = authorization.callID.uuidString
+                    return await self.applyMemoryProposalTool(
+                        arguments: arguments,
+                        sourceUtterance: trimmed,
+                        personalityID: snapshot.personalityID,
+                        sourceLocator: "call:\(callID):request:\(snapshot.requestID)",
+                        effectLedger: effectLedger,
+                        authorization: authorization
+                    )
+                }
+                if name == "request_session_search" {
+                    return await self.applySessionDiscoveryTool(
+                        arguments: arguments,
+                        sourceUtterance: trimmed,
+                        effectLedger: effectLedger,
+                        authorization: authorization
+                    )
+                }
+                if name == "request_exhaustive_review" {
+                    return await self.prepareExhaustiveReviewTool(
+                        snapshot: snapshot,
+                        authorization: authorization
+                    )
+                }
+                guard snapshot.isFocused, context != nil else {
                     return "No work-session tools are authorized for this conversation."
                 }
-                if name == "rename_session" {
-                    return await self?.applyRenameTool(arguments: arguments, sessionID: sessionID)
-                        ?? "There's no attached session to rename."
-                }
                 if name == "stage_agent_instruction" {
-                    return await self?.applyStageAgentInstructionTool(
+                    return await self.applyStageAgentInstructionTool(
                         arguments: arguments,
                         target: agentTarget,
-                        sourceUtterance: trimmed
+                        sourceUtterance: trimmed,
+                        effectLedger: effectLedger,
+                        authorization: authorization
                     )
-                        ?? "There's no attached session to send to."
                 }
-                return Self.executeConversationTool(
-                    name: name,
-                    arguments: arguments,
-                    sessionID: sessionID,
-                    workingDirectory: workingDirectory
-                )
+                return sessionTools?.execute(name: name, arguments: arguments)
+                    ?? "No frozen work-session evidence is authorized for this conversation turn."
             },
             completion: { [weak self] result in
                 guard let self,
                       self.conversationActive,
                       self.activeConversationRequestID == requestID else { return }
+                self.conversationRequestTask = nil
+                self.conversationCompiledInference = nil
                 self.activeConversationRequestID = nil
                 self.conversationRequestTimeoutTimer?.invalidate()
                 self.conversationRequestTimeoutTimer = nil
@@ -2456,12 +2966,44 @@ final class AppModel: ObservableObject {
                 self.endConversationWait()
                 switch result {
                 case .success(let reply):
-                    self.surfaceConversationReply(reply.text, toolCallLost: reply.toolCallLost)
+                    let inference = priorAttemptInference.map {
+                        reply.inference.recordingFallback(after: $0)
+                    } ?? reply.inference
+                    self.surfaceConversationReply(
+                        reply.text,
+                        toolCallLost: reply.toolCallLost,
+                        inference: inference
+                    )
                 case .failure(let error):
-                    self.handleConversationFailure(error, failedPrompt: trimmed, attemptedProvider: attemptedProvider)
+                    self.handleConversationFailure(
+                        error,
+                        failedPrompt: trimmed,
+                        attemptedProvider: attemptedProvider,
+                        frozenSnapshot: snapshot,
+                        attemptedSettings: settingsOverride ?? snapshot.modelSettings
+                    )
                 }
             }
         )
+    }
+
+    /// Issue the only token accepted by conversation effects. Keeping issuance
+    /// in one method makes the call/request pair impossible to mix across a
+    /// fallback, timeout, or subsequent call.
+    func issueConversationRequestAuthorization() -> ConversationRequestAuthorization? {
+        guard conversationActive, let callID = activeConversationID else { return nil }
+        let authorization = ConversationRequestAuthorization(callID: callID, requestID: UUID())
+        activeConversationRequestID = authorization.requestID
+        return authorization
+    }
+
+    @MainActor
+    private func conversationRequestIsAuthorized(
+        _ authorization: ConversationRequestAuthorization
+    ) -> Bool {
+        conversationActive
+            && activeConversationID == authorization.callID
+            && activeConversationRequestID == authorization.requestID
     }
 
     /// A live voice turn should feel conversational, not like an unbounded job.
@@ -2471,7 +3013,8 @@ final class AppModel: ObservableObject {
     private func beginConversationRequestDeadline(
         requestID: UUID,
         prompt: String,
-        attemptedProvider: AttachePresentationProvider
+        attemptedProvider: AttachePresentationProvider,
+        frozenSnapshot: AttacheRequestSnapshot
     ) {
         conversationRequestTimeoutTimer?.invalidate()
         let configured = presentationEnvironment["ATTACHE_CONVERSATION_TIMEOUT_SECONDS"]
@@ -2482,6 +3025,12 @@ final class AppModel: ObservableObject {
             guard let self,
                   self.conversationActive,
                   self.activeConversationRequestID == requestID else { return }
+            self.conversationRequestTask?.cancel()
+            self.conversationRequestTask = nil
+            let attemptedInference = self.conversationCompiledInference.flatMap {
+                $0.requestID == requestID ? $0.inference : nil
+            }
+            self.conversationCompiledInference = nil
             self.activeConversationRequestID = nil
             self.conversationRequestTimeoutTimer = nil
             self.isConversing = false
@@ -2489,7 +3038,10 @@ final class AppModel: ObservableObject {
             self.handleConversationFailure(
                 AttachePresentationError.transport(URLError(.timedOut)),
                 failedPrompt: prompt,
-                attemptedProvider: attemptedProvider
+                attemptedProvider: attemptedProvider,
+                frozenSnapshot: frozenSnapshot,
+                attemptedSettings: frozenSnapshot.modelSettings,
+                attemptedInference: attemptedInference
             )
         }
     }
@@ -2499,15 +3051,19 @@ final class AppModel: ObservableObject {
     /// (INF-258/D5, only while the toggle is on and no fallback is active yet
     /// this call), or (b) falls through to the existing manual Switch model /
     /// Retry recovery, unchanged from before this feature existed.
-    private func handleConversationFailure(
+    func handleConversationFailure(
         _ error: Error,
         failedPrompt: String,
-        attemptedProvider: AttachePresentationProvider
+        attemptedProvider: AttachePresentationProvider,
+        frozenSnapshot: AttacheRequestSnapshot,
+        attemptedSettings: AttachePresentationSettings?,
+        attemptedInference: AttacheInferenceMetadata? = nil
     ) {
         let errorMessage = error.localizedDescription
-        let presentationError = error as? AttachePresentationError
+        let underlyingError = (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
+        let presentationError = underlyingError as? AttachePresentationError
         let httpStatus = presentationError?.httpStatus
-        let urlErrorCode = presentationError?.urlErrorCode ?? (error as? URLError)?.code
+        let urlErrorCode = presentationError?.urlErrorCode ?? (underlyingError as? URLError)?.code
         let recovery = ConversationRecovery.classify(
             errorMessage: errorMessage,
             failedPrompt: failedPrompt,
@@ -2515,8 +3071,20 @@ final class AppModel: ObservableObject {
             urlErrorCode: urlErrorCode,
             isCLIProvider: attemptedProvider.isCLI
         )
+        let fallbackFailureCategory = Self.fallbackFailureCategory(for: error)
+        let fallbackDecision = AttacheFallbackRecompiler.shouldFallback(for: fallbackFailureCategory)
 
-        if let fallback = conversationFallbackState.advance(
+        if fallbackFailureCategory == .contextLimitOverflow {
+            presentConversationOverflowRecovery(
+                failedPrompt: failedPrompt,
+                frozenSnapshot: frozenSnapshot,
+                attemptedSettings: attemptedSettings
+            )
+            return
+        }
+
+        if fallbackDecision.shouldFallback,
+           let fallback = conversationFallbackState.advance(
             enabled: conversationFallbackChainEnabled,
             category: recovery.category,
             chain: conversationFallbackChain,
@@ -2531,7 +3099,10 @@ final class AppModel: ObservableObject {
                 category: recovery.category,
                 from: attemptedProvider,
                 to: fallback,
-                retryPrompt: failedPrompt
+                retryPrompt: failedPrompt,
+                frozenSnapshot: frozenSnapshot,
+                primaryFailureInference: attemptedInference
+                    ?? (error as? AttacheBrokerAttemptFailure)?.inference
             )
             return
         }
@@ -2550,6 +3121,91 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func presentConversationOverflowRecovery(
+        failedPrompt: String,
+        frozenSnapshot: AttacheRequestSnapshot,
+        attemptedSettings: AttachePresentationSettings?
+    ) {
+        conversationRecovery = nil
+        conversationRecoveryConfirmation = nil
+        conversationDraft = failedPrompt
+        conversationStatus = "This model ran out of context space. Choose an explicit retry strategy."
+        guard let requiredCallID = activeConversationID else { return }
+        let frozenSettings = attemptedSettings ?? frozenSnapshot.modelSettings
+        let recovery = AttacheFallbackRecompiler.overflowRecovery(preserving: failedPrompt)
+
+        Task { @MainActor [weak self] in
+            guard let self,
+                  self.conversationActive,
+                  self.activeConversationID == requiredCallID else { return }
+            AttacheContextUIState.shared.presentOverflowRecovery(recovery) {
+                [weak self, frozenSnapshot, frozenSettings] strategyKind, preservedDraft in
+                guard let self,
+                      self.conversationActive,
+                      self.activeConversationID == requiredCallID,
+                      self.activeConversationRequestID == nil else { return }
+                let strategy: AttacheContextStrategy
+                switch strategyKind {
+                case .automatic:
+                    strategy = .automatic
+                case .efficient:
+                    strategy = .efficient
+                default:
+                    return
+                }
+                let retrySnapshot = frozenSnapshot.retryingOverflow(with: strategy)
+                self.conversationDraft = ""
+                self.isConversing = true
+                self.beginConversationWait()
+                self.performConversationRequest(
+                    preservedDraft,
+                    frozenSnapshot: retrySnapshot,
+                    frozenSettingsOverride: frozenSettings
+                )
+            }
+        }
+    }
+
+    /// Structural fallback gate shared by HTTP and CLI failures (INF-337).
+    /// Authentication and context-window failures are terminal for automatic
+    /// fallback even when a provider reports them under a generic 5xx status.
+    static func fallbackFailureCategory(for error: Error) -> AttacheFallbackFailureCategory {
+        let underlyingError = (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
+        if let compilerError = underlyingError as? AttacheContextCompilerError {
+            switch compilerError {
+            case .protectedContentOverflow, .preEgressOverflow:
+                return .contextLimitOverflow
+            case .budgetPlanningFailure(.protectedContentOverflow):
+                return .contextLimitOverflow
+            case .budgetPlanningFailure(.invalidCustomPolicy),
+                 .requiresStagedProcessing,
+                 .unauthorizedPrebuiltMessage:
+                return .unknown
+            }
+        }
+        let presentationError = underlyingError as? AttachePresentationError
+        let body = presentationError?.responseBody ?? underlyingError.localizedDescription
+        let normalized = body.lowercased()
+        let contextMarkers = [
+            "context length", "context window", "maximum context", "token limit",
+            "too many tokens", "prompt is too long", "request too large"
+        ]
+        if contextMarkers.contains(where: normalized.contains) {
+            return .contextLimitOverflow
+        }
+        let authenticationMarkers = [
+            "unauthorized", "authentication", "invalid api key", "incorrect api key",
+            "missing api key", "forbidden"
+        ]
+        if authenticationMarkers.contains(where: normalized.contains) {
+            return .authenticationFailure
+        }
+        return AttacheFallbackRecompiler.classifyFailure(
+            statusCode: presentationError?.httpStatus,
+            errorBody: body
+        )
+    }
+
     /// Surfaces the fallback hop in the status line and as one spoken
     /// sentence (spec item 3), then retries `retryPrompt` against `fallback`
     /// once the announcement has had roughly enough time to play, so the
@@ -2558,7 +3214,9 @@ final class AppModel: ObservableObject {
         category: ConversationFailureCategory,
         from failedProvider: AttachePresentationProvider,
         to fallback: AttachePresentationProvider,
-        retryPrompt: String
+        retryPrompt: String,
+        frozenSnapshot: AttacheRequestSnapshot,
+        primaryFailureInference: AttacheInferenceMetadata?
     ) {
         guard conversationActive else { return }
         let announcement = ConversationFallbackChain.announcement(
@@ -2577,6 +3235,7 @@ final class AppModel: ObservableObject {
         conversationStatus = announcement
         conversationFallbackAnnouncement = announcement
         playback.preview(announcement)
+        let fallbackSettings = conversationFallbackSettings(for: fallback)
 
         let delaySeconds = Double(CaptionAlignmentBuilder.estimatedDurationMs(for: announcement)) / 1000.0 + 0.2
         conversationFallbackRetryTimer?.invalidate()
@@ -2586,7 +3245,12 @@ final class AppModel: ObservableObject {
             self.conversationFallbackAnnouncement = nil
             self.isConversing = true
             self.beginConversationWait()
-            self.performConversationRequest(retryPrompt)
+            self.performConversationRequest(
+                retryPrompt,
+                frozenSnapshot: frozenSnapshot,
+                frozenSettingsOverride: fallbackSettings,
+                priorAttemptInference: primaryFailureInference
+            )
         }
     }
 
@@ -2606,7 +3270,8 @@ final class AppModel: ObservableObject {
     // MARK: Per-character fallback chain runtime (INF-258/D5)
 
     func addConversationFallbackChainProvider(_ provider: AttachePresentationProvider) {
-        guard !conversationFallbackChain.contains(provider) else { return }
+        guard provider.supportsSafePersonalityInference,
+              !conversationFallbackChain.contains(provider) else { return }
         conversationFallbackChain.append(provider)
     }
 
@@ -2858,28 +3523,51 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func surfaceConversationReply(_ reply: String, toolCallLost: Bool = false) {
+    private func surfaceConversationReply(
+        _ reply: String,
+        toolCallLost: Bool = false,
+        inference: AttacheInferenceMetadata? = nil
+    ) {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard conversationActive, !trimmed.isEmpty else { return }
         // Keep the HUD in an audio-prep state until the normal delivery path,
         // captions and a replayable card, is ready.
         conversationStatus = "Preparing audio…"
+        let replyEgress: AttacheContextItemEgress = inference?.containsLocalOnlyContext == true
+            ? .localOnly
+            : .allowedRemote
         pendingAssistantReply = trimmed
+        pendingAssistantInference = inference
+        pendingAssistantReplyEgress = replyEgress
         expectingReplyAudio = true
         // The reply preempts any live update mid-flight; requeue it so it resumes
         // after the reply instead of being lost. The reply is filed as a
         // replayable history card, while live delivery uses the same preview
         // playback/caption path as other immediate voice responses.
         livePlaybackQueue.replyStarted()
-        _ = persistConversationReply(trimmed, toolCallLost: toolCallLost)
-        playback.preview(trimmed)
+        _ = persistConversationReply(
+            trimmed,
+            toolCallLost: toolCallLost,
+            inference: inference,
+            egress: replyEgress
+        )
+        if replyEgress == .localOnly {
+            playback.preview(trimmed, configuration: localOnlySpeechConfiguration)
+        } else {
+            playback.preview(trimmed)
+        }
         revealTimer?.invalidate()
         revealTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { [weak self] _ in
             self?.revealPendingReply()
         }
     }
 
-    private func persistConversationReply(_ reply: String, toolCallLost: Bool = false) -> VoicemailCard? {
+    private func persistConversationReply(
+        _ reply: String,
+        toolCallLost: Bool = false,
+        inference: AttacheInferenceMetadata? = nil,
+        egress: AttacheContextItemEgress = .allowedRemote
+    ) -> VoicemailCard? {
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -2899,9 +3587,15 @@ final class AppModel: ObservableObject {
         if toolCallLost {
             metadata["companion_tool_call_lost"] = "true"
         }
+        if egress == .localOnly {
+            metadata["attache_local_only_derived"] = "true"
+        }
         if let personality {
             metadata["companion_personality_id"] = personality.id
             metadata["companion_personality_name"] = personality.name
+        }
+        if let receipt = inference?.receiptView.encodedMetadataValue() {
+            metadata[AttacheContextReceiptView.metadataKey] = receipt
         }
         if let session {
             metadata["attached_codex_session_id"] = session.id
@@ -2946,7 +3640,19 @@ final class AppModel: ObservableObject {
         revealTimer?.invalidate(); revealTimer = nil
         guard let reply = pendingAssistantReply else { return }
         pendingAssistantReply = nil
-        appendConversationTurn(role: .assistant, text: reply)
+        let inference = pendingAssistantInference
+        pendingAssistantInference = nil
+        let egress = pendingAssistantReplyEgress
+        pendingAssistantReplyEgress = .allowedRemote
+        let turnID = appendConversationTurn(role: .assistant, text: reply, egress: egress)
+        if let inference {
+            Task { @MainActor in
+                AttacheContextUIState.shared.publishReceipt(
+                    inference.receiptView.bound(to: turnID),
+                    responseID: turnID
+                )
+            }
+        }
         conversationStatus = ""
         // If the reply produced no audio, the playback observer won't fire, so make
         // sure hands-free listening still resumes. If audio is still being
@@ -3026,8 +3732,21 @@ final class AppModel: ObservableObject {
         return trimmed
     }
 
-    private func appendConversationTurn(role: ConversationTurn.Role, text: String) {
-        conversationMessages.append(ConversationTurn(id: UUID().uuidString, role: role, text: text, createdAt: Date()))
+    @discardableResult
+    private func appendConversationTurn(
+        role: ConversationTurn.Role,
+        text: String,
+        egress: AttacheContextItemEgress = .allowedRemote
+    ) -> String {
+        let id = UUID().uuidString
+        conversationMessages.append(ConversationTurn(
+            id: id,
+            role: role,
+            text: text,
+            createdAt: Date(),
+            egress: egress
+        ))
+        return id
     }
 
     // MARK: - Two-way send-to-agent (INF-173)
@@ -3162,7 +3881,13 @@ final class AppModel: ObservableObject {
             if conversationActive { conversationStatus = reason }
             return
         }
-        if allowDirectSend && agentInstructionSendPolicy.sendsDirectlyAfterSessionEnable {
+        // Model tool calls can be influenced by untrusted session or file
+        // evidence. They may prepare a native confirmation, but can never
+        // inherit direct-send. Explicit Tell Agent and the off-call composer
+        // keep the user's configured direct-send behavior.
+        if allowDirectSend,
+           pending.origin != .personalityTool,
+           agentInstructionSendPolicy.sendsDirectlyAfterSessionEnable {
             confirmStagedInstruction()
         }
     }
@@ -3196,24 +3921,30 @@ final class AppModel: ObservableObject {
     /// Confirm and deliver the staged instruction (delivery still waits for the
     /// session to be idle).
     func confirmStagedInstruction() {
-        guard let instruction = pendingInstruction else { return }
-        pendingInstruction = nil
+        guard let instruction = pendingInstruction,
+              let coordinator = twoWay else { return }
         let target = instruction.targetDisplayName ?? "the focused agent"
         let message = "Sending to \(target) when the session is quiet…"
-        intakeStatus = message
-        liveFollowUpStatus = message
-        if conversationActive { conversationStatus = message }
-        let coordinator = twoWay
+        do {
+            // Confirmation is the irreversible gate. Persist it synchronously
+            // before returning or spawning delivery so a second call cannot
+            // observe a still-pending instruction and confirm it again.
+            _ = try coordinator.confirm(id: instruction.id)
+            pendingInstruction = nil
+            intakeStatus = message
+            liveFollowUpStatus = message
+            if conversationActive { conversationStatus = message }
+        } catch {
+            pendingInstruction = nil
+            let failure = "Send failed: \(error.localizedDescription)"
+            intakeStatus = failure
+            liveFollowUpStatus = failure
+            conversationStatus = failure
+            return
+        }
         Task { @MainActor in
-            do {
-                let changed = try await coordinator?.confirmAndDeliver(id: instruction.id) ?? []
-                handleTwoWayDeliveryChanges(changed)
-            } catch {
-                let message = "Send failed: \(error.localizedDescription)"
-                intakeStatus = message
-                liveFollowUpStatus = message
-                conversationStatus = message
-            }
+            let changed = await coordinator.pump()
+            handleTwoWayDeliveryChanges(changed)
         }
     }
 
@@ -3272,25 +4003,20 @@ final class AppModel: ObservableObject {
         let focused = snapshot.focusedSession
         let system = AttachePersonality.conversationSystemPrompt(
             profilePrompt: snapshot.profilePrompt,
-            memoryContext: snapshot.memoryContext,
-            sessionTitle: focused?.displayTitle,
-            sessionSourceName: focused.flatMap { SourceKind(rawValue: $0.sourceKind)?.displayName },
-            workingDirectory: focused?.workingDirectory,
-            latestSummary: conversationLatestSummary,
-            latestAgentReply: conversationLatestAgentReply,
+            memoryContext: nil,
+            sessionTitle: nil,
+            sessionIsFocused: focused != nil,
+            sessionSourceName: nil,
+            workingDirectory: nil,
+            latestSummary: nil,
+            latestAgentReply: nil,
             canStageAgentInstruction: snapshot.isFocused
         )
         var messages = [AttacheChatMessage(role: "system", content: system)]
-        // Cap the in-RAM transcript sent per turn so a long multi-call conversation
-        // doesn't grow the request unbounded; durable memory is the persistence
-        // surface, not this transcript (INF-170).
-        for turn in conversationMessages.suffix(Self.maxConversationTurnsPerRequest) {
-            messages.append(AttacheChatMessage(role: turn.role == .user ? "user" : "assistant", content: turn.text))
-        }
+        messages.append(contentsOf: snapshot.directChatMessages)
         return messages
     }
 
-    private static let maxConversationTurnsPerRequest = 24
     private static let maxLoadedCards = 1_000
 
     private var conversationWorkingDirectory: String? {
@@ -3335,59 +4061,23 @@ final class AppModel: ObservableObject {
         return cards.first { $0.externalSessionID == id && !isDirectConversationReply($0) }
     }
 
-    private static func executeConversationTool(
-        name: String,
-        arguments: String,
-        sessionID: String?,
-        workingDirectory: String?
-    ) -> String {
-        switch name {
-        case "read_session_transcript":
-            guard let sessionID else { return "No earlier transcript is available for this session." }
-            let args = (try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any]
-            if let startTurn = (args?["start_turn"] as? Int) ?? (args?["start_turn"] as? NSNumber)?.intValue {
-                let maxChars = (args?["max_chars"] as? Int) ?? (args?["max_chars"] as? NSNumber)?.intValue ?? 12_000
-                guard let page = AttacheSessionReader.transcriptPage(forSessionID: sessionID, startTurn: startTurn, maxChars: maxChars) else {
-                    return "No earlier transcript is available for this session."
-                }
-                return page
-            }
-            guard let transcript = AttacheSessionReader.transcript(forSessionID: sessionID) else {
-                return "No earlier transcript is available for this session."
-            }
-            return transcript
-        case "search_session_transcript":
-            guard let sessionID else { return "No transcript is available for this session." }
-            let query = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["query"] as? String ?? ""
-            guard let result = AttacheSessionReader.searchTranscript(forSessionID: sessionID, query: query) else {
-                return "No transcript is available for this session."
-            }
-            return result
-        case "list_working_directory":
-            guard let workingDirectory,
-                  let listing = AttacheSessionReader.workingDirectoryListing(path: workingDirectory) else {
-                return "No working directory is available for this session."
-            }
-            return listing
-        case "read_file":
-            guard let workingDirectory else { return "No working directory is available for this session." }
-            let path = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["path"] as? String ?? ""
-            guard !path.isEmpty,
-                  let content = AttacheSessionReader.readFile(path: path, within: workingDirectory) else {
-                return "Could not read that file. It may be outside the project, missing, or not text."
-            }
-            return content
-        default:
-            return "Unknown tool: \(name)."
-        }
-    }
-
     /// Apply a `rename_session` tool call on the main thread (it mutates published
     /// state and persists), returning a short confirmation for the assistant to relay.
-    private func applyRenameTool(arguments: String, sessionID: String?) async -> String {
+    func applyRenameTool(
+        arguments: String,
+        sessionID: String?,
+        effectLedger: ConversationTurnEffectLedger?,
+        authorization: ConversationRequestAuthorization? = nil
+    ) async -> String {
         guard let sessionID else { return "There's no attached session to rename right now." }
         let newName = ((try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any])?["name"] as? String ?? ""
         return await MainActor.run {
+            if let authorization, !conversationRequestIsAuthorized(authorization) {
+                return "That conversation request ended, so the rename was canceled without any side effect."
+            }
+            if let effectLedger, !effectLedger.claim(.renameSession) {
+                return "This turn already renamed the focused session. The rename was not repeated."
+            }
             renameSession(sessionID, to: newName)
             let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty
@@ -3396,9 +4086,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Stage or send a personality-requested agent instruction. The first-use
-    /// enable sheet always gates the session; the user's send policy decides
-    /// whether enabled-session instructions need a final confirmation sheet.
+    /// Stage a personality-requested agent instruction. The first-use enable
+    /// sheet always gates the session and model-originated handoffs always keep
+    /// a final native confirmation regardless of the Tell Agent send policy.
     ///
     /// Not `private` (INF-246): unit tests call this directly to verify a
     /// mismatched `intended_agent` produces no side effect (no
@@ -3407,7 +4097,9 @@ final class AppModel: ObservableObject {
     func applyStageAgentInstructionTool(
         arguments: String,
         target: AgentSendTarget?,
-        sourceUtterance: String
+        sourceUtterance: String,
+        effectLedger: ConversationTurnEffectLedger? = nil,
+        authorization: ConversationRequestAuthorization? = nil
     ) async -> String {
         guard let decoded = Self.agentInstructionArguments(fromToolArguments: arguments) else {
             return "No instruction was provided to stage for the agent."
@@ -3425,6 +4117,9 @@ final class AppModel: ObservableObject {
         )
         let intendedAgent = decoded.intendedAgent
         return await MainActor.run { [pending, intendedAgent] in
+            if let authorization, !conversationRequestIsAuthorized(authorization) {
+                return "That conversation request ended, so the instruction was canceled without staging or sending."
+            }
             // Fail-closed mismatch gate (INF-246): compare the model-declared
             // intent against the already-frozen target's source and the
             // currently watched sources. This is a refusal only - it never
@@ -3439,6 +4134,9 @@ final class AppModel: ObservableObject {
                 watchedSources: watchedSources
             ) {
                 return mismatch.message
+            }
+            if let effectLedger, !effectLedger.claim(.agentInstruction) {
+                return "This turn already staged an instruction for the focused agent. It was not staged, confirmed, or delivered again."
             }
             requestSendToAgent(pending.text, target: pending.target, origin: pending.origin, sourceUtterance: pending.sourceUtterance)
             if showTwoWayEnable {
@@ -3469,6 +4167,148 @@ final class AppModel: ObservableObject {
         guard !instruction.isEmpty else { return nil }
         let intendedAgent = decoded.intendedAgent?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (instruction, (intendedAgent?.isEmpty == false) ? intendedAgent : nil)
+    }
+
+    /// Applies a model's non-effectful memory proposal through local policy.
+    /// The model-provided confirmation and egress wishes are never authority:
+    /// Automatic storage is possible only when deterministic local comparison
+    /// finds the exact normalized fact in the user's own clause. Tool-originated
+    /// memories always start local-only; remote use requires the native per-item
+    /// confirmation in Memory settings.
+    @MainActor
+    func applyMemoryProposalTool(
+        arguments: String,
+        sourceUtterance: String,
+        personalityID: String,
+        sourceLocator: String?,
+        effectLedger: ConversationTurnEffectLedger? = nil,
+        authorization: ConversationRequestAuthorization? = nil
+    ) -> String {
+        if let authorization, !conversationRequestIsAuthorized(authorization) {
+            return "That conversation request ended, so the memory was canceled without being saved."
+        }
+        guard let decoded = Self.memoryProposalArguments(
+            fromToolArguments: arguments,
+            personalityID: personalityID
+        ) else {
+            return "That memory proposal was invalid and was not saved."
+        }
+
+        let userSupported = Self.memoryStatement(
+            decoded.statement,
+            isSupportedBy: sourceUtterance
+        )
+        let egress = Self.memoryEgressForToolProposal(decoded.egress)
+        let mode = AttacheContextUIState.shared.memoryMode
+        if let effectLedger, !effectLedger.claim(.memoryProposal) {
+            return "This turn already handled a memory proposal. It was not saved or queued again."
+        }
+        let disposition = memoryRuntime.processProposal(
+            statement: decoded.statement,
+            type: decoded.type,
+            scope: decoded.scope,
+            sensitivity: decoded.sensitivity,
+            egress: egress,
+            sourceLocator: sourceLocator,
+            explicitlyUserRequested: userSupported,
+            mode: mode
+        )
+        memoryRuntime.publish(to: .shared)
+
+        switch disposition {
+        case .autoStored:
+            return "The locally validated memory was saved on this Mac."
+        case .queuedForReview:
+            return "The memory suggestion is waiting for the user to review in Settings."
+        case .rejected(let reason):
+            return "Local memory policy rejected that suggestion (\(reason.rawValue))."
+        case .ignored:
+            return "Remembering is off, so nothing was saved or queued."
+        }
+    }
+
+    static func memoryProposalArguments(
+        fromToolArguments arguments: String,
+        personalityID: String
+    ) -> (
+        statement: String,
+        type: AttacheMemoryType,
+        scope: AttacheMemoryScope,
+        sensitivity: AttacheMemorySensitivity,
+        egress: AttacheMemoryEgress
+    )? {
+        guard let decoded = try? JSONDecoder().decode(
+            MemoryProposalToolArguments.self,
+            from: Data(arguments.utf8)
+        ) else { return nil }
+        let statement = decoded.statement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !statement.isEmpty,
+              statement.count <= 1_000,
+              let type = AttacheMemoryType(rawValue: decoded.type),
+              let sensitivity = AttacheMemorySensitivity(rawValue: decoded.sensitivity),
+              let egress = AttacheMemoryEgress(rawValue: decoded.egress) else { return nil }
+
+        let scope: AttacheMemoryScope
+        switch decoded.scope {
+        case "global":
+            scope = .global
+        case "personality":
+            scope = .personality(personalityID)
+        case "topic":
+            guard let topic = decoded.scopeValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !topic.isEmpty,
+                  topic.count <= 200 else { return nil }
+            scope = .topic(topic)
+        default:
+            return nil
+        }
+        return (statement, type, scope, sensitivity, egress)
+    }
+
+    /// Conservative local support check used before an Automatic-mode write.
+    /// Exact normalized clause matching preserves negation and modality. A
+    /// paraphrase can still be queued for review, but it cannot silently gain
+    /// user-authored authority from bag-of-words overlap.
+    static func memoryStatement(_ statement: String, isSupportedBy userTurn: String) -> Bool {
+        let proposed = normalizedMemoryClause(statement)
+        guard proposed.count >= 2 else { return false }
+        let clauses = userTurn.split { character in
+            character == "." || character == "!" || character == "?"
+                || character == ";" || character == "\n"
+        }
+        return clauses.contains { rawClause in
+            var clause = normalizedMemoryClause(String(rawClause))
+            for prefix in memoryCaptureLeadIns where clause.starts(with: prefix) {
+                clause.removeFirst(prefix.count)
+                break
+            }
+            return clause == proposed
+        }
+    }
+
+    private static func normalizedMemoryClause(_ text: String) -> [String] {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { !$0.isEmpty }
+    }
+
+    private static let memoryCaptureLeadIns: [[String]] = [
+        ["please", "remember", "that"],
+        ["remember", "that"],
+        ["please", "remember"],
+        ["remember"],
+        ["please", "note", "that"],
+        ["note", "that"],
+        ["keep", "in", "mind", "that"]
+    ]
+
+    static func memoryEgressForToolProposal(
+        _ requested: AttacheMemoryEgress
+    ) -> AttacheMemoryEgress {
+        _ = requested
+        return .localOnly
     }
 
     // MARK: - System media controls
@@ -3686,7 +4526,7 @@ final class AppModel: ObservableObject {
                 return nil
             }
             if let composeSource { return AttacheAgentIdentity(sourceKindRawValue: composeSource) }
-            return speakingAgent ?? .none
+            return speakingAgent ?? AttacheAgentIdentity.none
         }()
 
         return AttacheActivitySignals(
@@ -3866,6 +4706,49 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @MainActor
+    func exportStructuredMemory() {
+        guard let data = memoryRuntime.exportData() else {
+            memoryRuntime.publish(to: .shared, status: "Attaché could not prepare the memory export.")
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "Export Attaché Memory"
+        panel.nameFieldStringValue = "Attache-Memory.json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try data.write(to: url, options: [.atomic])
+            memoryRuntime.publish(to: .shared, status: "Memory exported.")
+        } catch {
+            memoryRuntime.publish(to: .shared, status: "Memory export failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    func importStructuredMemory() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Attaché Memory"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            guard data.count <= 10_000_000,
+                  let result = memoryRuntime.importData(data) else {
+                memoryRuntime.publish(to: .shared, status: "That file is not a valid Attaché memory export.")
+                return
+            }
+            memoryRuntime.publish(
+                to: .shared,
+                status: "Imported \(result.imported) memories; rejected \(result.rejected)."
+            )
+        } catch {
+            memoryRuntime.publish(to: .shared, status: "Memory import failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: Cloud consent
 
     /// Whether choosing this presentation provider will send agent output,
@@ -3888,46 +4771,109 @@ final class AppModel: ObservableObject {
         ).provider
     }
 
-    /// One-time acknowledgment that a cloud presentation provider sends data
-    /// off the Mac. Tracked per provider (INF-247), not as a single flag: a
-    /// user who consented to one cloud provider for one role should still be
-    /// asked before a different role starts sending data to a different
-    /// cloud provider. Migrated once from the legacy single
-    /// `cloudConsentPresentation` flag; see `migrateCloudConsentToPerProvider`.
+    /// Cloud acknowledgment is scoped to provider, normalized endpoint, and
+    /// egress class. Changing a Custom URL or moving Ollama between loopback
+    /// and a remote host invalidates the old consent automatically (INF-342).
     func cloudConsentAcknowledged(for provider: AttachePresentationProvider) -> Bool {
-        consentedCloudPresentationProviders().contains(provider.rawValue)
+        let scope = presentationConsentScope(for: provider)
+        return consentedCloudPresentationScopes().contains(scope.storageKey)
     }
 
     func acknowledgeCloudConsent(for provider: AttachePresentationProvider) {
-        var providers = consentedCloudPresentationProviders()
-        guard providers.insert(provider.rawValue).inserted else { return }
-        defaults.set(Array(providers).sorted(), forKey: AttachePreferenceKey.cloudConsentPresentationProviders)
+        var scopes = consentedCloudPresentationScopes()
+        guard scopes.insert(presentationConsentScope(for: provider).storageKey).inserted else { return }
+        defaults.set(Array(scopes).sorted(), forKey: AttachePreferenceKey.cloudConsentPresentationProviders)
     }
 
-    private func consentedCloudPresentationProviders() -> Set<String> {
+    func presentationConsentScope(for provider: AttachePresentationProvider) -> PresentationConsentScope {
+        PresentationConsentScope(provider: provider, endpoint: endpointForIntegration(provider))
+    }
+
+    private func consentedCloudPresentationScopes() -> Set<String> {
         Set(defaults.array(forKey: AttachePreferenceKey.cloudConsentPresentationProviders) as? [String] ?? [])
     }
 
-    /// Runs once, gated by `cloudConsentPresentationMigrationDone`: if the
-    /// legacy single-flag consent was already given, credits whatever
-    /// provider is configured right now (the provider that flag's consent
-    /// actually applied to) so existing users aren't re-prompted for a
-    /// provider they already agreed to send data to. Pure defaults
-    /// read/write, no keychain, so it's safe to run inline on the launch
-    /// path (unlike `migrateLegacyPresentationKeys`). Idempotent: once the
-    /// migration flag is set, this is a no-op forever after, so a later
-    /// per-provider revocation is never re-populated from the stale legacy flag.
+    /// Converts provider-only grants to the endpoint that is configured at
+    /// migration time. The old global boolean is consumed only once, while
+    /// provider-only array entries are upgraded even on profiles whose older
+    /// migration flag was already set.
     private func migrateCloudConsentToPerProvider() {
-        guard !defaults.bool(forKey: AttachePreferenceKey.cloudConsentPresentationMigrationDone) else { return }
-        if defaults.bool(forKey: AttachePreferenceKey.cloudConsentPresentation) {
-            acknowledgeCloudConsent(for: presentationProvider)
+        let stored = consentedCloudPresentationScopes()
+        var scoped = Set(stored.filter(PresentationConsentScope.isScopedStorageKey))
+        for raw in stored where !PresentationConsentScope.isScopedStorageKey(raw) {
+            guard let provider = AttachePresentationProvider(rawValue: raw) else { continue }
+            scoped.insert(presentationConsentScope(for: provider).storageKey)
         }
-        defaults.set(true, forKey: AttachePreferenceKey.cloudConsentPresentationMigrationDone)
+
+        if !defaults.bool(forKey: AttachePreferenceKey.cloudConsentPresentationMigrationDone) {
+            if defaults.bool(forKey: AttachePreferenceKey.cloudConsentPresentation) {
+                scoped.insert(presentationConsentScope(for: presentationProvider).storageKey)
+            }
+            defaults.set(true, forKey: AttachePreferenceKey.cloudConsentPresentationMigrationDone)
+        }
+        if scoped != stored {
+            defaults.set(Array(scoped).sorted(), forKey: AttachePreferenceKey.cloudConsentPresentationProviders)
+        }
     }
 
-    var cloudConsentVoiceAcknowledged: Bool {
-        get { defaults.bool(forKey: AttachePreferenceKey.cloudConsentVoice) }
-        set { defaults.set(newValue, forKey: AttachePreferenceKey.cloudConsentVoice) }
+    func voiceConsentScope(
+        for provider: AttacheSpeechProvider,
+        xaiBaseURL requestedXAIBaseURL: String? = nil
+    ) -> VoiceConsentScope {
+        VoiceConsentScope(
+            provider: provider,
+            xaiBaseURL: provider == .xai ? (requestedXAIBaseURL ?? xaiBaseURL) : nil
+        )
+    }
+
+    func cloudVoiceConsentAcknowledged(
+        for provider: AttacheSpeechProvider,
+        xaiBaseURL requestedXAIBaseURL: String? = nil
+    ) -> Bool {
+        guard provider.sendsToCloud else { return true }
+        return consentedCloudVoiceScopes().contains(
+            voiceConsentScope(for: provider, xaiBaseURL: requestedXAIBaseURL).storageKey
+        )
+    }
+
+    func acknowledgeCloudVoiceConsent(
+        for provider: AttacheSpeechProvider,
+        xaiBaseURL requestedXAIBaseURL: String? = nil
+    ) {
+        guard provider.sendsToCloud else { return }
+        var scopes = consentedCloudVoiceScopes()
+        let key = voiceConsentScope(for: provider, xaiBaseURL: requestedXAIBaseURL).storageKey
+        guard scopes.insert(key).inserted else { return }
+        defaults.set(Array(scopes).sorted(), forKey: AttachePreferenceKey.cloudConsentVoiceScopes)
+        applySpeechConfiguration()
+    }
+
+    func voiceConsentDestination(
+        for provider: AttacheSpeechProvider,
+        xaiBaseURL requestedXAIBaseURL: String? = nil
+    ) -> String {
+        voiceConsentScope(for: provider, xaiBaseURL: requestedXAIBaseURL).normalizedEndpoint
+    }
+
+    private func consentedCloudVoiceScopes() -> Set<String> {
+        Set(defaults.array(forKey: AttachePreferenceKey.cloudConsentVoiceScopes) as? [String] ?? [])
+    }
+
+    /// The former voice consent was one global boolean. Consume it once and
+    /// credit only the provider and endpoint selected at migration time. A later
+    /// provider or xAI endpoint change therefore requires a fresh approval.
+    private func migrateCloudVoiceConsentToScopes() {
+        guard !defaults.bool(forKey: AttachePreferenceKey.cloudConsentVoiceMigrationDone) else { return }
+        var scopes = Set(consentedCloudVoiceScopes().filter(VoiceConsentScope.isScopedStorageKey))
+        let legacyCanMigrate = speechProvider != .xai
+            || voiceConsentScope(for: .xai).normalizedEndpoint == PresentationConsentScope.normalize("https://api.x.ai/v1")
+        if defaults.bool(forKey: AttachePreferenceKey.cloudConsentVoice),
+           speechProvider.sendsToCloud,
+           legacyCanMigrate {
+            scopes.insert(voiceConsentScope(for: speechProvider).storageKey)
+        }
+        defaults.set(Array(scopes).sorted(), forKey: AttachePreferenceKey.cloudConsentVoiceScopes)
+        defaults.set(true, forKey: AttachePreferenceKey.cloudConsentVoiceMigrationDone)
     }
 
     func selectPresentationProvider(_ provider: AttachePresentationProvider) {
@@ -3952,9 +4898,11 @@ final class AppModel: ObservableObject {
         }
         presentationServiceTier = provider.supportsServiceTier ? provider.defaultServiceTier : "default"
         presentationAPIKey = readConfiguredSecret(account: provider.developmentSecretAccount) ?? ""
-        presentationModelOptions = []
-        applyFallbackCapabilitiesForCurrentModel()
-        presentationModelDiscoveryStatus = "Model discovery not checked"
+        if provider != previousProvider {
+            presentationModelOptions = []
+            presentationModelDiscoveryStatus = "Model discovery not checked"
+        }
+        applyCurrentPresentationModelCapabilities()
         refreshPresentationStatus()
         intakeStatus = "Presentation LLM provider set to \(provider.title)."
     }
@@ -3971,14 +4919,14 @@ final class AppModel: ObservableObject {
     }
 
     var connectedTextProviders: [AttachePresentationProvider] {
-        AttachePresentationProvider.allCases.filter { provider in
+        AttachePresentationProvider.personalityInferenceCases.filter { provider in
             switch provider {
             case .xai: return !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .groq: return !groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .custom: return !customAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .ollama: return true
             case .claudeCLI: return CLILanguageModel.isLikelyInstalled(.claude)
-            case .codexCLI: return CLILanguageModel.isLikelyInstalled(.codex)
+            case .codexCLI: return false
             }
         }
     }
@@ -3998,8 +4946,25 @@ final class AppModel: ObservableObject {
         let dedicated = openaiVoiceAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !dedicated.isEmpty { return dedicated }
         let customKey = customAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = (customBaseURL.isEmpty ? AttachePresentationProvider.custom.defaultBaseURL : customBaseURL).lowercased()
-        return (!customKey.isEmpty && base.contains("api.openai.com")) ? customKey : ""
+        let base = customBaseURL.isEmpty
+            ? AttachePresentationProvider.custom.defaultBaseURL
+            : customBaseURL
+        return (!customKey.isEmpty && Self.isOfficialOpenAIEndpoint(base)) ? customKey : ""
+    }
+
+    static func isOfficialOpenAIEndpoint(_ rawURL: String) -> Bool {
+        guard let components = URLComponents(string: rawURL),
+              components.scheme?.lowercased() == "https",
+              components.host?.lowercased() == "api.openai.com",
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil,
+              components.port == nil || components.port == 443 else {
+            return false
+        }
+        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return path.isEmpty || path == "v1"
     }
 
     func saveXAIIntegration() {
@@ -4065,7 +5030,7 @@ final class AppModel: ObservableObject {
         case "ondevice":
             integrationHealth[id] = .healthy
         case "codex":
-            integrationHealth[id] = CLILanguageModel.locate("codex") == nil ? .unconfigured : .healthy
+            integrationHealth[id] = .unhealthy("Unavailable for personality inference until Codex CLI can disable native file-reading tools.")
         case "claude":
             integrationHealth[id] = CLILanguageModel.locate("claude") == nil ? .unconfigured : .healthy
         case "xai":
@@ -4113,7 +5078,7 @@ final class AppModel: ObservableObject {
     }
 
     var healthyModelProviders: [AttachePresentationProvider] {
-        AttachePresentationProvider.allCases.filter {
+        AttachePresentationProvider.personalityInferenceCases.filter {
             if case .healthy = healthStatus(integrationID(for: $0)) { return true }
             return false
         }
@@ -4541,6 +5506,8 @@ final class AppModel: ObservableObject {
 
     func selectPersonality(_ id: String) {
         guard personalities.contains(where: { $0.id == id }) else { return }
+        guard id != activePersonalityID else { return }
+        cancelPendingReplyForPersonalitySwitch()
         activePersonalityID = id
         personalityStore.save(personalities, activeID: id)
         writeActivePersonalityToDefaults()
@@ -4549,6 +5516,35 @@ final class AppModel: ObservableObject {
             let issue = applyPersonalityConfiguration(personality)
             intakeStatus = issue ?? "Personality set to \(personality.name)."
         }
+    }
+
+    /// A reply is owned by the personality snapshot that requested it. A
+    /// switch invalidates that request and any not-yet-finished narration so
+    /// an old brain can never speak through the new character or fallback
+    /// chain. The call itself remains connected for the user's next turn.
+    private func cancelPendingReplyForPersonalitySwitch() {
+        conversationRequestTask?.cancel()
+        conversationRequestTask = nil
+        conversationCompiledInference = nil
+        activeConversationRequestID = nil
+        conversationRequestTimeoutTimer?.invalidate()
+        conversationRequestTimeoutTimer = nil
+        conversationFallbackRetryTimer?.invalidate()
+        conversationFallbackRetryTimer = nil
+        conversationFallbackAnnouncement = nil
+        conversationTurnEffectLedger = nil
+        conversationSessionToolRuntime = nil
+        sessionContextRuntime.advanceRequestBoundary()
+        isConversing = false
+        endConversationWait()
+        pendingAssistantReply = nil
+        pendingAssistantInference = nil
+        pendingAssistantReplyEgress = .allowedRemote
+        expectingReplyAudio = false
+        conversationRecovery = nil
+        conversationRecoveryConfirmation = nil
+        playback.stop()
+        conversationFallbackState.reset()
     }
 
     /// The welcome flow asks for a voice before it asks for a character. Carry
@@ -4597,29 +5593,17 @@ final class AppModel: ObservableObject {
     var isLiveCallActive: Bool { conversationActive && activeConversationID != nil }
 
     /// The user-facing personality switch from the dock or the ⌘[ / ⌘] shortcut.
-    /// In a live call it clarifies the last turn in the new personality's voice;
-    /// otherwise it is a plain switch. Kept separate from `selectPersonality` so
-    /// the internal switch `anotherTake` performs never re-enters clarify.
+    /// Selection is always silent, including during a live call. Model inference
+    /// and speech require the separate, explicit Another Take action (INF-336).
     func switchPersonalityFromUI(_ id: String) {
-        if isLiveCallActive {
-            clarifyWithPersonality(id)
-        } else {
-            selectPersonality(id)
-        }
+        selectPersonality(id)
     }
 
-    /// Live "clarify with a different personality" (INF-301): the new personality
-    /// reacts to the most recent update and gives its own take in its voice and
-    /// character, then listening resumes under it. Narration only, so it never changes
-    /// the frozen agent-send target or the Ask Attaché / Tell Agent routing.
+    /// Compatibility entry point retained for older internal callers. Clarify no
+    /// longer infers from a recent card; callers must invoke `anotherTake` with an
+    /// explicitly selected card and its frozen authorization.
     func clarifyWithPersonality(_ id: String) {
-        if let last = cards.max(by: { $0.createdAt < $1.createdAt }),
-           let callID = activeConversationID,
-           conversationActive {
-            anotherTake(card: last, targetPersonalityID: id, requiredCallID: callID)
-        } else {
-            selectPersonality(id)
-        }
+        selectPersonality(id)
     }
 
     func addPersonality() {
@@ -4674,16 +5658,9 @@ final class AppModel: ObservableObject {
 
     func duplicatePersonality(id: String) {
         guard let source = personalities.first(where: { $0.id == id }) else { return }
-        let copy = Personality(
-            id: "custom.\(UUID().uuidString)",
-            name: "\(source.name) Copy",
-            prompt: source.prompt,
-            voiceRef: source.voiceRef,
-            character: source.character,
-            visualMode: source.visualMode,
-            modelRef: source.modelRef,
-            playbackSpeed: source.playbackSpeed,
-            accentColorHex: source.accentColorHex
+        let copy = source.duplicated(
+            withID: "custom.\(UUID().uuidString)",
+            name: "\(source.name) Copy"
         )
         if let index = personalities.firstIndex(where: { $0.id == id }) {
             personalities.insert(copy, at: index + 1)
@@ -4696,6 +5673,9 @@ final class AppModel: ObservableObject {
     /// Model discovery for the creator without mutating the app's active model.
     /// It shares the same endpoints and credentials as Settings > Model.
     func personalityModelOptions(for provider: AttachePresentationProvider) async throws -> [AttachePresentationModelOption] {
+        guard provider.supportsSafePersonalityInference else {
+            throw CLILanguageModelError.unsafeToolIsolation(provider.title)
+        }
         let baseURL = endpointForIntegration(provider)
         let apiKey = readConfiguredSecret(account: provider.developmentSecretAccount) ?? ""
         if provider.requiresAPIKey, apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -4724,6 +5704,20 @@ final class AppModel: ObservableObject {
         Do not use stage directions, quotation marks, or em dashes.
         """
         let settings = personalityPreviewSettings(for: personality)
+        guard let settings else {
+            personalityPreviewRequestID = nil
+            let voice = speechConfiguration(for: personality.voiceRef)
+            voiceProviderStatus = "Previewing \(personality.name) with its configured voice."
+            playback.preview(fallback, configuration: voice)
+            completion(fallback)
+            return
+        }
+        let snapshot = captureRequestSnapshot(
+            role: .preview,
+            userInput: "Give me the quick hello now.",
+            personalityOverride: personality,
+            settingsOverride: settings
+        )
         let voice = speechConfiguration(for: personality.voiceRef)
         voiceProviderStatus = "Preparing personality preview."
 
@@ -4731,12 +5725,15 @@ final class AppModel: ObservableObject {
             let generated: String
             do {
                 let result = try await presentationService.complete(
+                    snapshot: snapshot,
                     system: system,
                     user: "Give me the quick hello now.",
-                    role: .conversation,
                     settingsOverride: settings
                 )
-                generated = Self.shortPersonalityGreeting(result, fallback: fallback)
+                generated = Self.shortPersonalityGreeting(result.text, fallback: fallback)
+                await MainActor.run {
+                    AttacheContextUIState.shared.publishReceipt(result.inference.receiptView)
+                }
             } catch {
                 generated = fallback
             }
@@ -4787,6 +5784,10 @@ final class AppModel: ObservableObject {
         if let value = ref.xaiBaseURL { configuration.xaiBaseURL = value }
         if let value = ref.xaiLanguage { configuration.xaiLanguage = value }
         if let value = ref.openaiVoiceID { configuration.openaiVoiceID = value }
+        configuration.remoteEgressConsentScope = ref.provider.sendsToCloud
+            && cloudVoiceConsentAcknowledged(for: ref.provider, xaiBaseURL: configuration.xaiBaseURL)
+            ? voiceConsentScope(for: ref.provider, xaiBaseURL: configuration.xaiBaseURL).storageKey
+            : nil
         return configuration.resolvedForPlayback(systemVoiceIdentifier: speechVoiceIdentifier)
     }
 
@@ -4817,6 +5818,12 @@ final class AppModel: ObservableObject {
         guard let ref = personality.voiceRef?.resolved(availableSystemVoiceIDs: installedSystemVoiceIDs()) else {
             return nil
         }
+        let requestedXAIBaseURL = ref.xaiBaseURL ?? xaiBaseURL
+        if ref.provider.sendsToCloud,
+           !cloudVoiceConsentAcknowledged(for: ref.provider, xaiBaseURL: requestedXAIBaseURL) {
+            speechProvider = .system
+            return "\(ref.provider.title) needs cloud voice approval, so this personality is using the on-device voice for now."
+        }
         switch ref.provider {
         case .system:
             speechProvider = .system
@@ -4832,7 +5839,7 @@ final class AppModel: ObservableObject {
             guard hasSpeechAPIKey(for: .xai) else { return fallBackToSystemVoice(missing: "xAI") }
             if let value = ref.xaiVoiceID { xaiVoiceID = value }
             if let value = ref.xaiVoiceName { xaiVoiceName = value }
-            if let value = ref.xaiBaseURL { xaiBaseURL = value }
+            xaiBaseURL = requestedXAIBaseURL
             if let value = ref.xaiLanguage { xaiLanguage = value }
             speechProvider = .xai
         case .openai:
@@ -5191,10 +6198,21 @@ final class AppModel: ObservableObject {
             voiceProviderStatus = "Enter an xAI API key to load voices."
             return
         }
+        let requestedBaseURL = xaiBaseURL
+        guard cloudVoiceConsentAcknowledged(for: .xai, xaiBaseURL: requestedBaseURL) else {
+            xaiVoiceOptions = []
+            voiceProviderStatus = "Approve the xAI voice destination before loading voices."
+            return
+        }
+        let consentScope = voiceConsentScope(for: .xai, xaiBaseURL: requestedBaseURL).storageKey
         voiceProviderStatus = "Loading xAI voices..."
         Task {
             do {
-                let voices = try await AttacheRemoteVoiceService.fetchXAIVoices(apiKey: key, baseURL: xaiBaseURL)
+                let voices = try await AttacheRemoteVoiceService.fetchXAIVoices(
+                    apiKey: key,
+                    baseURL: requestedBaseURL,
+                    remoteEgressConsentScope: consentScope
+                )
                 await MainActor.run {
                     self.xaiVoiceOptions = voices
                     self.voiceProviderStatus = "Loaded \(self.xaiVoiceOptions.count) xAI voices."
@@ -5250,6 +6268,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshCodexSessions(updateStatus: Bool = true) {
+        guard !store.isInMemory else { return }
         guard codexSourceEnabled else {
             codexSessions = []
             archivedCodexSessions = []
@@ -5282,9 +6301,20 @@ final class AppModel: ObservableObject {
         codexSessions = Self.uniqueCodexTargets(snapshot.activeSessions)
         archivedCodexSessions = Self.uniqueCodexTargets(snapshot.archivedSessions)
         codexAutomations = Self.uniqueCodexTargets(snapshot.automations)
+        if isIndexingSessions, sessionRecords.isEmpty {
+            let quickRecords = (codexSessions + archivedCodexSessions).compactMap {
+                Self.quickSessionRecord(from: $0)
+            }
+            if !quickRecords.isEmpty {
+                sessionContextRuntime.publishCatalog(records: quickRecords)
+                sessionRecords = quickRecords
+                sessionIndexRevision += 1
+            }
+        }
         let migratedAutomationAttachment = migrateAutomationAttachmentIfNeeded(in: snapshot, updateStatus: updateStatus)
         if attachedCodexSession?.category == .archivedSession {
             attachedCodexSessionID = nil
+            synchronizeSessionContextFocus()
         }
         updateCodexWatcher()
         if updateStatus, !migratedAutomationAttachment {
@@ -5294,7 +6324,27 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private static func quickSessionRecord(from target: CodexSessionTarget) -> SessionRecord? {
+        guard let filePath = target.filePath, !filePath.isEmpty else { return nil }
+        let modified = ((try? FileManager.default.attributesOfItem(atPath: filePath))?[.modificationDate] as? Date)
+            ?? target.updatedAt
+        return SessionRecord(
+            id: target.id,
+            title: target.displayTitle,
+            project: nil,
+            threadName: target.title,
+            updatedAt: target.updatedAt,
+            archived: target.category == .archivedSession,
+            filePath: filePath,
+            fileMtime: modified.timeIntervalSince1970,
+            content: "",
+            topicTag: nil,
+            sourceKind: target.sourceKind
+        )
+    }
+
     private func startCodexSessionRefreshTimer() {
+        guard !store.isInMemory else { return }
         codexSessionRefreshTimer?.invalidate()
         let timer = Timer(timeInterval: Self.codexSessionRefreshInterval, repeats: true) { [weak self] _ in
             self?.refreshCodexSessions(updateStatus: false)
@@ -5322,6 +6372,7 @@ final class AppModel: ObservableObject {
         } else {
             if let previousSessionID { attachedTargets.removeValue(forKey: previousSessionID) }
             attachedCodexSessionID = attachedSessionList.first?.id   // refocus another, if any
+            synchronizeSessionContextFocus()
         }
         if previousSessionID != attachedCodexSessionID {
             liveFollowUpText = ""
@@ -5343,10 +6394,46 @@ final class AppModel: ObservableObject {
 
     // MARK: - Session search
 
+    /// Keep the app's one FTS/search authority aligned with the scanner's
+    /// current source-of-truth records. A vanished focused log revokes its
+    /// authorization and removes that stale watch target before any future
+    /// request can reconstruct it from display metadata.
+    private func applySessionContextReconciliation(
+        _ reconciliation: SessionContextRuntime.Reconciliation
+    ) {
+        if let invalidated = reconciliation.invalidatedFocusedSessionID {
+            attachedTargets.removeValue(forKey: invalidated)
+            if attachedCodexSessionID == invalidated {
+                let validIDs = Set(sessionRecords.map(\.id))
+                attachedCodexSessionID = attachedSessionList.first(where: { validIDs.contains($0.id) })?.id
+            }
+        }
+        synchronizeSessionContextFocus()
+    }
+
+    /// Rebuild focus authorization only from a real indexed record. Catalog
+    /// rows and persisted labels alone are never enough to authorize evidence.
+    private func synchronizeSessionContextFocus() {
+        guard sessionContextRuntime != nil else { return }
+        guard let target = attachedCodexSession,
+              let record = sessionRecords.first(where: {
+                  $0.id == target.id && $0.sourceKind == target.sourceKind
+              }),
+              FileManager.default.fileExists(atPath: record.filePath) else {
+            sessionContextRuntime.clearFocus()
+            return
+        }
+        _ = sessionContextRuntime.grantAppOwnedFocus(
+            sessionID: record.id,
+            sourceKind: record.sourceKind.rawValue,
+            displayTitle: displaySessionTitle(record),
+            workingDirectory: record.project
+        )
+    }
+
     func refreshSessionIndex() {
-        guard !enabledAgentSources.isEmpty else {
+        guard !store.isInMemory else {
             sessionRecords = []
-            sessionIndexRevision += 1
             isIndexingSessions = false
             return
         }
@@ -5355,9 +6442,12 @@ final class AppModel: ObservableObject {
         let enabledSources = enabledAgentSources
         sessionIndexQueue.async { [weak self] in
             guard let self else { return }
-            let records = self.sessionIndexer.refresh()
+            let records = enabledSources.isEmpty ? [] : self.sessionIndexer.refresh()
+            let filteredRecords = records.filter { enabledSources.contains($0.sourceKind) }
+            let reconciliation = self.sessionContextRuntime.reconcile(records: filteredRecords)
             DispatchQueue.main.async {
-                self.sessionRecords = records.filter { enabledSources.contains($0.sourceKind) }
+                self.sessionRecords = filteredRecords
+                self.applySessionContextReconciliation(reconciliation)
                 self.sessionIndexRevision += 1
                 self.isIndexingSessions = false
                 self.tagUntaggedSessions()
@@ -5366,65 +6456,39 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Background LLM topic tagging. Labels untagged sessions (most-recent first) in
-    /// small batches so each row gets a short subject like "Taxes" or "Penumbra".
-    /// Tags persist in the index cache, so this only does real work for new or
-    /// changed sessions after the first pass. Bounded per run to keep cost in check.
+    /// Local topic tagging for indexed sessions. Background index maintenance
+    /// never has authority to send transcript-derived snippets, titles, or
+    /// working directories to a model, so labels are derived deterministically
+    /// from app-owned title/project metadata and persisted in the local cache.
     func tagUntaggedSessions(maxPerRun: Int = 480, batchSize: Int = 12) {
         guard ProcessInfo.processInfo.environment["ATTACHE_DISABLE_TOPIC_TAGGING"] != "1" else { return }
-        guard !isTaggingSessions, presentationService.isPresentationConfigured(for: .tagging) else { return }
+        guard !isTaggingSessions else { return }
         let pending = Array(sessionIndexer.untaggedRecords()
             .filter { enabledAgentSources.contains($0.sourceKind) }
             .prefix(maxPerRun))
         guard !pending.isEmpty else { return }
         isTaggingSessions = true
-        // Seed the vocabulary with tags already on record so a fresh run keeps reusing
-        // them; grows as batches complete to keep similar sessions consistent.
+        defer { isTaggingSessions = false }
+        _ = batchSize // retained for source compatibility with existing callers
         var vocabulary = Set(sessionRecords.compactMap { $0.topicTag }.filter { !$0.isEmpty })
-
-        Task { [weak self] in
-            guard let self else { return }
-            for start in stride(from: 0, to: pending.count, by: batchSize) {
-                let batch = Array(pending[start..<min(start + batchSize, pending.count)])
-                let items = batch.map { record in
-                    SessionTagger.Item(
-                        id: record.id,
-                        title: record.title,
-                        snippet: record.content,
-                        project: self.curatedProjectName(forCWD: record.project)
-                    )
-                }
-                // Tagging failures stay silent to the user by design (this is
-                // deliberate, per docs/reviews/2026-07-10-app-review.md): a
-                // failed batch is simply skipped, exactly as before. The only
-                // change (INF-254) is counting the failure for the
-                // diagnostics snapshot instead of it vanishing unobserved.
-                let reply: String?
-                do {
-                    reply = try await self.presentationService.complete(
-                        system: SessionTagger.systemPrompt,
-                        user: SessionTagger.userPrompt(for: items, knownTags: Array(vocabulary)),
-                        role: .tagging
-                    )
-                } catch {
-                    reply = nil
-                    await MainActor.run { self.taggingFailureCount += 1 }
-                }
-                let tags = reply.map { SessionTagger.parse($0) } ?? [:]
-                vocabulary.formUnion(tags.values)
-                if !tags.isEmpty {
-                    // SessionIndexer is internally locked, so writing back off the
-                    // index queue is safe; refresh and this stay serialized.
-                    let updated = self.sessionIndexer.applyTags(tags)
-                    await MainActor.run {
-                        self.sessionRecords = self.filteredEnabledRecords(updated)
-                        self.sessionIndexRevision += 1
-                    }
-                }
-                try? await Task.sleep(nanoseconds: 300_000_000)
-            }
-            await MainActor.run { self.isTaggingSessions = false }
+        var tags: [String: String] = [:]
+        for record in pending {
+            let tag = SessionTagger.localTag(
+                for: SessionTagger.Item(
+                    id: record.id,
+                    title: record.title,
+                    snippet: "",
+                    project: curatedProjectName(forCWD: record.project)
+                ),
+                knownTags: Array(vocabulary)
+            )
+            tags[record.id] = tag
+            vocabulary.insert(tag)
         }
+        let updated = sessionIndexer.applyTags(tags)
+        sessionRecords = filteredEnabledRecords(updated)
+        sessionIndexRevision += 1
+        refreshSessionIndex()
     }
 
     var localAgentSourcesEnabled: Bool {
@@ -5444,6 +6508,7 @@ final class AppModel: ObservableObject {
             if attachedCodexSession?.sourceKind == .codex {
                 attachedCodexSessionID = attachedSessionList.first?.id
             }
+            synchronizeSessionContextFocus()
             updateCodexWatcher()
         }
 
@@ -5464,6 +6529,7 @@ final class AppModel: ObservableObject {
             if attachedCodexSession?.sourceKind == .claudeCode {
                 attachedCodexSessionID = attachedSessionList.first?.id
             }
+            synchronizeSessionContextFocus()
             updateCodexWatcher()
         }
         rebuildSessionIndexer()
@@ -5491,6 +6557,7 @@ final class AppModel: ObservableObject {
     }
 
     private func rebuildSessionIndexer() {
+        guard !store.isInMemory else { return }
         var scanners: [SessionScanner] = []
         if codexSourceEnabled { scanners.append(CodexSessionScanner()) }
         if claudeCodeSourceEnabled { scanners.append(ClaudeCodeSessionScanner()) }
@@ -5504,12 +6571,722 @@ final class AppModel: ObservableObject {
     }
 
     func searchSessions(_ query: String, includeArchived: Bool) -> [SessionSearchHit] {
-        SessionSearchRanker.search(
+        sessionContextRuntime.commandKSearch(
             query,
-            in: sessionRecords,
-            pinned: [],
             includeArchived: includeArchived
         )
+    }
+
+    /// Production model-assisted discovery uses the exact same ranking
+    /// service as Command-K. `result` is safe to expose to a model; rows stay
+    /// app-owned until the user makes a native selection.
+    func beginModelAssistedSessionDiscovery(
+        query: AttacheSessionDiscoveryQuery,
+        triggeringUserTurn: String
+    ) throws -> SessionContextRuntime.DiscoveryHandle {
+        try sessionContextRuntime.beginDiscovery(AttacheSessionDiscoveryRequest(
+            query: query,
+            triggeringUserTurn: triggeringUserTurn
+        ))
+    }
+
+    /// Execute the model's narrow, non-effectful discovery request. The return
+    /// value is deliberately content-free; all actual rows remain in app-owned
+    /// state and are shown in the same native picker as Command-K.
+    @MainActor
+    private func applySessionDiscoveryTool(
+        arguments: String,
+        sourceUtterance: String,
+        effectLedger: ConversationTurnEffectLedger? = nil,
+        authorization: ConversationRequestAuthorization? = nil
+    ) -> String {
+        if let authorization, !conversationRequestIsAuthorized(authorization) {
+            return Self.sessionDiscoveryToolResult(
+                matchCount: 0,
+                requiresSelection: false,
+                noMatches: true,
+                guidance: "That conversation request ended, so the session search was canceled."
+            )
+        }
+        guard let data = arguments.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawQuery = object["query"] as? String else {
+            return Self.sessionDiscoveryToolResult(
+                matchCount: 0,
+                requiresSelection: false,
+                noMatches: true,
+                guidance: "The session search request was invalid. Ask the user for a short search phrase."
+            )
+        }
+        if let effectLedger, !effectLedger.claim(.sessionDiscovery) {
+            return Self.sessionDiscoveryToolResult(
+                matchCount: 0,
+                requiresSelection: false,
+                noMatches: true,
+                guidance: "This turn already requested one session search. Ask the user to refine the topic in a new turn."
+            )
+        }
+        do {
+            let handle = try beginModelAssistedSessionDiscovery(
+                query: AttacheSessionDiscoveryQuery(text: rawQuery),
+                triggeringUserTurn: sourceUtterance
+            )
+            if handle.result.requiresSelection {
+                modelSessionDiscoveryPicker = ModelSessionDiscoveryPickerState(
+                    token: handle.token,
+                    query: rawQuery.trimmingCharacters(in: .whitespacesAndNewlines),
+                    orderedResults: handle.orderedResults
+                )
+                NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
+            }
+            return Self.sessionDiscoveryToolResult(handle.result)
+        } catch {
+            return Self.sessionDiscoveryToolResult(
+                matchCount: 0,
+                requiresSelection: false,
+                noMatches: true,
+                guidance: "The local search could not run. Ask the user to shorten or rephrase the search."
+            )
+        }
+    }
+
+    private static func sessionDiscoveryToolResult(_ result: AttacheSessionDiscoveryResult) -> String {
+        sessionDiscoveryToolResult(
+            matchCount: result.matchCount,
+            requiresSelection: result.requiresSelection,
+            noMatches: result.noMatches,
+            guidance: result.guidance
+        )
+    }
+
+    private static func sessionDiscoveryToolResult(
+        matchCount: Int,
+        requiresSelection: Bool,
+        noMatches: Bool,
+        guidance: String
+    ) -> String {
+        let object: [String: Any] = [
+            "match_count": matchCount,
+            "requires_native_selection": requiresSelection,
+            "no_matches": noMatches,
+            "guidance": guidance
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else {
+            return #"{"match_count":0,"requires_native_selection":false,"no_matches":true}"#
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    // MARK: - Explicit exhaustive session review
+
+    @MainActor
+    private func bindExhaustiveReviewUI(to state: AttacheContextUIState) {
+        state.onStartExhaustiveReview = { [weak self] review in
+            self?.startExhaustiveReview(review)
+        }
+        state.onCancelExhaustiveReview = { [weak self] review in
+            self?.cancelExhaustiveReview(review)
+        }
+        state.onResumeExhaustiveReview = { [weak self] review in
+            self?.resumeExhaustiveReview(review)
+        }
+    }
+
+    /// The model may request this preview, but it cannot start provider work.
+    /// Freezing, mapping, and estimating happen locally; stage calls begin only
+    /// from the native Start review button wired above.
+    private func prepareExhaustiveReviewTool(
+        snapshot: AttacheRequestSnapshot,
+        authorization: ConversationRequestAuthorization
+    ) async -> String {
+        guard let focusedSession = snapshot.focusedSession,
+              snapshot.modelSettings != nil else {
+            return Self.exhaustiveReviewToolResult(
+                result: "unavailable",
+                estimatedCalls: 0,
+                eligibleRanges: 0,
+                guidance: "A focused session and configured frozen model are required."
+            )
+        }
+        guard await MainActor.run(body: {
+            self.conversationRequestIsAuthorized(authorization)
+        }) else {
+            return Self.exhaustiveReviewToolResult(
+                result: "canceled",
+                estimatedCalls: 0,
+                eligibleRanges: 0,
+                guidance: "The conversation request ended before the preview was prepared."
+            )
+        }
+
+        let source: SessionContextRuntime.FrozenReviewSource
+        do {
+            source = try sessionContextRuntime.freezeReviewSource(
+                focusedSession: focusedSession
+            )
+        } catch {
+            return Self.exhaustiveReviewToolResult(
+                result: "unavailable",
+                estimatedCalls: 0,
+                eligibleRanges: 0,
+                guidance: "The focused session could not be frozen. Keep it focused and try again."
+            )
+        }
+
+        let baseSnapshot = Self.exhaustiveReviewBaseSnapshot(
+            from: snapshot,
+            focusedSession: source.focusedSession
+        )
+        let prepared = Self.prepareExhaustiveReview(
+            source: source,
+            baseSnapshot: baseSnapshot,
+            callID: authorization.callID
+        )
+        let installed = await MainActor.run { [prepared] in
+            guard self.conversationRequestIsAuthorized(authorization),
+                  self.sessionContextRuntime.reviewSourceIsCurrent(prepared.context.source) else {
+                return false
+            }
+            self.installExhaustiveReviewPreview(
+                prepared.context,
+                state: prepared.uiState
+            )
+            return true
+        }
+        guard installed else {
+            return Self.exhaustiveReviewToolResult(
+                result: "canceled",
+                estimatedCalls: 0,
+                eligibleRanges: 0,
+                guidance: "The call or focused source changed before the preview was ready."
+            )
+        }
+        return Self.exhaustiveReviewToolResult(
+            result: "preview_ready",
+            estimatedCalls: prepared.uiState.estimatedCalls,
+            eligibleRanges: prepared.uiState.eligibleRanges,
+            guidance: "The local preview is open. No review stages have run. The user must press Start review."
+        )
+    }
+
+    private static func exhaustiveReviewBaseSnapshot(
+        from snapshot: AttacheRequestSnapshot,
+        focusedSession: AttacheFocusedSession
+    ) -> AttacheRequestSnapshot {
+        AttacheRequestSnapshot(
+            role: .recap,
+            personality: snapshot.personality,
+            profilePrompt: snapshot.profilePrompt,
+            userInput: "Review the entire explicitly focused session.",
+            session: .focused(focusedSession),
+            modelSettings: snapshot.modelSettings,
+            contextItems: [],
+            contextStrategy: snapshot.contextStrategy
+        )
+    }
+
+    private static func prepareExhaustiveReview(
+        source: SessionContextRuntime.FrozenReviewSource,
+        baseSnapshot: AttacheRequestSnapshot,
+        callID: UUID
+    ) -> (context: ActiveExhaustiveReviewContext, uiState: AttacheExhaustiveReviewUIState) {
+        let settings = baseSnapshot.modelSettings
+        let capability = settings.map {
+            AttachePresentationModelService.capabilityProfile(
+                provider: $0.provider,
+                baseURLText: $0.baseURL.absoluteString,
+                modelID: $0.model
+            )
+        } ?? .unknown
+        let egress = settings?.provider.dataEgress(
+            endpoint: settings?.baseURL.absoluteString,
+            enabled: settings?.llmEnabled ?? false
+        ) ?? .disabled
+        let runtime = AttacheExhaustiveReviewRuntime()
+        let prepared = runtime.prepare(
+            source: source,
+            baseSnapshot: baseSnapshot,
+            capability: capability,
+            egressClass: egress.rawValue
+        )
+        let context = ActiveExhaustiveReviewContext(
+            callID: callID,
+            preparedID: prepared.id,
+            runtime: runtime,
+            source: source,
+            baseSnapshot: baseSnapshot
+        )
+        let modelLabel = settings.map { "\($0.provider.title) · \($0.model)" }
+            ?? "Model unavailable"
+        let state = AttacheExhaustiveReviewUIState(
+            id: prepared.id,
+            sessionTitle: source.focusedSession.displayTitle,
+            modelLabel: modelLabel,
+            strategyLabel: AttacheContextStrategyDescription.title(
+                baseSnapshot.contextStrategy.kind
+            ),
+            egressLabel: egress.disclosureLabel,
+            estimatedCalls: prepared.estimatedCalls,
+            estimatedSourceBytes: prepared.estimatedSourceBytes,
+            estimatedInputTokens: prepared.estimatedInputTokens,
+            eligibleRanges: prepared.eligibleRanges
+        )
+        return (context, state)
+    }
+
+    @MainActor
+    private func installExhaustiveReviewPreview(
+        _ context: ActiveExhaustiveReviewContext,
+        state: AttacheExhaustiveReviewUIState
+    ) {
+        exhaustiveReviewRefreshTask?.cancel()
+        exhaustiveReviewRefreshTask = nil
+        exhaustiveReviewRefreshID = nil
+        if let prior = activeExhaustiveReview {
+            prior.runtime.cancel(id: prior.preparedID)
+        }
+        exhaustiveReviewTask?.cancel()
+        exhaustiveReviewTask = nil
+        exhaustiveReviewExecutionID = nil
+        exhaustiveReviewProviderExecutionID = nil
+        activeExhaustiveReview = context
+        AttacheContextUIState.shared.presentExhaustiveReview(state)
+    }
+
+    @MainActor
+    private func startExhaustiveReview(_ review: AttacheExhaustiveReviewUIState) {
+        guard let context = activeExhaustiveReview,
+              context.preparedID == review.id,
+              conversationActive,
+              activeConversationID == context.callID else {
+            AttacheContextUIState.shared.updateExhaustiveReview(
+                id: review.id,
+                phase: .stale,
+                coveredRanges: review.coveredRanges,
+                eligibleRanges: review.eligibleRanges,
+                completedCalls: review.completedCalls,
+                omittedRanges: review.omittedRanges
+            )
+            return
+        }
+        guard exhaustiveReviewExecutionID == nil,
+              exhaustiveReviewProviderExecutionID == nil else { return }
+        launchExhaustiveReview(
+            context,
+            waitingForReviewTask: nil,
+            waitingForConversationTask: conversationRequestTask
+        )
+    }
+
+    @MainActor
+    private func cancelExhaustiveReview(_ review: AttacheExhaustiveReviewUIState) {
+        guard let context = activeExhaustiveReview,
+              context.preparedID == review.id else { return }
+        exhaustiveReviewRefreshTask?.cancel()
+        exhaustiveReviewRefreshTask = nil
+        exhaustiveReviewRefreshID = nil
+        context.runtime.cancel(id: context.preparedID)
+        exhaustiveReviewTask?.cancel()
+        let reviewWasUsingProvider = exhaustiveReviewProviderExecutionID != nil
+        exhaustiveReviewExecutionID = nil
+        exhaustiveReviewProviderExecutionID = nil
+        if reviewWasUsingProvider {
+            isConversing = false
+            endConversationWait()
+        }
+        conversationStatus = "Exhaustive review canceled."
+        if reviewWasUsingProvider {
+            maybeResumeContinuousListening()
+        }
+    }
+
+    @MainActor
+    private func resumeExhaustiveReview(_ review: AttacheExhaustiveReviewUIState) {
+        guard let context = activeExhaustiveReview,
+              context.preparedID == review.id,
+              conversationActive,
+              activeConversationID == context.callID,
+              exhaustiveReviewExecutionID == nil,
+              exhaustiveReviewProviderExecutionID == nil else { return }
+        if review.phase == .stale {
+            restartStaleExhaustiveReview(context)
+            return
+        }
+        let priorTask = exhaustiveReviewTask
+        launchExhaustiveReview(
+            context,
+            waitingForReviewTask: priorTask,
+            waitingForConversationTask: conversationRequestTask
+        )
+    }
+
+    @MainActor
+    private func restartStaleExhaustiveReview(
+        _ prior: ActiveExhaustiveReviewContext
+    ) {
+        guard let current = sessionContextRuntime.authoritySnapshot().session,
+              current.sessionID == prior.source.focusedSession.sessionID,
+              current.sourceKind == prior.source.focusedSession.sourceKind else {
+            conversationStatus = "The focused session changed. Start a new call to review the new session."
+            preserveExhaustiveReviewProgress(id: prior.preparedID, phase: .stale)
+            return
+        }
+        exhaustiveReviewRefreshTask?.cancel()
+        let refreshID = UUID()
+        exhaustiveReviewRefreshID = refreshID
+        conversationStatus = "Refreshing the review preview from the current session…"
+        exhaustiveReviewRefreshTask = Task { [weak self, prior, current] in
+            guard let self else { return }
+            guard !Task.isCancelled else { return }
+            guard let source = try? self.sessionContextRuntime.freezeReviewSource(
+                focusedSession: current
+            ) else {
+                await MainActor.run {
+                    guard self.exhaustiveReviewRefreshID == refreshID,
+                          self.conversationActive,
+                          self.activeConversationID == prior.callID,
+                          self.activeExhaustiveReview?.preparedID == prior.preparedID,
+                          AttacheContextUIState.shared.exhaustiveReview?.phase == .running else {
+                        return
+                    }
+                    self.exhaustiveReviewRefreshTask = nil
+                    self.exhaustiveReviewRefreshID = nil
+                    self.conversationStatus = "The current session could not be frozen for review."
+                    self.preserveExhaustiveReviewProgress(
+                        id: prior.preparedID,
+                        phase: .stale
+                    )
+                }
+                return
+            }
+            guard !Task.isCancelled else { return }
+            let baseSnapshot = AttacheRequestSnapshot(
+                role: .recap,
+                personality: prior.baseSnapshot.personality,
+                profilePrompt: prior.baseSnapshot.profilePrompt,
+                userInput: prior.baseSnapshot.userInput,
+                session: .focused(current),
+                modelSettings: prior.baseSnapshot.modelSettings,
+                contextItems: [],
+                contextStrategy: prior.baseSnapshot.contextStrategy
+            )
+            let prepared = Self.prepareExhaustiveReview(
+                source: source,
+                baseSnapshot: baseSnapshot,
+                callID: prior.callID
+            )
+            await MainActor.run {
+                guard self.exhaustiveReviewRefreshID == refreshID,
+                      self.conversationActive,
+                      self.activeConversationID == prior.callID,
+                      self.activeExhaustiveReview?.preparedID == prior.preparedID,
+                      AttacheContextUIState.shared.exhaustiveReview?.phase == .running,
+                      self.sessionContextRuntime.reviewSourceIsCurrent(source) else { return }
+                self.exhaustiveReviewRefreshTask = nil
+                self.exhaustiveReviewRefreshID = nil
+                self.installExhaustiveReviewPreview(
+                    prepared.context,
+                    state: prepared.uiState
+                )
+                self.conversationStatus = "Review the updated cost preview, then press Start review."
+            }
+        }
+    }
+
+    @MainActor
+    private func launchExhaustiveReview(
+        _ context: ActiveExhaustiveReviewContext,
+        waitingForReviewTask: Task<Void, Never>?,
+        waitingForConversationTask: Task<Void, Never>?
+    ) {
+        guard exhaustiveReviewExecutionID == nil,
+              exhaustiveReviewProviderExecutionID == nil else {
+            preserveExhaustiveReviewProgress(
+                id: context.preparedID,
+                phase: .incomplete
+            )
+            return
+        }
+        let executionID = UUID()
+        exhaustiveReviewExecutionID = executionID
+        exhaustiveReviewTask = Task { [weak self, context] in
+            if let waitingForReviewTask { await waitingForReviewTask.value }
+            if let waitingForConversationTask { await waitingForConversationTask.value }
+            guard !Task.isCancelled, let self else { return }
+            let mayStart = await MainActor.run {
+                guard self.exhaustiveReviewIsAuthorized(
+                    context: context,
+                    executionID: executionID
+                ) else { return false }
+                guard self.sessionContextRuntime.reviewSourceIsCurrent(context.source) else {
+                    self.preserveExhaustiveReviewProgress(
+                        id: context.preparedID,
+                        phase: .stale
+                    )
+                    return false
+                }
+                self.exhaustiveReviewProviderExecutionID = executionID
+                self.isConversing = true
+                self.beginConversationWait()
+                self.conversationStatus = "Reviewing the focused session in bounded stages…"
+                return true
+            }
+            guard mayStart else {
+                await MainActor.run {
+                    guard self.exhaustiveReviewExecutionID == executionID else { return }
+                    self.exhaustiveReviewTask = nil
+                    self.exhaustiveReviewExecutionID = nil
+                    self.exhaustiveReviewProviderExecutionID = nil
+                }
+                return
+            }
+            do {
+                let outcome = try await context.runtime.runPreparedReview(
+                    id: context.preparedID,
+                    sourceIsCurrent: { [weak self, source = context.source] in
+                        self?.sessionContextRuntime.reviewSourceIsCurrent(source) == true
+                    },
+                    runStage: { [weak self, context] snapshot, system, user in
+                        guard let self else { throw CancellationError() }
+                        guard await MainActor.run(body: {
+                            self.exhaustiveReviewMayEgress(
+                                context: context,
+                                executionID: executionID
+                            )
+                        }) else { throw CancellationError() }
+                        let profile = snapshot.profilePrompt
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        let providerSystem = profile.isEmpty
+                            ? system
+                            : "\(profile)\n\n\(system)"
+                        let completion = try await self.presentationService.complete(
+                            snapshot: snapshot,
+                            system: providerSystem,
+                            user: user,
+                            settingsOverride: context.baseSnapshot.modelSettings,
+                            systemSources: profile.isEmpty
+                                ? [.safetyPolicy]
+                                : [.activePersonality, .safetyPolicy],
+                            userSources: [.currentUserTurn],
+                            requestIsActive: { [weak self, context] in
+                                guard let self else { return false }
+                                return await MainActor.run {
+                                    self.exhaustiveReviewMayEgress(
+                                        context: context,
+                                        executionID: executionID
+                                    )
+                                }
+                            }
+                        )
+                        guard await MainActor.run(body: {
+                            self.exhaustiveReviewMayEgress(
+                                context: context,
+                                executionID: executionID
+                            )
+                        }) else { throw CancellationError() }
+                        return completion
+                    },
+                    progress: { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            guard let self,
+                                  self.exhaustiveReviewIsAuthorized(
+                                    context: context,
+                                    executionID: executionID
+                                  ) else { return }
+                            AttacheContextUIState.shared.updateExhaustiveReview(
+                                id: context.preparedID,
+                                phase: .running,
+                                coveredRanges: progress.coveredRanges,
+                                eligibleRanges: progress.eligibleRanges,
+                                completedCalls: progress.completedCalls,
+                                omittedRanges: progress.omittedRanges
+                            )
+                        }
+                    }
+                )
+                await MainActor.run {
+                    self.finishExhaustiveReview(
+                        context: context,
+                        executionID: executionID,
+                        outcome: outcome
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.exhaustiveReviewIsAuthorized(
+                        context: context,
+                        executionID: executionID
+                    ) else { return }
+                    self.isConversing = false
+                    self.endConversationWait()
+                    self.exhaustiveReviewTask = nil
+                    self.exhaustiveReviewExecutionID = nil
+                    self.exhaustiveReviewProviderExecutionID = nil
+                    let sourceIsCurrent = self.sessionContextRuntime
+                        .reviewSourceIsCurrent(context.source)
+                    self.preserveExhaustiveReviewProgress(
+                        id: context.preparedID,
+                        phase: sourceIsCurrent
+                            ? (Task.isCancelled ? .canceled : .incomplete)
+                            : .stale
+                    )
+                    if !sourceIsCurrent {
+                        self.conversationStatus = "The session changed during review. Restart from the updated preview."
+                    } else {
+                        self.conversationStatus = Task.isCancelled
+                            ? "Exhaustive review canceled."
+                            : "The exhaustive review stopped before it could prove coverage."
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func preserveExhaustiveReviewProgress(
+        id: String,
+        phase: AttacheExhaustiveReviewUIState.Phase
+    ) {
+        guard let review = AttacheContextUIState.shared.exhaustiveReview,
+              review.id == id else { return }
+        AttacheContextUIState.shared.updateExhaustiveReview(
+            id: id,
+            phase: phase,
+            coveredRanges: review.coveredRanges,
+            eligibleRanges: review.eligibleRanges,
+            completedCalls: review.completedCalls,
+            omittedRanges: review.omittedRanges
+        )
+    }
+
+    @MainActor
+    private func exhaustiveReviewIsAuthorized(
+        context: ActiveExhaustiveReviewContext,
+        executionID: UUID
+    ) -> Bool {
+        conversationActive
+            && activeConversationID == context.callID
+            && activeExhaustiveReview?.preparedID == context.preparedID
+            && exhaustiveReviewExecutionID == executionID
+    }
+
+    @MainActor
+    private func exhaustiveReviewMayEgress(
+        context: ActiveExhaustiveReviewContext,
+        executionID: UUID
+    ) -> Bool {
+        exhaustiveReviewIsAuthorized(context: context, executionID: executionID)
+            && exhaustiveReviewProviderExecutionID == executionID
+            && sessionContextRuntime.reviewSourceIsCurrent(context.source)
+    }
+
+    @MainActor
+    private func finishExhaustiveReview(
+        context: ActiveExhaustiveReviewContext,
+        executionID: UUID,
+        outcome: AttacheExhaustiveReviewRuntime.Outcome
+    ) {
+        guard exhaustiveReviewIsAuthorized(
+            context: context,
+            executionID: executionID
+        ) else { return }
+        let phase: AttacheExhaustiveReviewUIState.Phase
+        switch outcome.result.status {
+        case .complete where outcome.progress.coveredRanges == outcome.progress.eligibleRanges:
+            phase = .complete
+        case .canceled:
+            phase = .canceled
+        case .stale:
+            phase = .stale
+        case .complete, .inProgress, .incomplete:
+            phase = .incomplete
+        }
+        AttacheContextUIState.shared.updateExhaustiveReview(
+            id: context.preparedID,
+            phase: phase,
+            coveredRanges: outcome.progress.coveredRanges,
+            eligibleRanges: outcome.progress.eligibleRanges,
+            completedCalls: outcome.progress.completedCalls,
+            omittedRanges: outcome.result.omittedRanges.count
+        )
+        exhaustiveReviewTask = nil
+        exhaustiveReviewExecutionID = nil
+        exhaustiveReviewProviderExecutionID = nil
+        isConversing = false
+        endConversationWait()
+        if phase == .complete || phase == .incomplete {
+            surfaceConversationReply(
+                outcome.responseText,
+                inference: outcome.inference
+            )
+        } else {
+            conversationStatus = phase == .stale
+                ? "The session changed during review. Restart from the updated preview."
+                : "Exhaustive review canceled."
+            maybeResumeContinuousListening()
+        }
+    }
+
+    private static func exhaustiveReviewToolResult(
+        result: String,
+        estimatedCalls: Int,
+        eligibleRanges: Int,
+        guidance: String
+    ) -> String {
+        let object: [String: Any] = [
+            "result": result,
+            "estimated_model_calls": max(0, estimatedCalls),
+            "eligible_ranges": max(0, eligibleRanges),
+            "requires_user_start": result == "preview_ready",
+            "guidance": guidance
+        ]
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        ) else {
+            return #"{"result":"unavailable","requires_user_start":false}"#
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func dismissModelSessionDiscoveryPicker() {
+        modelSessionDiscoveryPicker = nil
+    }
+
+    /// Apply a native row selected from a prior discovery result. The runtime
+    /// revalidates every field against its private candidate snapshot before
+    /// advancing focus; a model-supplied or stale row is rejected.
+    @discardableResult
+    func focusDiscoveredSession(token: UUID, row: SessionSearchHit) -> Bool {
+        let selection = AttacheSessionDiscoverySelection(
+            sessionID: row.record.id,
+            sourceKind: row.record.sourceKind.rawValue,
+            displayTitle: row.record.title,
+            workingDirectory: row.record.project
+        )
+        do {
+            _ = try sessionContextRuntime.grantDiscoverySelection(
+                token: token,
+                selection: selection
+            )
+            guard let record = sessionRecords.first(where: { $0.id == row.record.id }) else {
+                return false
+            }
+            watchSession(target(for: record), focus: true, focusAlreadyGranted: true)
+            modelSessionDiscoveryPicker = nil
+            if conversationActive {
+                // The picker selection grants new authority, but the request and
+                // call that opened it remain context-free. Start a fresh call
+                // boundary so only later user turns can receive session tools.
+                endConversation()
+                startConversation()
+                conversationStatus = "Focused \(displaySessionTitle(record)). Started a fresh call context for this session."
+            }
+            return true
+        } catch {
+            intakeStatus = "That session result changed. Search again before focusing it."
+            return false
+        }
     }
 
     /// The name Attaché shows for a session: an Attaché-local rename if set,
@@ -5559,15 +7336,28 @@ final class AppModel: ObservableObject {
     }
 
     func toggleWatchSearchHit(_ hit: SessionSearchHit) {
-        if attachedTargets[hit.record.id] != nil {
-            detachCodexSession(hit.record.id)
-        } else {
-            watchSearchHit(hit, focus: false)
+        guard let record = try? sessionContextRuntime.resolveCommandKSelection(hit) else {
+            intakeStatus = "That search result changed. Search again before watching it."
+            return
         }
+        if attachedTargets[record.id] != nil { detachCodexSession(record.id) }
+        else { watchSession(target(for: record), focus: false) }
     }
 
     func watchSearchHit(_ hit: SessionSearchHit, focus: Bool) {
-        watchSession(target(for: hit.record), focus: focus)
+        do {
+            let record = try sessionContextRuntime.resolveCommandKSelection(hit)
+            if focus {
+                _ = try sessionContextRuntime.grantCommandKSelection(hit)
+            }
+            watchSession(
+                target(for: record),
+                focus: focus,
+                focusAlreadyGranted: focus
+            )
+        } catch {
+            intakeStatus = "That search result changed. Search again before focusing it."
+        }
     }
 
     /// Map a session record to a watch target, reusing a live catalog target when
@@ -5601,10 +7391,17 @@ final class AppModel: ObservableObject {
         _ = changed   // attachedTargets' didSet persists on mutation
     }
 
-    private func watchSession(_ session: CodexSessionTarget, focus: Bool) {
+    private func watchSession(
+        _ session: CodexSessionTarget,
+        focus: Bool,
+        focusAlreadyGranted: Bool = false
+    ) {
         attachedTargets[session.id] = session
         if focus || attachedCodexSessionID == nil {
             attachedCodexSessionID = session.id
+        }
+        if (focus || attachedCodexSessionID == session.id), !focusAlreadyGranted {
+            synchronizeSessionContextFocus()
         }
         if focus {
             liveFollowUpText = ""
@@ -5686,18 +7483,20 @@ final class AppModel: ObservableObject {
 
         let requestID = UUID()
         followUpAnswerRequestID = requestID
+        let receiptResponseID = "follow-up:\(requestID.uuidString)"
+        followUpReceiptResponseID = nil
         followUpAnswerText = ""
         isGeneratingFollowUpAnswer = true
         followUpStatus = "Asking Attaché about \(target)."
         // A fresh attempt (typed question or explicit retry) supersedes any
         // stale recovery banner from a previous failure (INF-254).
         followUpRecovery = nil
+        let snapshot = captureRequestSnapshot(role: .followUp, userInput: trimmed)
 
         presentationService.answerFollowUpQuestion(
             card: card,
             danQuestion: trimmed,
-            personality: activePersonality,
-            profilePrompt: resolvedProfilePrompt(for: activePersonality)
+            snapshot: snapshot
         ) { [weak self] result in
             guard let self,
                   self.followUpAnswerRequestID == requestID else {
@@ -5707,6 +7506,13 @@ final class AppModel: ObservableObject {
             switch result {
             case .success(let answer):
                 self.followUpAnswerText = answer.answerText
+                self.followUpReceiptResponseID = receiptResponseID
+                Task { @MainActor in
+                    AttacheContextUIState.shared.publishReceipt(
+                        answer.inference.receiptView.bound(to: receiptResponseID),
+                        responseID: receiptResponseID
+                    )
+                }
                 self.followUpStatus = self.followUpAnswerStatusText(
                     target: target,
                     answer: answer
@@ -5720,6 +7526,10 @@ final class AppModel: ObservableObject {
 
     func clearFollowUpAnswer() {
         followUpAnswerRequestID = nil
+        if let id = followUpReceiptResponseID {
+            Task { @MainActor in AttacheContextUIState.shared.removeReceipt(for: id) }
+        }
+        followUpReceiptResponseID = nil
         followUpAnswerText = ""
         isGeneratingFollowUpAnswer = false
         followUpRecovery = nil
@@ -5767,18 +7577,35 @@ final class AppModel: ObservableObject {
         let target = "Codex / \(targetSessionID)"
         let requestID = UUID()
         liveFollowUpAnswerRequestID = requestID
+        let receiptResponseID = "live-follow-up:\(requestID.uuidString)"
+        liveFollowUpReceiptResponseID = nil
         liveFollowUpAnswerText = ""
         isGeneratingLiveFollowUpAnswer = true
         liveFollowUpStatus = "Asking Attaché about \(session.displayTitle)."
         // A fresh attempt (typed question or explicit retry) supersedes any
         // stale recovery banner from a previous failure (INF-254).
         liveFollowUpRecovery = nil
+        let card = followUpContextCard(for: session)
+        let snapshot = captureRequestSnapshot(role: .liveFollowUp, userInput: trimmed)
+        guard let frozenSession = snapshot.focusedSession,
+              frozenSession.sessionID == session.id else {
+            isGeneratingLiveFollowUpAnswer = false
+            liveFollowUpStatus = "That session is no longer authorized. Focus it again and retry."
+            return
+        }
 
         presentationService.answerFollowUpQuestion(
-            card: followUpContextCard(for: session),
+            card: card,
             danQuestion: trimmed,
-            personality: activePersonality,
-            profilePrompt: resolvedProfilePrompt(for: activePersonality)
+            snapshot: snapshot,
+            requestIsActive: { [weak self] in
+                guard let self else { return false }
+                return await MainActor.run {
+                    guard self.liveFollowUpAnswerRequestID == requestID else { return false }
+                    return self.sessionContextRuntime.authoritySnapshot().session?
+                        .hasSameAuthorization(as: frozenSession) == true
+                }
+            }
         ) { [weak self] result in
             guard let self,
                   self.liveFollowUpAnswerRequestID == requestID else {
@@ -5788,6 +7615,13 @@ final class AppModel: ObservableObject {
             switch result {
             case .success(let answer):
                 self.liveFollowUpAnswerText = answer.answerText
+                self.liveFollowUpReceiptResponseID = receiptResponseID
+                Task { @MainActor in
+                    AttacheContextUIState.shared.publishReceipt(
+                        answer.inference.receiptView.bound(to: receiptResponseID),
+                        responseID: receiptResponseID
+                    )
+                }
                 self.liveFollowUpStatus = self.followUpAnswerStatusText(
                     target: target,
                     answer: answer
@@ -5801,6 +7635,10 @@ final class AppModel: ObservableObject {
 
     func clearLiveFollowUpAnswer() {
         liveFollowUpAnswerRequestID = nil
+        if let id = liveFollowUpReceiptResponseID {
+            Task { @MainActor in AttacheContextUIState.shared.removeReceipt(for: id) }
+        }
+        liveFollowUpReceiptResponseID = nil
         liveFollowUpAnswerText = ""
         isGeneratingLiveFollowUpAnswer = false
         liveFollowUpRecovery = nil
@@ -5835,6 +7673,10 @@ final class AppModel: ObservableObject {
 
     private func resetFollowUpAnswerStatus() {
         followUpAnswerRequestID = nil
+        if let id = followUpReceiptResponseID {
+            Task { @MainActor in AttacheContextUIState.shared.removeReceipt(for: id) }
+        }
+        followUpReceiptResponseID = nil
         followUpAnswerText = ""
         isGeneratingFollowUpAnswer = false
         followUpStatus = "Ask Attaché about this update."
@@ -5842,6 +7684,10 @@ final class AppModel: ObservableObject {
 
     private func resetLiveFollowUpAnswerStatus() {
         liveFollowUpAnswerRequestID = nil
+        if let id = liveFollowUpReceiptResponseID {
+            Task { @MainActor in AttacheContextUIState.shared.removeReceipt(for: id) }
+        }
+        liveFollowUpReceiptResponseID = nil
         liveFollowUpAnswerText = ""
         isGeneratingLiveFollowUpAnswer = false
         if let session = talkContextSession {
@@ -5944,7 +7790,7 @@ final class AppModel: ObservableObject {
         case .play(let cardID):
             guard let card = cards.first(where: { $0.id == cardID }) else { return }
             selectedCardID = card.id
-            playback.play(card)
+            playCardRespectingEgress(card)
         case .markHeard(let cardID):
             markHeard(cardID: cardID)
         }
@@ -6034,7 +7880,7 @@ final class AppModel: ObservableObject {
             if let next = livePlaybackQueue.finished() { playCardLive(cardID: next) }
             return
         }
-        playback.play(card)
+        playCardRespectingEgress(card)
         intakeStatus = "Playing attached \(card.sourceDisplayName) update live."
     }
 
@@ -6296,17 +8142,17 @@ final class AppModel: ObservableObject {
                     : AttachePresentationProvider(rawValue: raw)
                 if let provider, !result.contains(provider) { result.append(provider) }
             }
-        // Needs presentationProvider loaded above (it credits whatever
-        // provider was configured at migration time); pure defaults
-        // read/write, so unlike migrateLegacyPresentationKeys it's safe
-        // inline on the launch path.
+        // Endpoint-bound consent migration must see the persisted integration
+        // URLs, not the property defaults.
+        if let value = defaults.string(forKey: AttachePreferenceKey.ollamaBaseURL), !value.isEmpty { ollamaBaseURL = value }
+        if let value = defaults.string(forKey: AttachePreferenceKey.customBaseURL), !value.isEmpty { customBaseURL = value }
+        // Needs presentationProvider and integration endpoints loaded above;
+        // pure defaults read/write, so unlike key migration it is safe inline.
         migrateCloudConsentToPerProvider()
         if let value = defaults.string(forKey: AttachePreferenceKey.speechProvider),
            let provider = AttacheSpeechProvider(rawValue: value) {
             speechProvider = provider
         }
-        if let value = defaults.string(forKey: AttachePreferenceKey.ollamaBaseURL), !value.isEmpty { ollamaBaseURL = value }
-        if let value = defaults.string(forKey: AttachePreferenceKey.customBaseURL), !value.isEmpty { customBaseURL = value }
         if let value = defaults.string(forKey: AttachePreferenceKey.elevenLabsModelID),
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             elevenLabsModelID = value
@@ -6323,6 +8169,9 @@ final class AppModel: ObservableObject {
            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             xaiLanguage = value
         }
+        // Voice approval is provider and endpoint scoped. Migration must run
+        // after both the saved provider and saved xAI endpoint are loaded.
+        migrateCloudVoiceConsentToScopes()
         loadStoredSecretsAsync(presentationAccount: presentationSettings.provider.developmentSecretAccount)
         speechVoiceOptions = AttacheVoiceCatalog.options()
         if let savedVoice = defaults.string(forKey: AttachePreferenceKey.speechVoiceIdentifier) {
@@ -6374,6 +8223,13 @@ final class AppModel: ObservableObject {
                 self.customAPIKey = custom
                 self.openaiVoiceAPIKey = openai
                 self.applyStoredCloudVoicePreferences()
+                if !self.store.isInMemory {
+                    // Populate or refresh the exact active model's capability
+                    // lineage after secrets arrive, off the launch path. Until
+                    // this finishes, the compiler safely uses its unknown-model
+                    // envelope or the persisted last-known record.
+                    self.loadPresentationModels(preserveCurrentSelection: true)
+                }
             }
         }
     }
@@ -6451,6 +8307,10 @@ final class AppModel: ObservableObject {
     private var selectedSpeechConfiguration: AttacheSpeechConfiguration {
         AttacheSpeechConfiguration(
             provider: speechProvider,
+            remoteEgressConsentScope: speechProvider.sendsToCloud && cloudVoiceConsentAcknowledged(
+                for: speechProvider,
+                xaiBaseURL: xaiBaseURL
+            ) ? voiceConsentScope(for: speechProvider, xaiBaseURL: xaiBaseURL).storageKey : nil,
             systemVoiceIdentifier: speechVoiceIdentifier,
             elevenLabsAPIKey: elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : elevenLabsAPIKey,
             elevenLabsVoiceID: elevenLabsVoiceID,
@@ -6467,15 +8327,22 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// Local-only model output must stay on this Mac even when the active
+    /// personality normally speaks through a cloud voice.
+    private var localOnlySpeechConfiguration: AttacheSpeechConfiguration {
+        var configuration = selectedSpeechConfiguration
+        configuration.provider = .system
+        configuration.remoteEgressConsentScope = nil
+        configuration.systemVoiceIdentifier = speechVoiceIdentifier
+        return configuration
+    }
+
     private func applySpeechConfiguration() {
         playback.configureVoice(
             configuration: selectedSpeechConfiguration.resolvedForPlayback(
                 systemVoiceIdentifier: speechVoiceIdentifier
             )
         )
-        if !cards.isEmpty {
-            prepareUnreadVoicemailAudio()
-        }
     }
 
     private func seekRelative(milliseconds: Int) {
@@ -6530,6 +8397,11 @@ final class AppModel: ObservableObject {
     }
 
     private func updateCodexWatcher() {
+        guard !store.isInMemory else {
+            codexSessionWatcher.stop()
+            sessionActivityWatcher.stop()
+            return
+        }
         // Watch every attached active session; their updates become voicemails, and the
         // focused one additionally speaks live while on a call.
         var targets = Array(attachedTargets.values)
@@ -6568,6 +8440,7 @@ final class AppModel: ObservableObject {
         }
         guard id != attachedCodexSessionID else { return }
         attachedCodexSessionID = id
+        synchronizeSessionContextFocus()
         liveFollowUpText = ""
         resetLiveFollowUpAnswerStatus()
         updateCodexWatcher()
@@ -6585,6 +8458,7 @@ final class AppModel: ObservableObject {
     func detachCodexSession(_ id: String) {
         attachedTargets.removeValue(forKey: id)
         if attachedCodexSessionID == id { attachedCodexSessionID = attachedSessionList.first?.id }
+        synchronizeSessionContextFocus()
         updateCodexWatcher()
     }
 
@@ -6631,11 +8505,13 @@ final class AppModel: ObservableObject {
 
         if let activeRun = latestActiveSession(matching: automation, in: snapshot.activeSessions) {
             self.attachedCodexSessionID = activeRun.id
+            synchronizeSessionContextFocus()
             if updateStatus {
                 intakeStatus = "Moved automation focus to active Codex session \(activeRun.displayTitle)."
             }
         } else {
             self.attachedCodexSessionID = nil
+            synchronizeSessionContextFocus()
             if updateStatus {
                 intakeStatus = "\(automation.displayTitle) is a schedule, not a live session. Open its Codex run to attach."
             }

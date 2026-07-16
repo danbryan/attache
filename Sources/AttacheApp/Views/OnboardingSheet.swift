@@ -56,6 +56,7 @@ enum OnboardingSourceProbe {
 
 struct OnboardingSheet: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var contextUI = AttacheContextUIState.shared
     @State private var step: OnboardingStep = .welcome
     @State private var codexCount = 0
     @State private var claudeCount = 0
@@ -85,7 +86,7 @@ struct OnboardingSheet: View {
         .onExitCommand { confirmSkip = true }
         .alert("Skip setup?", isPresented: $confirmSkip) {
             Button("Keep going", role: .cancel) {}
-            Button("Skip") { model.completeOnboarding() }
+            Button("Skip") { skipOnboarding() }
         } message: {
             Text("You can run the welcome again anytime from Settings or the Help menu.")
         }
@@ -311,7 +312,7 @@ struct OnboardingSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-                ForEach(AttachePresentationProvider.allCases) { provider in
+                ForEach(AttachePresentationProvider.personalityInferenceCases) { provider in
                     onboardingProviderCard(provider)
                 }
             }
@@ -398,7 +399,7 @@ struct OnboardingSheet: View {
             case .ollama:
                 TextField("Ollama /v1 endpoint", text: $model.ollamaBaseURL).textFieldStyle(.roundedBorder)
             case .codexCLI:
-                Text("Install and sign in to Codex CLI. Attaché uses an ephemeral read-only run with tools disabled.")
+                Text("Codex subscription inference is disabled until Codex CLI can guarantee that native file-reading tools are off.")
                     .typoCaption().foregroundStyle(.secondary)
             case .claudeCLI:
                 Text("Install and sign in to Claude Code. Attaché uses a one-shot run with tools and project settings disabled.")
@@ -546,6 +547,8 @@ struct OnboardingSheet: View {
                 .typoCaption(.medium)
             }
 
+            memoryChoice
+
             Divider().padding(.vertical, 2)
             HStack(spacing: 10) {
                 Button {
@@ -566,6 +569,39 @@ struct OnboardingSheet: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    private var memoryChoice: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Memory").typoLabel(.semibold)
+                Spacer()
+                Text("Optional and local by default")
+                    .typoCaption()
+                    .foregroundStyle(.secondary)
+            }
+            Picker("Memory", selection: onboardingMemoryBinding) {
+                Text("Off").tag(Optional(AttacheMemoryProposalMode.off))
+                Text("Suggest").tag(Optional(AttacheMemoryProposalMode.suggest))
+                Text("Automatic").tag(Optional(AttacheMemoryProposalMode.automatic))
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Choose memory mode")
+            .accessibilityValue(
+                contextUI.memoryChoiceWasExplicit
+                    ? onboardingMemoryLabel(contextUI.memoryMode)
+                    : "Not chosen"
+            )
+
+            Text(onboardingMemoryExplanation)
+                .typoCaption()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("First-run memory choice")
     }
 
     private func personalityCard(_ personality: Personality, blurb: String) -> some View {
@@ -611,7 +647,7 @@ struct OnboardingSheet: View {
 
     private var footer: some View {
         HStack {
-            Button("Skip for now") { model.completeOnboarding() }
+            Button("Skip for now") { skipOnboarding() }
                 .typoLabel()
                 .accessibilityLabel("Skip for now")
             Spacer()
@@ -625,7 +661,11 @@ struct OnboardingSheet: View {
                     .buttonStyle(.borderedProminent)
                     .tint(accent)
                     .accessibilityLabel(step == .welcome ? "Get started" : "Continue")
-                    .disabled(step == .integrations && !model.onboardingModelReady)
+                    .disabled(
+                        step == .integrations
+                            && !model.onboardingModelReady
+                            && ProcessInfo.processInfo.environment["ATTACHE_UI_TEST"] != "1"
+                    )
             } else {
                 Button("Finish") {
                     model.captureCurrentVoiceIntoActivePersonality()
@@ -636,6 +676,7 @@ struct OnboardingSheet: View {
                     .buttonStyle(.borderedProminent)
                     .tint(accent)
                     .accessibilityLabel("Finish welcome")
+                    .disabled(!contextUI.memoryChoiceWasExplicit)
             }
         }
         .padding(.horizontal, 24)
@@ -646,6 +687,44 @@ struct OnboardingSheet: View {
 
     private func selectWelcomePersonality(_ id: String) {
         model.selectOnboardingPersonality(id)
+    }
+
+    private var onboardingMemoryBinding: Binding<AttacheMemoryProposalMode?> {
+        Binding(
+            get: {
+                contextUI.memoryChoiceWasExplicit ? contextUI.memoryMode : nil
+            },
+            set: { choice in
+                if let choice { contextUI.setMemoryMode(choice) }
+            }
+        )
+    }
+
+    private var onboardingMemoryExplanation: String {
+        guard contextUI.memoryChoiceWasExplicit else {
+            return "Choose whether Attaché may notice durable details you tell it directly. Skipping setup leaves memory Off."
+        }
+        switch contextUI.memoryMode {
+        case .off:
+            return "Nothing new is proposed or saved. You can turn memory on later in Settings."
+        case .suggest:
+            return "Attaché asks before saving every durable detail it notices."
+        case .automatic:
+            return "Low-sensitivity facts you state clearly may be saved; sensitive or uncertain details still require approval."
+        }
+    }
+
+    private func onboardingMemoryLabel(_ mode: AttacheMemoryProposalMode) -> String {
+        switch mode {
+        case .off: return "Off"
+        case .suggest: return "Suggest"
+        case .automatic: return "Automatic"
+        }
+    }
+
+    private func skipOnboarding() {
+        contextUI.leaveMemoryOffForSkippedOnboarding()
+        model.completeOnboarding()
     }
 
     private func importOnboardingCharacter() {

@@ -218,32 +218,131 @@ public enum AttacheSessionReader {
         return prefix + text[start..<end].replacingOccurrences(of: "\n", with: " ") + suffix
     }
 
+    /// Enumerate every parsed user/assistant turn from a concrete transcript
+    /// without first loading the JSONL file into memory. The URL must already
+    /// have been resolved and authorized by the app layer; this function does
+    /// not discover sessions or grant access on its own.
+    @discardableResult
+    public static func enumerateTurns(
+        fromFileURL url: URL,
+        handle: (Int, Turn) -> Bool
+    ) -> Bool {
+        streamLocatedTurns(fromFileURL: url) { index, turn, _, _ in
+            handle(index, turn)
+        }
+    }
+
+    /// Enumerate from an already opened descriptor. The app layer uses this
+    /// overload after binding authorization to one O_NOFOLLOW/fstat-verified
+    /// transcript inode, so parsing cannot reopen a swapped pathname. The
+    /// caller retains ownership of the descriptor.
+    @discardableResult
+    public static func enumerateTurns(
+        fromFileDescriptor descriptor: Int32,
+        handle: (Int, Turn) -> Bool
+    ) -> Bool {
+        guard descriptor >= 0 else { return false }
+        let fileHandle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+        do {
+            try fileHandle.seek(toOffset: 0)
+        } catch {
+            return false
+        }
+        return streamLocatedTurns(fileHandle: fileHandle) { index, turn, _, _ in
+            handle(index, turn)
+        }
+    }
+
     /// Stream a session file's turns in order without holding the whole file:
     /// reads in chunks, parses complete lines, and calls `handle(index, turn)`.
     /// `handle` returns false to stop early (used by search).
     private static func streamTurns(fromFileURL url: URL, handle: (Int, Turn) -> Bool) {
-        guard let fileHandle = try? FileHandle(forReadingFrom: url) else { return }
+        _ = enumerateTurns(fromFileURL: url, handle: handle)
+    }
+
+    /// Stream user/assistant turns together with the exact JSONL source-line
+    /// byte range that produced each turn. The search index stores these raw
+    /// locators instead of offsets into a normalized digest, so a later reader
+    /// can re-open and validate the authoritative transcript line.
+    @discardableResult
+    static func streamLocatedTurns(
+        fromFileURL url: URL,
+        maxLineBytes: Int = 64 * 1024 * 1024,
+        handle: (Int, Turn, Int, Int) -> Bool
+    ) -> Bool {
+        guard let fileHandle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? fileHandle.close() }
+        return streamLocatedTurns(
+            fileHandle: fileHandle,
+            maxLineBytes: maxLineBytes,
+            handle: handle
+        )
+    }
+
+    /// Descriptor-preserving streaming implementation shared by URL callers
+    /// and the app's authorization-bound descriptor path.
+    @discardableResult
+    private static func streamLocatedTurns(
+        fileHandle: FileHandle,
+        maxLineBytes: Int = 64 * 1024 * 1024,
+        handle: (Int, Turn, Int, Int) -> Bool
+    ) -> Bool {
         var index = 0
-        var carry = Data()
+        var pendingLine = Data()
+        var currentLineLength = 0
+        var currentLineByteOffset = 0
+        var discardingOversizedLine = false
         let newline = UInt8(ascii: "\n")
+
+        func appendSegment(_ segment: Data.SubSequence) {
+            currentLineLength += segment.count
+            guard !discardingOversizedLine else { return }
+            guard pendingLine.count + segment.count <= maxLineBytes else {
+                // A malformed or pathological single JSONL record must not
+                // make session discovery consume unbounded memory. Keep
+                // scanning to the next newline, then resume with later turns.
+                pendingLine = Data()
+                discardingOversizedLine = true
+                return
+            }
+            pendingLine.append(contentsOf: segment)
+        }
+
+        func finishLine() -> Bool {
+            defer {
+                currentLineByteOffset += currentLineLength + 1
+                currentLineLength = 0
+                pendingLine = Data()
+                discardingOversizedLine = false
+            }
+            guard !discardingOversizedLine,
+                  let turn = turn(fromLine: pendingLine) else { return true }
+            index += 1
+            return handle(index, turn, currentLineByteOffset, currentLineLength)
+        }
+
         while true {
             let chunk = (try? fileHandle.read(upToCount: 256 * 1024)) ?? Data()
             if chunk.isEmpty { break }
-            carry.append(chunk)
-            while let nl = carry.firstIndex(of: newline) {
-                let lineData = carry[carry.startIndex..<nl]
-                carry.removeSubrange(carry.startIndex...nl)
-                if let turn = turn(fromLine: lineData) {
-                    index += 1
-                    if !handle(index, turn) { return }
+            var cursor = chunk.startIndex
+            while cursor < chunk.endIndex {
+                if let nl = chunk[cursor...].firstIndex(of: newline) {
+                    appendSegment(chunk[cursor..<nl])
+                    if !finishLine() { return true }
+                    cursor = chunk.index(after: nl)
+                } else {
+                    appendSegment(chunk[cursor..<chunk.endIndex])
+                    cursor = chunk.endIndex
                 }
             }
         }
-        if !carry.isEmpty, let turn = turn(fromLine: carry) {
+        if currentLineLength > 0,
+           !discardingOversizedLine,
+           let turn = turn(fromLine: pendingLine) {
             index += 1
-            _ = handle(index, turn)
+            _ = handle(index, turn, currentLineByteOffset, currentLineLength)
         }
+        return true
     }
 
     private static func turn(fromLine data: Data) -> Turn? {

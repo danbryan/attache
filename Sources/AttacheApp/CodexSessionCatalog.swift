@@ -22,6 +22,7 @@ struct CodexSessionTarget: Identifiable, Codable, Equatable {
     var category: CodexAttachmentCategory
     var status: String?
     var sourceKind: SourceKind = .codex
+    var filePath: String? = nil
 
     var shortID: String {
         String(id.prefix(8))
@@ -110,32 +111,34 @@ final class CodexSessionCatalog {
 
     func loadSnapshot(activeLimit: Int = 30, archivedLimit: Int = 20, automationLimit: Int = 20) -> CodexSessionCatalogSnapshot {
         let indexedSessions = loadIndexedSessions()
-        let activeIDs = sessionIDs(in: sessionsDirectory)
-        let archivedIDs = sessionIDs(in: archivedSessionsDirectory)
-        let missingFilesystemIndex = activeIDs.isEmpty && archivedIDs.isEmpty
+        let activeFiles = sessionFiles(in: sessionsDirectory)
+        let archivedFiles = sessionFiles(in: archivedSessionsDirectory)
+        let missingFilesystemIndex = activeFiles.isEmpty && archivedFiles.isEmpty
         let automations = loadAutomations(limit: automationLimit)
 
         let activeSessions = indexedSessions.compactMap { entry -> CodexSessionTarget? in
-            guard missingFilesystemIndex || activeIDs.contains(entry.id) else { return nil }
+            guard missingFilesystemIndex || activeFiles[entry.id] != nil else { return nil }
             return CodexSessionTarget(
                 id: entry.id,
                 title: entry.threadName,
                 updatedAt: entry.date,
                 category: .activeSession,
-                status: nil
+                status: nil,
+                filePath: activeFiles[entry.id]?.path
             )
         }
         .prefix(activeLimit)
         .map { $0 }
 
         let archivedSessions = indexedSessions.compactMap { entry -> CodexSessionTarget? in
-            guard !missingFilesystemIndex, archivedIDs.contains(entry.id) else { return nil }
+            guard !missingFilesystemIndex, archivedFiles[entry.id] != nil else { return nil }
             return CodexSessionTarget(
                 id: entry.id,
                 title: entry.threadName,
                 updatedAt: entry.date,
                 category: .archivedSession,
-                status: nil
+                status: nil,
+                filePath: archivedFiles[entry.id]?.path
             )
         }
         .prefix(archivedLimit)
@@ -170,23 +173,23 @@ final class CodexSessionCatalog {
         fractionalParser.date(from: value) ?? wholeSecondParser.date(from: value)
     }
 
-    private func sessionIDs(in directory: URL) -> Set<String> {
+    private func sessionFiles(in directory: URL) -> [String: URL] {
         guard let enumerator = FileManager.default.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else {
-            return []
+            return [:]
         }
 
-        var ids = Set<String>()
+        var files: [String: URL] = [:]
         for case let fileURL as URL in enumerator {
             guard fileURL.pathExtension == "jsonl" else { continue }
             if let id = sessionID(in: fileURL.lastPathComponent) {
-                ids.insert(id)
+                files[id] = fileURL
             }
         }
-        return ids
+        return files
     }
 
     private func sessionID(in fileName: String) -> String? {

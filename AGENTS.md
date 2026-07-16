@@ -111,8 +111,9 @@ swift test
   default rather than forcing plain readback.
 - `ATTACHE_DISABLE_TOPIC_TAGGING=1` turns off background topic tagging; most
   smoke scripts set it to keep runs deterministic and avoid stray LLM calls.
-- `ATTACHE_LIVE_CODEX_ROUTING_TEST=1` un-skips the real Codex routing canary in
-  `swift test` (wrapped by `scripts/codex-personality-routing-canary.sh`).
+- `scripts/codex-personality-routing-canary.sh` proves that legacy Codex
+  personality settings fail before compilation, subprocess launch, or app-tool
+  execution. Codex remains available as an agent source and reverse-send target.
 - `SMOKE_POSE=inbox|settings|live` (comma-separated, applied in order) poses the
   packaged app for screenshots via the smoke harness; `SMOKE_TEXTSCALE` sets
   text size and `SMOKE_POSE_SECONDS` the hold time.
@@ -385,7 +386,7 @@ Before claiming a change works, verify:
 - `swift build && swift test` pass,
 - `scripts/ui-smoke.sh` passes.
 - Before a release candidate, run `scripts/release-readiness-smoke.sh` as the
-  ten-gate pre-release suite. Set `ATTACHE_RELEASE_READINESS_WITH_CODEX=1`
+  eleven-gate pre-release suite. Set `ATTACHE_RELEASE_READINESS_WITH_CODEX=1`
   when the candidate also needs the real Codex f7/f8 round trips in the same
   run, and `ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1` when it also needs the
   real Claude Code f21 round trip (`scripts/claude-two-way-smoke.sh`,

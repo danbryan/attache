@@ -1,4 +1,5 @@
 import AppKit
+import AttacheCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -234,6 +235,7 @@ struct PersonalityStudioRequest: Identifiable {
 
 struct PersonalityStudioSheet: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var contextUI = AttacheContextUIState.shared
     let request: PersonalityStudioRequest
     var onClose: (() -> Void)?
 
@@ -244,6 +246,7 @@ struct PersonalityStudioSheet: View {
     @State private var modelOptions: [AttachePresentationModelOption] = []
     @State private var modelDiscoveryStatus = ""
     @State private var pendingCloudVoice: AttacheSpeechProvider?
+    @State private var previewAfterCloudVoiceConsent = false
     @State private var pendingCloudModel: AttachePresentationProvider?
     @State private var personalityLibraryPresented = false
     @State private var personalityQuery = ""
@@ -302,6 +305,7 @@ struct PersonalityStudioSheet: View {
                             VStack(alignment: .leading, spacing: 18) {
                                 voiceSection
                                 modelSection
+                                contextSection
                             }
                             .frame(width: 390, alignment: .top)
                         }
@@ -333,16 +337,31 @@ struct PersonalityStudioSheet: View {
         }
         .onDisappear { model.cancelPersonalityPreview() }
         .sheet(item: $pendingCloudVoice) { engine in
+            let requestedXAIBaseURL = draftXAIBaseURL(for: engine)
             CloudConsentSheet(
                 providerName: engine.title,
                 produces: "speech",
                 sends: "the preview greeting and future recap text",
+                destination: model.voiceConsentDestination(
+                    for: engine,
+                    xaiBaseURL: requestedXAIBaseURL
+                ),
                 onEnable: {
-                    model.cloudConsentVoiceAcknowledged = true
+                    model.acknowledgeCloudVoiceConsent(
+                        for: engine,
+                        xaiBaseURL: requestedXAIBaseURL
+                    )
                     setVoiceProvider(engine)
                     pendingCloudVoice = nil
+                    if previewAfterCloudVoiceConsent {
+                        previewAfterCloudVoiceConsent = false
+                        beginPersonalityPreview()
+                    }
                 },
-                onCancel: { pendingCloudVoice = nil }
+                onCancel: {
+                    previewAfterCloudVoiceConsent = false
+                    pendingCloudVoice = nil
+                }
             )
         }
         .sheet(item: $pendingCloudModel) { provider in
@@ -380,13 +399,7 @@ struct PersonalityStudioSheet: View {
                     .multilineTextAlignment(.center)
             }
 
-            Button {
-                previewPreparing = true
-                model.previewPersonality(draft) { greeting in
-                    previewText = greeting
-                    previewPreparing = false
-                }
-            } label: {
+            Button(action: requestPersonalityPreview) {
                 Label(previewPreparing ? "Preparing…" : "Preview personality", systemImage: "play.fill")
                     .frame(maxWidth: .infinity)
             }
@@ -748,6 +761,10 @@ struct PersonalityStudioSheet: View {
                     get: { modelRef.provider },
                     set: { requestModelProvider($0) }
                 )) {
+                    if !modelRef.provider.supportsSafePersonalityInference {
+                        Text("\(modelRef.provider.title) (disabled)").tag(modelRef.provider)
+                            .disabled(true)
+                    }
                     ForEach(modelProviderOptions) {
                         Label($0.title, systemImage: modelProviderIcon($0)).tag($0)
                     }
@@ -810,7 +827,12 @@ struct PersonalityStudioSheet: View {
                     Text(modelDiscoveryStatus).typoCaption().foregroundStyle(.secondary)
                 }
                 if !model.connectedTextProviders.contains(modelRef.provider) {
-                    Label("\(modelRef.provider.title) is not configured yet. This selection stays attached to the character, and safe fallback applies until Integrations is ready.", systemImage: "exclamationmark.triangle.fill")
+                    Label(
+                        modelRef.provider.supportsSafePersonalityInference
+                            ? "\(modelRef.provider.title) is not configured yet. This selection stays attached to the character, and safe fallback applies until Integrations is ready."
+                            : "Codex subscription inference is disabled because Codex CLI cannot yet guarantee that native file-reading tools are off. Choose another provider before saving.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
                         .typoCaption()
                         .foregroundStyle(.orange)
                 }
@@ -842,6 +864,11 @@ struct PersonalityStudioSheet: View {
                             HStack(spacing: 7) {
                                 Text("\(index + 1). \(provider.title)")
                                     .typoCaption(.medium)
+                                if !provider.supportsSafePersonalityInference {
+                                    Text("Disabled")
+                                        .typoCaption(.medium)
+                                        .foregroundStyle(.orange)
+                                }
                                 Spacer()
                                 Button {
                                     updateModel { ref in
@@ -881,6 +908,33 @@ struct PersonalityStudioSheet: View {
         }
     }
 
+    private var contextSection: some View {
+        studioSection(title: "Context") {
+            ContextStrategyEditor(
+                strategyOverride: Binding(
+                    get: { draft.contextStrategy },
+                    set: { strategy in
+                        draft.contextStrategy = strategy
+                        draft.contextStrategyMigrationNotice = nil
+                    }
+                ),
+                globalStrategy: contextUI.globalStrategy,
+                allowsInheritance: true,
+                capabilitySummary: draftCapabilitySummary,
+                modelLabel: draft.modelSummary,
+                migrationNotice: draft.contextStrategyMigrationNotice,
+                onDismissMigrationNotice: {
+                    draft.contextStrategyMigrationNotice = nil
+                },
+                onRefreshCapabilities: loadDraftModels
+            )
+            Text("This character can inherit the app default or carry its own context policy. Model facts are detected separately and are never overwritten by Custom limits.")
+                .typoCaption()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var footer: some View {
         HStack {
             Spacer()
@@ -911,7 +965,10 @@ struct PersonalityStudioSheet: View {
             && draft.voiceRef != nil
             && draftVoiceIsComplete
             && draft.modelRef?.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            && draft.modelRef?.provider.supportsSafePersonalityInference == true
+            && draft.modelRef?.fallbackProviders.allSatisfy(\.supportsSafePersonalityInference) == true
             && draftReasoningIsValid
+            && (draft.contextStrategy?.isValidForSaving ?? true)
     }
 
     private var voiceEngineOptions: [AttacheSpeechProvider] {
@@ -919,15 +976,49 @@ struct PersonalityStudioSheet: View {
     }
 
     private var modelProviderOptions: [AttachePresentationProvider] {
-        AttachePresentationProvider.allCases
+        AttachePresentationProvider.personalityInferenceCases
     }
 
     private func requestVoiceProvider(_ provider: AttacheSpeechProvider) {
-        if provider.sendsToCloud, !model.cloudConsentVoiceAcknowledged {
+        previewAfterCloudVoiceConsent = false
+        if provider.sendsToCloud,
+           !model.cloudVoiceConsentAcknowledged(
+               for: provider,
+               xaiBaseURL: draftXAIBaseURL(for: provider)
+           ) {
             pendingCloudVoice = provider
         } else {
             setVoiceProvider(provider)
         }
+    }
+
+    private func requestPersonalityPreview() {
+        guard let provider = draft.voiceRef?.provider else { return }
+        if provider.sendsToCloud,
+           !model.cloudVoiceConsentAcknowledged(
+               for: provider,
+               xaiBaseURL: draftXAIBaseURL(for: provider)
+           ) {
+            previewAfterCloudVoiceConsent = true
+            pendingCloudVoice = provider
+            return
+        }
+        beginPersonalityPreview()
+    }
+
+    private func beginPersonalityPreview() {
+        previewPreparing = true
+        model.previewPersonality(draft) { greeting in
+            previewText = greeting
+            previewPreparing = false
+        }
+    }
+
+    private func draftXAIBaseURL(for provider: AttacheSpeechProvider) -> String? {
+        guard provider == .xai else { return nil }
+        let imported = (draft.voiceRef?.xaiBaseURL ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return imported.isEmpty ? model.xaiBaseURL : imported
     }
 
     private func setVoiceProvider(_ provider: AttacheSpeechProvider) {
@@ -976,14 +1067,16 @@ struct PersonalityStudioSheet: View {
                     supported: supported
                 ),
             serviceTier: provider.defaultServiceTier,
-            fallbackProviders: (draft.modelRef?.fallbackProviders ?? []).filter { $0 != provider }
+            fallbackProviders: (draft.modelRef?.fallbackProviders ?? []).filter {
+                $0 != provider && $0.supportsSafePersonalityInference
+            }
         )
         loadDraftModels()
     }
 
     private var fallbackProviderOptions: [AttachePresentationProvider] {
         guard let ref = draft.modelRef else { return [] }
-        return AttachePresentationProvider.allCases.filter {
+        return AttachePresentationProvider.personalityInferenceCases.filter {
             $0 != ref.provider && !ref.fallbackProviders.contains($0)
         }
     }
@@ -1002,6 +1095,20 @@ struct PersonalityStudioSheet: View {
             modelID: ref.model
         )
         return modelOptions.contains(where: { $0.id == ref.model }) ? discovered : fallback
+    }
+
+    private var draftCapabilitySummary: AttacheCapabilitySummary {
+        guard let ref = draft.modelRef else {
+            return .from(detected: .unknown, override: draft.contextStrategy?.custom)
+        }
+        let exactOption = modelOptions.first(where: { $0.id == ref.model })
+        let detected = exactOption?.capabilityProfile
+            ?? AttachePresentationModelService.capabilityProfile(
+                provider: ref.provider,
+                baseURLText: model.endpointForIntegration(ref.provider),
+                modelID: ref.model
+            )
+        return .from(detected: detected, override: draft.contextStrategy?.custom)
     }
 
     private func normalizedDraftReasoning(in options: [String]) -> String {
@@ -1040,6 +1147,11 @@ struct PersonalityStudioSheet: View {
         guard let provider = draft.modelRef?.provider else {
             modelOptions = []
             modelDiscoveryStatus = ""
+            return
+        }
+        guard provider.supportsSafePersonalityInference else {
+            modelOptions = []
+            modelDiscoveryStatus = "Codex subscription inference is disabled until its CLI can guarantee native file-reading tools are off."
             return
         }
         modelDiscoveryStatus = "Loading \(provider.title) models…"

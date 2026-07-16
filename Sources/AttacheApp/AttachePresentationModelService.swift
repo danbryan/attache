@@ -6,9 +6,29 @@ struct AttachePresentationModelOption: Identifiable, Hashable {
     var detail: String
     var reasoningEfforts: [String]
     var serviceTiers: [AttachePresentationServiceTierOption] = []
+    var capabilityProfile: AttacheModelCapabilityProfile = .unknown
 
     var title: String {
         detail.isEmpty ? id : "\(id) - \(detail)"
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id
+            && lhs.detail == rhs.detail
+            && lhs.reasoningEfforts == rhs.reasoningEfforts
+            && lhs.serviceTiers == rhs.serviceTiers
+            && lhs.capabilityProfile == rhs.capabilityProfile
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(detail)
+        hasher.combine(reasoningEfforts)
+        hasher.combine(serviceTiers)
+        hasher.combine(capabilityProfile.declaredInputCeiling)
+        hasher.combine(capabilityProfile.outputLimit)
+        hasher.combine(capabilityProfile.estimatorFamily)
+        hasher.combine(capabilityProfile.provenance.rawValue)
     }
 }
 
@@ -19,6 +39,32 @@ struct AttachePresentationServiceTierOption: Identifiable, Hashable {
 }
 
 enum AttachePresentationModelService {
+    /// Runtime capability facts discovered from the exact provider endpoint.
+    /// The cache key includes provider, normalized endpoint, and model, so a
+    /// Custom URL change or a second Ollama host cannot inherit stale limits.
+    private static let capabilityCache: AttacheCapabilityCache = {
+        let cache = AttacheCapabilityCache()
+        if let data = try? Data(contentsOf: capabilityCacheURL),
+           let persisted = try? JSONDecoder().decode(
+            [String: AttacheCapabilityCacheRecord].self,
+            from: data
+           ) {
+            cache.restore(persisted)
+        }
+        return cache
+    }()
+
+    private static let capabilityCacheURL: URL = {
+        // Unit tests must never read or mutate the user's live capability
+        // cache. The production app uses its restrictive support directory.
+        if NSClassFromString("XCTestCase") != nil {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("attache-capabilities-test-\(getpid()).json")
+        }
+        return AttacheAppSupport.supportDirectory()
+            .appendingPathComponent("ModelCapabilities.json")
+    }()
+
     static func fetchModels(
         provider: AttachePresentationProvider,
         baseURLText: String,
@@ -27,7 +73,9 @@ enum AttachePresentationModelService {
         // CLI providers have no HTTP endpoint, so resolve their models before building
         // a base URL (an empty URL would crash the force-unwrap below).
         if provider.isCLI {
-            return cliModels(for: provider)
+            let options = cliModels(for: provider)
+            recordCapabilities(options, provider: provider, baseURLText: "")
+            return options
         }
 
         guard let baseURL = URL(string: baseURLText.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -36,17 +84,85 @@ enum AttachePresentationModelService {
         }
 
         // Model discovery is an idempotent GET; retry once on a transient failure.
+        let options: [AttachePresentationModelOption]
         switch provider {
         case .xai:
-            return try await retrying(attempts: 2) { try await fetchXAIModels(baseURL: baseURL, apiKey: apiKey) }
+            options = try await retrying(attempts: 2) { try await fetchXAIModels(baseURL: baseURL, apiKey: apiKey) }
         case .ollama:
-            return try await retrying(attempts: 2) { try await fetchOllamaModels(baseURL: baseURL) }
+            options = try await retrying(attempts: 2) { try await fetchOllamaModels(baseURL: baseURL) }
         case .groq, .custom:
-            return try await retrying(attempts: 2) {
+            options = try await retrying(attempts: 2) {
                 try await fetchOpenAICompatibleModels(baseURL: baseURL, apiKey: apiKey, provider: provider)
             }
         case .claudeCLI, .codexCLI:
-            return cliModels(for: provider)   // handled above; keeps the switch exhaustive
+            options = cliModels(for: provider)   // handled above; keeps the switch exhaustive
+        }
+        recordCapabilities(options, provider: provider, baseURLText: baseURL.absoluteString)
+        return options
+    }
+
+    static func modelIdentity(
+        provider: AttachePresentationProvider,
+        baseURLText: String,
+        modelID: String
+    ) -> ModelIdentity {
+        ModelIdentity(
+            provider: provider.rawValue,
+            normalizedEndpoint: provider.isCLI ? "" : baseURLText,
+            requestedModel: modelID
+        )
+    }
+
+    /// Last provider-confirmed facts for one exact destination. Unknown is a
+    /// first-class result and activates the compiler's conservative envelope.
+    static func capabilityProfile(
+        provider: AttachePresentationProvider,
+        baseURLText: String,
+        modelID: String
+    ) -> AttacheModelCapabilityProfile {
+        let identity = modelIdentity(provider: provider, baseURLText: baseURLText, modelID: modelID)
+        guard let record = capabilityCache.record(for: identity) else { return .unknown }
+        let profile = record.profile
+        return AttacheModelCapabilityProfile(
+            architecturalMaximum: profile.architecturalMaximum,
+            configuredRuntimeLimit: profile.configuredRuntimeLimit,
+            outputLimit: profile.outputLimit,
+            estimatorFamily: profile.estimatorFamily,
+            supportsReasoning: profile.supportsReasoning,
+            reasoningLevels: profile.reasoningLevels,
+            freshness: profile.freshness ?? record.recordedAt,
+            confidence: profile.confidence,
+            provenance: profile.provenance
+        )
+    }
+
+    private static func recordCapabilities(
+        _ options: [AttachePresentationModelOption],
+        provider: AttachePresentationProvider,
+        baseURLText: String
+    ) {
+        for option in options {
+            let identity = modelIdentity(
+                provider: provider,
+                baseURLText: baseURLText,
+                modelID: option.id
+            )
+            capabilityCache.record(identity: identity, profile: option.capabilityProfile)
+        }
+        persistCapabilityCache()
+    }
+
+    private static func persistCapabilityCache() {
+        guard let data = try? JSONEncoder().encode(capabilityCache.snapshot()) else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: capabilityCacheURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: capabilityCacheURL, options: [.atomic])
+            _ = chmod(capabilityCacheURL.path, 0o600)
+        } catch {
+            // Discovery remains usable in memory if persistence is unavailable.
         }
     }
 
@@ -64,7 +180,20 @@ enum AttachePresentationModelService {
                 ("opus", "most capable"),
                 ("sonnet", "most efficient"),
                 ("haiku", "fastest")
-            ].map { AttachePresentationModelOption(id: $0.0, detail: $0.1, reasoningEfforts: efforts) }
+            ].map {
+                AttachePresentationModelOption(
+                    id: $0.0,
+                    detail: $0.1,
+                    reasoningEfforts: efforts,
+                    capabilityProfile: AttacheModelCapabilityProfile(
+                        architecturalMaximum: nil,
+                        supportsReasoning: true,
+                        reasoningLevels: efforts,
+                        confidence: .unknown,
+                        provenance: .unknown
+                    )
+                )
+            }
         case .codexCLI:
             return codexModelsFromCache()
         default:
@@ -95,11 +224,15 @@ enum AttachePresentationModelService {
                 ? fallbackReasoningEfforts(provider: .codexCLI, modelID: slug)
                 : (["default"] + levels)
             let serviceTiers = serviceTiers(in: model, provider: .codexCLI, modelID: slug)
+            var capabilityJSON = model
+            capabilityJSON["reasoning_levels"] = levels
+            let profile = AttacheCapabilityParser.parseCodexCache(capabilityJSON) ?? .unknown
             options.append(AttachePresentationModelOption(
                 id: slug,
                 detail: name.lowercased() == slug.lowercased() ? "" : name,
                 reasoningEfforts: efforts,
-                serviceTiers: serviceTiers
+                serviceTiers: serviceTiers,
+                capabilityProfile: profile
             ))
         }
         return options
@@ -168,33 +301,40 @@ enum AttachePresentationModelService {
         _ options: [AttachePresentationModelOption],
         baseURL: URL
     ) async -> [AttachePresentationModelOption] {
-        await withTaskGroup(of: (String, [String]).self) { group in
+        await withTaskGroup(of: (String, [String], AttacheModelCapabilityProfile).self) { group in
             for option in options {
                 group.addTask {
-                    let efforts = (try? await fetchOllamaReasoningEfforts(
+                    let capability = try? await fetchOllamaCapability(
                         baseURL: baseURL,
                         modelID: option.id
-                    )) ?? []
-                    return (option.id, efforts)
+                    )
+                    return (
+                        option.id,
+                        capability?.reasoningEfforts ?? [],
+                        capability?.profile ?? .unknown
+                    )
                 }
             }
 
             var effortsByID: [String: [String]] = [:]
-            for await (id, efforts) in group {
+            var profileByID: [String: AttacheModelCapabilityProfile] = [:]
+            for await (id, efforts, profile) in group {
                 effortsByID[id] = efforts
+                profileByID[id] = profile
             }
             return options.map { option in
                 var enriched = option
                 enriched.reasoningEfforts = effortsByID[option.id] ?? []
+                enriched.capabilityProfile = profileByID[option.id] ?? .unknown
                 return enriched
             }
         }
     }
 
-    private static func fetchOllamaReasoningEfforts(
+    private static func fetchOllamaCapability(
         baseURL: URL,
         modelID: String
-    ) async throws -> [String] {
+    ) async throws -> (reasoningEfforts: [String], profile: AttacheModelCapabilityProfile) {
         let showURL = ollamaNativeBaseURL(from: baseURL)
             .appendingPathComponent("api")
             .appendingPathComponent("show")
@@ -204,7 +344,24 @@ enum AttachePresentationModelService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["model": modelID])
         let data = try await data(request: request, providerName: "Ollama")
-        return try parseOllamaShowReasoningEfforts(data, modelID: modelID)
+        guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ModelDiscoveryError.invalidPayload("Ollama")
+        }
+        root["name"] = modelID
+        let efforts = try parseOllamaShowReasoningEfforts(data, modelID: modelID)
+        let parsed = AttacheCapabilityParser.parseOllama(show: root) ?? .unknown
+        let profile = AttacheModelCapabilityProfile(
+            architecturalMaximum: parsed.architecturalMaximum,
+            configuredRuntimeLimit: parsed.configuredRuntimeLimit,
+            outputLimit: parsed.outputLimit,
+            estimatorFamily: parsed.estimatorFamily,
+            supportsReasoning: !efforts.isEmpty,
+            reasoningLevels: efforts,
+            freshness: parsed.freshness,
+            confidence: parsed.confidence,
+            provenance: parsed.provenance
+        )
+        return (efforts, profile)
     }
 
     private static func fetchOpenAICompatibleModels(
@@ -230,7 +387,14 @@ enum AttachePresentationModelService {
     }
 
     private static func data(request: URLRequest, providerName: String) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // Model discovery is an egress too. A redirect can forward the bearer
+        // credential (or Ollama's model identifier) to a destination that was
+        // never classified or consented, so expose the 3xx response instead of
+        // following it. This is the same fail-closed policy as inference.
+        let (data, response) = try await URLSession.shared.data(
+            for: request,
+            delegate: AttacheNoRedirectDelegate()
+        )
         guard let httpResponse = response as? HTTPURLResponse else {
             throw ModelDiscoveryError.invalidResponse(providerName)
         }
@@ -250,6 +414,7 @@ enum AttachePresentationModelService {
         return models.compactMap { model in
             guard let id = model["id"] as? String, !id.isEmpty else { return nil }
             guard supportsXAIChatCompletions(modelID: id) else { return nil }
+            let efforts = reasoningEfforts(in: model, provider: .xai, modelID: id)
             let aliases = (model["aliases"] as? [String] ?? []).filter { !$0.isEmpty }
             let modalities = [model["input_modalities"], model["output_modalities"]]
                 .compactMap { $0 as? [String] }
@@ -266,8 +431,9 @@ enum AttachePresentationModelService {
                 // but its published schema does not include reasoning levels.
                 // Prefer any future advertised levels, then use the documented
                 // capability table for known model families.
-                reasoningEfforts: reasoningEfforts(in: model, provider: .xai, modelID: id),
-                serviceTiers: serviceTiers(in: model, provider: .xai, modelID: id)
+                reasoningEfforts: efforts,
+                serviceTiers: serviceTiers(in: model, provider: .xai, modelID: id),
+                capabilityProfile: hostedCapabilityProfile(model, reasoningEfforts: efforts)
             )
         }
         .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
@@ -288,7 +454,8 @@ enum AttachePresentationModelService {
                 id: id,
                 detail: owner,
                 reasoningEfforts: efforts,
-                serviceTiers: serviceTiers(in: model, provider: provider, modelID: id)
+                serviceTiers: serviceTiers(in: model, provider: provider, modelID: id),
+                capabilityProfile: hostedCapabilityProfile(model, reasoningEfforts: efforts)
             )
         }
         .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
@@ -337,28 +504,11 @@ enum AttachePresentationModelService {
     }
 
     static func fallbackReasoningEfforts(provider: AttachePresentationProvider, modelID: String) -> [String] {
-        let normalizedID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        _ = modelID
         switch provider {
-        case .xai:
-            if normalizedID == "grok-4.5" || normalizedID.hasPrefix("grok-4.5-") {
-                return ["low", "medium", "high"]
-            }
-            if normalizedID == "grok-4.3" || normalizedID.hasPrefix("grok-4.3-") {
-                return ["none", "low", "medium", "high"]
-            }
-            return []
-        case .groq:
-            if normalizedID.contains("qwen3-32b") || normalizedID.contains("qwen-3-32b") {
-                return ["default", "none"]
-            }
-            if normalizedID.contains("gpt-oss") {
-                return ["low", "medium", "high"]
-            }
-            return []
-        case .custom:
-            if normalizedID.hasPrefix("gpt-5") {
-                return ["none", "minimal", "low", "medium", "high", "xhigh"]
-            }
+        case .xai, .groq, .custom:
+            // Hosted model names never imply capability. The selected model's
+            // live catalog metadata is the only authority.
             return []
         case .claudeCLI:
             return ["default", "low", "medium", "high", "xhigh", "max"]
@@ -430,10 +580,32 @@ enum AttachePresentationModelService {
         provider: AttachePresentationProvider,
         modelID: String
     ) -> [String] {
-        let advertised = advertisedReasoningEfforts(in: model)
-        return advertised.isEmpty
-            ? fallbackReasoningEfforts(provider: provider, modelID: modelID)
-            : advertised
+        _ = provider
+        _ = modelID
+        // Hosted providers are the authority for a discovered model. A model
+        // name is not a capability contract, so a newly released alias must not
+        // inherit a hard-coded reasoning menu from a similarly named model.
+        // Local CLI catalogs and Ollama's /api/show path attach their own
+        // explicit levels before reaching this helper.
+        return advertisedReasoningEfforts(in: model)
+    }
+
+    private static func hostedCapabilityProfile(
+        _ model: [String: Any],
+        reasoningEfforts: [String]
+    ) -> AttacheModelCapabilityProfile {
+        let parsed = AttacheCapabilityParser.parseHostedModel(model) ?? .unknown
+        return AttacheModelCapabilityProfile(
+            architecturalMaximum: parsed.architecturalMaximum,
+            configuredRuntimeLimit: parsed.configuredRuntimeLimit,
+            outputLimit: parsed.outputLimit,
+            estimatorFamily: parsed.estimatorFamily,
+            supportsReasoning: !reasoningEfforts.isEmpty,
+            reasoningLevels: reasoningEfforts,
+            freshness: parsed.freshness,
+            confidence: reasoningEfforts.isEmpty ? parsed.confidence : .authoritative,
+            provenance: reasoningEfforts.isEmpty ? parsed.provenance : .providerMetadata
+        )
     }
 
     /// Attaché currently sends xAI turns through `/v1/chat/completions`.

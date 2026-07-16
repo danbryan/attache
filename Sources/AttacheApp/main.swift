@@ -1,5 +1,33 @@
 import AppKit
 
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--context-production-probe") {
+    let outputPath = CommandLine.arguments.indices.contains(flagIndex + 1)
+        ? CommandLine.arguments[flagIndex + 1]
+        : "dist/context-production-probe"
+    do {
+        try AttacheContextProductionProbe.generate(at: URL(fileURLWithPath: outputPath))
+        print("context production probe: PASS")
+        exit(0)
+    } catch {
+        fputs("context production probe failed: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}
+
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--verify-context-production-probe") {
+    let outputPath = CommandLine.arguments.indices.contains(flagIndex + 1)
+        ? CommandLine.arguments[flagIndex + 1]
+        : "dist/context-production-probe"
+    do {
+        try AttacheContextProductionProbe.verify(at: URL(fileURLWithPath: outputPath))
+        print("context production probe verification: PASS")
+        exit(0)
+    } catch {
+        fputs("context production probe verification failed: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
+}
+
 // Fresh-process voice enumeration for the running app (the speech voice
 // registry is cached per process, so a helper spawn is the only way to see
 // voices downloaded after launch).

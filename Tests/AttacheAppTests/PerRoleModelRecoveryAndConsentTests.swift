@@ -10,9 +10,9 @@ import AttacheCore
 ///    (`selectConversationRecoveryProvider`/`selectConversationRecoveryModel`)
 ///    must persist to the `conversation` role's per-role keys, never the
 ///    global `presentationLLM*` keys presentation/recap/tagging fall back to.
-/// 2. Cloud consent is tracked per provider, migrated once from the legacy
-///    single `cloudConsentPresentation` flag onto whatever provider was
-///    configured at migration time, and that migration never re-runs.
+/// 2. Cloud consent is tracked per provider, normalized endpoint, and egress
+///    class. Legacy provider-only consent is migrated to the endpoint configured
+///    at migration time, and that migration never re-runs.
 ///
 /// `AppModel`'s only initializer reads `UserDefaults.standard` directly (no
 /// injectable defaults), so these tests follow the same pattern already used
@@ -33,6 +33,13 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
         AttachePreferenceKey.cloudConsentPresentation,
         AttachePreferenceKey.cloudConsentPresentationProviders,
         AttachePreferenceKey.cloudConsentPresentationMigrationDone,
+        AttachePreferenceKey.cloudConsentVoice,
+        AttachePreferenceKey.cloudConsentVoiceScopes,
+        AttachePreferenceKey.cloudConsentVoiceMigrationDone,
+        AttachePreferenceKey.speechProvider,
+        AttachePreferenceKey.xaiBaseURL,
+        AttachePreferenceKey.ollamaBaseURL,
+        AttachePreferenceKey.customBaseURL,
         AttachePreferenceKey.onboardingCompleted,
         AttachePreferenceKey.presentationLLMRoleKey(.conversation, .provider),
         AttachePreferenceKey.presentationLLMRoleKey(.conversation, .baseURL),
@@ -151,11 +158,11 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
         defaults.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         defaults.set(true, forKey: AttachePreferenceKey.cloudConsentPresentation)
 
-        _ = try AppModel(store: CardStore.inMemory())
-        XCTAssertEqual(
-            defaults.array(forKey: AttachePreferenceKey.cloudConsentPresentationProviders) as? [String],
-            [AttachePresentationProvider.xai.rawValue]
-        )
+        let firstLaunch = try AppModel(store: CardStore.inMemory())
+        let migrated = defaults.array(forKey: AttachePreferenceKey.cloudConsentPresentationProviders) as? [String]
+        XCTAssertEqual(migrated?.count, 1)
+        XCTAssertTrue(migrated?.first?.hasPrefix("v2|xai|") == true)
+        XCTAssertTrue(firstLaunch.cloudConsentAcknowledged(for: .xai))
 
         // Revoke consent and switch the configured provider, then relaunch:
         // since migration already ran once, the stale legacy `true` flag
@@ -166,6 +173,87 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
         let secondLaunch = try AppModel(store: CardStore.inMemory())
         XCTAssertFalse(secondLaunch.cloudConsentAcknowledged(for: .groq), "migration must not re-run on a later launch")
         XCTAssertFalse(secondLaunch.cloudConsentAcknowledged(for: .xai), "the explicit revocation above must stick")
+    }
+
+    func testCustomEndpointChangeRequiresFreshConsent() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+
+        defaults.set(AttachePresentationProvider.custom.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("https://first.example/v1", forKey: AttachePreferenceKey.customBaseURL)
+
+        let model = try AppModel(store: CardStore.inMemory())
+        model.acknowledgeCloudConsent(for: .custom)
+        XCTAssertTrue(model.cloudConsentAcknowledged(for: .custom))
+
+        model.customBaseURL = "https://second.example/v1"
+        XCTAssertFalse(
+            model.cloudConsentAcknowledged(for: .custom),
+            "consent for one Custom destination must not authorize another"
+        )
+    }
+
+    func testEquivalentCustomEndpointKeepsConsent() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+
+        defaults.set(AttachePresentationProvider.custom.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("HTTPS://Example.COM:443/v1/", forKey: AttachePreferenceKey.customBaseURL)
+
+        let model = try AppModel(store: CardStore.inMemory())
+        model.acknowledgeCloudConsent(for: .custom)
+        model.customBaseURL = "https://example.com/v1"
+
+        XCTAssertTrue(
+            model.cloudConsentAcknowledged(for: .custom),
+            "cosmetic URL spelling changes must not cause repeated consent prompts"
+        )
+    }
+
+    func testRemoteToLoopbackEndpointChangesConsentScopeAndEgress() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+
+        defaults.set(AttachePresentationProvider.custom.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set("https://remote.example/v1", forKey: AttachePreferenceKey.customBaseURL)
+
+        let model = try AppModel(store: CardStore.inMemory())
+        model.acknowledgeCloudConsent(for: .custom)
+        XCTAssertTrue(model.presentationProviderSendsToCloud(.custom))
+
+        model.customBaseURL = "http://127.0.0.1:11434/v1"
+        XCTAssertFalse(model.presentationProviderSendsToCloud(.custom))
+        XCTAssertFalse(
+            model.cloudConsentAcknowledged(for: .custom),
+            "the storage scope must reflect the current endpoint and egress class"
+        )
+    }
+
+    func testLegacyVoiceConsentDoesNotBlessNonstandardImportedXAIEndpoint() throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
+        defer { snapshot.restore() }
+
+        defaults.set(AttacheSpeechProvider.xai.rawValue, forKey: AttachePreferenceKey.speechProvider)
+        defaults.set("https://credential-exfil.example/v1", forKey: AttachePreferenceKey.xaiBaseURL)
+        defaults.set(true, forKey: AttachePreferenceKey.cloudConsentVoice)
+
+        let model = try AppModel(store: CardStore.inMemory())
+
+        XCTAssertFalse(
+            model.cloudVoiceConsentAcknowledged(
+                for: .xai,
+                xaiBaseURL: "https://credential-exfil.example/v1"
+            )
+        )
+        XCTAssertTrue(defaults.bool(forKey: AttachePreferenceKey.cloudConsentVoiceMigrationDone))
     }
 }
 

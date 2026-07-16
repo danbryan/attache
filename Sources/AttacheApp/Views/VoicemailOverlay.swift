@@ -190,6 +190,8 @@ extension AttacheRootView {
                     .id(card.id)
                 }
 
+                ContextReceiptDisclosure(responseID: card.id)
+
                 followUp(for: card)
 
                 HStack {
@@ -339,6 +341,9 @@ extension AttacheRootView {
                             RoundedRectangle(cornerRadius: 8)
                                 .stroke(accent.opacity(0.22))
                         )
+                    if let responseID = model.liveFollowUpReceiptResponseID {
+                        ContextReceiptDisclosure(responseID: responseID)
+                    }
                 }
             }
         }
@@ -456,6 +461,9 @@ extension AttacheRootView {
                             RoundedRectangle(cornerRadius: 8)
                                 .stroke(accent.opacity(0.22))
                         )
+                    if let responseID = model.followUpReceiptResponseID {
+                        ContextReceiptDisclosure(responseID: responseID)
+                    }
                 }
             }
         }

@@ -104,9 +104,18 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
     /// waits for the session to be idle).
     @discardableResult
     func confirmAndDeliver(id: String, now: Date = Date()) async throws -> [Instruction] {
-        _ = try engine.confirm(id: id, now: now)
-        refreshLog()
+        _ = try confirm(id: id, now: now)
         return await pump(now: now)
+    }
+
+    /// Persist confirmation synchronously before any delivery task is spawned
+    /// (INF-343). This gives the direct-send path a deterministic durable gate
+    /// and lets callers observe `confirmedAt` immediately without sleeps.
+    @discardableResult
+    func confirm(id: String, now: Date = Date()) throws -> Instruction {
+        let instruction = try engine.confirm(id: id, now: now)
+        refreshLog()
+        return instruction
     }
 
     func cancel(id: String) throws {

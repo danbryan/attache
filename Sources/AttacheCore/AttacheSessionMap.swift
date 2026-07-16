@@ -197,6 +197,11 @@ public enum AttacheSessionMapBuilder {
     public static let maxTermLength = 50
     public static let timeGapThresholdSeconds: TimeInterval = 300 // 5 minutes
     public static let currentMapVersion = 1
+    /// Keeps downstream review stages granular even when a transcript has no
+    /// natural topic or time boundary. A single larger turn remains one exact
+    /// source range and is rejected by the review planner if it cannot fit.
+    public static let maxTurnsPerEpisode = 16
+    public static let maxCharactersPerEpisode = 24_000
 
     /// Build a session map from turns (INF-326). Partitions into episodes
     /// based on time gaps, user pivots, and headings. Every eligible turn
@@ -256,7 +261,11 @@ public enum AttacheSessionMapBuilder {
                 let isUserPivot = turn.role == "user" && last.role == "assistant"
                     && currentEpisode.last?.role != "user"
                 let isHeading = turn.content.hasPrefix("#") || turn.content.hasPrefix("## ")
-                if timeGap > timeGapThresholdSeconds || isUserPivot || isHeading {
+                let wouldExceedStructuralBound = currentEpisode.count >= maxTurnsPerEpisode
+                    || currentEpisode.reduce(0) { $0 + $1.content.count } + turn.content.count
+                        > maxCharactersPerEpisode
+                if timeGap > timeGapThresholdSeconds || isUserPivot || isHeading
+                    || wouldExceedStructuralBound {
                     flushEpisode()
                 }
             }

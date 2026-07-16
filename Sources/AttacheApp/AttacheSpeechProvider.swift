@@ -45,6 +45,10 @@ struct RemoteVoiceOption: Identifiable, Equatable {
 
 struct AttacheSpeechConfiguration: Equatable {
     var provider: AttacheSpeechProvider
+    /// The exact endpoint-scoped grant captured when this immutable playback
+    /// configuration was assembled. A boolean is insufficient because a
+    /// personality can carry its own xAI base URL.
+    var remoteEgressConsentScope: String?
     var systemVoiceIdentifier: String?
     var elevenLabsAPIKey: String?
     var elevenLabsVoiceID: String
@@ -61,6 +65,7 @@ struct AttacheSpeechConfiguration: Equatable {
 
     static let systemDefault = AttacheSpeechConfiguration(
         provider: .system,
+        remoteEgressConsentScope: nil,
         systemVoiceIdentifier: nil,
         elevenLabsAPIKey: nil,
         elevenLabsVoiceID: "",
@@ -80,6 +85,9 @@ struct AttacheSpeechConfiguration: Equatable {
     /// Keeping this decision in the configuration makes playback fallback
     /// deterministic and independently testable instead of relying on UI state.
     var playbackUnavailableReason: String? {
+        if provider.sendsToCloud, !hasRemoteEgressConsent {
+            return "\(provider.title) cloud voice approval is required."
+        }
         switch provider {
         case .system:
             return nil
@@ -106,6 +114,15 @@ struct AttacheSpeechConfiguration: Equatable {
             }
         }
         return nil
+    }
+
+    var hasRemoteEgressConsent: Bool {
+        guard provider.sendsToCloud else { return true }
+        let required = VoiceConsentScope(
+            provider: provider,
+            xaiBaseURL: xaiBaseURL
+        ).storageKey
+        return remoteEgressConsentScope == required
     }
 
     func resolvedForPlayback(systemVoiceIdentifier: String?) -> AttacheSpeechConfiguration {
@@ -246,12 +263,18 @@ enum AttacheRemoteVoiceService {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    static func fetchXAIVoices(apiKey: String, baseURL: String) async throws -> [RemoteVoiceOption] {
+    static func fetchXAIVoices(
+        apiKey: String,
+        baseURL: String,
+        remoteEgressConsentScope: String?
+    ) async throws -> [RemoteVoiceOption] {
+        let requiredScope = VoiceConsentScope(provider: .xai, xaiBaseURL: baseURL).storageKey
+        guard remoteEgressConsentScope == requiredScope else {
+            throw VoiceProviderError.cloudConsentRequired(AttacheSpeechProvider.xai.title)
+        }
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw VoiceProviderError.missingAPIKey("xAI") }
-        guard let url = URL(string: "\(baseURL.trimmingTrailingSlash())/tts/voices") else {
-            throw VoiceProviderError.invalidEndpoint("xAI")
-        }
+        let url = try xaiURL(baseURL: baseURL, path: "tts/voices")
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
         if NetworkSecurity.allowsBearer(url) {
@@ -267,6 +290,9 @@ enum AttacheRemoteVoiceService {
     }
 
     static func synthesize(text: String, configuration: AttacheSpeechConfiguration, outputURL: URL) async throws {
+        if configuration.provider.sendsToCloud, !configuration.hasRemoteEgressConsent {
+            throw VoiceProviderError.cloudConsentRequired(configuration.provider.title)
+        }
         switch configuration.provider {
         case .system:
             throw VoiceProviderError.unsupportedProvider
@@ -342,9 +368,7 @@ enum AttacheRemoteVoiceService {
         guard !apiKey.isEmpty else { throw VoiceProviderError.missingAPIKey("xAI") }
         guard !configuration.xaiVoiceID.isEmpty else { throw VoiceProviderError.missingVoice("xAI") }
 
-        guard let url = URL(string: "\(configuration.xaiBaseURL.trimmingTrailingSlash())/tts") else {
-            throw VoiceProviderError.invalidEndpoint("xAI")
-        }
+        let url = try xaiURL(baseURL: configuration.xaiBaseURL, path: "tts")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 60
@@ -367,9 +391,10 @@ enum AttacheRemoteVoiceService {
     }
 
     private static func fetchXAICustomVoices(apiKey: String, baseURL: String) async throws -> [RemoteVoiceOption] {
-        guard var components = URLComponents(string: "\(baseURL.trimmingTrailingSlash())/custom-voices") else {
-            throw VoiceProviderError.invalidEndpoint("xAI custom voices")
-        }
+        guard var components = URLComponents(
+            url: try xaiURL(baseURL: baseURL, path: "custom-voices"),
+            resolvingAgainstBaseURL: false
+        ) else { throw VoiceProviderError.invalidEndpoint("xAI custom voices") }
         components.queryItems = [
             URLQueryItem(name: "limit", value: "100")
         ]
@@ -407,8 +432,35 @@ enum AttacheRemoteVoiceService {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    /// xAI voice endpoints can be configured, including through imported
+    /// personalities. Sensitive requests require HTTPS unless they stay on
+    /// this Mac, and base URLs cannot smuggle credentials, queries, or fragments.
+    private static func xaiURL(baseURL: String, path: String) throws -> URL {
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let components = URLComponents(string: trimmed),
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil,
+              let base = components.url,
+              let host = base.host,
+              !host.isEmpty,
+              (base.scheme?.lowercased() == "https"
+                  || (base.scheme?.lowercased() == "http" && NetworkSecurity.isLoopbackHost(host))) else {
+            throw VoiceProviderError.insecureEndpoint("xAI")
+        }
+        return base.appendingPathComponent(path)
+    }
+
     private static func validatedData(for request: URLRequest, provider: String) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        // A voice request can contain the same sensitive session and memory
+        // material as the model reply it narrates. Do not let a provider's
+        // redirect forward that text or its credential to a second endpoint
+        // that the user never selected.
+        let (data, response) = try await URLSession.shared.data(
+            for: request,
+            delegate: AttacheNoRedirectDelegate()
+        )
         guard let httpResponse = response as? HTTPURLResponse else {
             throw VoiceProviderError.invalidResponse(provider)
         }
@@ -426,9 +478,11 @@ enum AttacheRemoteVoiceService {
 }
 
 enum VoiceProviderError: Error, LocalizedError {
+    case cloudConsentRequired(String)
     case missingAPIKey(String)
     case missingVoice(String)
     case invalidEndpoint(String)
+    case insecureEndpoint(String)
     case invalidResponse(String)
     case http(provider: String, status: Int, body: String)
     case emptyAudio
@@ -436,12 +490,16 @@ enum VoiceProviderError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .cloudConsentRequired(let provider):
+            return "\(provider) cloud voice approval is required."
         case .missingAPIKey(let provider):
             return "\(provider) API key is not configured."
         case .missingVoice(let provider):
             return "\(provider) voice is not selected."
         case .invalidEndpoint(let provider):
             return "\(provider) endpoint URL is invalid."
+        case .insecureEndpoint(let provider):
+            return "\(provider) voice endpoints must use HTTPS or loopback."
         case .invalidResponse(let provider):
             return "\(provider) returned a non-HTTP response."
         case .http(let provider, let status, let body):

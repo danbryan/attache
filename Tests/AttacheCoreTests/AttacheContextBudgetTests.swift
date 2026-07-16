@@ -29,20 +29,42 @@ final class AttacheContextBudgetTests: XCTestCase {
         XCTAssertGreaterThan(estimator.estimate(text: combined), 1, "combining marks should not collapse to near-zero.")
     }
 
-    func testLatinIsApproximatelyFourCharsPerToken() {
+    func testFallbackRetainsProseBaselineForLowEntropyASCII() {
         let estimator = AttacheFallbackTokenEstimator()
         let latin = String(repeating: "a", count: 40)
-        let estimate = estimator.estimate(text: latin)
-        XCTAssertGreaterThanOrEqual(estimate, 10)
-        XCTAssertLessThanOrEqual(estimate, 12, "40 ASCII chars should be ~10 tokens, rounded up conservatively.")
+        XCTAssertEqual(estimator.estimate(text: latin), 10)
     }
 
-    func testMinifiedJSONAndLongURLsDoNotUnderestimate() {
+    func testMinifiedJSONURLsBase64AndRandomIdentifiersUseByteEnvelope() {
         let estimator = AttacheFallbackTokenEstimator()
         let json = "{\"key\":\"" + String(repeating: "x", count: 200) + "\"}"
         let url = "https://example.com/" + String(repeating: "p", count: 200)
+        let base64 = String(repeating: "A9+/", count: 100) + "=="
+        let identifiers = (0..<100).map { "id\($0)_f7A9bC2dE4" }.joined(separator: ",")
         XCTAssertGreaterThan(estimator.estimate(text: json), 50)
         XCTAssertGreaterThan(estimator.estimate(text: url), 50)
+        XCTAssertEqual(estimator.estimate(text: base64), base64.utf8.count)
+        XCTAssertGreaterThanOrEqual(
+            estimator.estimate(text: identifiers),
+            Int(Double(identifiers.utf8.count) * 0.9)
+        )
+    }
+
+    func testDenseUnicodeAndEmojiSequencesUseUTF8ByteEnvelope() {
+        let estimator = AttacheFallbackTokenEstimator()
+        let samples = [
+            String(repeating: "文", count: 100),
+            String(repeating: "👨‍👩‍👧‍👦", count: 40),
+            String(repeating: "🇺🇸", count: 60),
+            String(repeating: "e\u{0301}", count: 100)
+        ]
+        for sample in samples {
+            XCTAssertGreaterThanOrEqual(
+                estimator.estimate(text: sample),
+                sample.unicodeScalars.filter { $0.value > 0x7F }.reduce(0) { $0 + $1.utf8.count }
+            )
+            XCTAssertGreaterThanOrEqual(estimator.estimate(text: sample), sample.unicodeScalars.count)
+        }
     }
 
     // MARK: - Plans within hard limits (acceptance 1)
@@ -124,6 +146,20 @@ final class AttacheContextBudgetTests: XCTestCase {
         XCTAssertNotNil(plan.remainingEvidenceBudget)
     }
 
+    func testUnknownCapacityShrinksProspectiveReservesBeforeRejectingProtectedPrompt() throws {
+        let protectedPrompt = String(repeating: "a", count: 20_000)
+        let plan = try ContextBudgetPlanner.plan(
+            capability: profile(context: nil, confidence: .unknown),
+            strategy: .automatic,
+            role: .conversation,
+            currentUserInput: "hello",
+            protectedContentText: protectedPrompt
+        )
+        XCTAssertLessThanOrEqual(plan.totalReserved, ContextBudgetPlanner.unknownCapacityEnvelope)
+        XCTAssertGreaterThanOrEqual(plan.toolReserve, 128)
+        XCTAssertGreaterThanOrEqual(plan.retrievalReserve, 128)
+    }
+
     // MARK: - Protected-content overflow (acceptance 6)
 
     func testProtectedContentOverflowFailsAndPreservesDraft() {
@@ -192,7 +228,31 @@ final class AttacheContextBudgetTests: XCTestCase {
 
     func testEstimatorIsVersioned() {
         let estimator = AttacheFallbackTokenEstimator()
-        XCTAssertEqual(estimator.version, 1)
+        XCTAssertEqual(estimator.version, 2)
         XCTAssertEqual(estimator.family, "unicode-fallback")
+    }
+
+    func testCalibrationCanOnlyRaiseFallbackEstimate() {
+        let base = AttacheFallbackTokenEstimator()
+        let optimistic = AttacheCalibratedTokenEstimator(
+            base: base,
+            correction: AttacheCalibrationCorrection(
+                factor: 0.5,
+                sampleCount: 10,
+                aggregateError: 0.5,
+                isActionable: true
+            )
+        )
+        let conservative = AttacheCalibratedTokenEstimator(
+            base: base,
+            correction: AttacheCalibrationCorrection(
+                factor: 1.25,
+                sampleCount: 10,
+                aggregateError: 0.25,
+                isActionable: true
+            )
+        )
+        XCTAssertEqual(optimistic.estimate(text: "abcdef"), 2)
+        XCTAssertEqual(conservative.estimate(text: "abcdef"), 3)
     }
 }

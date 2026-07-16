@@ -3,6 +3,7 @@ import Foundation
 
 enum CLILanguageModelError: LocalizedError {
     case notInstalled(String)
+    case unsafeToolIsolation(String)
     case failed(String)
     case empty
     case timedOut(String)
@@ -10,6 +11,8 @@ enum CLILanguageModelError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notInstalled(let tool): return "\(tool) isn't installed or couldn't be found. Install it and sign in, then try again."
+        case .unsafeToolIsolation(let tool):
+            return "\(tool) personality inference is disabled because its CLI cannot yet guarantee that native file-reading tools are off. Choose Claude subscription, an API provider, or Ollama."
         case .failed(let detail): return detail
         case .empty: return "The model returned an empty response."
         case .timedOut(let tool): return "\(tool) did not answer within 90 seconds."
@@ -34,13 +37,33 @@ struct CLILanguageModel {
     var serviceTier: String? = nil       // Codex: service_tier (fast = 1.5x, flex = cheaper)
 
     func complete(messages: [AttacheChatMessage]) async throws -> String {
+        try await complete(prompt: Self.renderPrompt(messages: messages))
+    }
+
+    /// Run the exact prompt bytes already measured by `ContextCompiler`.
+    /// Production broker calls use this overload so transport cannot silently
+    /// re-render a different request after the pre-egress budget gate.
+    func complete(prompt: String) async throws -> String {
+        guard Self.supportsSafeToolIsolation(tool) else {
+            // This check intentionally runs before executable discovery or
+            // process creation. A persisted legacy Codex personality therefore
+            // fails closed without exposing any prompt bytes to a subprocess.
+            throw CLILanguageModelError.unsafeToolIsolation(tool.displayName)
+        }
         guard let executable = Self.locate(tool.executableName) else {
             throw CLILanguageModelError.notInstalled(tool.displayName)
         }
-        let prompt = Self.renderPrompt(messages: messages)
         switch tool {
         case .claude: return try await runClaude(executable: executable, prompt: prompt)
-        case .codex: return try await runCodex(executable: executable, prompt: prompt)
+        case .codex:
+            throw CLILanguageModelError.unsafeToolIsolation(tool.displayName)
+        }
+    }
+
+    static func supportsSafeToolIsolation(_ tool: Tool) -> Bool {
+        switch tool {
+        case .claude: return true
+        case .codex: return false
         }
     }
 
@@ -48,14 +71,16 @@ struct CLILanguageModel {
 
     /// Arguments for a one-shot sandboxed `claude -p` run. The prompt carries
     /// untrusted transcript text, so the invocation must not be able to act on it:
-    /// all tools disabled, permission prompts auto-denied, and the user's setting
-    /// sources, MCP servers, skills, and session persistence all off. An older CLI
-    /// that lacks any of these flags exits with an unknown-option error instead of
-    /// running unsandboxed, so an unsupported flag fails closed.
+    /// safe mode disables user/project CLAUDE.md files and every extension surface,
+    /// all tools are disabled, permission prompts are auto-denied, and settings,
+    /// MCP servers, slash commands, and session persistence are all off. An older
+    /// CLI that lacks any of these flags exits with an unknown-option error instead
+    /// of running unsandboxed, so an unsupported flag fails closed.
     static func claudeArguments(model: String, reasoningEffort: String?) -> [String] {
         var args = [
             "-p",
             "--output-format", "json",
+            "--safe-mode",
             "--tools", "",
             "--permission-mode", "dontAsk",
             "--setting-sources", "",
@@ -95,61 +120,6 @@ struct CLILanguageModel {
         return result
     }
 
-    // MARK: - Codex
-
-    private func runCodex(executable: String, prompt: String) async throws -> String {
-        // Read-only sandbox in a throwaway dir so a stray "do this" prompt can't touch
-        // the user's files; we only want the model's text back.
-        let scratch = FileManager.default.temporaryDirectory.path
-        var args = [
-            "exec",
-            "--json",
-            "--ephemeral",
-            "--ignore-rules",
-            "--ignore-user-config",
-            "--sandbox", "read-only",
-            "--skip-git-repo-check",
-            "-C", scratch
-        ]
-        if Self.usesExplicitModel(model) { args += ["--model", model] }
-        if let effort = Self.normalized(reasoningEffort) {
-            args += ["-c", "model_reasoning_effort=\(effort)"]
-        }
-        if let tier = Self.normalized(serviceTier) {
-            args += ["-c", "service_tier=\(tier)"]   // fast = 1.5x priority, flex = cheaper
-        }
-        args.append("-")
-        let output = try await Self.run(executable: executable, arguments: args, stdin: prompt, extraEnv: [:])
-        if let text = Self.lastCodexMessage(in: output) { return text }
-        // Fall back to the last non-empty stdout line.
-        let line = output.split(whereSeparator: \.isNewline).map(String.init).last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-        guard let line, !line.isEmpty else { throw CLILanguageModelError.empty }
-        return line
-    }
-
-    /// Codex `exec --json` emits one JSON event per line; the assistant's reply is the
-    /// last event carrying agent-message text.
-    static func lastCodexMessage(in output: String) -> String? {
-        var last: String?
-        for line in output.split(whereSeparator: \.isNewline) {
-            guard let data = String(line).data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                continue
-            }
-            let candidates: [Any?] = [
-                object["text"],
-                (object["item"] as? [String: Any])?["text"],
-                (object["msg"] as? [String: Any])?["message"],
-                (object["message"] as? [String: Any])?["content"]
-            ]
-            for case let text as String in candidates.compactMap({ $0 }) {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { last = trimmed }
-            }
-        }
-        return last
-    }
-
     static func usesExplicitModel(_ model: String) -> Bool {
         let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return !trimmed.isEmpty && trimmed != "default"
@@ -183,7 +153,15 @@ struct CLILanguageModel {
             case "system":
                 system += (system.isEmpty ? "" : "\n\n") + message.content
             case "assistant":
-                turns.append("Assistant: \(message.content)")
+                if !message.content.isEmpty {
+                    turns.append("Assistant: \(message.content)")
+                }
+                if !message.toolCalls.isEmpty {
+                    turns.append("Assistant tool calls: \(canonicalToolCalls(message.toolCalls))")
+                }
+            case "tool":
+                let callID = message.toolCallID ?? "unknown"
+                turns.append("Tool result for \(callID): \(message.content)")
             default:
                 turns.append("User: \(message.content)")
             }
@@ -195,6 +173,13 @@ struct CLILanguageModel {
             prompt += "\n\nRespond as the assistant with your reply only."
         }
         return prompt
+    }
+
+    private static func canonicalToolCalls(_ calls: [AttacheChatToolCall]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(calls) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
     }
 
     // MARK: - Process
@@ -235,104 +220,153 @@ struct CLILanguageModel {
         return (!resolved.isEmpty && FileManager.default.isExecutableFile(atPath: resolved)) ? resolved : nil
     }
 
-    private static func run(executable: String, arguments: [String], stdin: String?, extraEnv: [String: String], workingDirectory: URL? = nil) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            if let workingDirectory {
-                process.currentDirectoryURL = workingDirectory
-            }
-            var env = ProcessInfo.processInfo.environment
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            env["HOME"] = home
-            env["PATH"] = mergedPATH(existing: env["PATH"], home: home)
-            extraEnv.forEach { env[$0] = $1 }
-            process.environment = env
+    static func run(executable: String, arguments: [String], stdin: String?, extraEnv: [String: String], workingDirectory: URL? = nil) async throws -> String {
+        let cancellation = CLIProcessCancellation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = arguments
+                if let workingDirectory {
+                    process.currentDirectoryURL = workingDirectory
+                }
+                let home = FileManager.default.homeDirectoryForCurrentUser.path
+                process.environment = subprocessEnvironment(
+                    processEnvironment: ProcessInfo.processInfo.environment,
+                    home: home,
+                    extraEnv: extraEnv
+                )
 
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            process.standardOutput = outPipe
-            process.standardError = errPipe
+                let outPipe = Pipe()
+                let errPipe = Pipe()
+                process.standardOutput = outPipe
+                process.standardError = errPipe
 
-            let outCollector = OutputCollector()
-            let errCollector = OutputCollector()
-            outPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                guard !chunk.isEmpty else { return }
-                outCollector.append(chunk)
-            }
-            errPipe.fileHandleForReading.readabilityHandler = { handle in
-                let chunk = handle.availableData
-                guard !chunk.isEmpty else { return }
-                errCollector.append(chunk)
-            }
+                let outCollector = OutputCollector()
+                let errCollector = OutputCollector()
+                outPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let chunk = handle.availableData
+                    guard !chunk.isEmpty else { return }
+                    outCollector.append(chunk)
+                }
+                errPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let chunk = handle.availableData
+                    guard !chunk.isEmpty else { return }
+                    errCollector.append(chunk)
+                }
 
-            let completionGate = CLICompletionGate()
-            @Sendable func finish(_ result: Result<String, Error>) {
-                guard completionGate.claim() else { return }
-                outPipe.fileHandleForReading.readabilityHandler = nil
-                errPipe.fileHandleForReading.readabilityHandler = nil
-                continuation.resume(with: result)
-            }
+                let completionGate = CLICompletionGate()
+                @Sendable func finish(_ result: Result<String, Error>) {
+                    guard completionGate.claim() else { return }
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                    continuation.resume(with: result)
+                }
 
-            let timeoutItem = DispatchWorkItem {
-                let name = URL(fileURLWithPath: executable).lastPathComponent == "claude"
-                    ? "Claude Code"
-                    : "Codex"
-                finish(.failure(CLILanguageModelError.timedOut(name)))
-                if process.isRunning { process.terminate() }
-            }
-            DispatchQueue.global(qos: .utility).asyncAfter(
-                deadline: .now() + 90,
-                execute: timeoutItem
-            )
+                // Register the exact Process instance before launching it. Cancellation
+                // can race with Process.run(), so the controller handles all three
+                // states: not launched yet, currently launching, and running.
+                guard cancellation.register(process: process, handler: {
+                    finish(.failure(CancellationError()))
+                }) else {
+                    return
+                }
 
-            process.terminationHandler = { proc in
-                timeoutItem.cancel()
-                outCollector.append(outPipe.fileHandleForReading.readDataToEndOfFile())
-                errCollector.append(errPipe.fileHandleForReading.readDataToEndOfFile())
-                let stdout = String(decoding: outCollector.snapshot(), as: UTF8.self)
-                let stderr = String(decoding: errCollector.snapshot(), as: UTF8.self)
-                if proc.terminationStatus != 0 {
-                    finish(.failure(
-                        CLILanguageModelError.failed(
-                            processFailureMessage(
-                                executable: executable,
-                                code: proc.terminationStatus,
-                                stdout: stdout,
-                                stderr: stderr
+                let timeoutItem = DispatchWorkItem {
+                    let name = URL(fileURLWithPath: executable).lastPathComponent == "claude"
+                        ? "Claude Code"
+                        : "Codex"
+                    finish(.failure(CLILanguageModelError.timedOut(name)))
+                    if process.isRunning { process.terminate() }
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(
+                    deadline: .now() + 90,
+                    execute: timeoutItem
+                )
+
+                process.terminationHandler = { proc in
+                    timeoutItem.cancel()
+                    outCollector.append(outPipe.fileHandleForReading.readDataToEndOfFile())
+                    errCollector.append(errPipe.fileHandleForReading.readDataToEndOfFile())
+                    let stdout = String(decoding: outCollector.snapshot(), as: UTF8.self)
+                    let stderr = String(decoding: errCollector.snapshot(), as: UTF8.self)
+                    if proc.terminationStatus != 0 {
+                        finish(.failure(
+                            CLILanguageModelError.failed(
+                                processFailureMessage(
+                                    executable: executable,
+                                    code: proc.terminationStatus,
+                                    stdout: stdout,
+                                    stderr: stderr
+                                )
                             )
-                        )
-                    ))
-                } else {
-                    finish(.success(stdout))
+                        ))
+                    } else {
+                        finish(.success(stdout))
+                    }
+                    cancellation.clear(process: proc)
+                }
+
+                do {
+                    let inputPipe: Pipe?
+                    if stdin != nil {
+                        let pipe = Pipe()
+                        process.standardInput = pipe
+                        inputPipe = pipe
+                    } else {
+                        process.standardInput = FileHandle.nullDevice
+                        inputPipe = nil
+                    }
+                    try process.run()
+                    guard cancellation.processDidLaunch(process) else {
+                        try? inputPipe?.fileHandleForWriting.close()
+                        return
+                    }
+                    if let stdin, let inputPipe {
+                        inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
+                        try? inputPipe.fileHandleForWriting.close()
+                    }
+                } catch {
+                    timeoutItem.cancel()
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                    if Task.isCancelled {
+                        finish(.failure(CancellationError()))
+                    } else {
+                        finish(.failure(CLILanguageModelError.notInstalled(executable)))
+                    }
+                    cancellation.clear(process: process)
+                    return
                 }
             }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
 
-            do {
-                let inputPipe: Pipe?
-                if stdin != nil {
-                    let pipe = Pipe()
-                    process.standardInput = pipe
-                    inputPipe = pipe
-                } else {
-                    process.standardInput = FileHandle.nullDevice
-                    inputPipe = nil
-                }
-                try process.run()
-                if let stdin, let inputPipe {
-                    inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
-                    try? inputPipe.fileHandleForWriting.close()
-                }
-            } catch {
-                timeoutItem.cancel()
-                outPipe.fileHandleForReading.readabilityHandler = nil
-                errPipe.fileHandleForReading.readabilityHandler = nil
-                finish(.failure(CLILanguageModelError.notInstalled(executable)))
-                return
+    /// Do not inherit API keys, cloud credentials, or unrelated application
+    /// secrets into a subprocess that receives untrusted transcript text. The
+    /// Claude subscription flow needs only its login home/config location plus
+    /// ordinary locale and executable lookup state. Callers may add narrowly
+    /// scoped values explicitly through `extraEnv`.
+    static func subprocessEnvironment(
+        processEnvironment: [String: String],
+        home: String,
+        extraEnv: [String: String]
+    ) -> [String: String] {
+        var environment: [String: String] = [
+            "HOME": home,
+            "PATH": mergedPATH(existing: processEnvironment["PATH"], home: home),
+            "TMPDIR": processEnvironment["TMPDIR"] ?? FileManager.default.temporaryDirectory.path
+        ]
+        for key in ["LANG", "LC_ALL", "LC_CTYPE", "CLAUDE_CONFIG_DIR"] {
+            if let value = processEnvironment[key], !value.isEmpty {
+                environment[key] = value
             }
         }
+        extraEnv.forEach { environment[$0] = $1 }
+        return environment
     }
 
     static func processFailureMessage(executable: String, code: Int32, stdout: String, stderr: String) -> String {
@@ -434,8 +468,8 @@ struct CLILanguageModel {
     }
 }
 
-/// A subprocess timeout and Foundation's termination callback race on separate
-/// queues. Only the winner may resume the checked continuation.
+/// Process exit, timeout, and Swift task cancellation race on separate queues.
+/// Only the winner may resume the checked continuation.
 private final class CLICompletionGate: @unchecked Sendable {
     private let lock = NSLock()
     private var finished = false
@@ -446,6 +480,67 @@ private final class CLICompletionGate: @unchecked Sendable {
         guard !finished else { return false }
         finished = true
         return true
+    }
+}
+
+/// Coordinates Swift task cancellation with the one Foundation Process spawned
+/// for that request. The lock closes the narrow race where cancellation arrives
+/// after the launch check but before `Process.run()` has marked the process as
+/// running. In that case `processDidLaunch` terminates the same instance as soon
+/// as the launch completes.
+private final class CLIProcessCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancellationRequested = false
+    private var process: Process?
+    private var handler: (@Sendable () -> Void)?
+
+    func register(process: Process, handler: @escaping @Sendable () -> Void) -> Bool {
+        lock.lock()
+        guard !cancellationRequested else {
+            lock.unlock()
+            handler()
+            return false
+        }
+        self.process = process
+        self.handler = handler
+        lock.unlock()
+        return true
+    }
+
+    /// Returns false when cancellation won the launch race. The caller must not
+    /// write stdin after that point because termination is already underway.
+    func processDidLaunch(_ process: Process) -> Bool {
+        lock.lock()
+        let shouldTerminate = cancellationRequested && self.process === process
+        lock.unlock()
+        if shouldTerminate, process.isRunning {
+            process.terminate()
+        }
+        return !shouldTerminate
+    }
+
+    func cancel() {
+        lock.lock()
+        cancellationRequested = true
+        let process = process
+        let handler = handler
+        lock.unlock()
+
+        // Claim the continuation as canceled before signaling the process. A
+        // fast SIGTERM handler could otherwise report a successful exit first.
+        handler?()
+        if let process, process.isRunning {
+            process.terminate()
+        }
+    }
+
+    func clear(process: Process) {
+        lock.lock()
+        if self.process === process {
+            self.process = nil
+            handler = nil
+        }
+        lock.unlock()
     }
 }
 
