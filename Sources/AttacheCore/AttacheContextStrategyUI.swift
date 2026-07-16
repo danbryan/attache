@@ -29,6 +29,67 @@ public enum AttacheContextStrategyDescription {
     public static func requiresNumericControls(_ kind: AttacheContextStrategyKind) -> Bool {
         kind == .custom
     }
+
+    /// A compact projection of the real runtime policy for the Advanced UI.
+    /// Values come from the same planners and selectors that execute requests,
+    /// so switching strategies never looks like a cosmetic label change.
+    public static func behavior(
+        _ strategy: AttacheContextStrategy
+    ) -> AttacheContextStrategyBehaviorSummary {
+        let toolPolicy = AttacheToolBudgetPolicy.from(strategy: strategy)
+        let evidencePercent = Int(
+            ContextBudgetPlanner.strategyMultiplier(strategy.kind) * 100
+        )
+        let memoryCount = AttacheMemorySelector.maxCandidates(for: strategy)
+        let memoryTokens = AttacheMemorySelector.defaultBudgetTokens(for: strategy)
+        let memoryTokensLabel = memoryTokens.formatted()
+        let toolCharactersLabel = toolPolicy.defaultMaxChars.formatted()
+        let reviewPercent = Int(
+            AttacheExhaustiveReviewCoordinator.coverageFraction(for: strategy) * 100
+        )
+
+        let continuity: String
+        switch strategy.kind {
+        case .efficient:
+            continuity = "Compact exact history; older turns are summarized sooner"
+        case .automatic:
+            continuity = "Balanced exact history and older-turn summaries"
+        case .maximumCoverage:
+            continuity = "Largest exact history; older turns are summarized later"
+        case .custom:
+            continuity = "Balanced exact history within your Custom limits"
+        }
+
+        return AttacheContextStrategyBehaviorSummary(
+            evidenceAllowance: "\(evidencePercent)% of capacity remaining after reserves",
+            conversationContinuity: continuity,
+            durableMemory: "Up to \(memoryCount) relevant items · \(memoryTokensLabel) tokens",
+            toolRetrieval: "Up to \(toolPolicy.defaultMaxResults) results · \(toolCharactersLabel) characters each",
+            wholeSessionReview: "\(reviewPercent)% capacity target per review stage"
+        )
+    }
+}
+
+public struct AttacheContextStrategyBehaviorSummary: Equatable, Sendable {
+    public let evidenceAllowance: String
+    public let conversationContinuity: String
+    public let durableMemory: String
+    public let toolRetrieval: String
+    public let wholeSessionReview: String
+
+    public init(
+        evidenceAllowance: String,
+        conversationContinuity: String,
+        durableMemory: String,
+        toolRetrieval: String,
+        wholeSessionReview: String
+    ) {
+        self.evidenceAllowance = evidenceAllowance
+        self.conversationContinuity = conversationContinuity
+        self.durableMemory = durableMemory
+        self.toolRetrieval = toolRetrieval
+        self.wholeSessionReview = wholeSessionReview
+    }
 }
 
 /// A formatted capability summary for the advanced view (INF-313). Distinguishes

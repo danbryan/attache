@@ -19,6 +19,34 @@ final class AttacheContextStrategyUITests: XCTestCase {
         }
     }
 
+    func testAdvancedBehaviorSummaryMakesNamedStrategiesMeaningfullyDistinct() {
+        let efficient = AttacheContextStrategyDescription.behavior(.efficient)
+        let automatic = AttacheContextStrategyDescription.behavior(.automatic)
+        let maximum = AttacheContextStrategyDescription.behavior(.maximumCoverage)
+
+        XCTAssertEqual(efficient.evidenceAllowance, "50% of capacity remaining after reserves")
+        XCTAssertEqual(automatic.evidenceAllowance, "75% of capacity remaining after reserves")
+        XCTAssertEqual(maximum.evidenceAllowance, "100% of capacity remaining after reserves")
+        XCTAssertNotEqual(efficient.conversationContinuity, maximum.conversationContinuity)
+        XCTAssertEqual(efficient.durableMemory, "Up to 3 relevant items · \(1_024.formatted()) tokens")
+        XCTAssertEqual(maximum.durableMemory, "Up to 10 relevant items · \(4_096.formatted()) tokens")
+        XCTAssertEqual(efficient.toolRetrieval, "Up to 5 results · \(2_000.formatted()) characters each")
+        XCTAssertEqual(maximum.toolRetrieval, "Up to 20 results · \(8_000.formatted()) characters each")
+        XCTAssertEqual(efficient.wholeSessionReview, "35% capacity target per review stage")
+        XCTAssertEqual(maximum.wholeSessionReview, "80% capacity target per review stage")
+    }
+
+    func testCustomBehaviorSummaryReflectsCustomMemoryLimit() {
+        let custom = AttacheContextStrategy(
+            .custom,
+            custom: AttacheContextCustomPolicy(effectiveInputLimit: 64_000)
+        )
+        let summary = AttacheContextStrategyDescription.behavior(custom)
+        XCTAssertEqual(summary.evidenceAllowance, "100% of capacity remaining after reserves")
+        XCTAssertEqual(summary.durableMemory, "Up to 5 relevant items · \(8_000.formatted()) tokens")
+        XCTAssertEqual(summary.wholeSessionReview, "65% capacity target per review stage")
+    }
+
     // Criterion 3: each personality can inherit the global strategy or choose its own.
     func testResolvedStrategyReflectsSelection() {
         var vm = ContextStrategyViewModel(globalDefault: .efficient)

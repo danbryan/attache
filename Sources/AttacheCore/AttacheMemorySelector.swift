@@ -343,6 +343,21 @@ public enum AttacheMemorySelector {
         }
     }
 
+    /// Default durable-memory evidence budget used by production requests and
+    /// displayed in the context strategy UI.
+    public static func defaultBudgetTokens(for strategy: AttacheContextStrategy) -> Int {
+        switch strategy.kind {
+        case .efficient: return 1_024
+        case .automatic: return 2_048
+        case .maximumCoverage: return 4_096
+        case .custom:
+            return min(
+                max(strategy.custom?.effectiveInputLimit.map { $0 / 8 } ?? 2_048, 512),
+                16_384
+            )
+        }
+    }
+
     static func scaleByBudget(
         _ ranked: [(AttacheMemoryRecord, Double)],
         budget: Int, maxCount: Int

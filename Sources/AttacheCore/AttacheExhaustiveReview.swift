@@ -283,13 +283,7 @@ public enum AttacheExhaustiveReviewCoordinator {
     ) -> AttacheExhaustiveReviewPlan {
         let eligibleEpisodes = map.episodes.filter { !$0.isExcluded }
         let ceiling = capability.declaredInputCeiling ?? ContextBudgetPlanner.unknownCapacityEnvelope
-        let coverageFraction: Double
-        switch strategy.kind {
-        case .efficient: coverageFraction = 0.35
-        case .automatic: coverageFraction = 0.55
-        case .maximumCoverage: coverageFraction = 0.80
-        case .custom: coverageFraction = 0.65
-        }
+        let coverageFraction = Self.coverageFraction(for: strategy)
         let customLimit = strategy.custom?.effectiveInputLimit ?? strategy.custom?.hardInputLimit
         let effectiveCeiling = min(ceiling, customLimit ?? ceiling)
         let budgetPerStage = max(512, Int(Double(effectiveCeiling) * coverageFraction))
@@ -327,6 +321,17 @@ public enum AttacheExhaustiveReviewCoordinator {
             maxStageInputTokens: budgetPerStage,
             oversizedEpisodeIDs: oversizedEpisodeIDs
         )
+    }
+
+    /// Fraction of the effective input capacity available to one staged
+    /// whole-session review call. Shared with the Advanced strategy summary.
+    public static func coverageFraction(for strategy: AttacheContextStrategy) -> Double {
+        switch strategy.kind {
+        case .efficient: return 0.35
+        case .automatic: return 0.55
+        case .maximumCoverage: return 0.80
+        case .custom: return 0.65
+        }
     }
 
     /// Mark an episode as processing in the ledger (INF-329).

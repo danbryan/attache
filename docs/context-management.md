@@ -43,6 +43,14 @@ above it.
 Advertised context is a ceiling, not a target. Attaché never fills the
 context window for its own sake.
 
+Expand **Advanced** to see a live strategy plan. It changes immediately when
+you select a strategy and shows the runtime evidence allowance, conversation
+compression behavior, durable-memory budget, retrieved-tool limits, and
+whole-session review stage size. The separate Model evidence card is labeled
+independent of strategy because a strategy changes how Attaché uses a model's
+capacity, not the model facts themselves. Efficient and Maximum coverage can
+produce the same request when no relevant, authorized context is available.
+
 ## Model Capabilities
 
 Attaché detects model capabilities at runtime from provider metadata, runtime
@@ -59,10 +67,11 @@ observation, or local cache. Capabilities include:
 - **Custom policy**: a user can set a separate effective input limit and
   reserves. Custom policy never rewrites detected provider facts; both remain
   visible in the advanced view.
-- **Unknown providers**: when Attaché cannot detect capabilities, it uses an
-  unknown-capacity plan with a 16,384-token working envelope, staged
-  retrieval, and bounded tools. It never treats that envelope as a provider
-  fact or assumes a large context window.
+- **Unknown providers**: when Attaché cannot detect capabilities, named
+  strategies use a 16,384-token working envelope, staged retrieval, and
+  bounded tools. Custom uses its input cap when one is set, or the same
+  envelope otherwise. Attaché never treats the envelope as a provider fact or
+  assumes a large context window.
 - **Installed Ollama models**: Attaché discovers the exact tags on the selected
   Ollama host, then asks `/api/show` for each installed model's context and
   thinking capabilities. A saved tag that is no longer installed is labeled as

@@ -92,10 +92,11 @@ struct ContextStrategyEditor: View {
 
             DisclosureGroup(isExpanded: $advancedExpanded) {
                 VStack(alignment: .leading, spacing: 12) {
-                    capabilityPanel
+                    strategyBehaviorPanel
                     if effectiveStrategy.kind == .custom {
                         customControls
                     }
+                    capabilityPanel
                 }
                 .padding(.top, 9)
             } label: {
@@ -106,6 +107,49 @@ struct ContextStrategyEditor: View {
             .onChange(of: effectiveStrategy.kind) { kind in
                 if kind == .custom { advancedExpanded = true }
             }
+        }
+    }
+
+    private var strategyBehaviorPanel: some View {
+        let behavior = AttacheContextStrategyDescription.behavior(effectiveStrategy)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "slider.horizontal.3")
+                    .foregroundStyle(Color.accentColor)
+                Text("\(AttacheContextStrategyDescription.title(effectiveStrategy.kind)) plan")
+                    .typoLabel(.semibold)
+                    .accessibilityLabel("\(AttacheContextStrategyDescription.title(effectiveStrategy.kind)) context strategy plan")
+            }
+            strategyBehaviorRow("Evidence", behavior.evidenceAllowance)
+            strategyBehaviorRow("Conversation", behavior.conversationContinuity)
+            strategyBehaviorRow("Memory", behavior.durableMemory)
+            strategyBehaviorRow("Tool retrieval", behavior.toolRetrieval)
+            strategyBehaviorRow("Session review", behavior.wholeSessionReview)
+            Text("These allowances matter only when relevant, authorized context exists.")
+                .typoCaption()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color.accentColor.opacity(0.18), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(AttacheContextStrategyDescription.title(effectiveStrategy.kind)) context strategy plan")
+    }
+
+    private func strategyBehaviorRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .typoCaption(.medium)
+                .frame(width: 82, alignment: .leading)
+            Text(value)
+                .typoCaption()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 
@@ -142,6 +186,9 @@ struct ContextStrategyEditor: View {
                     Text("Model evidence")
                         .typoLabel(.semibold)
                         .accessibilityLabel("Context capability summary for \(modelLabel)")
+                    Text("Independent of strategy")
+                        .typoCaption()
+                        .foregroundStyle(.secondary)
                     Text(modelLabel).typoCaption().foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
@@ -159,14 +206,16 @@ struct ContextStrategyEditor: View {
             capabilityRow("Last confirmed", capabilitySummary.freshnessLabel)
             if capabilitySummary.isUnknown {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Capacity is unknown. Automatic still uses a bounded 16,384-token working envelope, staged retrieval, and tool budgets. It never treats that envelope as a provider fact.")
+                    Text(unknownCapacityExplanation)
                         .typoCaption()
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Set a Custom cap", action: openCustomLimits)
-                        .buttonStyle(.link)
-                        .accessibilityLabel("Set Custom context limits")
-                        .accessibilityHint("Changes the strategy to Custom and opens the input-limit controls")
+                    if effectiveStrategy.kind != .custom {
+                        Button("Set a Custom cap", action: openCustomLimits)
+                            .buttonStyle(.link)
+                            .accessibilityLabel("Set Custom context limits")
+                            .accessibilityHint("Changes the strategy to Custom and opens the input-limit controls")
+                    }
                 }
             } else if capabilitySummary.isStale {
                 Label("This capability evidence is stale. Refresh before relying on its ceiling.", systemImage: "clock.badge.exclamationmark")
@@ -189,6 +238,20 @@ struct ContextStrategyEditor: View {
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Context capability summary for \(modelLabel)")
+    }
+
+    private var unknownCapacityExplanation: String {
+        if effectiveStrategy.kind == .custom {
+            let limits = [
+                effectiveStrategy.custom?.hardInputLimit,
+                effectiveStrategy.custom?.effectiveInputLimit
+            ].compactMap { $0 }
+            if let cap = limits.min() {
+                return "Capacity is not reported. Custom plans within your \(cap.formatted())-token input cap, staged retrieval, and tool budgets. The detected model fact remains Unknown."
+            }
+            return "Capacity is not reported. Custom has no input cap, so Attaché uses a bounded 16,384-token working envelope with your reserves. The detected model fact remains Unknown."
+        }
+        return "Capacity is not reported. \(AttacheContextStrategyDescription.title(effectiveStrategy.kind)) plans within a bounded 16,384-token working envelope using the allowances above. Attaché never treats that envelope as a provider fact."
     }
 
     private func capabilityRow(_ label: String, _ value: String) -> some View {

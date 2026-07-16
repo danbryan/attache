@@ -2889,9 +2889,8 @@ if enabled("context") {
             role: kAXPopUpButtonRole as String,
             exactly: "Default context strategy"
         )
-        try selectPopup(picker, item: "Efficient")
-        try waitUntil("Efficient context strategy selection", timeout: 5) {
-            picker.stringValue.contains("Efficient")
+        guard picker.stringValue.contains("Automatic") else {
+            throw SmokeError(message: "fresh context strategy is not Automatic: \(picker.summary)")
         }
         let advanced = try waitForElement(
             "advanced context settings",
@@ -2902,9 +2901,56 @@ if enabled("context") {
             throw SmokeError(message: "advanced context disclosure is not actionable: \(advanced.summary)")
         }
         _ = try waitForElement(
+            "Automatic strategy plan",
+            in: try settingsWindow(),
+            containing: "Automatic context strategy plan"
+        )
+        _ = try waitForElement(
+            "Automatic evidence allowance",
+            in: try settingsWindow(),
+            containing: "75% of capacity remaining after reserves"
+        )
+        guard advanced.press() else {
+            throw SmokeError(message: "could not collapse advanced context settings: \(advanced.summary)")
+        }
+
+        let updatedPicker = try waitForElement(
+            "updated default context strategy",
+            in: try settingsWindow(),
+            role: kAXPopUpButtonRole as String,
+            exactly: "Default context strategy"
+        )
+        try selectPopup(updatedPicker, item: "Efficient")
+        try waitUntil("Efficient context strategy selection", timeout: 5) {
+            updatedPicker.stringValue.contains("Efficient")
+        }
+        let updatedAdvanced = try waitForElement(
+            "updated advanced context settings",
+            in: try settingsWindow(),
+            containing: "Advanced context settings"
+        )
+        guard updatedAdvanced.press() else {
+            throw SmokeError(message: "could not reopen advanced context settings: \(updatedAdvanced.summary)")
+        }
+        _ = try waitForElement(
+            "Efficient strategy plan",
+            in: try settingsWindow(),
+            containing: "Efficient context strategy plan"
+        )
+        _ = try waitForElement(
+            "Efficient evidence allowance",
+            in: try settingsWindow(),
+            containing: "50% of capacity remaining after reserves"
+        )
+        _ = try waitForElement(
             "context capability summary",
             in: try settingsWindow(),
             containing: "Context capability summary"
+        )
+        _ = try waitForElement(
+            "strategy-independent model evidence",
+            in: try settingsWindow(),
+            containing: "Independent of strategy"
         )
     }
 
