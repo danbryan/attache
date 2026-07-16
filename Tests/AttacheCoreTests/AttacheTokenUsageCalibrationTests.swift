@@ -71,7 +71,7 @@ final class AttacheTokenUsageCalibrationTests: XCTestCase {
         let diag = lineage.diagnostics()
         // Diagnostics carry only aggregate numbers and identity keys.
         let forbidden = ["password", "api_key", "secret", "/Users/", "transcript", "message"]
-        let dump = "\(diag.modelIdentityKey)|\(diag.lineageID)|\(diag.sampleCount)|\(diag.aggregateEstimateError)|\(diag.correctionFactor)"
+        let dump = "\(diag.modelIdentityKey)|\(diag.lineageID)|\(diag.sampleCount)|\(diag.observedMedianRatio)|\(diag.aggregateEstimateError)|\(diag.correctionFactor)"
         for marker in forbidden {
             XCTAssertFalse(dump.contains(marker), "diagnostics must not contain \(marker)")
         }
@@ -104,7 +104,8 @@ final class AttacheTokenUsageCalibrationTests: XCTestCase {
         let diagnostics = try XCTUnwrap(store.diagnostics(for: "ollama|early"))
         XCTAssertEqual(diagnostics.sampleCount, 4)
         XCTAssertFalse(diagnostics.isActionable)
-        XCTAssertEqual(diagnostics.correctionFactor, 1.3, accuracy: 0.001)
+        XCTAssertEqual(diagnostics.observedMedianRatio, 1.3, accuracy: 0.001)
+        XCTAssertEqual(diagnostics.correctionFactor, 1.0, accuracy: 0.001)
         try? FileManager.default.removeItem(at: tmp)
     }
 
@@ -118,7 +119,8 @@ final class AttacheTokenUsageCalibrationTests: XCTestCase {
         let correctionB = lineageB.computeCorrection()
         XCTAssertNotEqual(correctionA.factor, correctionB.factor, "isolated by identity")
         XCTAssertGreaterThan(correctionA.factor, 1.0, "lineage A underestimates")
-        XCTAssertLessThan(correctionB.factor, 1.0, "lineage B overestimates")
+        XCTAssertFalse(correctionB.isActionable, "six samples cannot reduce an estimate")
+        XCTAssertEqual(correctionB.factor, 1.0)
     }
 
     // Criterion 4: too few samples do not alter estimation.
@@ -135,16 +137,43 @@ final class AttacheTokenUsageCalibrationTests: XCTestCase {
 
     // Criterion 5: outliers cannot produce zero, negative, or implausibly
     // optimistic corrections.
-    func testOutliersClamped() {
+    func testFewOptimisticOutliersCannotReduceEstimate() {
         var lineage = AttacheCalibrationLineage(modelIdentityKey: "k", minSamples: 3)
         // Record extreme outliers.
         lineage.record(0.01)  // implausibly optimistic
         lineage.record(0.001) // near zero
         lineage.record(0.01)
         let correction = lineage.computeCorrection()
-        XCTAssertGreaterThanOrEqual(correction.factor, 0.5, "cannot go below 0.5")
-        XCTAssertLessThanOrEqual(correction.factor, 1.5, "cannot go above 1.5")
-        XCTAssertGreaterThan(correction.factor, 0, "never zero or negative")
+        XCTAssertFalse(correction.isActionable)
+        XCTAssertEqual(correction.factor, 1.0)
+    }
+
+    func testConsistentMeasuredOverestimationUsesGuardedTwentySampleReduction() {
+        var lineage = AttacheCalibrationLineage(modelIdentityKey: "k")
+        for _ in 0..<20 { lineage.record(0.50) }
+
+        let correction = lineage.computeCorrection()
+
+        XCTAssertTrue(correction.isActionable)
+        XCTAssertEqual(correction.factor, 0.75, accuracy: 0.001)
+        XCTAssertEqual(
+            AttacheTokenUsageCalibrator.applyCorrection(
+                estimate: 10_000,
+                correction: correction
+            ),
+            7_500
+        )
+    }
+
+    func testUpperRatioOutlierBlocksOptimisticCalibration() {
+        var lineage = AttacheCalibrationLineage(modelIdentityKey: "k")
+        for _ in 0..<19 { lineage.record(0.50) }
+        lineage.record(1.10)
+
+        let correction = lineage.computeCorrection()
+
+        XCTAssertFalse(correction.isActionable)
+        XCTAssertEqual(correction.factor, 1.0)
     }
 
     func testExtremeHighOutlierClamped() {

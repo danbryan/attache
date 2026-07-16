@@ -157,6 +157,55 @@ final class AttacheCapabilityDiscoveryTests: XCTestCase {
         XCTAssertEqual(cache.profile(for: v1)?.architecturalMaximum, 32_000, "the old lineage is untouched")
     }
 
+    func testSelectionResolvesNewestExactFingerprintedIdentity() throws {
+        let cache = AttacheCapabilityCache()
+        let selection = ModelIdentity(
+            provider: "ollama",
+            normalizedEndpoint: "http://localhost:11434",
+            requestedModel: "qwen"
+        )
+        let old = ModelIdentity(
+            provider: "ollama",
+            normalizedEndpoint: "http://localhost:11434",
+            requestedModel: "qwen",
+            fingerprint: "sha:old"
+        )
+        let current = ModelIdentity(
+            provider: "ollama",
+            normalizedEndpoint: "http://localhost:11434",
+            requestedModel: "qwen",
+            fingerprint: "sha:current"
+        )
+        cache.record(
+            identity: old,
+            profile: AttacheModelCapabilityProfile(
+                architecturalMaximum: 32_000,
+                provenance: .providerMetadata
+            ),
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+        cache.record(
+            identity: selection,
+            profile: AttacheModelCapabilityProfile(
+                architecturalMaximum: 48_000,
+                provenance: .localCache
+            ),
+            now: Date(timeIntervalSince1970: 1_500)
+        )
+        cache.record(
+            identity: current,
+            profile: AttacheModelCapabilityProfile(
+                architecturalMaximum: 64_000,
+                provenance: .providerMetadata
+            ),
+            now: Date(timeIntervalSince1970: 2_000)
+        )
+
+        let resolved = try XCTUnwrap(cache.resolvedRecord(for: selection))
+        XCTAssertEqual(resolved.identity, current)
+        XCTAssertEqual(resolved.record.profile.architecturalMaximum, 64_000)
+    }
+
     func testInvalidateRemovesOneEntry() {
         let cache = AttacheCapabilityCache()
         let identity = ModelIdentity(provider: "xai", normalizedEndpoint: "https://api.x.ai", requestedModel: "grok")

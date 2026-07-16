@@ -97,9 +97,11 @@ public struct AttacheFallbackTokenEstimator: TokenEstimating {
     }
 }
 
-/// A conservative calibrated estimator (INF-318). Calibration may only raise
-/// a base estimate. It never changes a provider hard limit and production does
-/// not apply it to Custom policies.
+/// A guarded calibrated estimator (INF-318). Underestimation is corrected
+/// after a small sample set. Measured overestimation may reduce an estimate
+/// only after a much larger consistent sample set, with a fixed safety floor.
+/// Calibration never changes a provider hard limit and production does not
+/// apply it to Custom policies or unknown-capacity models.
 public struct AttacheCalibratedTokenEstimator: TokenEstimating {
     public let family: String
     public let version: Int

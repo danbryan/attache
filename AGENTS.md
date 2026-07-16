@@ -343,6 +343,12 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
   and clears the temporary state at hangup. It is a local app-storage guarantee,
   not a cloud-provider retention guarantee. Saved calls carry a conversation id
   so History can permanently delete every linked reply and alternate take.
+- **Model utilization stays evidence-bound.** An unchanged Ollama digest may
+  retain stale last-known capability while offline; mutable or unfingerprinted
+  model identities fall back to the unknown-capacity envelope after staleness.
+  Provider-reported token usage may reduce conservative estimates only after
+  twenty consistent samples, with a 25 percent maximum reduction. It never
+  changes Custom policy, unknown-capacity plans, or provider hard limits.
 - **Recap length is dynamic.** The recap prompt scales a sentence ceiling by item
   count, clusters related items, compresses solved problems to their outcome, and
   preserves decisions.

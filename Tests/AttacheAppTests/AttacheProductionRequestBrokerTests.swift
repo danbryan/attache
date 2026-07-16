@@ -14,13 +14,25 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         )
         XCTAssertEqual(
             AttacheProductionRequestBroker.compilationCapability(
-                stale, strategy: .automatic, now: now
+                stale,
+                modelIdentity: ModelIdentity(
+                    provider: "xai",
+                    normalizedEndpoint: "https://api.x.ai/v1",
+                    requestedModel: "grok"
+                ),
+                strategy: .automatic,
+                now: now
             ),
             .unknown
         )
         XCTAssertEqual(
             AttacheProductionRequestBroker.compilationCapability(
                 stale,
+                modelIdentity: ModelIdentity(
+                    provider: "xai",
+                    normalizedEndpoint: "https://api.x.ai/v1",
+                    requestedModel: "grok"
+                ),
                 strategy: AttacheContextStrategy(
                     .custom,
                     custom: AttacheContextCustomPolicy()
@@ -29,6 +41,57 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
             ),
             stale,
             "An explicit Custom policy must not be silently replaced."
+        )
+    }
+
+    func testStaleFingerprintedOllamaCapabilityKeepsItsExactKnownCeiling() {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = AttacheModelCapabilityProfile(
+            architecturalMaximum: 131_072,
+            freshness: now.addingTimeInterval(-30 * 86_400),
+            confidence: .observed,
+            provenance: .providerMetadata
+        )
+        let identity = ModelIdentity(
+            provider: "ollama",
+            normalizedEndpoint: "http://127.0.0.1:11434/v1",
+            requestedModel: "qwen3.6:35b",
+            fingerprint: "sha256:unchanged"
+        )
+
+        XCTAssertEqual(
+            AttacheProductionRequestBroker.compilationCapability(
+                stale,
+                modelIdentity: identity,
+                strategy: .maximumCoverage,
+                now: now
+            ),
+            stale
+        )
+    }
+
+    func testStaleUnfingerprintedOllamaCapabilityUsesUnknownEnvelope() {
+        let now = Date(timeIntervalSince1970: 10_000_000)
+        let stale = AttacheModelCapabilityProfile(
+            architecturalMaximum: 131_072,
+            freshness: now.addingTimeInterval(-30 * 86_400),
+            confidence: .observed,
+            provenance: .providerMetadata
+        )
+        let identity = ModelIdentity(
+            provider: "ollama",
+            normalizedEndpoint: "http://127.0.0.1:11434/v1",
+            requestedModel: "mutable-alias"
+        )
+
+        XCTAssertEqual(
+            AttacheProductionRequestBroker.compilationCapability(
+                stale,
+                modelIdentity: identity,
+                strategy: .automatic,
+                now: now
+            ),
+            .unknown
         )
     }
 
@@ -203,6 +266,80 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
             messages: messages
         )
         XCTAssertEqual(store.diagnostics(for: storageKey)?.sampleCount, 5)
+    }
+
+    func testMeasuredOverestimationUsesBoundedReductionOnlyForKnownCapacity() throws {
+        let databaseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-broker-down-calibration-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: databaseURL)
+            try? FileManager.default.removeItem(atPath: databaseURL.path + "-wal")
+            try? FileManager.default.removeItem(atPath: databaseURL.path + "-shm")
+        }
+        let store = AttacheCalibrationStore(databaseURL: databaseURL)
+        let knownAttempt = try makeAttempt(capacity: 64_000, tools: false)
+        let key = knownAttempt.modelIdentity.capabilityKey
+        for index in 0..<20 {
+            XCTAssertTrue(store.record(AttacheProviderUsageSample(
+                modelIdentityKey: key,
+                estimatorVersion: AttacheTokenUsageCalibrator.estimatorVersion,
+                strategyKind: "automatic",
+                role: "conversation",
+                estimatedInputTokens: 10_000,
+                actualInputTokens: 4_000,
+                actualOutputTokens: 10,
+                timestamp: Date(timeIntervalSince1970: 1_800_000_000 + Double(index)),
+                receiptID: "down-\(index)"
+            )))
+        }
+        let storageKey = AttacheCalibrationStore.storageKey(
+            modelIdentityKey: key,
+            estimatorVersion: AttacheTokenUsageCalibrator.estimatorVersion
+        )
+        let diagnostics = try XCTUnwrap(store.diagnostics(for: storageKey))
+        XCTAssertTrue(diagnostics.isActionable)
+        XCTAssertEqual(diagnostics.observedMedianRatio, 0.5, accuracy: 0.001)
+        XCTAssertEqual(diagnostics.correctionFactor, 0.75, accuracy: 0.001)
+
+        let snapshot = makeSnapshot(userInput: String(repeating: "context ", count: 300))
+        let messages = [
+            AttacheChatMessage(role: "system", content: "Stay concise."),
+            AttacheChatMessage(role: "user", content: snapshot.userInput)
+        ]
+        let calibratedBroker = AttacheProductionRequestBroker(calibrationStore: store)
+        let baseBroker = AttacheProductionRequestBroker(calibrationStore: nil)
+        let calibrated = try calibratedBroker.compile(
+            snapshot: snapshot,
+            attempt: knownAttempt,
+            messages: messages
+        )
+        let base = try baseBroker.compile(
+            snapshot: snapshot,
+            attempt: knownAttempt,
+            messages: messages
+        )
+        XCTAssertLessThan(
+            calibrated.receipt.totalEstimatedTokens,
+            base.receipt.totalEstimatedTokens
+        )
+        XCTAssertEqual(calibrated.budgetPlan.effectiveHardLimit, 64_000)
+
+        let unknownAttempt = try makeAttempt(capacity: nil, tools: false)
+        let unknownCalibrated = try calibratedBroker.compile(
+            snapshot: snapshot,
+            attempt: unknownAttempt,
+            messages: messages
+        )
+        let unknownBase = try baseBroker.compile(
+            snapshot: snapshot,
+            attempt: unknownAttempt,
+            messages: messages
+        )
+        XCTAssertEqual(
+            unknownCalibrated.receipt.totalEstimatedTokens,
+            unknownBase.receipt.totalEstimatedTokens,
+            "Unknown-capacity plans never use downward calibration"
+        )
     }
 
     func testRevokedRequestCannotReachTransportAfterCompilation() async throws {
@@ -933,7 +1070,8 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         role: AttacheRequestRole = .conversation,
         modelSettings: AttachePresentationSettings? = nil,
         contextItems: [AttacheContextItem]? = nil,
-        memorySelectionReceipt: [AttacheMemoryReceiptEntry] = []
+        memorySelectionReceipt: [AttacheMemoryReceiptEntry] = [],
+        userInput: String = "question"
     ) -> AttacheRequestSnapshot {
         AttacheRequestSnapshot(
             requestID: "request-338",
@@ -941,7 +1079,7 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
             role: role,
             personality: Personality(id: "test", name: "Test", prompt: "Stay concise."),
             profilePrompt: "Stay concise.",
-            userInput: "question",
+            userInput: userInput,
             session: .contextFree,
             modelSettings: modelSettings,
             contextItems: contextItems ?? [AttacheContextItem(

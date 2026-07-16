@@ -174,11 +174,20 @@ public enum AttacheCapabilityParser {
 /// A cached capability record: the profile plus when it was recorded and the
 /// parser version that produced it, so staleness and lineage forks are visible.
 public struct AttacheCapabilityCacheRecord: Equatable, Codable, Sendable {
+    /// The exact identity that produced this record. Older caches decode this
+    /// as nil and continue to work through their dictionary key.
+    public let identity: ModelIdentity?
     public let profile: AttacheModelCapabilityProfile
     public let recordedAt: Date
     public let parserVersion: Int
 
-    public init(profile: AttacheModelCapabilityProfile, recordedAt: Date, parserVersion: Int) {
+    public init(
+        identity: ModelIdentity? = nil,
+        profile: AttacheModelCapabilityProfile,
+        recordedAt: Date,
+        parserVersion: Int
+    ) {
+        self.identity = identity
         self.profile = profile
         self.recordedAt = recordedAt
         self.parserVersion = parserVersion
@@ -204,7 +213,10 @@ public final class AttacheCapabilityCache: @unchecked Sendable {
     public func record(identity: ModelIdentity, profile: AttacheModelCapabilityProfile, now: Date = Date()) {
         lock.lock(); defer { lock.unlock() }
         records[identity.capabilityKey] = AttacheCapabilityCacheRecord(
-            profile: profile, recordedAt: now, parserVersion: AttacheCapabilityParser.parserVersion
+            identity: identity,
+            profile: profile,
+            recordedAt: now,
+            parserVersion: AttacheCapabilityParser.parserVersion
         )
     }
 
@@ -216,6 +228,34 @@ public final class AttacheCapabilityCache: @unchecked Sendable {
     public func record(for identity: ModelIdentity) -> AttacheCapabilityCacheRecord? {
         lock.lock(); defer { lock.unlock() }
         return records[identity.capabilityKey]
+    }
+
+    /// Resolve a user's provider/endpoint/model selection to the newest exact
+    /// discovered identity. This is what carries an Ollama digest from model
+    /// discovery into a later frozen inference attempt. A changed digest is a
+    /// different identity and cannot inherit the prior model's facts.
+    public func resolvedRecord(
+        for selection: ModelIdentity
+    ) -> (identity: ModelIdentity, record: AttacheCapabilityCacheRecord)? {
+        lock.lock(); defer { lock.unlock() }
+        let candidates: [(identity: ModelIdentity, record: AttacheCapabilityCacheRecord)] = records.values.compactMap { record in
+            guard let identity = record.identity,
+                  identity.provider == selection.provider,
+                  identity.normalizedEndpoint == selection.normalizedEndpoint,
+                  identity.requestedModel == selection.requestedModel,
+                  identity.resolvedModel == selection.resolvedModel else {
+                return nil
+            }
+            return (identity: identity, record: record)
+        }
+        let discovered = candidates.max {
+            $0.record.recordedAt < $1.record.recordedAt
+        }
+        if let discovered { return discovered }
+        if let legacy = records[selection.capabilityKey] {
+            return (legacy.identity ?? selection, legacy)
+        }
+        return nil
     }
 
     public func invalidate(for identity: ModelIdentity) {

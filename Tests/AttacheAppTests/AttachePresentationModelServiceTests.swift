@@ -2,6 +2,17 @@ import XCTest
 @testable import AttacheApp
 
 final class AttachePresentationModelServiceTests: XCTestCase {
+    func testOllamaTagDigestBecomesModelFingerprint() throws {
+        let data = Data(#"{"models":[{"name":"qwen:latest","digest":"sha256:abc123","details":{"parameter_size":"7B"}}]}"#.utf8)
+
+        let option = try XCTUnwrap(
+            AttachePresentationModelService.parseOllamaTags(data).first
+        )
+
+        XCTAssertEqual(option.id, "qwen:latest")
+        XCTAssertEqual(option.fingerprint, "sha256:abc123")
+    }
+
     func testModelDiscoveryRedirectPolicyRefusesUnclassifiedDestination() {
         var redirected = URLRequest(url: URL(string: "https://unclassified.example/v1/models")!)
         redirected.setValue("Bearer MODEL_DISCOVERY_SECRET", forHTTPHeaderField: "Authorization")

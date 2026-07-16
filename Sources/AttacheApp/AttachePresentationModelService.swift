@@ -7,6 +7,9 @@ struct AttachePresentationModelOption: Identifiable, Hashable {
     var reasoningEfforts: [String]
     var serviceTiers: [AttachePresentationServiceTierOption] = []
     var capabilityProfile: AttacheModelCapabilityProfile = .unknown
+    /// Provider model version when discovery supplies one. Ollama's digest is
+    /// used to keep capability and calibration lineage exact across retags.
+    var fingerprint: String? = nil
 
     var title: String {
         detail.isEmpty ? id : "\(id) - \(detail)"
@@ -18,6 +21,7 @@ struct AttachePresentationModelOption: Identifiable, Hashable {
             && lhs.reasoningEfforts == rhs.reasoningEfforts
             && lhs.serviceTiers == rhs.serviceTiers
             && lhs.capabilityProfile == rhs.capabilityProfile
+            && lhs.fingerprint == rhs.fingerprint
     }
 
     func hash(into hasher: inout Hasher) {
@@ -29,6 +33,7 @@ struct AttachePresentationModelOption: Identifiable, Hashable {
         hasher.combine(capabilityProfile.outputLimit)
         hasher.combine(capabilityProfile.estimatorFamily)
         hasher.combine(capabilityProfile.provenance.rawValue)
+        hasher.combine(fingerprint)
     }
 }
 
@@ -104,13 +109,20 @@ enum AttachePresentationModelService {
     static func modelIdentity(
         provider: AttachePresentationProvider,
         baseURLText: String,
-        modelID: String
+        modelID: String,
+        fingerprint: String? = nil
     ) -> ModelIdentity {
         ModelIdentity(
             provider: provider.rawValue,
             normalizedEndpoint: provider.isCLI ? "" : baseURLText,
-            requestedModel: modelID
+            requestedModel: modelID,
+            fingerprint: fingerprint
         )
+    }
+
+    struct CapabilityEvidence: Equatable {
+        let identity: ModelIdentity
+        let profile: AttacheModelCapabilityProfile
     }
 
     /// Last provider-confirmed facts for one exact destination. Unknown is a
@@ -120,11 +132,35 @@ enum AttachePresentationModelService {
         baseURLText: String,
         modelID: String
     ) -> AttacheModelCapabilityProfile {
-        let identity = modelIdentity(provider: provider, baseURLText: baseURLText, modelID: modelID)
-        guard let record = capabilityCache.record(for: identity) else {
-            return provider == .xai ? documentedXAICapability(for: modelID) ?? .unknown : .unknown
+        capabilityEvidence(
+            provider: provider,
+            baseURLText: baseURLText,
+            modelID: modelID
+        ).profile
+    }
+
+    /// Return capability facts together with the exact identity that produced
+    /// them. Keeping these together prevents a discovered Ollama digest from
+    /// being lost between Settings and the immutable provider attempt.
+    static func capabilityEvidence(
+        provider: AttachePresentationProvider,
+        baseURLText: String,
+        modelID: String
+    ) -> CapabilityEvidence {
+        let selection = modelIdentity(
+            provider: provider,
+            baseURLText: baseURLText,
+            modelID: modelID
+        )
+        guard let resolved = capabilityCache.resolvedRecord(for: selection) else {
+            return CapabilityEvidence(
+                identity: selection,
+                profile: provider == .xai
+                    ? documentedXAICapability(for: modelID) ?? .unknown
+                    : .unknown
+            )
         }
-        let stored = record.profile
+        let stored = resolved.record.profile
         let profile = AttacheModelCapabilityProfile(
             architecturalMaximum: stored.architecturalMaximum,
             configuredRuntimeLimit: stored.configuredRuntimeLimit,
@@ -132,19 +168,24 @@ enum AttachePresentationModelService {
             estimatorFamily: stored.estimatorFamily,
             supportsReasoning: stored.supportsReasoning,
             reasoningLevels: stored.reasoningLevels,
-            freshness: stored.freshness ?? record.recordedAt,
+            freshness: stored.freshness ?? resolved.record.recordedAt,
             confidence: stored.confidence,
             provenance: stored.provenance
         )
-        guard provider == .xai else { return profile }
+        guard provider == .xai else {
+            return CapabilityEvidence(identity: resolved.identity, profile: profile)
+        }
         let efforts = profile.reasoningLevels.isEmpty
             ? (documentedXAICapability(for: modelID)?.reasoningLevels ?? [])
             : profile.reasoningLevels
-        return mergedXAICapability(
-            live: profile,
-            liveEfforts: profile.reasoningLevels,
-            documented: documentedXAICapability(for: modelID),
-            effectiveEfforts: efforts
+        return CapabilityEvidence(
+            identity: resolved.identity,
+            profile: mergedXAICapability(
+                live: profile,
+                liveEfforts: profile.reasoningLevels,
+                documented: documentedXAICapability(for: modelID),
+                effectiveEfforts: efforts
+            )
         )
     }
 
@@ -157,7 +198,8 @@ enum AttachePresentationModelService {
             let identity = modelIdentity(
                 provider: provider,
                 baseURLText: baseURLText,
-                modelID: option.id
+                modelID: option.id,
+                fingerprint: option.fingerprint
             )
             capabilityCache.record(identity: identity, profile: option.capabilityProfile)
         }
@@ -279,7 +321,7 @@ enum AttachePresentationModelService {
     }
 
     private static func fetchOllamaModels(baseURL: URL) async throws -> [AttachePresentationModelOption] {
-        let options: [AttachePresentationModelOption]
+        var options: [AttachePresentationModelOption]
         do {
             let data = try await data(
                 url: endpoint(baseURL: baseURL, path: "models"),
@@ -294,6 +336,26 @@ enum AttachePresentationModelService {
             }
         } catch {
             options = try await fetchOllamaNativeTags(baseURL: baseURL)
+        }
+        // Ollama's OpenAI-compatible list can omit the immutable digest. Merge
+        // the native tag catalog so the later frozen request can distinguish a
+        // stable local model from a tag that was replaced in place.
+        if options.contains(where: { $0.fingerprint == nil }),
+           let native = try? await fetchOllamaNativeTags(baseURL: baseURL) {
+            let fingerprints = Dictionary(
+                uniqueKeysWithValues: native.compactMap { option in
+                    option.fingerprint.map { (option.id, $0) }
+                }
+            )
+            options = options.map { option in
+                guard option.fingerprint == nil,
+                      let fingerprint = fingerprints[option.id] else {
+                    return option
+                }
+                var resolved = option
+                resolved.fingerprint = fingerprint
+                return resolved
+            }
         }
         return await enrichOllamaCapabilities(options, baseURL: baseURL)
     }
@@ -498,7 +560,7 @@ enum AttachePresentationModelService {
         .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }
     }
 
-    private static func parseOllamaTags(_ data: Data) throws -> [AttachePresentationModelOption] {
+    static func parseOllamaTags(_ data: Data) throws -> [AttachePresentationModelOption] {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let models = root["models"] as? [[String: Any]] else {
             throw ModelDiscoveryError.invalidPayload("Ollama")
@@ -508,10 +570,13 @@ enum AttachePresentationModelService {
             let name = (model["name"] as? String) ?? (model["model"] as? String) ?? ""
             guard !name.isEmpty else { return nil }
             let detail = (model["details"] as? [String: Any])?["parameter_size"] as? String ?? ""
+            let digest = (model["digest"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             return AttachePresentationModelOption(
                 id: name,
                 detail: detail,
-                reasoningEfforts: []
+                reasoningEfforts: [],
+                fingerprint: digest?.isEmpty == false ? digest : nil
             )
         }
         .sorted { $0.id.localizedCaseInsensitiveCompare($1.id) == .orderedAscending }

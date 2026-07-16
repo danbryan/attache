@@ -89,8 +89,12 @@ observation, or local cache. Capabilities include:
   assumes a large context window.
 - **Installed Ollama models**: Attaché discovers the exact tags on the selected
   Ollama host, then asks `/api/show` for each installed model's context and
-  thinking capabilities. A saved tag that is no longer installed is labeled as
-  such rather than presented as a mysterious unknown profile.
+  thinking capabilities. The model digest travels with the cached capability
+  and frozen request identity. If an unchanged digest is temporarily offline,
+  Attaché can retain its last-known ceiling while visibly marking the evidence
+  stale. A changed digest starts a new identity and cannot inherit the prior
+  model's facts. A saved tag that is no longer installed is labeled as such
+  rather than presented as a mysterious unknown profile.
 - **xAI catalog gaps**: Attaché asks xAI which models are available. xAI's
   current catalog omits capacity and reasoning fields, so exact current Grok
   4.3, 4.5, Build 0.1, and 4.20 records are supplemented from a versioned
@@ -320,7 +324,11 @@ engine.
 - **AttacheToolBudgetEnforcer**: per-call and cumulative tool budget enforcer
   (INF-317).
 - **AttacheTokenUsageCalibration**: provider token usage parser and
-  content-free calibration (INF-318).
+  content-free calibration (INF-318). Underestimation can raise estimates after
+  five observations. Overestimation needs at least twenty consistent
+  observations, uses the upper 95th-percentile ratio with additional headroom,
+  and can reduce an estimate by at most 25 percent. Downward calibration never
+  applies to Custom or unknown-capacity models and never changes a hard limit.
 - **AttacheMemorySelector**: pure memory selector with policy filtering and
   conflict surfacing (INF-319).
 - **AttacheProgressiveTranscriptTools**: inspect, search, readRange for

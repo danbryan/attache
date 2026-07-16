@@ -48,7 +48,8 @@ struct AttacheFrozenModelAttempt: Equatable {
         settings: AttachePresentationSettings,
         capability: AttacheModelCapabilityProfile,
         strategy: AttacheContextStrategy,
-        toolDefinitionsJSON: Data = Data()
+        toolDefinitionsJSON: Data = Data(),
+        modelIdentity: ModelIdentity? = nil
     ) {
         self.role = role
         provider = settings.provider
@@ -60,7 +61,7 @@ struct AttacheFrozenModelAttempt: Equatable {
         self.capability = capability
         self.strategy = strategy
         self.toolDefinitionsJSON = toolDefinitionsJSON
-        modelIdentity = ModelIdentity(
+        self.modelIdentity = modelIdentity ?? ModelIdentity(
             provider: settings.provider.rawValue,
             normalizedEndpoint: settings.provider.isCLI ? "" : settings.baseURL.absoluteString,
             requestedModel: settings.model
@@ -85,7 +86,8 @@ struct AttacheFrozenModelAttempt: Equatable {
                 profilePrompt: ""
             ),
             capability: capability,
-            strategy: strategy
+            strategy: strategy,
+            modelIdentity: modelIdentity
         )
     }
 }
@@ -472,6 +474,7 @@ final class AttacheProductionRequestBroker {
             items: snapshot.contextItems,
             capability: Self.compilationCapability(
                 attempt.capability,
+                modelIdentity: attempt.modelIdentity,
                 strategy: attempt.strategy
             ),
             strategy: attempt.strategy,
@@ -494,11 +497,20 @@ final class AttacheProductionRequestBroker {
     /// policy and is still bounded by any lower known provider ceiling.
     static func compilationCapability(
         _ capability: AttacheModelCapabilityProfile,
+        modelIdentity: ModelIdentity,
         strategy: AttacheContextStrategy,
         now: Date = Date()
     ) -> AttacheModelCapabilityProfile {
         guard strategy.kind != .custom,
               capability.isStale(olderThan: 7 * 86_400, now: now) else {
+            return capability
+        }
+        // An Ollama digest identifies immutable model bytes at one exact
+        // endpoint. Retain its last-known ceiling while offline and show the
+        // stale evidence in UI. Mutable aliases and unversioned endpoints keep
+        // the conservative unknown envelope until refreshed.
+        if modelIdentity.provider == AttachePresentationProvider.ollama.rawValue,
+           modelIdentity.fingerprint != nil {
             return capability
         }
         return .unknown
@@ -1053,6 +1065,16 @@ final class AttacheProductionRequestBroker {
                 for: Self.calibrationStorageKey(attempt)
               ),
               diagnostics.isActionable else { return estimator }
+        if diagnostics.correctionFactor < 1.0 {
+            let compilationCapability = Self.compilationCapability(
+                attempt.capability,
+                modelIdentity: attempt.modelIdentity,
+                strategy: attempt.strategy
+            )
+            guard compilationCapability.declaredInputCeiling != nil else {
+                return estimator
+            }
+        }
         return AttacheCalibratedTokenEstimator(
             base: estimator,
             correction: AttacheCalibrationCorrection(

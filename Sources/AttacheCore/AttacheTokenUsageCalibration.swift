@@ -108,19 +108,25 @@ public struct AttacheCalibrationDiagnostics: Equatable, Sendable {
     public let modelIdentityKey: String
     public let lineageID: String
     public let sampleCount: Int
+    /// Provider-reported input tokens divided by the fallback estimate. This
+    /// is observed evidence, not necessarily the factor production applies.
+    public let observedMedianRatio: Double
     public let aggregateEstimateError: Double
+    /// The bounded factor production may apply after sample and safety gates.
     public let correctionFactor: Double
     public let isActionable: Bool
     public let lastUpdate: Date?
 
     public init(
         modelIdentityKey: String, lineageID: String, sampleCount: Int,
-        aggregateEstimateError: Double, correctionFactor: Double,
+        observedMedianRatio: Double, aggregateEstimateError: Double,
+        correctionFactor: Double,
         isActionable: Bool, lastUpdate: Date?
     ) {
         self.modelIdentityKey = modelIdentityKey
         self.lineageID = lineageID
         self.sampleCount = sampleCount
+        self.observedMedianRatio = observedMedianRatio
         self.aggregateEstimateError = aggregateEstimateError
         self.correctionFactor = correctionFactor
         self.isActionable = isActionable
@@ -241,7 +247,7 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
     }
 
     public var sampleCount: Int { ratios.count }
-    public var isActionable: Bool { sampleCount >= minSamples }
+    public var isActionable: Bool { computeCorrection().isActionable }
 
     /// Record a sample's ratio (INF-318). Bounds the stored sample count.
     public mutating func record(_ ratio: Double) {
@@ -253,18 +259,16 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
         lastUpdate = Date(timeIntervalSince1970: 1_700_000_000 + Double(ratios.count))
     }
 
-    /// Compute the outlier-resistant correction factor (INF-318). Uses the
-    /// median ratio, clamped to [0.5, 1.5]. Too few samples return 1.0
-    /// (non-actionable). Outliers cannot produce zero, negative, or
-    /// implausibly optimistic corrections.
+    /// Compute the guarded correction factor (INF-318). Underestimation uses
+    /// the median after `minSamples`. A downward correction requires twenty
+    /// samples, uses the upper 95th-percentile observation plus headroom, and
+    /// can never reduce an estimate by more than 25 percent.
     public func computeCorrection() -> AttacheCalibrationCorrection {
-        guard isActionable else { return .unactionable }
-        let median = aggregateMedianRatio
-        let clamped = min(max(median, 0.5), 1.5)
-        let error = abs(clamped - 1.0)
-        return AttacheCalibrationCorrection(
-            factor: clamped, sampleCount: sampleCount,
-            aggregateError: error, isActionable: true
+        AttacheTokenUsageCalibrator.correction(
+            observedMedianRatio: aggregateMedianRatio,
+            observedUpperRatio: upperRatio(percentile: 0.95),
+            sampleCount: sampleCount,
+            minimumIncreaseSamples: minSamples
         )
     }
 
@@ -296,11 +300,22 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
         return sorted[middle]
     }
 
+    private func upperRatio(percentile: Double) -> Double {
+        guard !ratios.isEmpty else { return 1.0 }
+        let sorted = ratios.sorted()
+        let position = Int(
+            (percentile * Double(sorted.count - 1)).rounded(.up)
+        )
+        return sorted[min(max(position, 0), sorted.count - 1)]
+    }
+
     public func diagnostics() -> AttacheCalibrationDiagnostics {
         let correction = computeCorrection()
         return AttacheCalibrationDiagnostics(
             modelIdentityKey: modelIdentityKey, lineageID: lineageID,
-            sampleCount: sampleCount, aggregateEstimateError: correction.aggregateError,
+            sampleCount: sampleCount,
+            observedMedianRatio: aggregateMedianRatio,
+            aggregateEstimateError: abs(aggregateMedianRatio - 1.0),
             correctionFactor: correction.factor, isActionable: correction.isActionable,
             lastUpdate: lastUpdate
         )
@@ -308,12 +323,16 @@ public struct AttacheCalibrationLineage: Equatable, Sendable {
 }
 
 /// The pure token-usage calibrator (INF-318). Records samples, computes
-/// conservative corrections, and applies them to estimates. Calibration
-/// adjusts estimator safety but never raises a hard limit, overrides
-/// authoritative runtime/provider capacity, or changes Custom values.
+/// guarded corrections, and applies them to estimates. Calibration never
+/// raises a hard limit, overrides authoritative runtime/provider capacity, or
+/// changes Custom values.
 public enum AttacheTokenUsageCalibrator {
 
     public static let estimatorVersion = "attache.fallback-estimator.v2"
+    public static let minimumMeasuredDecreaseSamples = 20
+    public static let minimumAppliedFactor = 0.75
+    public static let maximumAppliedFactor = 1.5
+    public static let measuredDecreaseHeadroom = 1.15
 
     /// Record a usage sample into a lineage (INF-318).
     public static func record(
@@ -324,22 +343,65 @@ public enum AttacheTokenUsageCalibrator {
         lineage.record(sample.estimateRatio)
     }
 
-    /// Apply a correction to an estimated token count (INF-318). The
-    /// correction makes the estimate more conservative (higher) when the
-    /// estimator underestimates. It never raises a hard limit or overrides
-    /// authoritative capacity. A non-actionable correction returns the
-    /// original estimate unchanged.
+    /// Resolve observed ratios into a factor production may apply. A downward
+    /// correction needs four times the ordinary sample floor (at least twenty),
+    /// is based on the conservative upper observation, adds fifteen percent
+    /// headroom, and stops at a 0.75 floor.
+    public static func correction(
+        observedMedianRatio: Double,
+        observedUpperRatio: Double,
+        sampleCount: Int,
+        minimumIncreaseSamples: Int = 5
+    ) -> AttacheCalibrationCorrection {
+        guard observedMedianRatio.isFinite,
+              observedUpperRatio.isFinite,
+              observedMedianRatio > 0,
+              observedUpperRatio > 0 else { return .unactionable }
+
+        if observedMedianRatio > 1.0 {
+            guard sampleCount >= minimumIncreaseSamples else { return .unactionable }
+            let factor = min(observedMedianRatio, maximumAppliedFactor)
+            return AttacheCalibrationCorrection(
+                factor: factor,
+                sampleCount: sampleCount,
+                aggregateError: abs(observedMedianRatio - 1.0),
+                isActionable: true
+            )
+        }
+
+        let requiredDecreaseSamples = max(
+            minimumMeasuredDecreaseSamples,
+            minimumIncreaseSamples * 4
+        )
+        guard observedMedianRatio < 1.0,
+              sampleCount >= requiredDecreaseSamples else { return .unactionable }
+        let factor = min(
+            1.0,
+            max(
+                minimumAppliedFactor,
+                observedUpperRatio * measuredDecreaseHeadroom
+            )
+        )
+        guard factor < 1.0 else { return .unactionable }
+        return AttacheCalibrationCorrection(
+            factor: factor,
+            sampleCount: sampleCount,
+            aggregateError: abs(observedMedianRatio - 1.0),
+            isActionable: true
+        )
+    }
+
+    /// Apply a guarded correction to an estimated token count (INF-318).
+    /// A non-actionable correction returns the original estimate unchanged.
     public static func applyCorrection(
         estimate: Int, correction: AttacheCalibrationCorrection
     ) -> Int {
         guard correction.isActionable else { return estimate }
-        // The correction factor is the median actual/estimated ratio.
-        // Applying it makes the estimate match observed reality. But we only
-        // ever apply it conservatively: round up, never down below the
-        // original estimate, so calibration cannot make the estimator less
-        // safe.
-        let adjusted = Int((Double(estimate) * correction.factor).rounded(.up))
-        return max(adjusted, estimate)
+        let bounded = min(
+            max(correction.factor, minimumAppliedFactor),
+            maximumAppliedFactor
+        )
+        return max(1, Int((Double(estimate) * bounded).rounded(.up)))
     }
 
     /// Apply a correction to a hard limit (INF-318). This is always a no-op:
@@ -437,6 +499,12 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         guard let handle else { return false }
         let median = min(max(lineage.aggregateMedianRatio, Self.minimumRatio), Self.maximumRatio)
         let histogram = Self.histogram(for: lineage.ratios)
+        let correction = AttacheTokenUsageCalibrator.correction(
+            observedMedianRatio: median,
+            observedUpperRatio: Self.upperRatio(in: histogram, percentile: 0.95),
+            sampleCount: lineage.sampleCount,
+            minimumIncreaseSamples: lineage.minSamples
+        )
         let sql = """
         INSERT OR REPLACE INTO calibration_lineages
         (model_identity_key, lineage_id, ratio_count, median_ratio, last_update, is_actionable, ratio_histogram)
@@ -454,7 +522,7 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         } else {
             sqlite3_bind_null(stmt, 5)
         }
-        sqlite3_bind_int(stmt, 6, lineage.isActionable ? 1 : 0)
+        sqlite3_bind_int(stmt, 6, correction.isActionable ? 1 : 0)
         sqlite3_bind_text(stmt, 7, Self.encodeHistogram(histogram), -1, transient)
         let saved = sqlite3_step(stmt) == SQLITE_DONE
         hardenPermissions()
@@ -505,6 +573,12 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         histogram[Self.bucketIndex(for: sample.estimateRatio)] += 1
         let count = histogram.reduce(0, +)
         let median = Self.medianRatio(in: histogram)
+        let correction = AttacheTokenUsageCalibrator.correction(
+            observedMedianRatio: median,
+            observedUpperRatio: Self.upperRatio(in: histogram, percentile: 0.95),
+            sampleCount: count,
+            minimumIncreaseSamples: Self.minimumActionableSamples
+        )
 
         let upsert = """
         INSERT OR REPLACE INTO calibration_lineages
@@ -521,7 +595,7 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         sqlite3_bind_int64(statement, 3, Int64(count))
         sqlite3_bind_double(statement, 4, median)
         sqlite3_bind_double(statement, 5, sample.timestamp.timeIntervalSince1970)
-        sqlite3_bind_int(statement, 6, count >= Self.minimumActionableSamples ? 1 : 0)
+        sqlite3_bind_int(statement, 6, correction.isActionable ? 1 : 0)
         sqlite3_bind_text(statement, 7, Self.encodeHistogram(histogram), -1, transient)
         let saved = sqlite3_step(statement) == SQLITE_DONE
         hardenPermissions()
@@ -539,7 +613,7 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
     public func diagnostics(for key: String) -> AttacheCalibrationDiagnostics? {
         lock.lock(); defer { lock.unlock() }
         guard let handle else { return nil }
-        let sql = "SELECT model_identity_key, lineage_id, ratio_count, median_ratio, last_update, is_actionable FROM calibration_lineages WHERE model_identity_key = ?;"
+        let sql = "SELECT model_identity_key, lineage_id, ratio_count, median_ratio, last_update, ratio_histogram FROM calibration_lineages WHERE model_identity_key = ?;"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
@@ -550,11 +624,23 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
         let count = Int(sqlite3_column_int64(stmt, 2))
         let median = sqlite3_column_double(stmt, 3)
         let lastUpdate: Date? = sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
-        let actionable = sqlite3_column_int(stmt, 5) == 1
+        let histogram = Self.decodeHistogram(stringColumn(stmt, 5))
+        let correction = AttacheTokenUsageCalibrator.correction(
+            observedMedianRatio: median,
+            observedUpperRatio: histogram.map {
+                Self.upperRatio(in: $0, percentile: 0.95)
+            } ?? median,
+            sampleCount: count,
+            minimumIncreaseSamples: Self.minimumActionableSamples
+        )
         return AttacheCalibrationDiagnostics(
             modelIdentityKey: identityKey, lineageID: lineageID,
-            sampleCount: count, aggregateEstimateError: abs(median - 1.0),
-            correctionFactor: median, isActionable: actionable, lastUpdate: lastUpdate
+            sampleCount: count,
+            observedMedianRatio: median,
+            aggregateEstimateError: abs(median - 1.0),
+            correctionFactor: correction.factor,
+            isActionable: correction.isActionable,
+            lastUpdate: lastUpdate
         )
     }
 
@@ -627,6 +713,24 @@ public final class AttacheCalibrationStore: @unchecked Sendable {
             }
         }
         return 1.0
+    }
+
+    private static func upperRatio(
+        in histogram: [Int],
+        percentile: Double
+    ) -> Double {
+        let total = histogram.reduce(0, +)
+        guard total > 0 else { return 1.0 }
+        let target = Int((percentile * Double(total - 1)).rounded(.up))
+        var cumulative = 0
+        for (index, count) in histogram.enumerated() {
+            cumulative += count
+            if cumulative > target {
+                let fraction = Double(index) / Double(histogramBucketCount - 1)
+                return minimumRatio + fraction * (maximumRatio - minimumRatio)
+            }
+        }
+        return maximumRatio
     }
 
     private static func encodeHistogram(_ histogram: [Int]) -> String {

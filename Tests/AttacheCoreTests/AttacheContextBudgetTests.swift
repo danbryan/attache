@@ -232,7 +232,7 @@ final class AttacheContextBudgetTests: XCTestCase {
         XCTAssertEqual(estimator.family, "unicode-fallback")
     }
 
-    func testCalibrationCanOnlyRaiseFallbackEstimate() {
+    func testCalibrationRaisesUnderestimatedFallback() {
         let base = AttacheFallbackTokenEstimator()
         let optimistic = AttacheCalibratedTokenEstimator(
             base: base,

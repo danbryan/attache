@@ -581,7 +581,7 @@ final class AttachePresentationService {
                 return nil
             }
         }
-        let capability = AttachePresentationModelService.capabilityProfile(
+        let evidence = AttachePresentationModelService.capabilityEvidence(
             provider: settings.provider,
             baseURLText: settings.baseURL.absoluteString,
             modelID: settings.model
@@ -589,9 +589,10 @@ final class AttachePresentationService {
         return AttacheFrozenModelAttempt(
             role: snapshot.role,
             settings: settings,
-            capability: capability,
+            capability: evidence.profile,
             strategy: snapshot.contextStrategy,
-            toolDefinitionsJSON: toolDefinitionsJSON
+            toolDefinitionsJSON: toolDefinitionsJSON,
+            modelIdentity: evidence.identity
         )
     }
 
