@@ -2060,8 +2060,10 @@ if enabled("f12") {
 
     run.step("f12-load", "Command-K finds the target Codex session among many indexed sessions") {
         try focusSessionInCommandK(query: needle, sessionID: sessionID, timeout: 90)
-        _ = try waitForElement("focused load session Call button", in: try mainWindow(),
-                               role: kAXButtonRole as String, exactly: "Call", timeout: 15)
+        _ = try waitForElement("focused load session saved-call button", in: try mainWindow(),
+                               role: kAXButtonRole as String, exactly: "Start saved call", timeout: 15)
+        _ = try waitForElement("focused load session status", in: try mainWindow(),
+                               containing: "Focused · Load smoke target \(nonce)", timeout: 15)
         guard (try mainWindow()).firstDescendant(containing: "Open send-to-agent composer") == nil else {
             throw SmokeError(message: "legacy off-call send-to-agent dock button is still exposed")
         }
