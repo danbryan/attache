@@ -33,7 +33,16 @@ enum AttacheVoiceCatalogSnapshotStore {
     static let fileName = "voice-catalog-snapshot.json"
 
     static func defaultURL() -> URL {
-        AttacheAppSupport.supportDirectory().appendingPathComponent(fileName)
+        // Unit tests must never read or mutate the user's live voice-catalog
+        // snapshot. Every explicit-injection test already passes its own
+        // scratch URL; this only guards the shared `AttacheVoiceCatalog.catalog`
+        // singleton that a default-constructed PersonalityStore or AppModel
+        // still reaches during a test run.
+        if NSClassFromString("XCTestCase") != nil {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("attache-voice-catalog-test-\(getpid()).json")
+        }
+        return AttacheAppSupport.supportDirectory().appendingPathComponent(fileName)
     }
 
     /// Returns the cached voice list, or nil if there is no snapshot yet or
