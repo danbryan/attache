@@ -7,10 +7,18 @@ umask 077
 
 APP_NAME="Attache"
 BUNDLE_ID="com.bryanlabs.attache"
-SUPPORT_DIR="$HOME/Library/Application Support/Attache"
-BACKUP_ROOT="$HOME/Library/Application Support/Attache Backups"
+# Overridable so scripts/test-simulate-fresh-user-restore-guard.sh can exercise
+# the real logic against a throwaway directory instead of the live profile.
+SUPPORT_DIR="${ATTACHE_FRESH_USER_SUPPORT_DIR:-$HOME/Library/Application Support/Attache}"
+BACKUP_ROOT="${ATTACHE_FRESH_USER_BACKUP_ROOT:-$HOME/Library/Application Support/Attache Backups}"
 KEYCHAIN_BACKUP_FILE="keychain-secrets.tsv"
 DEFAULTS_BACKUP_FILE="defaults.plist"
+LOCK_DIR="$BACKUP_ROOT/.simulate-fresh-user.lock"
+LOCK_ACQUIRED=0
+
+in_test_mode() {
+  [[ "${ATTACHE_FRESH_USER_TEST_MODE:-0}" == "1" ]]
+}
 
 SECRET_SERVICE="com.bryanlabs.attache.secrets"
 LEGACY_PRESENTATION_SERVICE="com.bryanlabs.attache.presentation"
@@ -36,6 +44,7 @@ EOF
 }
 
 quit_app() {
+  in_test_mode && return 0
   osascript -e 'tell application "Attache" to quit' >/dev/null 2>&1 || true
   sleep 1
 }
@@ -51,7 +60,41 @@ cleanup_partial_keychain_backup() {
     rm -f "$KEYCHAIN_TSV_IN_PROGRESS"
   fi
 }
-trap cleanup_partial_keychain_backup EXIT
+
+# fresh/restore/ui-smoke.sh must never run concurrently against the same
+# profile: two overlapping invocations racing on SUPPORT_DIR is what turned a
+# missing-backup restore into a full profile wipe on 2026-07-17. The lock is a
+# plain atomic mkdir so it needs no extra tooling (flock is not on macOS by
+# default).
+acquire_lock() {
+  mkdir -p "$BACKUP_ROOT"
+  chmod 700 "$BACKUP_ROOT" 2>/dev/null || true
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    local holder=""
+    if [[ -f "$LOCK_DIR/pid" ]]; then
+      holder=" (pid $(cat "$LOCK_DIR/pid" 2>/dev/null || true))"
+    fi
+    echo "error: another simulate-fresh-user.sh invocation is already in progress${holder}." >&2
+    echo "Refusing to run concurrently. Lock: $LOCK_DIR" >&2
+    echo "If you are certain nothing is actually running, remove the lock directory manually." >&2
+    exit 1
+  fi
+  echo "$$" > "$LOCK_DIR/pid"
+  LOCK_ACQUIRED=1
+}
+
+release_lock() {
+  if [[ "$LOCK_ACQUIRED" == "1" ]]; then
+    rm -rf "$LOCK_DIR"
+    LOCK_ACQUIRED=0
+  fi
+}
+
+cleanup_on_exit() {
+  cleanup_partial_keychain_backup
+  release_lock
+}
+trap cleanup_on_exit EXIT
 
 backup_keychain_secret() {
   local service="$1"
@@ -71,6 +114,7 @@ delete_keychain_secret() {
 }
 
 fresh() {
+  acquire_lock
   quit_app
 
   local stamp backup_dir
@@ -85,7 +129,9 @@ fresh() {
     mv "$SUPPORT_DIR" "$backup_dir/Attache"
   fi
 
-  if defaults export "$BUNDLE_ID" "$backup_dir/$DEFAULTS_BACKUP_FILE" >/dev/null 2>&1; then
+  if in_test_mode; then
+    printf 'Skipped (test mode).\n' > "$backup_dir/defaults-not-found.txt"
+  elif defaults export "$BUNDLE_ID" "$backup_dir/$DEFAULTS_BACKUP_FILE" >/dev/null 2>&1; then
     chmod 600 "$backup_dir/$DEFAULTS_BACKUP_FILE"
     defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
   else
@@ -96,17 +142,21 @@ fresh() {
   KEYCHAIN_TSV_IN_PROGRESS="$keychain_tsv"
   : > "$keychain_tsv"
   chmod 600 "$keychain_tsv"
-  for account in "${SECRET_ACCOUNTS[@]}"; do
-    backup_keychain_secret "$SECRET_SERVICE" "$account" "$keychain_tsv"
-  done
-  backup_keychain_secret "$LEGACY_PRESENTATION_SERVICE" "presentationLLMAPIKey" "$keychain_tsv"
+  if ! in_test_mode; then
+    for account in "${SECRET_ACCOUNTS[@]}"; do
+      backup_keychain_secret "$SECRET_SERVICE" "$account" "$keychain_tsv"
+    done
+    backup_keychain_secret "$LEGACY_PRESENTATION_SERVICE" "presentationLLMAPIKey" "$keychain_tsv"
+  fi
   KEYCHAIN_TSV_IN_PROGRESS=""
 
   # The TSV is complete; only now remove the entries from the Keychain.
-  for account in "${SECRET_ACCOUNTS[@]}"; do
-    delete_keychain_secret "$SECRET_SERVICE" "$account"
-  done
-  delete_keychain_secret "$LEGACY_PRESENTATION_SERVICE" "presentationLLMAPIKey"
+  if ! in_test_mode; then
+    for account in "${SECRET_ACCOUNTS[@]}"; do
+      delete_keychain_secret "$SECRET_SERVICE" "$account"
+    done
+    delete_keychain_secret "$LEGACY_PRESENTATION_SERVICE" "presentationLLMAPIKey"
+  fi
 
   mkdir -p "$SUPPORT_DIR"
 
@@ -149,20 +199,37 @@ restore() {
     exit 1
   fi
 
+  acquire_lock
+
+  # Hard-fail BEFORE touching the live profile if this backup has nothing to
+  # restore. The 2026-07-17 incident happened because the old code ran
+  # `rm -rf "$SUPPORT_DIR"` unconditionally and only afterward checked whether
+  # there was anything to put back; a backup consumed by an earlier
+  # (concurrent, duplicate) restore call had no Attache folder left, so the
+  # live profile was deleted and nothing was restored in its place.
+  if [[ ! -d "$backup_dir/Attache" ]]; then
+    echo "error: backup '$backup_dir' has no Attache directory to restore." >&2
+    echo "Refusing to touch the live profile at '$SUPPORT_DIR'. Nothing was changed." >&2
+    exit 1
+  fi
+
   quit_app
 
   rm -rf "$SUPPORT_DIR"
-  if [[ -d "$backup_dir/Attache" ]]; then
-    mv "$backup_dir/Attache" "$SUPPORT_DIR"
-  fi
+  mv "$backup_dir/Attache" "$SUPPORT_DIR"
 
-  defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
-  if [[ -f "$backup_dir/$DEFAULTS_BACKUP_FILE" ]]; then
-    defaults import "$BUNDLE_ID" "$backup_dir/$DEFAULTS_BACKUP_FILE"
-  fi
+  if in_test_mode; then
+    : # UserDefaults and Keychain are left untouched under test mode.
+  else
+    defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true
+    if [[ -f "$backup_dir/$DEFAULTS_BACKUP_FILE" ]]; then
+      defaults import "$BUNDLE_ID" "$backup_dir/$DEFAULTS_BACKUP_FILE"
+    fi
 
-  restore_keychain_secrets "$backup_dir/$KEYCHAIN_BACKUP_FILE"
-  # The secrets are back in the Keychain; do not leave the exported copy on disk.
+    restore_keychain_secrets "$backup_dir/$KEYCHAIN_BACKUP_FILE"
+  fi
+  # The secrets (if any) are back in the Keychain; do not leave the exported
+  # copy on disk.
   rm -f "$backup_dir/$KEYCHAIN_BACKUP_FILE"
 
   echo "Attaché state restored from:"

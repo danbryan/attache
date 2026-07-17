@@ -164,10 +164,19 @@ swift test
   display-level capture; it can grab unrelated windows containing personal
   data (2026-07-10 incident).
 - Never point automation at the real user profile except through
-  `scripts/simulate-fresh-user.sh`'s fresh/restore backup pairing, and any
-  script that does must hard-fail if the expected backup is missing
+  `scripts/simulate-fresh-user.sh`'s fresh/restore backup pairing.
+  `restore()` hard-fails, leaving the live profile untouched, if the target
+  backup has no `Attache` folder to restore, and `fresh`/`restore` take a
+  process lock so concurrent invocations hard-fail instead of racing
   (2026-07-10 incident: a stray kill mid-capture left the live profile
-  cleared until the backup was recovered).
+  cleared until the backup was recovered; 2026-07-17 incident: two
+  overlapping `ui-smoke.sh` runs raced `restore()`, which deleted the live
+  profile unconditionally before checking whether the backup had anything to
+  restore, wiping the real profile until it was recovered from a Time
+  Machine snapshot). `scripts/simulate-fresh-user-restore-guard-smoke.sh`
+  proves both guards against a throwaway directory. `ui-smoke.sh` runs are
+  single-flight: run them yourself as the orchestrating agent, never
+  delegate one to a subagent, and never run two at once.
 
 ## Git And Commits
 
