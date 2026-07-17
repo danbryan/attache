@@ -116,8 +116,21 @@ extension AttacheRootView {
                                 model.playSelected()
                             }
                             .contextMenu {
-                                // "Summarize Session…" (INF-370) is hidden until
-                                // its cost-preview sheet is built (follow-up).
+                                if let sessionID = card.externalSessionID {
+                                    // INF-370/372: available for any indexed
+                                    // session regardless of watch state,
+                                    // including fully historic ones. Presents
+                                    // the cost-preview sheet before any model
+                                    // call.
+                                    Button("Summarize Session…") {
+                                        model.requestHistoricSessionSummary(
+                                            sessionID: sessionID, sourceKind: card.sourceKind,
+                                            displayTitle: card.sessionTitle ?? card.summary, workingDirectory: card.projectPath
+                                        )
+                                    }
+                                    .accessibilityIdentifier("Summarize Session…")
+                                    Divider()
+                                }
                                 Button("Delete Voicemail") {
                                     model.selectedCardID = card.id
                                     model.archiveSelected()

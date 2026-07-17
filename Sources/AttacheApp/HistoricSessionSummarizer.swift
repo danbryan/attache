@@ -26,6 +26,42 @@ enum HistoricSessionSummaryOutcome: Equatable {
     case failedClosed(reason: String)
 }
 
+/// The result of the local cost preview (INF-372). Computed with the same
+/// grant, freeze, and plan machinery `summarize()` runs, but with no model
+/// call, so the user sees the number of stages, the episode count, and the
+/// egress class before spending anything. A preview never reads a transcript
+/// byte for an unauthorized request: the fail-closed grant and authorization
+/// checks run first, exactly as they do for `summarize()`.
+enum SessionSummaryPreview: Equatable {
+    case ready(
+        sessionTitle: String,
+        sourceKindDisplay: String,
+        episodeCount: Int,
+        stageCount: Int,
+        estimatedTotalTokens: Int,
+        egressClass: String,
+        persistsCard: Bool
+    )
+    case failedClosed(reason: String)
+}
+
+/// The AppModel-facing state that drives the summarize-session cost-preview
+/// sheet (INF-372). The sheet is shown whenever this is non-nil.
+enum SessionSummaryUIState: Equatable {
+    /// The preview is being computed (grant, freeze, plan) off the main actor.
+    case loadingPreview
+    /// The preview is ready; the sheet shows the cost and a Continue button.
+    case previewing(SessionSummaryPreview)
+    /// A confirmed run is in flight; the sheet shows a spinner and this status.
+    case running(status: String)
+    /// The run finished; the sheet shows the spoken text. `persisted` is false
+    /// for a don't-record (ephemeral) session; `incomplete` is true when the
+    /// summary covers only part of the session.
+    case finished(spokenText: String, persisted: Bool, incomplete: Bool)
+    /// The preview or run failed closed; the sheet shows the reason.
+    case failed(reason: String)
+}
+
 /// Drives one historic-session summary request end to end. Read-only:
 /// exhaustive review stages carry no effectful tools (INF-329), and this
 /// summarizer never touches the frozen agent-send destinations.
@@ -62,13 +98,22 @@ final class HistoricSessionSummarizer {
     /// Polled before and after each stage; true cancels the remaining run.
     typealias CancelCheck = () -> Bool
 
-    func summarize(
-        request: HistoricSessionSummaryRequest,
-        options: Options,
-        cancel: @escaping CancelCheck = { false },
-        runStage: StageRunner,
-        synthesize: Synthesizer
-    ) async throws -> HistoricSessionSummaryOutcome {
+    /// A frozen review ready to run or preview: the same grant, authorize, and
+    /// freeze machinery both entry points depend on, factored so `summarize()`
+    /// and `preview()` stay bit-for-bit consistent about what is authorized and
+    /// how the plan is built.
+    private enum PreparedReview {
+        case ready(SessionContextRuntime.FrozenReviewSource, AttacheExhaustiveReviewPlan)
+        case failedClosed(String)
+    }
+
+    /// Grants app-owned focus, re-checks authorization, freezes the review
+    /// source, and builds the staged plan. All local and I/O only for the
+    /// frozen transcript, never a model call, and the fail-closed checks run
+    /// before any transcript byte is touched.
+    private func prepareReview(
+        request: HistoricSessionSummaryRequest, options: Options
+    ) -> PreparedReview {
         // Invoking the action IS the explicit user selection (INF-315 /
         // INF-370 step 2). This is an app-owned surface (a known Command-K or
         // inbox session row), not a model-driven pick, so it grants focus the
@@ -81,7 +126,7 @@ final class HistoricSessionSummarizer {
             displayTitle: request.displayTitle,
             workingDirectory: request.workingDirectory
         ) else {
-            return .failedClosed(reason: "no matching indexed session for the requested id/source")
+            return .failedClosed("no matching indexed session for the requested id/source")
         }
 
         // Fail-closed re-check before any transcript byte is touched: this
@@ -95,7 +140,7 @@ final class HistoricSessionSummarizer {
         let focusedSession: AttacheFocusedSession
         switch authorization {
         case .success(let session): focusedSession = session
-        case .failure(let error): return .failedClosed(reason: "\(error)")
+        case .failure(let error): return .failedClosed("\(error)")
         }
 
         // opencode has no per-session transcript file (INF-362): all sessions
@@ -108,15 +153,57 @@ final class HistoricSessionSummarizer {
                 ? try runtime.freezeReviewSourceForOpencode(focusedSession: focusedSession)
                 : try runtime.freezeReviewSource(focusedSession: focusedSession)
         } catch {
-            return .failedClosed(reason: "\(error)")
+            return .failedClosed("\(error)")
+        }
+
+        let plan = AttacheExhaustiveReviewCoordinator.buildPlan(
+            map: frozen.sessionMap, modelKey: options.modelKey, capability: options.capability,
+            strategy: options.strategy, egressClass: options.egressClass
+        )
+        return .ready(frozen, plan)
+    }
+
+    /// The local cost preview (INF-372). Runs the grant/freeze/plan pipeline
+    /// with no model call so the sheet can show what a confirmed run will cost.
+    func preview(request: HistoricSessionSummaryRequest, options: Options) -> SessionSummaryPreview {
+        switch prepareReview(request: request, options: options) {
+        case .failedClosed(let reason):
+            return .failedClosed(reason: reason)
+        case .ready(let frozen, let plan):
+            let sourceKindEnum = SourceKind(rawValue: request.sourceKind) ?? .generic
+            let episodeCount = plan.stages.reduce(0) { $0 + $1.episodeIDs.count }
+            let estimatedTotalTokens = plan.stages.reduce(0) { $0 + $1.estimatedTokens }
+            return .ready(
+                sessionTitle: frozen.focusedSession.displayTitle,
+                sourceKindDisplay: sourceKindEnum.displayName,
+                episodeCount: episodeCount,
+                stageCount: plan.stages.count,
+                estimatedTotalTokens: estimatedTotalTokens,
+                egressClass: options.egressClass,
+                persistsCard: options.persistCard
+            )
+        }
+    }
+
+    func summarize(
+        request: HistoricSessionSummaryRequest,
+        options: Options,
+        cancel: @escaping CancelCheck = { false },
+        runStage: StageRunner,
+        synthesize: Synthesizer
+    ) async throws -> HistoricSessionSummaryOutcome {
+        let frozen: SessionContextRuntime.FrozenReviewSource
+        let plan: AttacheExhaustiveReviewPlan
+        switch prepareReview(request: request, options: options) {
+        case .failedClosed(let reason):
+            return .failedClosed(reason: reason)
+        case .ready(let preparedFrozen, let preparedPlan):
+            frozen = preparedFrozen
+            plan = preparedPlan
         }
 
         var ledger = AttacheExhaustiveReviewCoordinator.buildLedger(
             from: frozen.sessionMap, sourceVersion: frozen.sourceVersion
-        )
-        let plan = AttacheExhaustiveReviewCoordinator.buildPlan(
-            map: frozen.sessionMap, modelKey: options.modelKey, capability: options.capability,
-            strategy: options.strategy, egressClass: options.egressClass
         )
 
         var stageSummaries: [String] = []

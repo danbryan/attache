@@ -420,6 +420,12 @@ struct AttacheRootView: View {
                 onCancel: { pendingCallPresentationProvider = nil }
             )
         }
+        .sheet(isPresented: Binding(
+            get: { model.sessionSummaryState != nil },
+            set: { presented in if !presented { model.cancelSessionSummary() } }
+        )) {
+            SessionSummarySheet(model: model)
+        }
         .sheet(item: $pendingRecoveryProviderSwitch) { pending in
             CloudConsentSheet(
                 providerName: pending.provider.title,

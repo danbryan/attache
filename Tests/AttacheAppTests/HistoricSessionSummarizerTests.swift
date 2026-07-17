@@ -294,6 +294,108 @@ final class HistoricSessionSummarizerTests: XCTestCase {
         XCTAssertEqual(card.metadataJSON.contains("canceled"), true, "the persisted card's metadata must record incomplete coverage")
     }
 
+    // MARK: - Local cost preview (INF-372): no model call, fail-closed first
+
+    func testPreviewOnFourSourceFixturesReturnsReadyWithStages() throws {
+        let harness = try makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+
+        let codexTranscript = harness.root.appendingPathComponent("codex.jsonl")
+        try writeCodexTranscript(at: codexTranscript)
+        let claudeTranscript = harness.root.appendingPathComponent("claude.jsonl")
+        try writeClaudeTranscript(at: claudeTranscript)
+        let grokTranscript = harness.root.appendingPathComponent("grok.jsonl")
+        try writeGrokTranscript(at: grokTranscript)
+        let opencodeDB = harness.root.appendingPathComponent("opencode.db")
+        try writeOpencodeDatabase(at: opencodeDB, sessionID: "oc-sess-1")
+
+        let records = [
+            record(id: "codex-sess-1", source: .codex, filePath: codexTranscript.path, project: "/tmp/codex-proj"),
+            record(id: "claude-sess-1", source: .claudeCode, filePath: claudeTranscript.path, project: "/tmp/claude-proj"),
+            record(id: "grok-sess-1", source: .grokBuild, filePath: grokTranscript.path, project: "/tmp/grok-proj"),
+            record(id: "oc-sess-1", source: .opencode, filePath: opencodeDB.path, project: "/tmp/opencode-proj")
+        ]
+        harness.runtime.reconcile(records: records)
+
+        for rec in records {
+            let request = HistoricSessionSummaryRequest(
+                sessionID: rec.id, sourceKind: rec.sourceKind.rawValue,
+                displayTitle: rec.title, workingDirectory: rec.project
+            )
+            let preview = harness.summarizer.preview(request: request, options: defaultOptions())
+            guard case .ready(let sessionTitle, let sourceKindDisplay, let episodeCount,
+                              let stageCount, let estimatedTotalTokens, let egressClass, let persistsCard) = preview else {
+                XCTFail("\(rec.sourceKind.rawValue): expected a ready preview, got \(preview)")
+                continue
+            }
+            XCTAssertGreaterThanOrEqual(stageCount, 1, "\(rec.sourceKind.rawValue): a summarizable session must plan at least one stage")
+            XCTAssertGreaterThanOrEqual(episodeCount, 1, "\(rec.sourceKind.rawValue): expected at least one covered episode")
+            XCTAssertGreaterThan(estimatedTotalTokens, 0, "\(rec.sourceKind.rawValue): expected a nonzero token estimate")
+            XCTAssertEqual(sourceKindDisplay, rec.sourceKind.displayName)
+            XCTAssertFalse(sessionTitle.isEmpty)
+            XCTAssertEqual(egressClass, "local")
+            XCTAssertTrue(persistsCard, "default options persist a card")
+        }
+    }
+
+    func testPreviewUnknownSessionFailsClosed() throws {
+        let harness = try makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        // No records reconciled: grantAppOwnedFocus returns nil before any
+        // transcript byte is touched (preview takes no stage/synthesize
+        // closures, so a model call is structurally impossible here).
+        let request = HistoricSessionSummaryRequest(
+            sessionID: "never-indexed", sourceKind: SourceKind.codex.rawValue,
+            displayTitle: "Not a real session", workingDirectory: nil
+        )
+        let preview = harness.summarizer.preview(request: request, options: defaultOptions())
+        guard case .failedClosed(let reason) = preview else {
+            XCTFail("expected failedClosed, got \(preview)")
+            return
+        }
+        XCTAssertTrue(reason.contains("no matching indexed session"))
+    }
+
+    func testPreviewMismatchedSourceKindFailsClosed() throws {
+        let harness = try makeHarness()
+        defer { try? FileManager.default.removeItem(at: harness.root) }
+        let codexTranscript = harness.root.appendingPathComponent("codex.jsonl")
+        try writeCodexTranscript(at: codexTranscript)
+        let rec = record(id: "codex-sess-1", source: .codex, filePath: codexTranscript.path, project: "/tmp/codex-proj")
+        harness.runtime.reconcile(records: [rec])
+        // Right id, wrong source kind: must fail closed just like summarize().
+        let request = HistoricSessionSummaryRequest(
+            sessionID: "codex-sess-1", sourceKind: SourceKind.claudeCode.rawValue,
+            displayTitle: rec.title, workingDirectory: rec.project
+        )
+        let preview = harness.summarizer.preview(request: request, options: defaultOptions())
+        guard case .failedClosed = preview else {
+            XCTFail("expected failedClosed, got \(preview)")
+            return
+        }
+    }
+
+    // MARK: - persistCard routing decision (pure, INF-372)
+
+    func testSummaryPersistsCardReflectsPrivacyRegistry() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-privacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var registry = SessionPrivacyRegistry(fileURL: root.appendingPathComponent("privacy.json"))
+
+        // A normal session records: the summary persists a card.
+        XCTAssertTrue(AppModel.summaryPersistsCard(sessionID: "sess-record", privacyRegistry: registry))
+
+        // A don't-record session routes to the ephemeral path (no card).
+        _ = registry.setRecordingDisabled(sessionID: "sess-private")
+        XCTAssertFalse(AppModel.summaryPersistsCard(sessionID: "sess-private", privacyRegistry: registry))
+
+        // Clearing the flag restores the persisted path.
+        _ = registry.clearRecordingDisabled(sessionID: "sess-private")
+        XCTAssertTrue(AppModel.summaryPersistsCard(sessionID: "sess-private", privacyRegistry: registry))
+    }
+
     // MARK: - Async helper (XCTest has no native async test wait on this toolchain path)
 
     private func runAsync<T>(_ operation: @escaping () async throws -> T) throws -> T {

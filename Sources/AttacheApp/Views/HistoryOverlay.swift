@@ -379,8 +379,19 @@ struct HistoryOverlay: View {
             }
             anotherTakeButtons(for: card)
             Divider()
-            // "Summarize Session…" (INF-370) is hidden until its cost-preview
-            // sheet is built (tracked as a follow-up).
+            if let sessionID = card.externalSessionID {
+                // INF-370/372: available for any indexed session regardless of
+                // watch state, including fully historic ones. Presents the
+                // cost-preview sheet before any model call.
+                Button("Summarize Session…") {
+                    model.requestHistoricSessionSummary(
+                        sessionID: sessionID, sourceKind: card.sourceKind,
+                        displayTitle: card.sessionTitle ?? rowTitle(for: card), workingDirectory: card.projectPath
+                    )
+                }
+                .accessibilityIdentifier("Summarize Session…")
+                Divider()
+            }
             Button(role: .destructive) {
                 pendingDeletion = HistoryDeletionRequest(
                     card: card,
