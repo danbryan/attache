@@ -257,10 +257,7 @@ struct CharacterSwitcherPalette: View {
     }
 
     private func moveSelection(_ delta: Int) {
-        let ids = filtered.map(\.id)
-        guard !ids.isEmpty else { return }
-        let current = selectedID.flatMap { ids.firstIndex(of: $0) } ?? (delta > 0 ? -1 : ids.count)
-        selectedID = ids[max(0, min(ids.count - 1, current + delta))]
+        selectedID = PaletteSelectionIndex.move(current: selectedID, ids: filtered.map(\.id), delta: delta)
     }
 
     private func selectCurrent() {

@@ -216,7 +216,12 @@ struct HistoryOverlay: View {
         .readingPlate(theme: model.theme)
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.12)))
         .shadow(color: .black.opacity(0.3), radius: 28, y: 12)
-        .background(PaletteKeyMonitor(onMove: moveSelection, onSelect: playSelection))
+        .background(PaletteKeyMonitor(
+            onMove: moveSelection,
+            onSelect: playSelection,
+            vimKeysEnabled: true,
+            isFieldFocused: fieldFocused
+        ))
         .onExitCommand { isVisible = false }
         .onAppear {
             scope = model.attachedCodexSessionID != nil ? .focused : .all
@@ -564,22 +569,10 @@ struct HistoryOverlay: View {
 
     private func moveSelection(_ delta: Int) {
         if kindFilter == .sent {
-            let list = navigableInstructions
-            guard !list.isEmpty else { return }
-            guard let current = selectedID, let index = list.firstIndex(where: { $0.id == current }) else {
-                selectedID = delta >= 0 ? list.first?.id : list.last?.id
-                return
-            }
-            selectedID = list[min(max(index + delta, 0), list.count - 1)].id
+            selectedID = PaletteSelectionIndex.move(current: selectedID, ids: navigableInstructions.map(\.id), delta: delta)
             return
         }
-        let list = navigableCards
-        guard !list.isEmpty else { return }
-        guard let current = selectedID, let index = list.firstIndex(where: { $0.id == current }) else {
-            selectedID = delta >= 0 ? list.first?.id : list.last?.id
-            return
-        }
-        selectedID = list[min(max(index + delta, 0), list.count - 1)].id
+        selectedID = PaletteSelectionIndex.move(current: selectedID, ids: navigableCards.map(\.id), delta: delta)
     }
 
     private func playSelection() {
