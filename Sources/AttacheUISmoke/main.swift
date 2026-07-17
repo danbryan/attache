@@ -332,6 +332,21 @@ func frontmostWindowID(forPID pid: pid_t) -> CGWindowID? {
     return candidates.max(by: { area(of: $0) < area(of: $1) })?[kCGWindowNumber as String] as? CGWindowID
 }
 
+/// Resolves a window by title substring rather than by largest area, for poses
+/// that need to capture a specific secondary window (like Settings) instead of
+/// the app's main window, which `frontmostWindowID` would otherwise pick
+/// whenever it happens to be the larger of the two.
+func windowID(forPID pid: pid_t, titleContains needle: String) -> CGWindowID? {
+    guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: AnyObject]] else {
+        return nil
+    }
+    return infoList.first { info in
+        (info[kCGWindowOwnerPID as String] as? pid_t) == pid
+            && (info[kCGWindowLayer as String] as? Int) == 0
+            && ((info[kCGWindowName as String] as? String)?.localizedCaseInsensitiveContains(needle) ?? false)
+    }?[kCGWindowNumber as String] as? CGWindowID
+}
+
 /// Screenshots the app's own window by CGWindowID via `screencapture -l`,
 /// never the whole screen. This is INF-244's fix for the screenshot matrix:
 /// a full-screen `screencapture -x` captures whatever macOS Space is
@@ -351,6 +366,28 @@ func captureAppWindowScreenshot(to path: String) {
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     // -x: no sound. -o: no window shadow (keeps the crop to just the window's
     // own content). -l<id>: capture exactly this window, any Space.
+    process.arguments = ["-x", "-o", "-l\(windowID)", path]
+    do {
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            print("screenshot: screencapture exited \(process.terminationStatus) for window \(windowID)")
+        }
+    } catch {
+        print("screenshot: failed to launch screencapture: \(error)")
+    }
+}
+
+/// Same as `captureAppWindowScreenshot`, but targets a specific window by
+/// title substring (see `windowID(forPID:titleContains:)`) rather than the
+/// largest window owned by the app.
+func captureNamedWindowScreenshot(to path: String, titleContains needle: String) {
+    guard let windowID = windowID(forPID: app.pid, titleContains: needle) else {
+        print("screenshot: could not resolve a window id containing \"\(needle)\" for pid \(app.pid); skipping capture to \(path)")
+        return
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     process.arguments = ["-x", "-o", "-l\(windowID)", path]
     do {
         try process.run()
@@ -406,6 +443,29 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 app.activate()
                 app.key(Key.comma, command: true)
                 try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+
+            case "voice-pane":
+                // INF-364 multilingual audit (b): the Voice & Captions pane
+                // holds the Spoken language picker, independent of app UI
+                // language (a macOS AppleLanguages / localization concern).
+                app.activate()
+                app.key(Key.comma, command: true)
+                try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+                try selectSettingsSection("Voice & Captions", paneMarker: "Spoken language")
+                // The Spoken language row sits below the fold; scroll the
+                // pane's own scroll view down so the screenshot shows it
+                // without depending on inconsistent scroll-into-view support.
+                if let scrollBar = try? waitForElement(
+                    "Voice & Captions pane scroll bar",
+                    in: try settingsWindow(),
+                    timeout: 5,
+                    matching: { element in element.role == kAXScrollBarRole as String }
+                ) {
+                    _ = scrollBar.setValue(1.0)
+                    Thread.sleep(forTimeInterval: 0.4)
+                }
+                _ = try waitForElement("Spoken language row", in: try settingsWindow(),
+                                       containing: "Spoken language", timeout: 10)
             case "live":
                 break
             case "play":
@@ -436,6 +496,51 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 _ = button.press()
                 let row = try waitForElement("card row play action", in: try mainWindow(),
                                              containing: "Play Shell smoke update")
+                _ = row.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+
+            case "korean-voice-torture":
+                // INF-364 multilingual audit (c): pick an on-device Korean
+                // system voice for the active personality, then play a
+                // Korean-text card, so captions render Korean while every
+                // fixed app control around them (Pause, Hang up, the sidebar)
+                // stays in English UI chrome. ATTACHE_FORCE_PLAIN_READBACK=1
+                // (set by the wrapper) speaks the event text verbatim, so this
+                // is deterministic and does not depend on a live presentation
+                // LLM translating into Korean.
+                app.activate()
+                app.key(Key.comma, command: true)
+                try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+                try selectSettingsSection("Voice & Captions", paneMarker: "Voice engine")
+                // The "Voice" row's popup can show the same "System default"
+                // text as the unrelated "Input source" popup further down the
+                // same pane, so disambiguate by picking the topmost match
+                // (Voice appears near the top of the pane, Input source near
+                // the bottom, see the pane layout in VoicePane.swift).
+                var candidatePopups: [AXElement] = []
+                try waitUntil("system voice popup", timeout: 10) {
+                    candidatePopups = (try? settingsWindow())?.descendants(where: { element in
+                        element.role == kAXPopUpButtonRole as String
+                            && (element.matchText.contains("en-US") || element.matchText.contains("ko-KR")
+                                || element.matchText == "System default")
+                    }, collectLimit: 20) ?? []
+                    return !candidatePopups.isEmpty
+                }
+                guard let voicePopup = candidatePopups.min(by: { ($0.frame?.minY ?? .infinity) < ($1.frame?.minY ?? .infinity) }) else {
+                    throw SmokeError(message: "no system voice popup found")
+                }
+                try selectPopup(voicePopup, item: "ko-KR")
+                try settingsWindow().descendants(where: { $0.subrole == "AXCloseButton" }, collectLimit: 1)
+                    .first.map { _ = $0.press() }
+
+                let koreanText = "안녕하세요 저는 앱 개발자입니다 오늘은 날씨가 정말 좋습니다"
+                _ = try runShell("EVENT_TITLE='Korean voice torture card' EVENT_TEXT='\(koreanText)' scripts/send-event.sh")
+                let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, containing: "Open inbox")
+                _ = button.press()
+                let row = try waitForElement("card row play action", in: try mainWindow(),
+                                             containing: "Play Korean voice torture card")
                 _ = row.press()
                 _ = try waitForElement("speaking indicator", in: try mainWindow(),
                                        containing: "Assistant speaking", timeout: 15)
@@ -679,8 +784,15 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
         // Screenshot the app's own window (by CGWindowID, never the whole
         // screen) the instant the requested state is confirmed on screen,
         // before the hold-sleep even starts, if the wrapper asked for one.
+        // Poses that land on a secondary window (Settings) target it by
+        // title, since it is usually smaller than the main window and the
+        // largest-window heuristic would otherwise capture the wrong one.
         if let screenshotPath = ProcessInfo.processInfo.environment["ATTACHE_POSE_SCREENSHOT_PATH"] {
-            captureAppWindowScreenshot(to: screenshotPath)
+            if pose.contains("voice-pane") || pose.contains("settings") {
+                captureNamedWindowScreenshot(to: screenshotPath, titleContains: "Settings")
+            } else {
+                captureAppWindowScreenshot(to: screenshotPath)
+            }
         }
         print("posing \(pose) for \(Int(holdSeconds))s")
         // Wrapper scripts tail the log for this marker to time recordings;
