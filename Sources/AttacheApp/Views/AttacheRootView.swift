@@ -113,6 +113,29 @@ struct AttacheRootView: View {
     // highlight and selection accent in Attaché window.
     var accent: Color { model.theme.signatureColor }
 
+    // The private-mode window edge tint (INF-356 step 3): a subtle border
+    // glow in the active theme's accent, so a private call is visible even
+    // at a glance from across the room, layered on top of everything else
+    // and never intercepting clicks. Reuses `accent` (the same theme
+    // machinery every other highlight in this view follows) rather than
+    // inventing a new color, so it automatically holds the same WCAG floor
+    // `ThemeContrastTests`/`PrivateModeWindowTintTests` verify for every
+    // built-in theme's accent.
+    private var privateModeWindowTint: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [accent.opacity(0.55), accent.opacity(0.18), accent.opacity(0.55)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 3
+            )
+            .padding(1.5)
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
+    }
+
     // Ambient home: the chrome is visible while the pointer is recently active (or
     // pinned, or you're interacting), and fades to the bare glow when still.
     private var controlsVisible: Bool {
@@ -312,7 +335,14 @@ struct AttacheRootView: View {
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
 
+            if model.isPrivateConversation {
+                privateModeWindowTint
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
         }
+        .animation(.easeInOut(duration: 0.22), value: model.isPrivateConversation)
         .contentShape(Rectangle())
         .attacheTextScale(model.uiTextScale)
         .onPreferenceChange(BottomOverlayHeightKey.self) { bottomOverlayHeight = $0 }

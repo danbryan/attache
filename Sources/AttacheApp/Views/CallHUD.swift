@@ -198,9 +198,12 @@ extension AttacheRootView {
             Image(systemName: "eye.slash.fill")
                 .typoIcon(size: 12, .semibold)
                 .foregroundStyle(accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Private Call")
-                    .typoLabel(.bold)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("Private Call")
+                        .typoLabel(.bold)
+                    privateChip
+                }
                 Text(model.privateConversationDisclosure)
                     .typoCaption()
                     .foregroundStyle(.secondary)
@@ -213,6 +216,29 @@ extension AttacheRootView {
         .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Private Call. \(model.privateConversationDisclosure)")
+    }
+
+    // The persistent PRIVATE chip (INF-356): shown in the call HUD and the
+    // mini window while storage mode is .privateCall. Its tooltip is derived
+    // from the active presentation model's egress classification (local vs
+    // cloud) rather than a static disclosure, so it stays accurate as the
+    // user switches models mid-call.
+    var privateChip: some View {
+        Text("PRIVATE")
+            .typoCaption(.bold)
+            .tracking(0.6)
+            .foregroundStyle(accent)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(accent.opacity(0.16), in: Capsule())
+            .overlay(Capsule().stroke(accent.opacity(0.4)))
+            .help(privateChipTooltip)
+            .accessibilityLabel("PRIVATE")
+            .accessibilityValue(privateChipTooltip)
+    }
+
+    var privateChipTooltip: String {
+        PrivateModeIndicator.chipTooltip(modelIsLocal: !model.presentationSendsToCloud)
     }
 
     // One status row for the whole call-phase surface (INF-244): icon (or

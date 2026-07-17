@@ -2672,6 +2672,9 @@ final class AppModel: ObservableObject {
             conversationFallbackState.reset()
             conversationTurnEffectLedger = nil
             conversationSessionToolRuntime = nil
+            if storageMode == .privateCall {
+                AccessibilityAnnouncer.announce(PrivateModeIndicator.enteredAnnouncement)
+            }
         }
         conversationActive = true
         if conversationStatus.isEmpty {
@@ -2685,6 +2688,7 @@ final class AppModel: ObservableObject {
     }
 
     func endConversation() {
+        let wasPrivate = isPrivateConversation
         let endingConversationID = activeConversationID
         let endingReviewID = activeExhaustiveReview?.preparedID
         exhaustiveReviewRefreshTask?.cancel()
@@ -2747,6 +2751,9 @@ final class AppModel: ObservableObject {
         playback.stop()
         livePlaybackQueue.reset()
         conversationMessages = []
+        if wasPrivate {
+            AccessibilityAnnouncer.announce(PrivateModeIndicator.exitedAnnouncement)
+        }
     }
 
     var isPrivateConversation: Bool {
@@ -2817,6 +2824,7 @@ final class AppModel: ObservableObject {
                 }
             }
             conversationStatus = "This call is now private. Its recorded history was deleted."
+            AccessibilityAnnouncer.announce(PrivateModeIndicator.enteredAnnouncement)
             return true
         } catch {
             // Fail closed: roll the freeze back so the call remains saved
