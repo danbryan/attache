@@ -299,7 +299,9 @@ struct InboxOverlay: View {
             .help(collapsed ? "Expand this group" : "Collapse this group")
             .accessibilityLabel("\(group.title), \(group.cards.count) waiting, \(collapsed ? "collapsed" : "expanded")")
             if let card = group.cards.first {
-                SourceBadge(sourceKind: card.sourceKind, displayName: card.sourceDisplayName)
+                SourceBadge(sourceKind: card.sourceKind,
+                            displayName: card.sourceDisplayName,
+                            localModelHint: model.localModelHint(forExternalSessionID: card.externalSessionID))
             }
             if let subtitle = group.subtitle {
                 Text(subtitle)

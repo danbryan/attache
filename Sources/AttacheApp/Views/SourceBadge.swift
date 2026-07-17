@@ -10,6 +10,21 @@ import SwiftUI
 struct SourceBadge: View {
     let sourceKind: String
     let displayName: String
+    /// Non-nil when this is a Claude Code session Attaché detected as running
+    /// against a local (non-Anthropic) model, e.g. an Ollama-backed
+    /// `claude-oss` wrapper (INF-363). The raw model tag becomes the chip's
+    /// tooltip; the chip itself is a cosmetic "local" suffix distinguishing
+    /// these sessions from cloud Claude ones at a glance. Nil for every other
+    /// session, which renders exactly as before.
+    var localModelHint: String? = nil
+
+    /// Pure derivation of whether the "local" chip renders: purely a function
+    /// of `localModelHint`, never of `sourceKind` or `displayName`, so the
+    /// chip never appears or disappears for reasons unrelated to local-model
+    /// detection (INF-363).
+    static func showsLocalChip(localModelHint: String?) -> Bool {
+        localModelHint != nil
+    }
 
     private static let marks: [String: NSImage] = {
         var loaded: [String: NSImage] = [:]
@@ -48,26 +63,40 @@ struct SourceBadge: View {
     }
 
     var body: some View {
-        if let mark = Self.marks[sourceKind] {
-            Image(nsImage: mark)
-                .resizable()
-                .renderingMode(.template)
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 11, height: 11)
-                .foregroundStyle(.secondary)
-                .help(displayName)
-                .accessibilityLabel(displayName)
-        } else {
-            Text(displayName)
-                .typoCaption(.heavy)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.4), lineWidth: 1))
-                .help(displayName)
-                .accessibilityLabel(displayName)
+        HStack(spacing: 3) {
+            if let mark = Self.marks[sourceKind] {
+                Image(nsImage: mark)
+                    .resizable()
+                    .renderingMode(.template)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 11, height: 11)
+                    .foregroundStyle(.secondary)
+                    .help(displayName)
+                    .accessibilityLabel(displayName)
+            } else {
+                Text(displayName)
+                    .typoCaption(.heavy)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+                    .help(displayName)
+                    .accessibilityLabel(displayName)
+            }
+            if Self.showsLocalChip(localModelHint: localModelHint), let localModelHint {
+                Text("local")
+                    .typoCaption(.heavy)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+                    .help(localModelHint)
+                    .accessibilityLabel("Local model session")
+            }
         }
     }
 }

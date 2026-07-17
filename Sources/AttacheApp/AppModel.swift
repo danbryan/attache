@@ -7483,6 +7483,15 @@ final class AppModel: ObservableObject {
         return records.filter { sources.contains($0.sourceKind) }
     }
 
+    /// The local-model tag (INF-363) for a card's linked session, if the
+    /// session index has one on file. Read-only lookup against the already
+    /// loaded `sessionRecords`; never triggers a rescan and never changes
+    /// what a card carries.
+    func localModelHint(forExternalSessionID sessionID: String?) -> String? {
+        guard let sessionID else { return nil }
+        return sessionRecords.first(where: { $0.id == sessionID })?.localModelHint
+    }
+
     func searchSessions(_ query: String, includeArchived: Bool) -> [SessionSearchHit] {
         sessionContextRuntime.commandKSearch(
             query,
