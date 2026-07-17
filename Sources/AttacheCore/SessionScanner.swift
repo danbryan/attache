@@ -225,9 +225,13 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
 
     public func makeRecord(for file: ScannedFile, priorTopicTag: String?, contentCap: Int) -> SessionRecord {
         let parsed = Self.readSessionFile(file.url, contentCap: contentCap)
-        // Prefer the name the user sees in the Claude app, then the
-        // transcript's own title, then the (markup-cleaned) first prompt.
-        let title = desktopTitles[file.id]
+        // Title precedence: an explicit CLI rename (`customTitle`) is the
+        // user's most recent intent, so it wins over everything, including
+        // the desktop sidebar title. Below that, desktop title still beats
+        // the generated `aiTitle`, which beats the cleaned first prompt
+        // (INF-368 Part A).
+        let title = parsed.customTitle
+            ?? desktopTitles[file.id]
             ?? parsed.title
             ?? parsed.firstUserMessage
             ?? "Session \(file.id.prefix(8))"
@@ -250,12 +254,21 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
         var refreshed = record
         refreshed.updatedAt = Date(timeIntervalSince1970: file.mtime)
         refreshed.sourceKind = .claudeCode
+        // Tail-aware rename pickup: a CLI rename (`customTitle`) is appended
+        // mid-session, far past `readSessionFile`'s 256KiB head-window read
+        // that produced this record, so scan just the last 64KiB instead of
+        // re-reading the whole file. A rename beats the desktop sidebar name
+        // too (it is the user's most recent explicit intent), matching
+        // `makeRecord`'s precedence (INF-368 Part A).
+        let tailCustomTitle = Self.tailCustomTitle(url: file.url)
         // Desktop titles can appear or change without the transcript's mtime
         // moving, and cached records may predate the markup cleanup; keep the
         // displayed name in sync either way.
-        if let desktopTitle = desktopTitles[file.id] {
+        if let tailCustomTitle {
+            refreshed.title = tailCustomTitle
+        } else if let desktopTitle = desktopTitles[file.id] {
             refreshed.title = desktopTitle
-        } else if refreshed.title.contains("<command-name>") {
+        } else if refreshed.title.contains("<command-name>") || refreshed.title.contains("<local-command-caveat>") {
             refreshed.title = SessionDigest.title(from: refreshed.title)
         }
         return refreshed
@@ -264,20 +277,25 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
     // MARK: Claude parsing (pure)
 
     /// Read a Claude Code session prefix and pull out the cwd, the generated title,
-    /// the first user prompt, and a lowercased content digest.
-    static func readSessionFile(_ url: URL, contentCap: Int, byteCap: Int = 262_144) -> (project: String?, content: String, title: String?, firstUserMessage: String?) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, "", nil, nil) }
+    /// the first user prompt, the last-seen CLI rename, and a lowercased content digest.
+    static func readSessionFile(_ url: URL, contentCap: Int, byteCap: Int = 262_144) -> (project: String?, content: String, title: String?, firstUserMessage: String?, customTitle: String?) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, "", nil, nil, nil) }
         defer { try? handle.close() }
         let data = (try? handle.read(upToCount: byteCap)) ?? Data()
-        guard !data.isEmpty else { return (nil, "", nil, nil) }
+        guard !data.isEmpty else { return (nil, "", nil, nil, nil) }
         let text = String(decoding: data, as: UTF8.self)
         return parse(jsonl: text, contentCap: contentCap)
     }
 
-    public static func parse(jsonl text: String, contentCap: Int) -> (project: String?, content: String, title: String?, firstUserMessage: String?) {
+    public static func parse(jsonl text: String, contentCap: Int) -> (project: String?, content: String, title: String?, firstUserMessage: String?, customTitle: String?) {
         var project: String?
         var aiTitle: String?
         var firstUser: String?
+        // The CLI persists a rename (Command-K "Rename" or `/rename`) as its
+        // own JSONL record (verified shape: type/sessionId/customTitle), not
+        // as a field on the session-meta or message lines. Track the LAST
+        // one seen so a later rename supersedes an earlier one (INF-368 Part A).
+        var customTitle: String?
         var parts: [String] = []
         for line in text.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
@@ -290,6 +308,9 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
             if aiTitle == nil, let title = (object["aiTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
                 aiTitle = title
             }
+            if let renamed = (object["customTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !renamed.isEmpty {
+                customTitle = renamed
+            }
             let type = object["type"] as? String
             guard type == "user" || type == "assistant",
                   let text = messageText(in: object["message"]) else {
@@ -300,7 +321,34 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
         }
         var content = parts.joined(separator: " ").lowercased()
         if content.count > contentCap { content = String(content.prefix(contentCap)) }
-        return (project, content, aiTitle, firstUser)
+        return (project, content, aiTitle, firstUser, customTitle)
+    }
+
+    /// Scans the last `byteCap` bytes of a session file for `customTitle`
+    /// records, returning the LAST one found. This is how a mid-session
+    /// rename surfaces on refresh without re-reading the whole (potentially
+    /// 100MB+) file (INF-368 Part A).
+    static func tailCustomTitle(url: URL, byteCap: Int = 65_536) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return nil }
+        let start = size > UInt64(byteCap) ? size - UInt64(byteCap) : 0
+        do {
+            try handle.seek(toOffset: start)
+        } catch {
+            return nil
+        }
+        guard let data = try? handle.readToEnd(), !data.isEmpty else { return nil }
+        let text = String(decoding: data, as: UTF8.self)
+        var customTitle: String?
+        for line in text.split(whereSeparator: \.isNewline) {
+            guard let lineData = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let renamed = (object["customTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !renamed.isEmpty else { continue }
+            customTitle = renamed
+        }
+        return customTitle
     }
 
     /// Extract readable text from a Claude `message` (content is a string for user
@@ -484,6 +532,7 @@ public enum SessionDigest {
     /// <command-args>Work ticket…</command-args>`. Render those as the command
     /// followed by its arguments so titles read like what the user typed.
     public static func cleanedCommandMarkup(_ text: String) -> String {
+        let text = strippedLocalCommandCaveat(text)
         guard text.contains("<command-name>") else { return text }
         func capture(_ tag: String) -> String? {
             guard let regex = try? NSRegularExpression(
@@ -502,6 +551,31 @@ public enum SessionDigest {
         return text.replacingOccurrences(of: #"</?[a-z-]+>"#, with: " ", options: .regularExpression)
     }
 
+    /// Claude Code CLI wraps the first turn of a session that included a
+    /// local (non-slash) command in a `<local-command-caveat>…</local-command-caveat>`
+    /// envelope of boilerplate ("Caveat: The messages below were generated
+    /// by…"). Strip that envelope BEFORE the command-name handling above so
+    /// a title derives from the user's actual content, not the caveat text
+    /// (INF-368 Part A). If the closing tag never appears (a truncated
+    /// head-window read cut it off), treat everything from the open tag
+    /// onward as boilerplate rather than showing it raw.
+    private static func strippedLocalCommandCaveat(_ text: String) -> String {
+        guard text.contains("<local-command-caveat>") else { return text }
+        if let regex = try? NSRegularExpression(
+            pattern: "<local-command-caveat>.*?</local-command-caveat>",
+            options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+            let range = NSRange(text.startIndex..., in: text)
+            let stripped = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+            if stripped != text {
+                return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        if let openRange = text.range(of: "<local-command-caveat>") {
+            return String(text[..<openRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
+    }
+
     /// Removes agent command markup from free text while keeping the
     /// surrounding prose. Unlike `cleanedCommandMarkup` this never collapses
     /// the text down to the command itself, so it is safe for multi-turn
@@ -510,7 +584,7 @@ public enum SessionDigest {
         guard text.contains("<command-") || text.contains("<local-command-") else { return text }
         return text
             .replacingOccurrences(
-                of: #"</?(?:command-name|command-message|command-args|command-contents|local-command-stdout|local-command-stderr)>"#,
+                of: #"</?(?:command-name|command-message|command-args|command-contents|local-command-stdout|local-command-stderr|local-command-caveat)>"#,
                 with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
