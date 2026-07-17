@@ -924,6 +924,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var modelSessionDiscoveryPicker: ModelSessionDiscoveryPickerState?
     @Published private(set) var codexSourceEnabled = false
     @Published private(set) var claudeCodeSourceEnabled = false
+    @Published private(set) var grokBuildSourceEnabled = false
     private lazy var curatedProjectPaths: [String] = Self.loadCuratedProjectPaths()
     let store: CardStore
 
@@ -6660,7 +6661,7 @@ final class AppModel: ObservableObject {
     }
 
     var localAgentSourcesEnabled: Bool {
-        codexSourceEnabled || claudeCodeSourceEnabled
+        codexSourceEnabled || claudeCodeSourceEnabled || grokBuildSourceEnabled
     }
 
     func setCodexSourceEnabled(_ enabled: Bool) {
@@ -6704,6 +6705,25 @@ final class AppModel: ObservableObject {
         refreshSessionIndex()
     }
 
+    /// Toggle off stops indexing and watching for grok_build only, mirroring
+    /// `setClaudeCodeSourceEnabled` exactly (INF-361 acceptance criterion:
+    /// toggling one source off must never disturb codex/claude).
+    func setGrokBuildSourceEnabled(_ enabled: Bool) {
+        guard grokBuildSourceEnabled != enabled else { return }
+        grokBuildSourceEnabled = enabled
+        defaults.set(enabled, forKey: AttachePreferenceKey.grokBuildSourceEnabled)
+        if !enabled {
+            attachedTargets = attachedTargets.filter { $0.value.sourceKind != .grokBuild }
+            if attachedCodexSession?.sourceKind == .grokBuild {
+                attachedCodexSessionID = attachedSessionList.first?.id
+            }
+            synchronizeSessionContextFocus()
+            updateCodexWatcher()
+        }
+        rebuildSessionIndexer()
+        refreshSessionIndex()
+    }
+
     func focusIntegration(for provider: AttacheSpeechProvider) {
         switch provider {
         case .system:
@@ -6721,6 +6741,7 @@ final class AppModel: ObservableObject {
         var sources = Set<SourceKind>()
         if codexSourceEnabled { sources.insert(.codex) }
         if claudeCodeSourceEnabled { sources.insert(.claudeCode) }
+        if grokBuildSourceEnabled { sources.insert(.grokBuild) }
         return sources
     }
 
@@ -8257,6 +8278,9 @@ final class AppModel: ObservableObject {
         if defaults.object(forKey: AttachePreferenceKey.claudeCodeSourceEnabled) != nil {
             claudeCodeSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.claudeCodeSourceEnabled)
         }
+        if defaults.object(forKey: AttachePreferenceKey.grokBuildSourceEnabled) != nil {
+            grokBuildSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.grokBuildSourceEnabled)
+        }
         if let raw = defaults.string(forKey: AttachePreferenceKey.agentInstructionSendPolicy),
            let policy = AgentInstructionSendPolicy(rawValue: raw) {
             agentInstructionSendPolicy = policy
@@ -8639,7 +8663,8 @@ final class AppModel: ObservableObject {
         let enabledTargets = targets.filter {
             $0.category == .activeSession
                 && (($0.sourceKind == .codex && codexSourceEnabled)
-                    || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled))
+                    || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled)
+                    || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled))
         }
         codexSessionWatcher.watch(enabledTargets)
         // Ambient verbs cover every watched session, not just the focused
@@ -8702,6 +8727,7 @@ final class AppModel: ObservableObject {
         let enabledSessions = sessions.filter {
             ($0.sourceKind == .codex && codexSourceEnabled)
                 || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled)
+                || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled)
         }
         attachedTargets = Dictionary(uniqueKeysWithValues: enabledSessions.map { ($0.id, $0) })
     }

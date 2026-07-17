@@ -320,6 +320,152 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
     }
 }
 
+// MARK: - Grok Build
+
+/// Grok Build writes one directory per session under
+/// `~/.grok/sessions/<percent-encoded-project-path>/<session-uuid>/`, holding
+/// `chat_history.jsonl` (the narratable transcript), `events.jsonl`,
+/// `hunk_records.jsonl`, `plan.md`, `plan_mode.json`, and `images/` (verified
+/// on real sessions on this Mac, INF-361). There is no separate archived
+/// directory or session-title index like Codex's; the title comes from the
+/// session's own content (`plan.md`'s first heading, else the first user
+/// prompt), and the project cwd comes from percent-decoding the parent
+/// directory name rather than a `cwd` field on any transcript line (Grok's
+/// chat_history.jsonl records carry none).
+public final class GrokBuildSessionScanner: SessionScanner {
+    public let kind: SourceKind = .grokBuild
+    private let sessionsDirectory: URL
+
+    public init(grokHome: URL? = nil) {
+        let home = grokHome ?? GrokPaths.home()
+        self.sessionsDirectory = home.appendingPathComponent("sessions", isDirectory: true)
+    }
+
+    public func beginScan() {}
+
+    public func enumerateFiles() -> [ScannedFile] {
+        let fileManager = FileManager.default
+        guard let projectDirs = try? fileManager.contentsOfDirectory(
+            at: sessionsDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var files: [ScannedFile] = []
+        for projectDir in projectDirs {
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: projectDir.path, isDirectory: &isDirectory), isDirectory.boolValue else { continue }
+            guard let sessionDirs = try? fileManager.contentsOfDirectory(
+                at: projectDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            ) else { continue }
+            for sessionDir in sessionDirs {
+                guard fileManager.fileExists(atPath: sessionDir.path, isDirectory: &isDirectory), isDirectory.boolValue else { continue }
+                let chatHistory = sessionDir.appendingPathComponent("chat_history.jsonl")
+                guard fileManager.fileExists(atPath: chatHistory.path) else { continue }
+                let id = sessionDir.lastPathComponent.lowercased()
+                let mtime = (try? chatHistory.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?
+                    .timeIntervalSince1970 ?? 0
+                files.append(ScannedFile(id: id, url: chatHistory, mtime: mtime, archived: false))
+            }
+        }
+        return files
+    }
+
+    public func makeRecord(for file: ScannedFile, priorTopicTag: String?, contentCap: Int) -> SessionRecord {
+        let sessionDir = file.url.deletingLastPathComponent()
+        let project = Self.decodedProject(fromSessionDirectory: sessionDir)
+        let parsed = Self.readSessionFile(file.url, contentCap: contentCap)
+        let title = Self.planTitle(inSessionDirectory: sessionDir)
+            ?? parsed.firstUserMessage
+            ?? "Session \(file.id.prefix(8))"
+        return SessionRecord(
+            id: file.id,
+            title: title,
+            project: project,
+            threadName: nil,
+            updatedAt: Date(timeIntervalSince1970: file.mtime),
+            archived: file.archived,
+            filePath: file.url.path,
+            fileMtime: file.mtime,
+            content: parsed.content,
+            topicTag: priorTopicTag,
+            sourceKind: .grokBuild
+        )
+    }
+
+    public func refreshMetadata(_ record: SessionRecord, for file: ScannedFile) -> SessionRecord {
+        var refreshed = record
+        refreshed.updatedAt = Date(timeIntervalSince1970: file.mtime)
+        refreshed.sourceKind = .grokBuild
+        return refreshed
+    }
+
+    // MARK: Grok Build parsing (pure)
+
+    /// The project directory name is a percent-encoded absolute path (e.g.
+    /// `%2FUsers%2Fdanb` decodes to `/Users/danb`), verified against real
+    /// sessions on this Mac. `removingPercentEncoding` handles spaces and
+    /// non-ASCII the same way it decodes `%20`/`%C3%A9`, etc.
+    public static func decodedProject(fromSessionDirectory sessionDirectory: URL) -> String? {
+        let encodedProjectName = sessionDirectory.deletingLastPathComponent().lastPathComponent
+        guard !encodedProjectName.isEmpty else { return nil }
+        return encodedProjectName.removingPercentEncoding
+    }
+
+    /// `plan.md`'s first Markdown heading, if the session wrote one, else nil.
+    static func planTitle(inSessionDirectory sessionDirectory: URL) -> String? {
+        let planURL = sessionDirectory.appendingPathComponent("plan.md")
+        guard let text = try? String(contentsOf: planURL, encoding: .utf8) else { return nil }
+        for line in text.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("#") else { continue }
+            let heading = trimmed.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+            if !heading.isEmpty { return heading }
+        }
+        return nil
+    }
+
+    static func readSessionFile(_ url: URL, contentCap: Int, byteCap: Int = 262_144) -> (content: String, firstUserMessage: String?) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return ("", nil) }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: byteCap)) ?? Data()
+        guard !data.isEmpty else { return ("", nil) }
+        let text = String(decoding: data, as: UTF8.self)
+        return parse(jsonl: text, contentCap: contentCap)
+    }
+
+    public static func parse(jsonl text: String, contentCap: Int) -> (content: String, firstUserMessage: String?) {
+        var firstUser: String?
+        var parts: [String] = []
+        for line in text.split(whereSeparator: \.isNewline) {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = object["type"] as? String else {
+                continue
+            }
+            switch type {
+            case "user":
+                guard let blocks = object["content"] as? [[String: Any]] else { continue }
+                let text = blocks
+                    .compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+                guard !text.isEmpty else { continue }
+                if firstUser == nil { firstUser = SessionDigest.title(from: text) }
+                parts.append(text)
+            case "assistant":
+                guard let text = (object["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !text.isEmpty else { continue }
+                parts.append(text)
+            default:
+                continue
+            }
+        }
+        var content = parts.joined(separator: " ").lowercased()
+        if content.count > contentCap { content = String(content.prefix(contentCap)) }
+        return (content, firstUser)
+    }
+}
+
 // MARK: - Shared
 
 public enum SessionDigest {

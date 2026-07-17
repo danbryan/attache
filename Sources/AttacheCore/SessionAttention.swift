@@ -99,14 +99,30 @@ public enum SessionAttentionClassifier {
         var lastErrorTimestamp: Date?
         var lastRealUserTimestamp: Date?
 
+        // Grok Build's tail lines carry no per-line timestamp (INF-361); assign
+        // a synthetic one anchored to `now` so ordering (and therefore which
+        // record is "newest") is preserved. See TranscriptParser.parse for the
+        // same technique applied to narration.
+        var grokBuildSyntheticIndex = 0
+        let grokBuildLineCount = tailLines.count
+
         for line in tailLines {
             guard let data = line.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
             }
-            guard let timestampText = object["timestamp"] as? String,
-                  let timestamp = TranscriptParser.parseDate(timestampText) else {
-                continue
+
+            let timestamp: Date
+            if format == .grokBuild {
+                let stepsFromNewest = grokBuildLineCount - 1 - grokBuildSyntheticIndex
+                timestamp = now.addingTimeInterval(-Double(stepsFromNewest) * 0.001)
+                grokBuildSyntheticIndex += 1
+            } else {
+                guard let timestampText = object["timestamp"] as? String,
+                      let parsed = TranscriptParser.parseDate(timestampText) else {
+                    continue
+                }
+                timestamp = parsed
             }
             lastRecordTimestamp = max(lastRecordTimestamp ?? .distantPast, timestamp)
 
@@ -122,6 +138,11 @@ public enum SessionAttentionClassifier {
                           pendingTools: &pendingTools,
                           lastAssistantText: &lastAssistantText,
                           lastRealUserTimestamp: &lastRealUserTimestamp)
+            case .grokBuild:
+                scanGrokBuild(object, timestamp: timestamp,
+                              pendingTools: &pendingTools,
+                              lastAssistantText: &lastAssistantText,
+                              lastRealUserTimestamp: &lastRealUserTimestamp)
             }
         }
 
@@ -265,6 +286,47 @@ public enum SessionAttentionClassifier {
                       let text = TranscriptParser.assistantText(from: payload) {
                 lastAssistantText = (text, timestamp)
             }
+        default:
+            break
+        }
+    }
+
+    // MARK: - Grok Build records
+
+    /// `assistant` records carry `tool_calls: [{id, name, arguments}]`
+    /// (verified on real sessions, INF-361); a pending call resolves when a
+    /// later `tool_result` names the same `tool_call_id`. `user` records with
+    /// real typed text (not synthetic) mark the user turn.
+    private static func scanGrokBuild(
+        _ object: [String: Any],
+        timestamp: Date,
+        pendingTools: inout [String: (name: String, timestamp: Date)],
+        lastAssistantText: inout (text: String, timestamp: Date)?,
+        lastRealUserTimestamp: inout Date?
+    ) {
+        switch object["type"] as? String {
+        case "assistant":
+            if let text = (object["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !text.isEmpty {
+                lastAssistantText = (text, timestamp)
+            }
+            guard let toolCalls = object["tool_calls"] as? [[String: Any]] else { return }
+            for call in toolCalls {
+                if let id = call["id"] as? String {
+                    pendingTools[id] = (call["name"] as? String ?? "", timestamp)
+                }
+            }
+        case "tool_result":
+            if let id = object["tool_call_id"] as? String {
+                pendingTools.removeValue(forKey: id)
+            }
+        case "user":
+            guard let blocks = object["content"] as? [[String: Any]] else { return }
+            let hasRealText = blocks.contains { block in
+                guard block["type"] as? String == "text", let text = block["text"] as? String else { return false }
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            if hasRealText { lastRealUserTimestamp = timestamp }
         default:
             break
         }

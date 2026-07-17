@@ -17,6 +17,7 @@ public enum CardKind: String, Codable, Equatable, CaseIterable {
 public enum SourceKind: String, Codable, Equatable, CaseIterable {
     case codex
     case claudeCode = "claude_code"
+    case grokBuild = "grok_build"
     case mcp
     case generic
     case simulated
@@ -26,6 +27,7 @@ public enum SourceKind: String, Codable, Equatable, CaseIterable {
         switch self {
         case .codex: return "Codex"
         case .claudeCode: return "Claude Code"
+        case .grokBuild: return "Grok Build"
         case .mcp: return "MCP"
         case .generic: return "Custom"
         case .simulated: return "Demo"
@@ -37,6 +39,7 @@ public enum SourceKind: String, Codable, Equatable, CaseIterable {
         switch self {
         case .codex: return "Codex"
         case .claudeCode: return "Claude"
+        case .grokBuild: return "Grok"
         case .mcp: return "MCP"
         case .generic: return "Custom"
         case .simulated: return "Demo"
@@ -46,8 +49,11 @@ public enum SourceKind: String, Codable, Equatable, CaseIterable {
     /// Raw values for sources that represent a live coding agent whose session
     /// Attaché attaches to, narrates, and answers questions about. Behavior gated on
     /// "is this a real agent session" should check membership here, not `== .codex`.
+    /// Grok Build (INF-361) is included: its sessions are watched, narrated, and
+    /// attached the same way Codex/Claude Code are, even though two-way delivery
+    /// stays unavailable until a delivery adapter exists.
     public static let liveAgentRawValues: Set<String> = [
-        SourceKind.codex.rawValue, SourceKind.claudeCode.rawValue
+        SourceKind.codex.rawValue, SourceKind.claudeCode.rawValue, SourceKind.grokBuild.rawValue
     ]
 }
 

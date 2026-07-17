@@ -392,6 +392,20 @@ enum SessionDeliveryReadinessClassifier {
                     lastCompletedAssistant: &lastCompletedAssistant,
                     lastTurnActivity: &lastTurnActivity
                 )
+            case .grokBuild:
+                // No delivery adapter is registered for grok_build (INF-361),
+                // so this arm is unreachable in production - readiness is
+                // never checked for a source with no adapter (see
+                // InstructionReplyEngine.deliverReadyInstructions). Kept real
+                // rather than a stub for exhaustiveness/completeness.
+                scanGrokBuild(
+                    object,
+                    index: index,
+                    pendingTools: &pendingTools,
+                    lastRealUser: &lastRealUser,
+                    lastCompletedAssistant: &lastCompletedAssistant,
+                    lastTurnActivity: &lastTurnActivity
+                )
             }
         }
 
@@ -489,6 +503,46 @@ enum SessionDeliveryReadinessClassifier {
             break
         }
     }
+
+    /// Grok Build's `chat_history.jsonl` shape (verified on real sessions,
+    /// INF-361): `assistant.tool_calls` are pending until a `tool_result`
+    /// names the matching `tool_call_id`; a completed assistant turn is
+    /// non-empty prose with no pending calls.
+    private static func scanGrokBuild(
+        _ object: [String: Any],
+        index: Int,
+        pendingTools: inout Set<String>,
+        lastRealUser: inout Int?,
+        lastCompletedAssistant: inout Int?,
+        lastTurnActivity: inout Int?
+    ) {
+        switch object["type"] as? String {
+        case "assistant":
+            let hasText = !((object["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+            if let toolCalls = object["tool_calls"] as? [[String: Any]] {
+                for call in toolCalls {
+                    if let id = call["id"] as? String { pendingTools.insert(id) }
+                }
+            }
+            lastTurnActivity = index
+            if hasText, pendingTools.isEmpty { lastCompletedAssistant = index }
+        case "tool_result":
+            if let id = object["tool_call_id"] as? String { pendingTools.remove(id) }
+            lastTurnActivity = index
+        case "user":
+            guard let blocks = object["content"] as? [[String: Any]] else { return }
+            let hasRealText = blocks.contains { block in
+                guard block["type"] as? String == "text", let text = block["text"] as? String else { return false }
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            if hasRealText {
+                lastRealUser = index
+                lastTurnActivity = index
+            }
+        default:
+            break
+        }
+    }
 }
 
 /// Correlates a delivered instruction's reply positionally (INF-245/B2): the
@@ -516,6 +570,11 @@ enum SessionReplyCorrelation {
                 completed = codexCompletedAssistantText(object, pendingTools: &pendingTools)
             case .claude:
                 completed = claudeCompletedAssistantText(object, pendingTools: &pendingTools)
+            case .grokBuild:
+                // Unreachable in production: no delivery adapter is registered
+                // for grok_build (INF-361), so no instruction is ever
+                // delivered/correlated for it. Kept real for exhaustiveness.
+                completed = grokBuildCompletedAssistantText(object, pendingTools: &pendingTools)
             }
             if let completed { return completed }
         }
@@ -574,6 +633,29 @@ enum SessionReplyCorrelation {
             for block in blocks where block["type"] as? String == "tool_result" {
                 if let id = block["tool_use_id"] as? String { pendingTools.remove(id) }
             }
+        default:
+            break
+        }
+        return nil
+    }
+
+    private static func grokBuildCompletedAssistantText(
+        _ object: [String: Any],
+        pendingTools: inout Set<String>
+    ) -> String? {
+        switch object["type"] as? String {
+        case "assistant":
+            if let toolCalls = object["tool_calls"] as? [[String: Any]] {
+                for call in toolCalls {
+                    if let id = call["id"] as? String { pendingTools.insert(id) }
+                }
+            }
+            guard pendingTools.isEmpty,
+                  let text = (object["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { return nil }
+            return text
+        case "tool_result":
+            if let id = object["tool_call_id"] as? String { pendingTools.remove(id) }
         default:
             break
         }

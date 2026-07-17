@@ -49,4 +49,34 @@ final class SessionSourceRegistryWatcherTests: XCTestCase {
         let fileURL = URL(fileURLWithPath: "/tmp/attache-unrelated-directory/y.jsonl")
         XCTAssertEqual(watcher.sourceKind(for: fileURL), .codex)
     }
+
+    // MARK: - Grok Build (INF-361)
+
+    private let grokSessionsDirectory = URL(
+        fileURLWithPath: "/tmp/attache-fake-grok-home-test/sessions", isDirectory: true
+    )
+
+    /// Both watchers classify a fake-grok file to `.grokBuild` purely through
+    /// the production registry's data - the same delegation INF-360 proved
+    /// for a synthetic source, now proven for the real third production
+    /// source added by this ticket.
+    func testCodexSessionWatcherClassifiesAFakeGrokFileAsGrokBuild() {
+        let registry = SessionSourceRegistry.production(grokSessionsDirectory: grokSessionsDirectory)
+        let watcher = CodexSessionWatcher(sourceRegistry: registry)
+        let fileURL = grokSessionsDirectory
+            .appendingPathComponent("%2FUsers%2Ftester%2Fproject", isDirectory: true)
+            .appendingPathComponent("00000000-0000-0000-0000-000000000000", isDirectory: true)
+            .appendingPathComponent("chat_history.jsonl")
+        XCTAssertEqual(watcher.sourceKind(for: fileURL), .grokBuild)
+    }
+
+    func testSessionActivityWatcherClassifiesAFakeGrokFileAsGrokBuild() {
+        let registry = SessionSourceRegistry.production(grokSessionsDirectory: grokSessionsDirectory)
+        let watcher = SessionActivityWatcher(sourceRegistry: registry)
+        let fileURL = grokSessionsDirectory
+            .appendingPathComponent("%2FUsers%2Ftester%2Fproject", isDirectory: true)
+            .appendingPathComponent("00000000-0000-0000-0000-000000000000", isDirectory: true)
+            .appendingPathComponent("chat_history.jsonl")
+        XCTAssertEqual(watcher.sourceKind(for: fileURL), .grokBuild)
+    }
 }

@@ -156,21 +156,42 @@ final class SessionActivityWatcher {
 
     private func activitySignals(inText text: String, sourceKind: SourceKind, format: TranscriptFormat, recentCutoff: Date?) -> [Signal] {
         var signals: [Signal] = []
+        // Grok Build's chat_history.jsonl lines carry no per-line timestamp
+        // (INF-361); assign a synthetic, monotonically increasing one anchored
+        // to "now" so ordering is preserved, the same technique
+        // TranscriptParser.parse uses for narration.
+        var grokBuildSyntheticIndex = 0
+
         for line in text.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let timestamp = timestamp(in: object) else {
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
+            }
+
+            let timestamp: Date
+            if format == .grokBuild {
+                timestamp = Date(timeIntervalSinceNow: TimeInterval(grokBuildSyntheticIndex) * 0.001)
+                grokBuildSyntheticIndex += 1
+            } else {
+                guard let parsed = self.timestamp(in: object) else { continue }
+                timestamp = parsed
             }
             if let recentCutoff, timestamp < recentCutoff { continue }
 
             // Dispatch on the registered transcript format (not the source
             // kind directly) so a future source registered with the Claude
             // JSONL shape parses the same way Claude Code does (INF-360).
-            if format == .claude || object["payload"] == nil {
+            switch format {
+            case .grokBuild:
+                signals.append(contentsOf: grokBuildSignals(from: object, timestamp: timestamp))
+            case .claude:
                 signals.append(contentsOf: claudeSignals(from: object, timestamp: timestamp))
-            } else {
-                signals.append(contentsOf: codexSignals(from: object, timestamp: timestamp))
+            case .codex:
+                if object["payload"] == nil {
+                    signals.append(contentsOf: claudeSignals(from: object, timestamp: timestamp))
+                } else {
+                    signals.append(contentsOf: codexSignals(from: object, timestamp: timestamp))
+                }
             }
         }
         // Attribution follows the session file the lines came from, so the
@@ -240,6 +261,27 @@ final class SessionActivityWatcher {
             }
         }
         return signals
+    }
+
+    /// Grok Build's `assistant.tool_calls` (`[{id, name, arguments}]`, verified
+    /// on real sessions, INF-361) and `tool_result.content` map onto the same
+    /// intent/result-phrase heuristics Codex/Claude tool calls use.
+    private func grokBuildSignals(from object: [String: Any], timestamp: Date) -> [Signal] {
+        switch object["type"] as? String {
+        case "assistant":
+            guard let toolCalls = object["tool_calls"] as? [[String: Any]] else { return [] }
+            return toolCalls.flatMap { call in
+                intentSignals(from: call, payloadType: (call["name"] as? String) ?? "tool_call", timestamp: timestamp)
+            }
+        case "tool_result":
+            let output = compactText(object["content"])
+            if let phrase = resultPhrase(from: output) {
+                return [Signal(text: phrase, source: .toolResult, weight: 1.0, timestamp: timestamp)]
+            }
+            return []
+        default:
+            return []
+        }
     }
 
     private func intentSignals(from payload: [String: Any], payloadType: String, timestamp: Date) -> [Signal] {

@@ -72,7 +72,8 @@ public final class SessionSourceRegistry {
     public static func production(
         codexSessionsDirectory: URL? = nil,
         codexArchivedSessionsDirectory: URL? = nil,
-        claudeProjectsDirectory: URL? = nil
+        claudeProjectsDirectory: URL? = nil,
+        grokSessionsDirectory: URL? = nil
     ) -> SessionSourceRegistry {
         SessionSourceRegistry(descriptors: [
             SessionSourceDescriptor(
@@ -96,6 +97,20 @@ public final class SessionSourceRegistry {
                 },
                 adapterTag: "claude-session-file",
                 makeScanner: { ClaudeCodeSessionScanner() }
+            ),
+            // Grok Build (INF-361): watching/indexing/narration only. No
+            // `InstructionDeliveryAdapter` is registered for `grok_build` in
+            // `TwoWayCoordinator`, so two-way delivery fails closed with "No
+            // delivery adapter for grok_build" (InstructionReplyEngine's
+            // existing fail-safe) rather than a silent send.
+            SessionSourceDescriptor(
+                sourceKind: .grokBuild,
+                transcriptFormat: .grokBuild,
+                watchedDirectories: {
+                    [grokSessionsDirectory ?? GrokPaths.sessionsDirectory()]
+                },
+                adapterTag: "grok-build-session-file",
+                makeScanner: { GrokBuildSessionScanner() }
             )
         ])
     }

@@ -115,6 +115,33 @@ final class InstructionReplyEngineTests: XCTestCase {
         XCTAssertEqual(adapter.delivered, [created.id])
     }
 
+    /// INF-361 safety criterion: Grok Build is registered for watching/
+    /// narration in `SessionSourceRegistry`, but `TwoWayCoordinator` never
+    /// registers a delivery adapter for it (no adapter exists yet). Proves the
+    /// engine's existing fail-safe (`deliverReadyInstructions`'s
+    /// `guard let adapter = adapters[instruction.sourceKind] else { markFailed... }`)
+    /// covers a source with zero adapters registered at all, not just an
+    /// adapter that explicitly reports itself unavailable: a confirmed
+    /// instruction for a "grok_build" session fails closed with a clear error
+    /// and is never silently sent.
+    func testConfirmedInstructionForSourceWithNoRegisteredAdapterFailsClosed() async throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        // Only "codex" has an adapter, mirroring production's real registration
+        // (TwoWayCoordinator registers claude + codex, never grok_build).
+        engine.register(MockAdapter(sourceKind: "codex"))
+        engine.setTwoWayEnabled(true, forSessionID: "grok-s1")
+
+        let created = try engine.submit(text: "run the tests again", sessionID: "grok-s1", sourceKind: "grok_build", now: now)
+        _ = try engine.confirm(id: created.id, now: now)
+
+        let delivered = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+        XCTAssertEqual(delivered.count, 1)
+        XCTAssertEqual(delivered.first?.state, .failed)
+        XCTAssertEqual(delivered.first?.error, "No delivery adapter for grok_build.")
+        XCTAssertEqual(try store.fetchInstruction(id: created.id)?.state, .failed)
+    }
+
     func testTwoWayDisabledRefusesSubmit() throws {
         let store = try makeStore()
         let engine = InstructionReplyEngine(store: store)

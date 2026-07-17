@@ -12,4 +12,10 @@ final class SessionSourceTogglePreferenceKeyTests: XCTestCase {
         XCTAssertEqual(AttachePreferenceKey.codexSourceEnabled, "attache.codexSourceEnabled")
         XCTAssertEqual(AttachePreferenceKey.claudeCodeSourceEnabled, "attache.claudeCodeSourceEnabled")
     }
+
+    /// INF-361: Grok Build's toggle is a third preference key added the same
+    /// way, not a rename or reuse of an existing one.
+    func testGrokBuildToggleKeyExists() {
+        XCTAssertEqual(AttachePreferenceKey.grokBuildSourceEnabled, "attache.grokBuildSourceEnabled")
+    }
 }

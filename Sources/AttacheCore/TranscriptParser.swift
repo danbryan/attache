@@ -15,14 +15,32 @@ public enum TranscriptParser {
     public static func parse(text: String, format: TranscriptFormat, carriedCWD: String?) -> Result {
         var cwd = carriedCWD
         var records: [ParsedTranscriptRecord] = []
+        // Grok Build's chat_history.jsonl carries no per-line timestamp
+        // (verified against real sessions on this Mac, INF-361 sampling
+        // comment). A monotonically increasing synthetic timestamp anchored to
+        // "now" preserves the line order the coalescer relies on even though
+        // the absolute time is approximate; this only affects narration
+        // ordering within one parsed chunk, never two-way correlation (which
+        // uses transcript byte offsets, not timestamps).
+        var syntheticIndex = 0
 
         for line in text.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let timestampText = object["timestamp"] as? String,
-                  let timestamp = parseDate(timestampText),
                   let type = object["type"] as? String else {
                 continue
+            }
+
+            let timestamp: Date
+            if format == .grokBuild {
+                timestamp = Date(timeIntervalSinceNow: TimeInterval(syntheticIndex) * 0.001)
+                syntheticIndex += 1
+            } else {
+                guard let timestampText = object["timestamp"] as? String,
+                      let parsed = parseDate(timestampText) else {
+                    continue
+                }
+                timestamp = parsed
             }
 
             switch format {
@@ -30,6 +48,8 @@ public enum TranscriptParser {
                 parseClaudeLine(object, type: type, timestamp: timestamp, cwd: &cwd, into: &records)
             case .codex:
                 parseCodexLine(object, type: type, timestamp: timestamp, cwd: &cwd, into: &records)
+            case .grokBuild:
+                parseGrokBuildLine(object, type: type, timestamp: timestamp, cwd: &cwd, into: &records)
             }
         }
 
@@ -147,6 +167,53 @@ public enum TranscriptParser {
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - Grok Build
+
+    /// Grok Build's `chat_history.jsonl` records (verified on real sessions,
+    /// INF-361): `system` (skipped, not narratable), `user` (content is a
+    /// `[{type, text}]` block list; a real typed prompt is a turn boundary),
+    /// `assistant` (content is a plain string; always narratable prose - Grok
+    /// exposes no Codex-style `phase`/`final_answer` marker, so every non-empty
+    /// assistant line is treated as interstitial prose the same way Claude's
+    /// is), and `tool_result` (content is a plain string of tool output, not
+    /// narrated). Any other `type` value is skipped, never fatal.
+    private static func parseGrokBuildLine(
+        _ object: [String: Any],
+        type: String,
+        timestamp: Date,
+        cwd: inout String?,
+        into records: inout [ParsedTranscriptRecord]
+    ) {
+        switch type {
+        case "assistant":
+            guard let text = (object["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else {
+                return
+            }
+            records.append(.init(kind: .assistantProse(text: text, isFinal: false), timestamp: timestamp, cwd: cwd))
+        case "user":
+            if grokBuildUserHasRealText(object["content"]) {
+                records.append(.init(kind: .userTurnBoundary, timestamp: timestamp, cwd: cwd))
+            }
+        case "system", "tool_result":
+            return
+        default:
+            return
+        }
+    }
+
+    /// True when a Grok Build `user` record's content block list carries real
+    /// typed text (`{type: "text", text: "..."}`), mirroring
+    /// `isRealUserMessage`'s Claude equivalent.
+    private static func grokBuildUserHasRealText(_ content: Any?) -> Bool {
+        guard let blocks = content as? [[String: Any]] else { return false }
+        return blocks.contains { block in
+            guard block["type"] as? String == "text",
+                  let text = block["text"] as? String else { return false }
+            return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     // MARK: - Dates
