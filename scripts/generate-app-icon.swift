@@ -25,65 +25,32 @@ func drawIcon(side: CGFloat) {
     func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> NSRect {
         NSRect(x: x * s, y: y * s, width: w * s, height: h * s)
     }
-    let k: CGFloat = 3.2
+    // The face is scaled up to fill the tile (2026-07-17 icon refresh); the
+    // head, not a plaque, is the icon. Centered on the plate's midpoint.
+    let k: CGFloat = 4.8
     let ox: CGFloat = 256 - 120 * k
-    let oy: CGFloat = 256 - 96 * k
-    func m(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-        NSPoint(x: (ox + x * k) * s, y: (512 - oy - y * k) * s)
-    }
+    let oy: CGFloat = 256 - 112 * k
     func mrect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> NSRect {
         NSRect(x: (ox + x * k) * s, y: (512 - oy - (y + h) * k) * s, width: w * k * s, height: h * k * s)
     }
 
-    // macOS-blue brand palette, shared with the earlier tile.
-    let tileTop = NSColor(srgbRed: 0.180, green: 0.565, blue: 1.000, alpha: 1)
-    let tileMid = NSColor(srgbRed: 0.043, green: 0.420, blue: 0.902, alpha: 1)
-    let tileDeep = NSColor(srgbRed: 0.024, green: 0.235, blue: 0.620, alpha: 1)
-    let ringColor = NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 0.14)
-    let white = NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1)
     let steel = NSColor(srgbRed: 0.780, green: 0.816, blue: 0.863, alpha: 1)
     let screenNavy = NSColor(srgbRed: 0.063, green: 0.141, blue: 0.243, alpha: 1)
     let led = NSColor(srgbRed: 0.400, green: 0.890, blue: 1.000, alpha: 1)
     let coral = NSColor(srgbRed: 1.0, green: 0.616, blue: 0.631, alpha: 1)
+    // A dark tile so the robot face reads as the whole icon. The voice-bar
+    // mouth now carries the "give your agents a voice" motif the arc crown
+    // used to. Mirrors AttacheAppIcon.draw exactly.
+    let bgTop = NSColor(srgbRed: 0.086, green: 0.118, blue: 0.180, alpha: 1)
+    let bgDeep = NSColor(srgbRed: 0.027, green: 0.043, blue: 0.086, alpha: 1)
 
     let tile = NSBezierPath(roundedRect: rect(28, 28, 456, 456), xRadius: 112 * s, yRadius: 112 * s)
-    NSGradient(colors: [tileTop, tileMid, tileDeep])?.draw(in: tile, angle: 305)
+    NSGradient(colors: [bgTop, bgDeep])?.draw(in: tile, angle: 270)
 
     NSGraphicsContext.saveGraphicsState()
     tile.addClip()
 
-    ringColor.setStroke()
-    for radius in [150.0, 205.0] as [CGFloat] {
-        let circle = NSBezierPath(ovalIn: rect(256 - radius, 256 - radius, radius * 2, radius * 2))
-        circle.lineWidth = 5 * s
-        circle.stroke()
-    }
-
-    // Voice arcs crown Attaché consistently across the icon and in-app mark,
-    // reinforcing "give your agents a voice". AppKit is y-up, so the upward
-    // arcs sweep counterclockwise around the shared center.
-    let arcSpecs: [(radius: CGFloat, alpha: CGFloat)] = [(24, 1.0), (33, 0.62), (42, 0.34)]
-    for spec in arcSpecs {
-        white.withAlphaComponent(spec.alpha).setStroke()
-        let arc = NSBezierPath()
-        arc.appendArc(withCenter: m(120, 56), radius: spec.radius * k * s, startAngle: 52, endAngle: 128)
-        arc.lineWidth = 7 * k * s
-        arc.lineCapStyle = .round
-        arc.stroke()
-    }
-
-    // Volt: antenna, steel plate, navy screen, LED eyes, side bolts, and
-    // the resting smile bar.
-    steel.setStroke()
-    let stem = NSBezierPath()
-    stem.lineWidth = 3 * k * s
-    stem.lineCapStyle = .round
-    stem.move(to: m(120, 82))
-    stem.line(to: m(120, 73))
-    stem.stroke()
-    coral.setFill()
-    NSBezierPath(ovalIn: mrect(116.5, 64, 7, 7)).fill()
-
+    // Steel plate, navy screen, LED eyes, coral side bolts.
     steel.setFill()
     NSBezierPath(roundedRect: mrect(88, 82, 64, 60), xRadius: 14 * k * s, yRadius: 14 * k * s).fill()
     screenNavy.setFill()
@@ -97,8 +64,17 @@ func drawIcon(side: CGFloat) {
     NSBezierPath(ovalIn: mrect(92.5, 117, 4, 4)).fill()
     NSBezierPath(ovalIn: mrect(143.5, 117, 4, 4)).fill()
 
+    // Voice-bar mouth: five navy equalizer bars below the screen, a frozen
+    // "speaking" pose that replaces the resting smile.
     screenNavy.setFill()
-    NSBezierPath(roundedRect: mrect(109.2, 131, 21.6, 3.5), xRadius: 1.75 * k * s, yRadius: 1.75 * k * s).fill()
+    let barHeights: [CGFloat] = [6.5, 11, 8.5, 13, 7]
+    for (index, height) in barHeights.enumerated() {
+        let x = 108 + CGFloat(index) * 6
+        NSBezierPath(
+            roundedRect: mrect(x - 1.8, 133 - height / 2, 3.6, height),
+            xRadius: 1.8 * k * s, yRadius: 1.8 * k * s
+        ).fill()
+    }
 
     NSGraphicsContext.restoreGraphicsState()
 }
