@@ -43,9 +43,9 @@ final class SessionActivityWatcher {
         var agentKind: SourceKind = .codex
     }
 
-    private let sessionsDirectory: URL
-    private let archivedSessionsDirectory: URL
-    private let claudeProjectsDirectory: URL
+    /// See `CodexSessionWatcher.sourceRegistry`: the registered sources this
+    /// watcher polls and classifies files against (INF-360).
+    private let sourceRegistry: SessionSourceRegistry
     private var timer: Timer?
     private var sessions: [CodexSessionTarget] = []
     private var fileOffsets: [String: UInt64] = [:]
@@ -56,17 +56,31 @@ final class SessionActivityWatcher {
     private let firstReadWindow: TimeInterval = 120
     private let phraseLifetime: TimeInterval = 36
 
+    /// Subagent tail state, keyed by `"<parent session id>::<subagent file
+    /// path>"` so bookkeeping for one watched session's subagents never
+    /// collides with another's (INF-368 Part B). Records parsed from these
+    /// files are attributed to the parent `sourceKind`/session, never a
+    /// separate one; `isSubagentTranscript` files stay excluded from the
+    /// session index (INF-168), only the live activity layer reads them.
+    private var subagentFileOffsets: [String: UInt64] = [:]
+    private var subagentPendingFragments: [String: String] = [:]
+    /// Bound the cost of tailing an unbounded number of subagent files per
+    /// session: only the 8 most-recently-modified `agent-*.jsonl` files are
+    /// tailed, recomputed every poll, which is equivalent to an
+    /// oldest-mtime eviction of anything beyond the cap.
+    private let maxConcurrentSubagentTails = 8
+
     init(
         sessionsDirectory: URL? = nil,
         archivedSessionsDirectory: URL? = nil,
-        claudeProjectsDirectory: URL? = nil
+        claudeProjectsDirectory: URL? = nil,
+        sourceRegistry: SessionSourceRegistry? = nil
     ) {
-        let codexHome = CodexPaths.home()
-        self.sessionsDirectory = sessionsDirectory ?? codexHome
-            .appendingPathComponent("sessions", isDirectory: true)
-        self.archivedSessionsDirectory = archivedSessionsDirectory ?? codexHome
-            .appendingPathComponent("archived_sessions", isDirectory: true)
-        self.claudeProjectsDirectory = claudeProjectsDirectory ?? ClaudePaths.projectsDirectory()
+        self.sourceRegistry = sourceRegistry ?? .production(
+            codexSessionsDirectory: sessionsDirectory,
+            codexArchivedSessionsDirectory: archivedSessionsDirectory,
+            claudeProjectsDirectory: claudeProjectsDirectory
+        )
     }
 
     func watch(_ sessions: [CodexSessionTarget]) {
@@ -77,6 +91,8 @@ final class SessionActivityWatcher {
         fileOffsets = fileOffsets.filter { nextIDs.contains($0.key) }
         pendingFragments = pendingFragments.filter { nextIDs.contains($0.key) }
         locatedFileURLs = locatedFileURLs.filter { nextIDs.contains($0.key) }
+        subagentFileOffsets = subagentFileOffsets.filter { key, _ in nextIDs.contains(parentSessionID(fromSubagentKey: key)) }
+        subagentPendingFragments = subagentPendingFragments.filter { key, _ in nextIDs.contains(parentSessionID(fromSubagentKey: key)) }
 
         if previousIDs != nextIDs {
             signalsByText.removeAll()
@@ -105,6 +121,8 @@ final class SessionActivityWatcher {
         pendingFragments.removeAll()
         locatedFileURLs.removeAll()
         signalsByText.removeAll()
+        subagentFileOffsets.removeAll()
+        subagentPendingFragments.removeAll()
         onPhrases?([])
     }
 
@@ -145,26 +163,168 @@ final class SessionActivityWatcher {
         fileOffsets[session.id] = size
 
         let sourceKind = sourceKind(for: fileURL)
+        // Falls back to .codex when the registry has no format for this kind,
+        // matching CodexSessionWatcher's fallback (see its pollSession).
+        let format = sourceRegistry.transcriptFormat(for: sourceKind) ?? .codex
         let recentCutoff = firstRead ? now.addingTimeInterval(-firstReadWindow) : nil
-        for signal in activitySignals(inText: text, sourceKind: sourceKind, recentCutoff: recentCutoff) {
+        for signal in activitySignals(inText: text, sourceKind: sourceKind, format: format, recentCutoff: recentCutoff) {
             record(signal)
+        }
+
+        // Nearly all activity happens in the parent's subagents while an
+        // executor loop is mid-delegation, so tail those too, attributed to
+        // the parent session's phrases (INF-368 Part B). Only reachable for
+        // a session in `sessions` above, i.e. only currently watched or
+        // focused sessions ever have their subagent directory opened.
+        if sourceKind == .claudeCode {
+            pollSubagents(forSession: session.id, parentFileURL: fileURL, now: now)
         }
     }
 
-    private func activitySignals(inText text: String, sourceKind: SourceKind, recentCutoff: Date?) -> [Signal] {
+    /// Tail the parent session's `subagents/agent-*.jsonl` files (INF-168's
+    /// layout), attributing every signal to the parent session's activity
+    /// pool. Recomputing the 8 most-recently-modified files every poll is an
+    /// oldest-mtime eviction: a subagent file that drops out of the top 8
+    /// simply stops being tailed and its bookkeeping is dropped below.
+    private func pollSubagents(forSession sessionID: String, parentFileURL: URL, now: Date) {
+        let files = candidateSubagentFiles(forParentFileURL: parentFileURL)
+        let trackedKeys = Set(files.map { subagentKey(sessionID: sessionID, fileURL: $0) })
+        for key in subagentFileOffsets.keys where parentSessionID(fromSubagentKey: key) == sessionID && !trackedKeys.contains(key) {
+            subagentFileOffsets[key] = nil
+            subagentPendingFragments[key] = nil
+        }
+
+        for fileURL in files {
+            let key = subagentKey(sessionID: sessionID, fileURL: fileURL)
+            guard let size = fileSize(fileURL) else { continue }
+
+            let previousOffset = subagentFileOffsets[key]
+            let firstRead = previousOffset == nil
+            let offset: UInt64
+            if let previousOffset, size >= previousOffset {
+                offset = previousOffset
+            } else {
+                offset = size > tailByteCap ? size - tailByteCap : 0
+                subagentPendingFragments[key] = nil
+            }
+
+            guard let text = subagentAppendedText(
+                in: fileURL,
+                key: key,
+                from: offset,
+                skipPartialPrefix: firstRead && offset > 0
+            ), !text.isEmpty else {
+                subagentFileOffsets[key] = size
+                continue
+            }
+            subagentFileOffsets[key] = size
+
+            let recentCutoff = firstRead ? now.addingTimeInterval(-firstReadWindow) : nil
+            for signal in activitySignals(inText: text, sourceKind: .claudeCode, format: .claude, recentCutoff: recentCutoff) {
+                record(signal)
+            }
+        }
+    }
+
+    /// The 8 most-recently-modified `agent-*.jsonl` files directly under the
+    /// parent session's `subagents/` directory (`<claude-project>/<session-id>/subagents/`,
+    /// INF-168's layout). Subagent transcripts stay out of the session index
+    /// (INF-168 stands); this only feeds the live activity layer.
+    private func candidateSubagentFiles(forParentFileURL parentFileURL: URL) -> [URL] {
+        let subagentsDirectory = parentFileURL.deletingPathExtension().appendingPathComponent("subagents", isDirectory: true)
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: subagentsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        let agentFiles = items.filter { $0.pathExtension == "jsonl" && $0.lastPathComponent.lowercased().hasPrefix("agent-") }
+        let withMtime = agentFiles.map { url -> (url: URL, modified: Date) in
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? Date(timeIntervalSince1970: 0)
+            return (url, modified)
+        }
+        return withMtime.sorted { $0.modified > $1.modified }.prefix(maxConcurrentSubagentTails).map { $0.url }
+    }
+
+    private func subagentKey(sessionID: String, fileURL: URL) -> String {
+        "\(sessionID)::\(fileURL.path)"
+    }
+
+    private func parentSessionID(fromSubagentKey key: String) -> String {
+        String(key.split(separator: ":", maxSplits: 1).first ?? Substring(key))
+    }
+
+    private func subagentAppendedText(in fileURL: URL, key: String, from offset: UInt64, skipPartialPrefix: Bool) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return nil }
+        defer { try? handle.close() }
+
+        do {
+            try handle.seek(toOffset: offset)
+            let data = try handle.readToEnd() ?? Data()
+            guard var text = String(data: data, encoding: .utf8), !text.isEmpty else {
+                return nil
+            }
+            if skipPartialPrefix, let newline = text.firstIndex(where: \.isNewline) {
+                text = String(text[text.index(after: newline)...])
+            }
+            let combined = (subagentPendingFragments[key] ?? "") + text
+            guard let last = combined.last else { return nil }
+            if last.isNewline {
+                subagentPendingFragments[key] = nil
+                return combined
+            }
+
+            let lines = combined.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            guard let lastFragment = lines.last else {
+                subagentPendingFragments[key] = combined
+                return nil
+            }
+            subagentPendingFragments[key] = String(lastFragment)
+            return lines.dropLast().map(String.init).joined(separator: "\n")
+        } catch {
+            return nil
+        }
+    }
+
+    private func activitySignals(inText text: String, sourceKind: SourceKind, format: TranscriptFormat, recentCutoff: Date?) -> [Signal] {
         var signals: [Signal] = []
+        // Grok Build's chat_history.jsonl lines carry no per-line timestamp
+        // (INF-361); assign a synthetic, monotonically increasing one anchored
+        // to "now" so ordering is preserved, the same technique
+        // TranscriptParser.parse uses for narration.
+        var grokBuildSyntheticIndex = 0
+
         for line in text.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let timestamp = timestamp(in: object) else {
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
+            }
+
+            let timestamp: Date
+            if format == .grokBuild {
+                timestamp = Date(timeIntervalSinceNow: TimeInterval(grokBuildSyntheticIndex) * 0.001)
+                grokBuildSyntheticIndex += 1
+            } else {
+                guard let parsed = self.timestamp(in: object) else { continue }
+                timestamp = parsed
             }
             if let recentCutoff, timestamp < recentCutoff { continue }
 
-            if sourceKind == .claudeCode || object["payload"] == nil {
+            // Dispatch on the registered transcript format (not the source
+            // kind directly) so a future source registered with the Claude
+            // JSONL shape parses the same way Claude Code does (INF-360).
+            switch format {
+            case .grokBuild:
+                signals.append(contentsOf: grokBuildSignals(from: object, timestamp: timestamp))
+            case .claude:
                 signals.append(contentsOf: claudeSignals(from: object, timestamp: timestamp))
-            } else {
-                signals.append(contentsOf: codexSignals(from: object, timestamp: timestamp))
+            case .codex:
+                if object["payload"] == nil {
+                    signals.append(contentsOf: claudeSignals(from: object, timestamp: timestamp))
+                } else {
+                    signals.append(contentsOf: codexSignals(from: object, timestamp: timestamp))
+                }
             }
         }
         // Attribution follows the session file the lines came from, so the
@@ -234,6 +394,27 @@ final class SessionActivityWatcher {
             }
         }
         return signals
+    }
+
+    /// Grok Build's `assistant.tool_calls` (`[{id, name, arguments}]`, verified
+    /// on real sessions, INF-361) and `tool_result.content` map onto the same
+    /// intent/result-phrase heuristics Codex/Claude tool calls use.
+    private func grokBuildSignals(from object: [String: Any], timestamp: Date) -> [Signal] {
+        switch object["type"] as? String {
+        case "assistant":
+            guard let toolCalls = object["tool_calls"] as? [[String: Any]] else { return [] }
+            return toolCalls.flatMap { call in
+                intentSignals(from: call, payloadType: (call["name"] as? String) ?? "tool_call", timestamp: timestamp)
+            }
+        case "tool_result":
+            let output = compactText(object["content"])
+            if let phrase = resultPhrase(from: output) {
+                return [Signal(text: phrase, source: .toolResult, weight: 1.0, timestamp: timestamp)]
+            }
+            return []
+        default:
+            return []
+        }
     }
 
     private func intentSignals(from payload: [String: Any], payloadType: String, timestamp: Date) -> [Signal] {
@@ -454,9 +635,13 @@ final class SessionActivityWatcher {
            FileManager.default.fileExists(atPath: cached.path) {
             return cached
         }
-        let located = findSessionFile(id: id, under: sessionsDirectory)
-            ?? findSessionFile(id: id, under: archivedSessionsDirectory)
-            ?? findSessionFile(id: id, under: claudeProjectsDirectory)
+        var located: URL?
+        for directory in sourceRegistry.allWatchedDirectories() {
+            if let match = findSessionFile(id: id, under: directory) {
+                located = match
+                break
+            }
+        }
         locatedFileURLs[id] = located
         return located
     }
@@ -483,14 +668,11 @@ final class SessionActivityWatcher {
         return matches.sorted { $0.modified > $1.modified }.first?.url
     }
 
-    /// See `CodexSessionWatcher.sourceKind(for:)`: classify by the actually
-    /// resolved `claudeProjectsDirectory` (which already honors a
-    /// `CLAUDE_CONFIG_DIR` override) rather than a literal `/.claude/`
-    /// substring, which misclassifies any override whose path does not
-    /// itself contain that substring.
+    /// See `CodexSessionWatcher.sourceKind(for:)`: classify via the registry's
+    /// symlink-resolved, longest-matching directory prefix, falling back to
+    /// `.codex` when nothing matches (preserving the old behavior exactly).
     func sourceKind(for fileURL: URL) -> SourceKind {
-        fileURL.resolvingSymlinksInPath().path.hasPrefix(claudeProjectsDirectory.resolvingSymlinksInPath().path)
-            ? .claudeCode : .codex
+        sourceRegistry.classify(fileURL: fileURL) ?? .codex
     }
 
     private func fileSize(_ fileURL: URL) -> UInt64? {

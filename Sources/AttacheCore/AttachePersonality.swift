@@ -678,6 +678,80 @@ public enum AttachePersonality {
         }
     }
 
+    /// The synthesis turn for INF-370 "Summarize Session…": one presentation
+    /// call that turns an `AttacheExhaustiveReviewCoordinator` run's staged
+    /// summaries (already assembled with an incompleteness notice when
+    /// coverage isn't complete, `AttacheSessionSummaryLanguage`) into a single
+    /// spoken-style voicemail card, in the active personality's voice, with
+    /// the same dynamic length scaling and no-em-dash rule as every other
+    /// spoken path. Pure and deterministic; the caller runs it through the
+    /// presentation model and `stripDashes` on the result, exactly like recap
+    /// and another-take.
+    public static func sessionSummarySynthesisPrompt(
+        sourceText: String,
+        sessionTitle: String,
+        sourceKindDisplayName: String,
+        profilePrompt: String = defaultProfilePrompt,
+        memoryContext: String?,
+        spokenLanguageName: String? = nil,
+        maxSourceCharacters: Int = 20_000
+    ) -> AttachePresentationPrompt {
+        let rawSource = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clippedSource: String
+        let truncated: Bool
+        if rawSource.count > maxSourceCharacters {
+            let end = rawSource.index(rawSource.startIndex, offsetBy: maxSourceCharacters)
+            clippedSource = String(rawSource[..<end]) + "\n\n[Review material truncated.]"
+            truncated = true
+        } else {
+            clippedSource = rawSource
+            truncated = false
+        }
+        let title = sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ceiling = anotherTakeSentenceCeiling(sourceCharacters: rawSource.count)
+        let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
+        let languageBlock = spokenLanguageName.map {
+            "\n- Speak in \($0), translating what matters even if the source is in another language."
+        } ?? ""
+
+        let system = """
+        \(attacheIdentityPrompt)
+
+        \(profilePrompt.trimmingCharacters(in: .whitespacesAndNewlines))\(memoryBlock)
+
+        Session summary task:\(languageBlock)
+        - The user asked you to summarize a \(sourceKindDisplayName) session titled "\(title.isEmpty ? "Untitled session" : title)" they were not listening to live. The material below is the staged review's own findings, not raw transcript; do not re-derive anything not present in it.
+        - Compress hard: a solved problem gets its outcome, not each step; keep every decision, every unresolved failure, and anything the user still needs to act on.
+        - If the material below ends with a line stating the summary only covers part of the session, you must say so out loud, near the end, in your own words. Never claim full coverage unless no such line is present.
+        - This is spoken and captioned: short sentences, headline first, no lists, no code, no reciting paths, hashes, URLs, or IDs.
+        - Keep it tight: at most \(ceiling) sentences. Let the information set the length; do not pad.
+        - Speak directly to the user, never to an agent. No stage directions, no parentheticals, no asterisk notes.
+        - Never use em dashes; write with commas, periods, or parentheses instead.
+
+        Required output format:
+        CARD_SUMMARY: <a tight 6-12 word card summary, no period>
+
+        <spoken session summary>
+        """
+
+        let user = """
+        Staged review findings for "\(title.isEmpty ? "Untitled session" : title)":
+        \(clippedSource.isEmpty ? "[No findings were produced.]" : clippedSource)
+
+        Write the spoken session summary now.
+        """
+
+        return AttachePresentationPrompt(
+            messages: [
+                AttacheChatMessage(role: "system", content: system),
+                AttacheChatMessage(role: "user", content: user)
+            ],
+            memoryContext: memoryContext,
+            rawOutputCharacterCount: rawSource.count,
+            truncatedRawOutput: truncated
+        )
+    }
+
     /// Replaces em/en dashes with a comma so spoken text and captions never show
     /// the dash, even when the model ignores the no-em-dash instruction in the
     /// prompt. Keeps the pause (comma) and tidies the spacing artifacts.

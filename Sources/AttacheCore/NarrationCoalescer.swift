@@ -5,6 +5,12 @@ import Foundation
 public enum TranscriptFormat {
     case claude
     case codex
+    /// Grok Build's `chat_history.jsonl` (INF-361): user/assistant/tool_result
+    /// records with `content` and `type` keys, but unlike Claude/Codex, no
+    /// per-line `timestamp` field. Parsers dispatching on this case must
+    /// synthesize an ordering-preserving timestamp rather than reading one
+    /// from the line (see `TranscriptParser.parse`).
+    case grokBuild
 }
 
 /// One meaningful record parsed from a session transcript: either a piece of

@@ -417,6 +417,8 @@ enum AttachePreferenceKey {
     static let attachedCodexSessionID = "attache.attachedCodexSessionID"
     static let codexSourceEnabled = "attache.codexSourceEnabled"
     static let claudeCodeSourceEnabled = "attache.claudeCodeSourceEnabled"
+    static let grokBuildSourceEnabled = "attache.grokBuildSourceEnabled"
+    static let opencodeSourceEnabled = "attache.opencodeSourceEnabled"
     static let agentInstructionSendPolicy = "attache.agentInstructionSendPolicy"
     static let personalityPrompt = "attache.personalityPrompt"
     static let speechProvider = "attache.speechProvider"

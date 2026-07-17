@@ -13,7 +13,9 @@ public final class SessionIndexer: @unchecked Sendable {
 
     public init(cacheURL: URL, scanners: [SessionScanner]? = nil) {
         self.cacheURL = cacheURL
-        self.scanners = scanners ?? [CodexSessionScanner(), ClaudeCodeSessionScanner()]
+        // Registry-driven (INF-360): production is exactly Codex + Claude
+        // Code, in that order, matching the scanner list this replaced.
+        self.scanners = scanners ?? SessionSourceRegistry.production().descriptors.map { $0.makeScanner() }
         loadCache()
     }
 

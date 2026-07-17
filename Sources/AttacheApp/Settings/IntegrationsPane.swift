@@ -69,6 +69,14 @@ struct IntegrationsPane: View {
                 get: { model.claudeCodeSourceEnabled },
                 set: { model.setClaudeCodeSourceEnabled($0) }
             ))
+            Toggle("Grok Build sessions", isOn: Binding(
+                get: { model.grokBuildSourceEnabled },
+                set: { model.setGrokBuildSourceEnabled($0) }
+            ))
+            Toggle("opencode sessions", isOn: Binding(
+                get: { model.opencodeSourceEnabled },
+                set: { model.setOpencodeSourceEnabled($0) }
+            ))
             Toggle("Precise Claude Code status", isOn: $model.installClaudeHooks)
             Text("Adds Attaché's Notification and Stop hooks so character reactions update immediately. Turning it off removes only Attaché's hooks.")
                 .font(.caption)

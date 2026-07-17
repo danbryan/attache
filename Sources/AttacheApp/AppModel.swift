@@ -556,6 +556,28 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// INF-370 "Summarize Session…": the entry point on any Command-K or
+    /// inbox/history session row. Setting this presents the cost preview
+    /// (session, model/strategy, estimated stages, egress class) before any
+    /// model call; the staged review + synthesis only runs once the user
+    /// explicitly confirms. Available for any indexed session regardless of
+    /// watch state, including fully historic ones the user never listened to.
+    @Published var pendingSessionSummaryRequest: HistoricSessionSummaryRequest?
+
+    /// Presents the summarize-session cost preview for a known session row.
+    /// This call IS the explicit user selection (INF-315): the row's
+    /// `sessionID`/`sourceKind` came from the reconciled index, never from a
+    /// model, so the resulting focus grant is fail-closed authorized the same
+    /// way a native picker selection is.
+    func requestHistoricSessionSummary(
+        sessionID: String, sourceKind: String, displayTitle: String, workingDirectory: String?
+    ) {
+        pendingSessionSummaryRequest = HistoricSessionSummaryRequest(
+            sessionID: sessionID, sourceKind: sourceKind,
+            displayTitle: displayTitle, workingDirectory: workingDirectory
+        )
+    }
+
     /// Ambient home: when on, the chrome (dock, banner, history) fades while the
     /// pointer is still and wakes on movement. Off keeps everything always visible.
     @Published var autoHideControls: Bool = true {
@@ -978,6 +1000,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var modelSessionDiscoveryPicker: ModelSessionDiscoveryPickerState?
     @Published private(set) var codexSourceEnabled = false
     @Published private(set) var claudeCodeSourceEnabled = false
+    @Published private(set) var grokBuildSourceEnabled = false
+    @Published private(set) var opencodeSourceEnabled = false
     private lazy var curatedProjectPaths: [String] = Self.loadCuratedProjectPaths()
     let store: CardStore
     /// Sessions marked "do not record" (INF-357). Consulted before persisting
@@ -7320,7 +7344,7 @@ final class AppModel: ObservableObject {
     }
 
     var localAgentSourcesEnabled: Bool {
-        codexSourceEnabled || claudeCodeSourceEnabled
+        codexSourceEnabled || claudeCodeSourceEnabled || grokBuildSourceEnabled || opencodeSourceEnabled
     }
 
     func setCodexSourceEnabled(_ enabled: Bool) {
@@ -7364,6 +7388,47 @@ final class AppModel: ObservableObject {
         refreshSessionIndex()
     }
 
+    /// Toggle off stops indexing and watching for grok_build only, mirroring
+    /// `setClaudeCodeSourceEnabled` exactly (INF-361 acceptance criterion:
+    /// toggling one source off must never disturb codex/claude).
+    func setGrokBuildSourceEnabled(_ enabled: Bool) {
+        guard grokBuildSourceEnabled != enabled else { return }
+        grokBuildSourceEnabled = enabled
+        defaults.set(enabled, forKey: AttachePreferenceKey.grokBuildSourceEnabled)
+        if !enabled {
+            attachedTargets = attachedTargets.filter { $0.value.sourceKind != .grokBuild }
+            if attachedCodexSession?.sourceKind == .grokBuild {
+                attachedCodexSessionID = attachedSessionList.first?.id
+            }
+            synchronizeSessionContextFocus()
+            updateCodexWatcher()
+        }
+        rebuildSessionIndexer()
+        refreshSessionIndex()
+    }
+
+    /// Toggle off stops indexing for opencode only, mirroring
+    /// `setGrokBuildSourceEnabled` exactly (INF-362): opencode has no live
+    /// watcher wiring (its sessions are SQLite rows, not a `.jsonl` file
+    /// `CodexSessionWatcher`/`SessionActivityWatcher` can byte-offset tail),
+    /// so this only rebuilds the background index and clears any attached
+    /// opencode target; there is no live-narration path to stop.
+    func setOpencodeSourceEnabled(_ enabled: Bool) {
+        guard opencodeSourceEnabled != enabled else { return }
+        opencodeSourceEnabled = enabled
+        defaults.set(enabled, forKey: AttachePreferenceKey.opencodeSourceEnabled)
+        if !enabled {
+            attachedTargets = attachedTargets.filter { $0.value.sourceKind != .opencode }
+            if attachedCodexSession?.sourceKind == .opencode {
+                attachedCodexSessionID = attachedSessionList.first?.id
+            }
+            synchronizeSessionContextFocus()
+            updateCodexWatcher()
+        }
+        rebuildSessionIndexer()
+        refreshSessionIndex()
+    }
+
     func focusIntegration(for provider: AttacheSpeechProvider) {
         switch provider {
         case .system:
@@ -7381,14 +7446,20 @@ final class AppModel: ObservableObject {
         var sources = Set<SourceKind>()
         if codexSourceEnabled { sources.insert(.codex) }
         if claudeCodeSourceEnabled { sources.insert(.claudeCode) }
+        if grokBuildSourceEnabled { sources.insert(.grokBuild) }
+        if opencodeSourceEnabled { sources.insert(.opencode) }
         return sources
     }
 
     private func rebuildSessionIndexer() {
         guard !store.isInMemory else { return }
-        var scanners: [SessionScanner] = []
-        if codexSourceEnabled { scanners.append(CodexSessionScanner()) }
-        if claudeCodeSourceEnabled { scanners.append(ClaudeCodeSessionScanner()) }
+        // Registry-driven (INF-360): replaces the two hardcoded
+        // `if codexSourceEnabled { ... }` / `if claudeCodeSourceEnabled { ... }`
+        // appends with an iteration filtered by the same enabled set.
+        let enabledKinds = enabledAgentSources
+        let scanners = SessionSourceRegistry.production().descriptors
+            .filter { enabledKinds.contains($0.sourceKind) }
+            .map { $0.makeScanner() }
         sessionIndexer = SessionIndexer(cacheURL: Self.sessionIndexURL, scanners: scanners)
     }
 
@@ -8913,6 +8984,12 @@ final class AppModel: ObservableObject {
         if defaults.object(forKey: AttachePreferenceKey.claudeCodeSourceEnabled) != nil {
             claudeCodeSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.claudeCodeSourceEnabled)
         }
+        if defaults.object(forKey: AttachePreferenceKey.grokBuildSourceEnabled) != nil {
+            grokBuildSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.grokBuildSourceEnabled)
+        }
+        if defaults.object(forKey: AttachePreferenceKey.opencodeSourceEnabled) != nil {
+            opencodeSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.opencodeSourceEnabled)
+        }
         if let raw = defaults.string(forKey: AttachePreferenceKey.agentInstructionSendPolicy),
            let policy = AgentInstructionSendPolicy(rawValue: raw) {
             agentInstructionSendPolicy = policy
@@ -9288,7 +9365,9 @@ final class AppModel: ObservableObject {
         let enabledTargets = targets.filter {
             $0.category == .activeSession
                 && (($0.sourceKind == .codex && codexSourceEnabled)
-                    || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled))
+                    || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled)
+                    || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled)
+                    || ($0.sourceKind == .opencode && opencodeSourceEnabled))
         }
         codexSessionWatcher.watch(enabledTargets)
         // Ambient verbs cover every watched session, not just the focused
@@ -9351,6 +9430,8 @@ final class AppModel: ObservableObject {
         let enabledSessions = sessions.filter {
             ($0.sourceKind == .codex && codexSourceEnabled)
                 || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled)
+                || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled)
+                || ($0.sourceKind == .opencode && opencodeSourceEnabled)
         }
         attachedTargets = Dictionary(uniqueKeysWithValues: enabledSessions.map { ($0.id, $0) })
     }

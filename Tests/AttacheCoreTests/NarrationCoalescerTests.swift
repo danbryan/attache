@@ -184,4 +184,44 @@ final class NarrationCoalescerTests: XCTestCase {
         )
         XCTAssertEqual(second.records.first?.cwd, "/carried")
     }
+
+    // MARK: - Sidechain (INF-368 Part B)
+
+    private func claudeSidechainAssistant(_ text: String, at seconds: Int) -> String {
+        """
+        {"type":"assistant","isSidechain":true,"timestamp":"2026-07-02T10:00:\(pad(seconds))Z","cwd":"/proj","message":{"role":"assistant","content":[{"type":"text","text":"\(text)"}]}}
+        """
+    }
+
+    /// A sidechain line interleaved in a PARENT transcript (the historical
+    /// case this guard existed for) is never that session's main narration
+    /// by default.
+    func testSidechainLinesAreExcludedByDefault() {
+        let records = TranscriptParser.parse(
+            text: [claudeSidechainAssistant("Buried subagent chatter.", at: 1), claudeAssistant("Real answer.", at: 2)].joined(separator: "\n"),
+            format: .claude, carriedCWD: nil
+        ).records
+        XCTAssertEqual(records.count, 1)
+        if case let .assistantProse(text, _) = records.first?.kind {
+            XCTAssertEqual(text, "Real answer.")
+        } else {
+            XCTFail("expected one prose record")
+        }
+    }
+
+    /// A dedicated subagent transcript file is ENTIRELY sidechain-marked
+    /// lines; `includeSidechain: true` is how a caller (the live watchers
+    /// tailing `<session>/subagents/agent-*.jsonl`) opts into narrating it.
+    func testIncludeSidechainSurfacesSubagentProse() {
+        let records = TranscriptParser.parse(
+            text: claudeSidechainAssistant("Subagent finished the investigation.", at: 1),
+            format: .claude, carriedCWD: nil, includeSidechain: true
+        ).records
+        XCTAssertEqual(records.count, 1)
+        if case let .assistantProse(text, _) = records.first?.kind {
+            XCTAssertEqual(text, "Subagent finished the investigation.")
+        } else {
+            XCTFail("expected one prose record")
+        }
+    }
 }

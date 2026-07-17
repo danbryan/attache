@@ -9,9 +9,13 @@ final class CodexSessionWatcher {
     /// Fires when a watched session's live sub-agent count changes (INF-275).
     var onSubAgents: ((String, Int) -> Void)?
 
-    private let sessionsDirectory: URL
-    private let archivedSessionsDirectory: URL
-    private let claudeProjectsDirectory: URL
+    /// The registered sources this watcher polls and classifies files
+    /// against. Defaults to production (Codex + Claude Code) built from the
+    /// explicit directory overrides below, if any; a caller (tests) can pass
+    /// a full custom registry instead, e.g. to register a synthetic source
+    /// and prove classification/format/watching are purely data-driven
+    /// (INF-360).
+    private let sourceRegistry: SessionSourceRegistry
     private let defaults: UserDefaults
     private var timer: Timer?
     private var sessions: [CodexSessionTarget] = []   // all attached sessions, watched concurrently
@@ -33,18 +37,31 @@ final class CodexSessionWatcher {
     private var attentionRecordAt: [String: Date] = [:]
     private var subAgentCounts: [String: Int] = [:]
 
+    /// Subagent tail state, keyed by `"<parent session id>::<subagent file
+    /// path>"` (INF-368 Part B). Records parsed from a subagent file are fed
+    /// into the PARENT's coalescer (`coalescer(for: session.id)`), so they
+    /// become the same session's narration turns; they never create a
+    /// separate card or session. Subagent transcripts still stay out of the
+    /// session index (INF-168 stands) - only the live watcher opens them,
+    /// and only for a session currently in `sessions` (watched/focused).
+    private var subagentFileOffsets: [String: UInt64] = [:]
+    private var subagentPendingFragments: [String: String] = [:]
+    /// Bound the cost: only the 8 most-recently-modified subagent files are
+    /// tailed per session, recomputed every poll (an oldest-mtime eviction).
+    private let maxConcurrentSubagentTails = 8
+
     init(
         sessionsDirectory: URL? = nil,
         archivedSessionsDirectory: URL? = nil,
         claudeProjectsDirectory: URL? = nil,
+        sourceRegistry: SessionSourceRegistry? = nil,
         defaults: UserDefaults = .standard
     ) {
-        let codexHome = CodexPaths.home()
-        self.sessionsDirectory = sessionsDirectory ?? codexHome
-            .appendingPathComponent("sessions", isDirectory: true)
-        self.archivedSessionsDirectory = archivedSessionsDirectory ?? codexHome
-            .appendingPathComponent("archived_sessions", isDirectory: true)
-        self.claudeProjectsDirectory = claudeProjectsDirectory ?? ClaudePaths.projectsDirectory()
+        self.sourceRegistry = sourceRegistry ?? .production(
+            codexSessionsDirectory: sessionsDirectory,
+            codexArchivedSessionsDirectory: archivedSessionsDirectory,
+            claudeProjectsDirectory: claudeProjectsDirectory
+        )
         self.defaults = defaults
     }
 
@@ -66,6 +83,10 @@ final class CodexSessionWatcher {
         for id in subAgentCounts.keys where !activeIDs.contains(id) {
             subAgentCounts[id] = nil
             onSubAgents?(id, 0)
+        }
+        for key in subagentFileOffsets.keys where !activeIDs.contains(parentSessionID(fromSubagentKey: key)) {
+            subagentFileOffsets[key] = nil
+            subagentPendingFragments[key] = nil
         }
 
         guard !active.isEmpty else {
@@ -103,6 +124,8 @@ final class CodexSessionWatcher {
         locatedFileURLs.removeAll()
         locateMissTick.removeAll()
         coalescers.removeAll()
+        subagentFileOffsets.removeAll()
+        subagentPendingFragments.removeAll()
     }
 
     private func poll() {
@@ -123,7 +146,10 @@ final class CodexSessionWatcher {
         }
 
         let sourceKind = sourceKind(for: fileURL)
-        let format: TranscriptFormat = sourceKind == .claudeCode ? .claude : .codex
+        // Falls back to .codex when the registry has no format for this kind
+        // (only reachable with a caller-supplied registry that omits it),
+        // matching the classification fallback below.
+        let format = sourceRegistry.transcriptFormat(for: sourceKind) ?? .codex
 
         classifyAttention(session: session, fileURL: fileURL, format: format)
 
@@ -153,6 +179,119 @@ final class CodexSessionWatcher {
         let turns = coalescer(for: session.id).poll(parsed.records)
         for turn in turns {
             emit(turn, session: session, fileURL: fileURL, sourceKind: sourceKind)
+        }
+
+        // Nearly all activity happens in the parent's subagents while an
+        // executor loop is mid-delegation, so tail those too, fed into the
+        // SAME coalescer so they become the parent session's own narration
+        // turns (INF-368 Part B). Only reachable for a session currently in
+        // `sessions` (watched/focused), same as the parent tail above.
+        if sourceKind == .claudeCode {
+            let subagentTurns = pollSubagents(forSession: session.id, parentFileURL: fileURL)
+            for turn in subagentTurns {
+                emit(turn, session: session, fileURL: fileURL, sourceKind: sourceKind)
+            }
+        }
+    }
+
+    /// Tail the parent session's `subagents/agent-*.jsonl` files (INF-168's
+    /// layout: `<claude-project>/<session-id>/subagents/agent-*.jsonl`),
+    /// feeding parsed records into the parent's own `NarrationCoalescer` so
+    /// they surface as that session's narration, never a separate card or
+    /// session. Recomputing the 8 most-recently-modified files every poll is
+    /// an oldest-mtime eviction of anything beyond the cap.
+    private func pollSubagents(forSession sessionID: String, parentFileURL: URL) -> [CoalescedTurn] {
+        let files = candidateSubagentFiles(forParentFileURL: parentFileURL)
+        let trackedKeys = Set(files.map { subagentKey(sessionID: sessionID, fileURL: $0) })
+        for key in subagentFileOffsets.keys where parentSessionID(fromSubagentKey: key) == sessionID && !trackedKeys.contains(key) {
+            subagentFileOffsets[key] = nil
+            subagentPendingFragments[key] = nil
+        }
+
+        var allTurns: [CoalescedTurn] = []
+        // Real Claude Code subagent transcripts can also grow large; cap the
+        // first read to the same 256KiB tail ceiling `newAppendedText` uses
+        // for a session's own first attach, rather than replaying an
+        // unbounded backlog (INF-368 Part B).
+        let tailBytes: UInt64 = 256 * 1024
+        for fileURL in files {
+            let key = subagentKey(sessionID: sessionID, fileURL: fileURL)
+            guard let size = fileSize(fileURL) else { continue }
+
+            let previousOffset = subagentFileOffsets[key]
+            let offset: UInt64
+            if let previousOffset, size >= previousOffset {
+                offset = previousOffset
+            } else {
+                offset = size > tailBytes ? size - tailBytes : 0
+                subagentPendingFragments[key] = nil
+            }
+
+            let text = subagentAppendedText(in: fileURL, key: key, from: offset)
+            subagentFileOffsets[key] = size
+            guard !text.isEmpty else { continue }
+
+            let parsed = TranscriptParser.parse(text: text, format: .claude, carriedCWD: currentWorkingDirectories[sessionID], includeSidechain: true)
+            allTurns.append(contentsOf: coalescer(for: sessionID).poll(parsed.records))
+        }
+        return allTurns
+    }
+
+    /// The 8 most-recently-modified `agent-*.jsonl` files directly under the
+    /// parent session's `subagents/` directory. Subagent transcripts stay
+    /// out of the session index (INF-168 stands); this only feeds live
+    /// narration for a session that is currently watched or focused.
+    private func candidateSubagentFiles(forParentFileURL parentFileURL: URL) -> [URL] {
+        let subagentsDirectory = parentFileURL.deletingPathExtension().appendingPathComponent("subagents", isDirectory: true)
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: subagentsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        let agentFiles = items.filter { $0.pathExtension == "jsonl" && $0.lastPathComponent.lowercased().hasPrefix("agent-") }
+        let withMtime = agentFiles.map { url -> (url: URL, modified: Date) in
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? Date(timeIntervalSince1970: 0)
+            return (url, modified)
+        }
+        return withMtime.sorted { $0.modified > $1.modified }.prefix(maxConcurrentSubagentTails).map { $0.url }
+    }
+
+    private func subagentKey(sessionID: String, fileURL: URL) -> String {
+        "\(sessionID)::\(fileURL.path)"
+    }
+
+    private func parentSessionID(fromSubagentKey key: String) -> String {
+        String(key.split(separator: ":", maxSplits: 1).first ?? Substring(key))
+    }
+
+    private func subagentAppendedText(in fileURL: URL, key: String, from offset: UInt64) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return "" }
+        defer { try? handle.close() }
+
+        do {
+            try handle.seek(toOffset: offset)
+            let data = try handle.readToEnd() ?? Data()
+            guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+                return ""
+            }
+            let combined = (subagentPendingFragments[key] ?? "") + text
+            guard let last = combined.last else { return "" }
+            if last.isNewline {
+                subagentPendingFragments[key] = nil
+                return combined
+            }
+
+            let lines = combined.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            guard let lastFragment = lines.last else {
+                subagentPendingFragments[key] = combined
+                return ""
+            }
+            subagentPendingFragments[key] = String(lastFragment)
+            return lines.dropLast().map(String.init).joined(separator: "\n")
+        } catch {
+            return ""
         }
     }
 
@@ -221,7 +360,7 @@ final class CodexSessionWatcher {
             title: session.displayTitle,
             text: turn.text
         )
-        event.metadata["adapter"] = sourceKind == .claudeCode ? "claude-session-file" : "codex-session-file"
+        event.metadata["adapter"] = sourceRegistry.adapterTag(for: sourceKind) ?? "codex-session-file"
         event.metadata["codex_session_file"] = fileURL.path
         event.metadata["codex_target_category"] = session.category.rawValue
         // Source time = when the agent wrote the turn, not when we processed it, so
@@ -328,28 +467,26 @@ final class CodexSessionWatcher {
         }
     }
 
-    /// A session file is Claude Code's iff it resolved under
-    /// `claudeProjectsDirectory`, which itself already honors a
-    /// `CLAUDE_CONFIG_DIR` override (`ClaudePaths.projectsDirectory()`). This
-    /// used to be a literal `path.contains("/.claude/")` check, which broke
-    /// for any override that does not itself contain that substring, e.g. a
-    /// disposable test home (`/tmp/.../claude-home/projects/...`, INF-257/E2)
-    /// or a real user's own `CLAUDE_CONFIG_DIR`: the file was still located
-    /// correctly (`locateSessionFile` searches `claudeProjectsDirectory`), but
-    /// got misclassified as Codex and parsed with the wrong transcript
-    /// format, so its completed turns were silently dropped instead of
-    /// becoming cards.
+    /// Classifies a file by the longest matching directory prefix across
+    /// every registered source (`SessionSourceRegistry.classify`), falling
+    /// back to `.codex` when nothing matches, preserving this function's old
+    /// literal `... ? .claudeCode : .codex` fallback exactly.
     ///
-    /// Both sides are resolved with `resolvingSymlinksInPath()` before the
-    /// prefix check: `FileManager`'s enumerator (used by `findSessionFile`)
-    /// returns canonicalized paths, so a `claudeProjectsDirectory` built from
-    /// a `/tmp/...` override (a symlink to `/private/tmp/...` on macOS) would
-    /// otherwise never match the `/private/tmp/...` path the enumerator
-    /// actually handed back, silently falling through to `.codex` even though
-    /// the file was found under the right directory (INF-261).
+    /// This used to be a literal `path.contains("/.claude/")` check, which
+    /// broke for any override that does not itself contain that substring,
+    /// e.g. a disposable test home (`/tmp/.../claude-home/projects/...`,
+    /// INF-257/E2) or a real user's own `CLAUDE_CONFIG_DIR`: the file was
+    /// still located correctly, but got misclassified as Codex and parsed
+    /// with the wrong transcript format, so its completed turns were
+    /// silently dropped instead of becoming cards. It was then a direct
+    /// `hasPrefix` check against `claudeProjectsDirectory` alone (both sides
+    /// resolved with `resolvingSymlinksInPath()`, since `FileManager`'s
+    /// enumerator returns canonicalized paths and a `/tmp/...` override is a
+    /// symlink to `/private/tmp/...` on macOS, INF-261). The registry's
+    /// `classify` does the same symlink-resolved prefix check against every
+    /// registered source's directories instead of one hardcoded directory.
     func sourceKind(for fileURL: URL) -> SourceKind {
-        fileURL.resolvingSymlinksInPath().path.hasPrefix(claudeProjectsDirectory.resolvingSymlinksInPath().path)
-            ? .claudeCode : .codex
+        sourceRegistry.classify(fileURL: fileURL) ?? .codex
     }
 
     private func fileSize(_ fileURL: URL) -> UInt64? {
@@ -372,14 +509,18 @@ final class CodexSessionWatcher {
             return cached
         }
         // Negative cache: a session whose file is briefly missing must not trigger
-        // a full three-tree walk every 2s. After a miss, hold off re-walking until
-        // the re-check window elapses.
+        // a full walk of every watched directory every 2s. After a miss, hold off
+        // re-walking until the re-check window elapses.
         if let missedAt = locateMissTick[id], pollTick &- missedAt < missRecheckPolls {
             return nil
         }
-        let located = findSessionFile(id: id, under: sessionsDirectory)
-            ?? findSessionFile(id: id, under: archivedSessionsDirectory)
-            ?? findSessionFile(id: id, under: claudeProjectsDirectory)
+        var located: URL?
+        for directory in sourceRegistry.allWatchedDirectories() {
+            if let match = findSessionFile(id: id, under: directory) {
+                located = match
+                break
+            }
+        }
         if let located {
             locatedFileURLs[id] = located
             locateMissTick[id] = nil
