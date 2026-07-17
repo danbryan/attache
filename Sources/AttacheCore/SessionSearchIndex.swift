@@ -14,6 +14,12 @@ public struct SessionRecord: Codable, Equatable {
     public var content: String       // lowercased, capped transcript digest
     public var topicTag: String?     // LLM-assigned topic ("Taxes", "Penumbra"), nil until tagged
     public var sourceKind: SourceKind // which tool produced the session (Codex, Claude Code, ...)
+    /// The raw model tag when a Claude Code session shows evidence of running
+    /// against a local (non-Anthropic) model, such as an Ollama-backed
+    /// `claude-oss` wrapper. Nil for ordinary cloud Claude sessions and for
+    /// every non-Claude-Code source. Cosmetic only: see
+    /// `ClaudeCodeSessionScanner.localModelHint(forModelID:)`.
+    public var localModelHint: String?
 
     public init(
         id: String,
@@ -26,7 +32,8 @@ public struct SessionRecord: Codable, Equatable {
         fileMtime: Double,
         content: String,
         topicTag: String? = nil,
-        sourceKind: SourceKind = .codex
+        sourceKind: SourceKind = .codex,
+        localModelHint: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -39,6 +46,7 @@ public struct SessionRecord: Codable, Equatable {
         self.content = content
         self.topicTag = topicTag
         self.sourceKind = sourceKind
+        self.localModelHint = localModelHint
     }
 }
 

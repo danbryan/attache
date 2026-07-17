@@ -389,7 +389,8 @@ struct SessionCommandPalette: View {
                 HStack(spacing: 5) {
                     if availableSources.count > 1 {
                         SourceBadge(sourceKind: record.sourceKind.rawValue,
-                                    displayName: record.sourceKind.displayName)
+                                    displayName: record.sourceKind.displayName,
+                                    localModelHint: record.localModelHint)
                     }
                     if let tag = tagToShow {
                         Text(tag)

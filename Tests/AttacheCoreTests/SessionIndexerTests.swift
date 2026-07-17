@@ -91,6 +91,47 @@ final class SessionIndexerTests: XCTestCase {
         XCTAssertTrue(parsed.content.contains("validator notes"))
         XCTAssertTrue(parsed.content.contains("done, notes added."))
         XCTAssertFalse(parsed.content.contains("hmm"), "thinking blocks are not part of the digest")
+        XCTAssertNil(parsed.localModelHint, "no model field on this fixture: absent-field case yields nil")
+    }
+
+    // MARK: - Local-model badge detection (INF-363)
+
+    /// Pure function fixture cases: a cloud `claude-*` id yields no hint, an
+    /// Ollama-style tag yields the tag verbatim, and an absent field yields nil.
+    func testLocalModelHintClaudeCloudIDYieldsNil() {
+        XCTAssertNil(ClaudeCodeSessionScanner.localModelHint(forModelID: "claude-sonnet-5"))
+        XCTAssertNil(ClaudeCodeSessionScanner.localModelHint(forModelID: "claude-3-5-sonnet-20241022"))
+        XCTAssertNil(ClaudeCodeSessionScanner.localModelHint(forModelID: "Claude-Opus-4"), "case-insensitive prefix match")
+    }
+
+    func testLocalModelHintOllamaTagYieldsTheTag() {
+        XCTAssertEqual(ClaudeCodeSessionScanner.localModelHint(forModelID: "qwen2.5-coder:32b"), "qwen2.5-coder:32b")
+        XCTAssertEqual(ClaudeCodeSessionScanner.localModelHint(forModelID: "glm-4"), "glm-4")
+        XCTAssertEqual(ClaudeCodeSessionScanner.localModelHint(forModelID: "llama3.1"), "llama3.1")
+    }
+
+    func testLocalModelHintAbsentFieldYieldsNil() {
+        XCTAssertNil(ClaudeCodeSessionScanner.localModelHint(forModelID: nil))
+        XCTAssertNil(ClaudeCodeSessionScanner.localModelHint(forModelID: ""))
+        XCTAssertNil(ClaudeCodeSessionScanner.localModelHint(forModelID: "   "))
+    }
+
+    func testClaudeCodeParseDetectsOllamaModelHintFromAssistantRecord() {
+        let jsonl = """
+        {"type":"user","cwd":"/Users/example/code/penumbra","message":{"role":"user","content":"quick question"}}
+        {"type":"assistant","cwd":"/Users/example/code/penumbra","message":{"role":"assistant","model":"qwen2.5-coder:32b","content":[{"type":"text","text":"sure"}]}}
+        """
+        let parsed = ClaudeCodeSessionScanner.parse(jsonl: jsonl, contentCap: 8_000)
+        XCTAssertEqual(parsed.localModelHint, "qwen2.5-coder:32b")
+    }
+
+    func testClaudeCodeParseCloudSessionYieldsNoLocalModelHint() {
+        let jsonl = """
+        {"type":"user","cwd":"/Users/example/code/penumbra","message":{"role":"user","content":"quick question"}}
+        {"type":"assistant","cwd":"/Users/example/code/penumbra","message":{"role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"sure"}]}}
+        """
+        let parsed = ClaudeCodeSessionScanner.parse(jsonl: jsonl, contentCap: 8_000)
+        XCTAssertNil(parsed.localModelHint)
     }
 
     func testFreshCacheIsPrivateAndDoesNotDuplicateTranscriptContent() throws {

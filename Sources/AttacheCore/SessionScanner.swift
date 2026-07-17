@@ -242,7 +242,8 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
             fileMtime: file.mtime,
             content: parsed.content,
             topicTag: priorTopicTag,
-            sourceKind: .claudeCode
+            sourceKind: .claudeCode,
+            localModelHint: parsed.localModelHint
         )
     }
 
@@ -265,19 +266,20 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
 
     /// Read a Claude Code session prefix and pull out the cwd, the generated title,
     /// the first user prompt, and a lowercased content digest.
-    static func readSessionFile(_ url: URL, contentCap: Int, byteCap: Int = 262_144) -> (project: String?, content: String, title: String?, firstUserMessage: String?) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, "", nil, nil) }
+    static func readSessionFile(_ url: URL, contentCap: Int, byteCap: Int = 262_144) -> (project: String?, content: String, title: String?, firstUserMessage: String?, localModelHint: String?) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, "", nil, nil, nil) }
         defer { try? handle.close() }
         let data = (try? handle.read(upToCount: byteCap)) ?? Data()
-        guard !data.isEmpty else { return (nil, "", nil, nil) }
+        guard !data.isEmpty else { return (nil, "", nil, nil, nil) }
         let text = String(decoding: data, as: UTF8.self)
         return parse(jsonl: text, contentCap: contentCap)
     }
 
-    public static func parse(jsonl text: String, contentCap: Int) -> (project: String?, content: String, title: String?, firstUserMessage: String?) {
+    public static func parse(jsonl text: String, contentCap: Int) -> (project: String?, content: String, title: String?, firstUserMessage: String?, localModelHint: String?) {
         var project: String?
         var aiTitle: String?
         var firstUser: String?
+        var modelHint: String?
         var parts: [String] = []
         for line in text.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
@@ -291,6 +293,11 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
                 aiTitle = title
             }
             let type = object["type"] as? String
+            if modelHint == nil, type == "assistant",
+               let message = object["message"] as? [String: Any],
+               let modelID = message["model"] as? String {
+                modelHint = localModelHint(forModelID: modelID)
+            }
             guard type == "user" || type == "assistant",
                   let text = messageText(in: object["message"]) else {
                 continue
@@ -300,7 +307,31 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
         }
         var content = parts.joined(separator: " ").lowercased()
         if content.count > contentCap { content = String(content.prefix(contentCap)) }
-        return (project, content, aiTitle, firstUser)
+        return (project, content, aiTitle, firstUser, modelHint)
+    }
+
+    /// Pure detection of a "this is a local, non-Anthropic model" marker from a
+    /// Claude Code assistant record's `message.model` field (confirmed present
+    /// on real `~/.claude` session records, INF-363). A normal cloud Claude
+    /// Code session carries a `claude-*` model id (e.g. `claude-sonnet-5`,
+    /// `claude-3-5-sonnet-20241022`). Dan's `claude-oss` wrapper points the
+    /// real `claude` CLI at a local Ollama endpoint by setting
+    /// `ANTHROPIC_BASE_URL`; Ollama echoes back its own served model tag (e.g.
+    /// `qwen2.5-coder:32b`, `glm-4`) in that same field rather than a Claude
+    /// model id, which is what this function keys on. Absent field, or a
+    /// `claude-*` id, yields nil (cloud session, no badge). Any other
+    /// non-empty tag is treated as local-model evidence and returned verbatim
+    /// so the UI can show it as a tooltip.
+    ///
+    /// False-positive risk: a hypothetical future Anthropic-hosted model
+    /// whose id does not start with `claude` would be misclassified as local.
+    /// No such id exists today; if one ships, this allowlist should grow.
+    public static func localModelHint(forModelID modelID: String?) -> String? {
+        guard let modelID else { return nil }
+        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.lowercased().hasPrefix("claude") else { return nil }
+        return trimmed
     }
 
     /// Extract readable text from a Claude `message` (content is a string for user

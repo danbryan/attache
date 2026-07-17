@@ -329,7 +329,9 @@ struct HistoryOverlay: View {
                         .typoBody(.semibold)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    SourceBadge(sourceKind: card.sourceKind, displayName: card.sourceDisplayName)
+                    SourceBadge(sourceKind: card.sourceKind,
+                                displayName: card.sourceDisplayName,
+                                localModelHint: model.localModelHint(forExternalSessionID: card.externalSessionID))
                     if let marker {
                         PersonalityMarkerBadge(marker: marker, accent: model.theme.signatureColor, compact: true)
                     }
@@ -449,7 +451,9 @@ struct HistoryOverlay: View {
                 .typoBody(.semibold)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            SourceBadge(sourceKind: instruction.sourceKind, displayName: instruction.targetDisplayName ?? instruction.sourceKind)
+            SourceBadge(sourceKind: instruction.sourceKind,
+                        displayName: instruction.targetDisplayName ?? instruction.sourceKind,
+                        localModelHint: model.localModelHint(forExternalSessionID: instruction.sessionID))
         }
     }
 
