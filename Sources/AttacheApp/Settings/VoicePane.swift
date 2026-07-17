@@ -304,6 +304,10 @@ struct VoicePane: View {
                 }
                 .labelsHidden().frame(width: 280)
             }
+            if model.isScanningVoices && model.speechVoiceOptions.isEmpty {
+                Text("Scanning voices…")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text("Tip: download a free Premium voice in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices for much better quality.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }

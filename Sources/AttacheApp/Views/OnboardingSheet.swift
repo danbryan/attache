@@ -197,6 +197,10 @@ struct OnboardingSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pick the voice for spoken recaps. Preview plays a short line.")
                 .typoBody()
+            if model.isScanningVoices && recommendedVoices.isEmpty {
+                Text("Scanning voices…")
+                    .typoCaption().foregroundStyle(.secondary)
+            }
             ForEach(recommendedVoices) { option in
                 voiceRow(option)
             }

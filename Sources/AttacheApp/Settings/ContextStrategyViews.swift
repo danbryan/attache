@@ -1,5 +1,6 @@
 import AttacheCore
 import SwiftUI
+import os
 
 private enum ContextStrategyChoice: String, CaseIterable, Identifiable {
     case inherit
@@ -48,6 +49,9 @@ struct ContextStrategyEditor: View {
     var onRefreshCapabilities: (() -> Void)?
 
     @State private var advancedExpanded = false
+    /// The open signpost interval while Advanced is expanded (INF-349); ends
+    /// when the user collapses it. Measurement only.
+    @State private var advancedSignpostState: OSSignpostIntervalState?
 
     private var effectiveStrategy: AttacheContextStrategy {
         strategyOverride ?? globalStrategy
@@ -106,6 +110,14 @@ struct ContextStrategyEditor: View {
             .accessibilityLabel("Advanced context settings")
             .onChange(of: effectiveStrategy.kind) { kind in
                 if kind == .custom { advancedExpanded = true }
+            }
+            .onChange(of: advancedExpanded) { expanded in
+                if expanded {
+                    advancedSignpostState = AttacheLog.uiLatency.beginInterval("advancedDisclosureExpanded")
+                } else if let state = advancedSignpostState {
+                    AttacheLog.uiLatency.endInterval("advancedDisclosureExpanded", state)
+                    advancedSignpostState = nil
+                }
             }
         }
     }

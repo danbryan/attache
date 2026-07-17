@@ -366,12 +366,21 @@ extension Personality {
 extension Personality {
     /// A short, human label for this personality's voice, for list rows and the
     /// editor. Never surfaces provider internals like a raw voice id.
-    var voiceSummary: String {
+    ///
+    /// Takes an already-computed system voice options list (e.g.
+    /// `AppModel.speechVoiceOptions`) rather than calling
+    /// `AttacheVoiceCatalog.options()` itself, which re-filters and re-sorts
+    /// the whole catalog on every call. Wardrobe cards recompute this on
+    /// every render, so a fresh catalog call there was the largest avoidable
+    /// per-render cost in the personality list (INF-352 step 6). Callers with
+    /// no options handy (e.g. a personality known not to use a system voice)
+    /// can pass an empty array; only the `.system` branch consults it.
+    func voiceSummary(in systemOptions: [AttacheVoiceOption]) -> String {
         guard let ref = voiceRef else { return "Voice not set" }
         switch ref.provider {
         case .system:
             guard let identifier = ref.systemVoiceIdentifier else { return "Voice not set" }
-            return AttacheVoiceCatalog.option(for: identifier)?.title ?? identifier
+            return systemOptions.first(where: { $0.id == identifier })?.title ?? identifier
         case .elevenLabs:
             return "ElevenLabs" + (ref.elevenLabsVoiceName.map { ": \($0)" } ?? " voice")
         case .xai:
@@ -411,9 +420,17 @@ final class PersonalityStore {
     private let defaults: UserDefaults
     private let listKey = "attache.personalities"
     private let activeKey = "attache.activePersonalityID"
+    /// Supplies the voice list `fillingExplicitConfiguration` validates
+    /// system voice references against. Defaults to the shared voice
+    /// catalog's already-loaded snapshot (never a fresh enumeration, see
+    /// INF-350) but is injectable so tests never touch real voice
+    /// enumeration and can exercise the empty-snapshot backfill path.
+    private let voiceOptionsProvider: () -> [AttacheVoiceOption]
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard,
+         voiceOptionsProvider: @escaping () -> [AttacheVoiceOption] = { AttacheVoiceCatalog.options() }) {
         self.defaults = defaults
+        self.voiceOptionsProvider = voiceOptionsProvider
     }
 
     func load() -> (personalities: [Personality], activeID: String) {
@@ -487,6 +504,19 @@ final class PersonalityStore {
         return (seeded, activeID)
     }
 
+    /// Re-validates every personality's system voice reference against the
+    /// current voice list. `load()` may have run before the voice catalog's
+    /// background scan published real voices (INF-350: a first launch with
+    /// no disk snapshot starts with an empty options list rather than
+    /// blocking on enumeration), leaving system-voice personalities on the
+    /// generic fallback ID. Call this once the catalog's `onUpdate` fires so
+    /// those personalities pick up the user's actual system voice. Pure and
+    /// idempotent; the caller decides whether the result differs enough to
+    /// persist.
+    func reconcilingVoiceReferences(_ personalities: [Personality]) -> [Personality] {
+        personalities.map(fillingExplicitConfiguration)
+    }
+
     func save(_ personalities: [Personality], activeID: String) {
         if let data = try? JSONEncoder().encode(personalities) {
             defaults.set(data, forKey: listKey)
@@ -515,9 +545,10 @@ final class PersonalityStore {
             configured.voiceRef = PersonalityVoiceRef.capture(from: defaults)
         }
         if var voice = configured.voiceRef, voice.provider == .system {
-            let available = Set(AttacheVoiceCatalog.options().map(\.id))
+            let voiceOptions = voiceOptionsProvider()
+            let available = Set(voiceOptions.map(\.id))
             if voice.systemVoiceIdentifier.map({ !available.contains($0) }) ?? true {
-                voice.systemVoiceIdentifier = AttacheVoiceCatalog.fileExportFallbackVoiceID()
+                voice.systemVoiceIdentifier = AttacheVoiceCatalog.fileExportFallbackVoiceID(in: voiceOptions)
                     ?? Personality.defaultPreferredVoiceID
                 configured.voiceRef = voice
             }

@@ -332,6 +332,21 @@ func frontmostWindowID(forPID pid: pid_t) -> CGWindowID? {
     return candidates.max(by: { area(of: $0) < area(of: $1) })?[kCGWindowNumber as String] as? CGWindowID
 }
 
+/// Finds a window owned by `pid` whose title contains `titleContains` (e.g.
+/// "Settings"), so a pose that opens a secondary window can be captured
+/// specifically instead of falling back to whichever window has the largest
+/// area (`frontmostWindowID`, which picks the main window when it happens to
+/// be bigger than the window actually being posed).
+func windowID(forPID pid: pid_t, titleContains: String) -> CGWindowID? {
+    guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: AnyObject]] else {
+        return nil
+    }
+    return infoList.first { info in
+        (info[kCGWindowOwnerPID as String] as? pid_t) == pid
+            && (info[kCGWindowName as String] as? String)?.contains(titleContains) == true
+    }?[kCGWindowNumber as String] as? CGWindowID
+}
+
 /// Screenshots the app's own window by CGWindowID via `screencapture -l`,
 /// never the whole screen. This is INF-244's fix for the screenshot matrix:
 /// a full-screen `screencapture -x` captures whatever macOS Space is
@@ -342,8 +357,10 @@ func frontmostWindowID(forPID pid: pid_t) -> CGWindowID? {
 /// directly from the window server's buffer for that specific window,
 /// independent of which Space is frontmost, so the screenshot is guaranteed
 /// to show Attaché rather than whatever else happened to be on screen.
-func captureAppWindowScreenshot(to path: String) {
-    guard let windowID = frontmostWindowID(forPID: app.pid) else {
+func captureAppWindowScreenshot(to path: String, titleContains: String? = nil) {
+    let resolvedWindowID = titleContains.flatMap { windowID(forPID: app.pid, titleContains: $0) }
+        ?? frontmostWindowID(forPID: app.pid)
+    guard let windowID = resolvedWindowID else {
         print("screenshot: could not resolve a window id for pid \(app.pid); skipping capture to \(path)")
         return
     }
@@ -406,6 +423,13 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 app.activate()
                 app.key(Key.comma, command: true)
                 try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+            case "about":
+                // Poses the About pane so the Responsiveness section
+                // (INF-349) can be captured for evidence.
+                app.activate()
+                app.key(Key.comma, command: true)
+                try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+                try selectSettingsSection("About", paneMarker: "Responsiveness")
             case "live":
                 break
             case "play":
@@ -641,7 +665,8 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
         // screen) the instant the requested state is confirmed on screen,
         // before the hold-sleep even starts, if the wrapper asked for one.
         if let screenshotPath = ProcessInfo.processInfo.environment["ATTACHE_POSE_SCREENSHOT_PATH"] {
-            captureAppWindowScreenshot(to: screenshotPath)
+            let titleHint = pose.contains("settings") || pose.contains("about") ? "Settings" : nil
+            captureAppWindowScreenshot(to: screenshotPath, titleContains: titleHint)
         }
         print("posing \(pose) for \(Int(holdSeconds))s")
         // Wrapper scripts tail the log for this marker to time recordings;
@@ -2114,9 +2139,11 @@ if enabled("f6") {
     run.step("f6-palettes", "Command-I inbox palette filters as you type") {
         _ = try runShell("scripts/send-event.sh")
         app.activate()
-        app.key(Key.i, command: true)
-        let field = try waitForElement("inbox search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search inbox")
+        let field = try assertWithinLatencyBudget("opening the inbox palette") {
+            app.key(Key.i, command: true)
+            return try waitForElement("inbox search field", in: try mainWindow(),
+                                      role: kAXTextFieldRole as String, containing: "Search inbox")
+        }
         _ = field.setFocused()
         if !field.setValue("smoke") { app.type("smoke") }
         _ = try waitForElement("filtered inbox card", in: try mainWindow(), containing: "Shell smoke update")
@@ -2142,9 +2169,11 @@ if enabled("f6") {
     }
     run.step("f6-palettes", "Command-Y history palette opens, filters, closes") {
         app.activate()
-        app.key(Key.y, command: true)
-        let field = try waitForElement("history search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search history")
+        let field = try assertWithinLatencyBudget("opening the history palette") {
+            app.key(Key.y, command: true)
+            return try waitForElement("history search field", in: try mainWindow(),
+                                      role: kAXTextFieldRole as String, containing: "Search history")
+        }
         _ = field.setFocused()
         if !field.setValue("zzz-no-match") { app.type("zzz-no-match") }
         _ = try waitForElement("empty-state message", in: try mainWindow(), containing: "No history matches")
@@ -2192,10 +2221,12 @@ var originalTextScale = 1.0
 
 if enabled("f5") {
     run.step("f5-settings", "settings window opens with Command-comma") {
-        app.activate()
-        app.key(Key.comma, command: true)
-        try waitUntil("settings window", timeout: 10) {
-            (try? settingsWindow()) != nil
+        try assertWithinLatencyBudget("opening Settings") {
+            app.activate()
+            app.key(Key.comma, command: true)
+            try waitUntil("settings window", timeout: 10) {
+                (try? settingsWindow()) != nil
+            }
         }
     }
     run.step("f5-settings", "theme switches to a different value") {
@@ -2838,6 +2869,69 @@ if enabled("personality") {
         try waitUntil("character studio closes after save", timeout: 10) { (try? personalityStudioWindow()) == nil }
         _ = try waitForElement("created character", in: try settingsWindow(), containing: "Smoke Character")
         _ = try waitForElement("created Echo presence", in: try settingsWindow(), containing: "Echo voice bars")
+    }
+
+    run.step("personality-studio", "the voice picker opens, filters by search, and the row count shrinks") {
+        let create = try waitForElement(
+            "Create character button",
+            in: try settingsWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Create character"
+        )
+        guard create.press() else { throw SmokeError(message: "AXPress failed on \(create.summary)") }
+        try waitUntil("character studio window for voice picker check", timeout: 10) { (try? personalityStudioWindow()) != nil }
+        let studio = try personalityStudioWindow()
+
+        let browseVoices = try waitForElement(
+            "Browse voices button",
+            in: studio,
+            role: kAXButtonRole as String,
+            containing: "Browse voices"
+        )
+        guard browseVoices.press() else { throw SmokeError(message: "AXPress failed on \(browseVoices.summary)") }
+        try waitUntil("voice picker sheet", timeout: 10) {
+            (try? personalityStudioWindow())?.firstDescendant(containing: "Voice picker") != nil
+        }
+
+        func rowCount() -> Int {
+            (try? personalityStudioWindow())?.descendants(
+                where: { $0.matches("Play sample of") },
+                collectLimit: 200
+            ).count ?? 0
+        }
+        try waitUntil("voice picker rows to populate", timeout: 5) { rowCount() > 0 }
+        let before = rowCount()
+
+        let search = try waitForElement(
+            "voice search field",
+            in: try personalityStudioWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search voices"
+        )
+        _ = search.setFocused()
+        if !search.setValue("zzz-no-such-voice-xyz") { app.type("zzz-no-such-voice-xyz") }
+        try waitUntil("voice picker rows to shrink after search", timeout: 5) {
+            rowCount() < before
+        }
+        let after = rowCount()
+        guard after < before else {
+            throw SmokeError(message: "voice picker row count did not shrink after search: before=\(before) after=\(after)")
+        }
+
+        let done = try waitForElement(
+            "voice picker done button",
+            in: try personalityStudioWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Done"
+        )
+        guard done.press() else { throw SmokeError(message: "AXPress failed on \(done.summary)") }
+        try waitUntil("voice picker sheet closes", timeout: 5) {
+            (try? personalityStudioWindow())?.firstDescendant(containing: "Voice picker") == nil
+        }
+
+        // Discard this scratch draft rather than saving it.
+        app.key(Key.escape)
+        try waitUntil("character studio closes after voice picker check", timeout: 10) { (try? personalityStudioWindow()) == nil }
     }
 
     run.step("personality-studio", "a complete personality JSON imports through the app workflow") {

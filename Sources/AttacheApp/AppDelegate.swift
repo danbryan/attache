@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateDockBadge()
         requestNotificationPermissionIfUseful()
         model.startEventServer()
+        model.mainThreadWatchdog.start()
         windowController?.showAttache()
         NotificationCenter.default.addObserver(forName: .attacheOpenSettings, object: nil, queue: .main) { [weak self] _ in
             self?.showSettings()
@@ -480,10 +481,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings() {
-        if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController(model: model)
+        AttacheLog.uiLatency.withIntervalSignpost("openSettings") {
+            if settingsWindowController == nil {
+                settingsWindowController = SettingsWindowController(model: model)
+            }
+            settingsWindowController?.show()
         }
-        settingsWindowController?.show()
     }
 
     private func showPersonalityStudio(_ request: PersonalityStudioRequest) {

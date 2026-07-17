@@ -253,6 +253,41 @@ final class AppModel: ObservableObject {
     /// and publishing it here replaces nothing about today's rendering.
     @Published private(set) var callPhase: CallPhase = .idle
 
+    // MARK: - Responsiveness instrumentation (INF-349)
+    //
+    // Measurement only: nothing here changes app behavior. The watchdog is
+    // started once by AppDelegate on launch; this model supplies the
+    // frontmost-pane context string it stamps on any stall it observes, and
+    // the diagnostics surface (AboutPane) reads `mainThreadWatchdog.report()`.
+
+    /// True while the Settings window is on screen; set by
+    /// `SettingsWindowController.show()`/`windowWillClose`.
+    @Published var settingsWindowVisible: Bool = false
+    /// The sidebar section currently showing in Settings; kept in sync from
+    /// `SettingsView.onChange(of:)`.
+    @Published var activeSettingsSection: SettingsSection = .appearance
+
+    /// Background main-thread stall detector. `lazy` so its context-provider
+    /// closure can capture `self` after the rest of the model has finished
+    /// initializing.
+    lazy var mainThreadWatchdog: MainThreadWatchdog = {
+        MainThreadWatchdog(contextProvider: { [weak self] in
+            self?.responsivenessContext ?? "idle"
+        })
+    }()
+
+    /// Content-free label for whatever the user is looking at right now:
+    /// a live call, a specific Settings pane, or idle. Never user text.
+    var responsivenessContext: String {
+        if isLiveCallActive {
+            return "call.live"
+        }
+        if settingsWindowVisible {
+            return "settings.\(activeSettingsSection.rawValue)"
+        }
+        return "idle"
+    }
+
     // MARK: - Recap / follow-up recovery (INF-254)
     //
     // Same shape as the live call's `conversationRecovery` above, extended to
@@ -701,6 +736,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var roleModelDiscoveryStatus: [ModelRole: String] = [:]
     @Published private(set) var attacheMemoryStatus: String = "Memory not checked"
     @Published private(set) var speechVoiceOptions: [AttacheVoiceOption] = []
+    /// True until the voice catalog's first scan publishes (INF-350): only
+    /// happens on a first-ever launch with no disk snapshot, or a stale
+    /// (version-mismatched) one. The system voice picker shows a brief
+    /// "Scanning voices…" placeholder while this is true.
+    @Published private(set) var isScanningVoices: Bool = false
     @Published private(set) var elevenLabsVoiceOptions: [RemoteVoiceOption] = []
     @Published private(set) var xaiVoiceOptions: [RemoteVoiceOption] = []
     @Published private(set) var openaiVoiceOptions: [RemoteVoiceOption] = []
@@ -5633,6 +5673,41 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// Re-reads the voice catalog's current in-memory list, re-resolves the
+    /// saved speech voice identifier against it, and backfills any
+    /// personality whose system voice fell back to the generic default
+    /// because the catalog was still empty when it loaded (INF-350). Called
+    /// once synchronously during `loadPreferences()` and again every time
+    /// `AttacheVoiceCatalog.catalog.onUpdate` fires (first-launch scan
+    /// completing, or a later re-enumeration diff).
+    func refreshVoiceCatalogState() {
+        speechVoiceOptions = AttacheVoiceCatalog.options()
+        isScanningVoices = AttacheVoiceCatalog.catalog.currentlyScanning()
+        if let savedVoice = defaults.string(forKey: AttachePreferenceKey.speechVoiceIdentifier) {
+            let trimmed = savedVoice.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == Self.systemVoicePreference || trimmed.isEmpty {
+                speechVoiceIdentifier = nil
+            } else if trimmed == Self.legacyAutoSelectedSamanthaVoiceID,
+                      !defaults.bool(forKey: AttachePreferenceKey.legacySamanthaDefaultMigrated) {
+                defaults.set(true, forKey: AttachePreferenceKey.legacySamanthaDefaultMigrated)
+                speechVoiceIdentifier = nil
+            } else if speechVoiceOptions.contains(where: { $0.id == trimmed }) {
+                speechVoiceIdentifier = trimmed
+            } else {
+                speechVoiceIdentifier = nil
+            }
+        } else {
+            speechVoiceIdentifier = nil
+        }
+        applySpeechConfiguration()
+        guard !personalities.isEmpty else { return }
+        let reconciled = personalityStore.reconcilingVoiceReferences(personalities)
+        if reconciled != personalities {
+            personalities = reconciled
+            personalityStore.save(personalities, activeID: activePersonalityID)
+        }
+    }
+
     func loadPersonalities() {
         let loaded = personalityStore.load()
         personalities = loaded.personalities
@@ -5651,16 +5726,18 @@ final class AppModel: ObservableObject {
     }
 
     func selectPersonality(_ id: String) {
-        guard personalities.contains(where: { $0.id == id }) else { return }
-        guard id != activePersonalityID else { return }
-        cancelPendingReplyForPersonalitySwitch()
-        activePersonalityID = id
-        personalityStore.save(personalities, activeID: id)
-        writeActivePersonalityToDefaults()
-        refreshPresentationStatus()
-        if let personality = activePersonality {
-            let issue = applyPersonalityConfiguration(personality)
-            intakeStatus = issue ?? "Personality set to \(personality.name)."
+        AttacheLog.uiLatency.withIntervalSignpost("personalitySwitch") {
+            guard personalities.contains(where: { $0.id == id }) else { return }
+            guard id != activePersonalityID else { return }
+            cancelPendingReplyForPersonalitySwitch()
+            activePersonalityID = id
+            personalityStore.save(personalities, activeID: id)
+            writeActivePersonalityToDefaults()
+            refreshPresentationStatus()
+            if let personality = activePersonality {
+                let issue = applyPersonalityConfiguration(personality)
+                intakeStatus = issue ?? "Personality set to \(personality.name)."
+            }
         }
     }
 
@@ -5935,6 +6012,21 @@ final class AppModel: ObservableObject {
 
     func cancelPersonalityPreview() {
         personalityPreviewRequestID = nil
+    }
+
+    /// Speaks a short sample in one specific voice, for the voice picker's
+    /// per-row preview button (INF-352). Only ever called from an explicit
+    /// button click, never on picker open or row selection/highlight, per
+    /// the off-call audio safety rule. Callers are responsible for gating
+    /// cloud engines behind `cloudVoiceConsentAcknowledged` before invoking
+    /// this: it does not itself block on consent, matching how
+    /// `previewPersonality` and `previewAssistantVoice` already speak
+    /// whatever voice is configured without a consent check of their own.
+    func previewVoiceSample(
+        for ref: PersonalityVoiceRef,
+        sampleText: String = "Hi, this is a quick preview of this voice."
+    ) {
+        playback.preview(sampleText, configuration: speechConfiguration(for: ref))
     }
 
     private func personalityPreviewSettings(for personality: Personality) -> AttachePresentationSettings? {
@@ -8449,24 +8541,17 @@ final class AppModel: ObservableObject {
         // after both the saved provider and saved xAI endpoint are loaded.
         migrateCloudVoiceConsentToScopes()
         loadStoredSecretsAsync(presentationAccount: presentationSettings.provider.developmentSecretAccount)
-        speechVoiceOptions = AttacheVoiceCatalog.options()
-        if let savedVoice = defaults.string(forKey: AttachePreferenceKey.speechVoiceIdentifier) {
-            let trimmed = savedVoice.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed == Self.systemVoicePreference || trimmed.isEmpty {
-                speechVoiceIdentifier = nil
-            } else if trimmed == Self.legacyAutoSelectedSamanthaVoiceID,
-                      !defaults.bool(forKey: AttachePreferenceKey.legacySamanthaDefaultMigrated) {
-                defaults.set(true, forKey: AttachePreferenceKey.legacySamanthaDefaultMigrated)
-                speechVoiceIdentifier = nil
-            } else if speechVoiceOptions.contains(where: { $0.id == trimmed }) {
-                speechVoiceIdentifier = trimmed
-            } else {
-                speechVoiceIdentifier = nil
-            }
-        } else {
-            speechVoiceIdentifier = nil
+        // AttacheVoiceCatalog.options() reads the class's in-memory list,
+        // which was itself populated from a fast disk snapshot read (or is
+        // still empty pending a first-launch background scan), never a
+        // synchronous full enumeration (INF-350). `onUpdate` fires once that
+        // background scan (or a later re-enumeration) publishes a changed
+        // list, so this launch-time call never blocks and the picker still
+        // ends up showing every installed voice shortly after.
+        refreshVoiceCatalogState()
+        AttacheVoiceCatalog.catalog.onUpdate = { [weak self] in
+            self?.refreshVoiceCatalogState()
         }
-        applySpeechConfiguration()
         if let savedFocus = defaults.string(forKey: AttachePreferenceKey.attachedCodexSessionID),
            attachedTargets[savedFocus] != nil || codexSourceEnabled {
             attachedCodexSessionID = savedFocus
