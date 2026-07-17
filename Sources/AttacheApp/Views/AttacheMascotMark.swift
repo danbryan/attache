@@ -12,6 +12,12 @@ struct AttacheMascotMark: View {
     var monochrome: Color?
     var glow: Color = .clear
     var glowStrength: Double = 0
+    /// Menu-bar variant: drop the voice arcs and antenna and frame tightly on
+    /// the head so it fills a small status-bar glyph instead of shrinking to a
+    /// speck under its arcs. Default false keeps the canonical mark (arcs and
+    /// all) byte-identical, so the geometry lock against the character rig
+    /// (INF-269) is unaffected.
+    var headOnly: Bool = false
 
     // Shared with AttacheCharacterFigure so the animated character and the static mark
     // can never drift apart on brand colors. `agentColors` are the fleet
@@ -29,9 +35,17 @@ struct AttacheMascotMark: View {
 
     var body: some View {
         Canvas { context, size in
-            let s = min(size.width, size.height) / 252
-            let ox = (size.width - 252 * s) / 2 + 6 * s
-            let oy = (size.height - 252 * s) / 2 + 12 * s
+            // Canonical mark frames a 252-unit box (head + crowning arcs). The
+            // menu-bar variant frames a 76-unit square centered on the head so
+            // the face fills the glyph.
+            let box: CGFloat = headOnly ? 76 : 252
+            let s = min(size.width, size.height) / box
+            let ox: CGFloat = headOnly
+                ? (size.width - box * s) / 2 - 82 * s
+                : (size.width - 252 * s) / 2 + 6 * s
+            let oy: CGFloat = headOnly
+                ? (size.height - box * s) / 2 - 74 * s
+                : (size.height - 252 * s) / 2 + 12 * s
             func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: ox + x * s, y: oy + y * s) }
             func rrect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> Path {
                 Path(roundedRect: CGRect(x: p(x, y).x, y: p(x, y).y, width: w * s, height: h * s), cornerRadius: r * s)
@@ -40,6 +54,22 @@ struct AttacheMascotMark: View {
             let arcTint = monochrome ?? arcColor
             let steelTint = monochrome ?? Self.steelColor
             let coral = monochrome ?? Self.cheekColor
+
+            // Menu-bar glyph: a robot-face silhouette with the eyes and a
+            // voice-bar mouth punched out (even-odd), so it reads as a robot
+            // even as a small tinted template. No arcs, no antenna.
+            if headOnly {
+                var face = rrect(88, 82, 64, 60, 14)
+                face.addPath(rrect(99, 100.5, 14, 11, 2.5))
+                face.addPath(rrect(127, 100.5, 14, 11, 2.5))
+                let barHeights: [CGFloat] = [6.5, 11, 8.5, 13, 7]
+                for (index, height) in barHeights.enumerated() {
+                    let x = 108 + CGFloat(index) * 6
+                    face.addPath(rrect(x - 1.8, 133 - height / 2, 3.6, height, 1.8))
+                }
+                context.fill(face, with: .color(monochrome ?? Self.steelColor), style: FillStyle(eoFill: true))
+                return
+            }
 
             // Voice arcs above the head. SwiftUI angles are y-down.
             let arcSpecs: [(radius: CGFloat, width: CGFloat, opacity: Double)] = [
