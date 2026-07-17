@@ -1,5 +1,18 @@
 import SwiftUI
 
+/// Pure digit-to-row resolution for the palette's number-key switch (INF-365):
+/// while the search field is empty, pressing 1-9 switches to the Nth visible
+/// personality in the current (possibly filtered) list. Kept free of SwiftUI
+/// state so it is unit-testable without a live view.
+enum PersonalityDigitSwitch {
+    static func resolve(digit: Int, visible: [Personality], searchIsEmpty: Bool) -> Personality? {
+        guard searchIsEmpty, digit >= 1, digit <= 9 else { return nil }
+        let index = digit - 1
+        guard visible.indices.contains(index) else { return nil }
+        return visible[index]
+    }
+}
+
 /// Persistent, keyboard-first character picker. This intentionally shares the
 /// command-palette contract instead of using a transient system popover: search
 /// is focused on open, arrows move, Return switches, and Escape closes.
@@ -43,7 +56,12 @@ struct CharacterSwitcherPalette: View {
         .readingPlate(theme: model.theme)
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.12)))
         .shadow(color: .black.opacity(0.3), radius: 28, y: 12)
-        .background(PaletteKeyMonitor(onMove: moveSelection, onSelect: selectCurrent))
+        .background(PaletteKeyMonitor(
+            onMove: moveSelection,
+            onSelect: selectCurrent,
+            onDigit: switchToVisibleRow,
+            isFieldFocused: fieldFocused
+        ))
         .onAppear {
             selectedID = model.activePersonalityID
             DispatchQueue.main.async { fieldFocused = true }
@@ -115,8 +133,8 @@ struct CharacterSwitcherPalette: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 34)
                     } else {
-                        ForEach(filtered) { personality in
-                            row(personality).id(personality.id)
+                        ForEach(Array(filtered.enumerated()), id: \.element.id) { index, personality in
+                            row(personality, hintNumber: index < 9 ? index + 1 : nil).id(personality.id)
                         }
                     }
                 }
@@ -133,13 +151,22 @@ struct CharacterSwitcherPalette: View {
         }
     }
 
-    private func row(_ personality: Personality) -> some View {
+    private func row(_ personality: Personality, hintNumber: Int? = nil) -> some View {
         let selected = selectedID == personality.id
         let active = model.activePersonalityID == personality.id
         return Button {
             switchTo(personality)
         } label: {
             HStack(spacing: 12) {
+                if let hintNumber {
+                    Text("\(hintNumber)")
+                        .typoCaption(.semibold, design: .monospaced)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14)
+                        .help("Press \(hintNumber) to switch here. Works only while the search field is empty; digits filter the search when it has text.")
+                } else {
+                    Color.clear.frame(width: 14)
+                }
                 Text(personality.characterAvatarEmoji)
                     .font(.system(size: 25))
                     .frame(width: 38, height: 38)
@@ -198,6 +225,9 @@ struct CharacterSwitcherPalette: View {
         HStack(spacing: 14) {
             Label("Navigate", systemImage: "arrow.up.arrow.down")
             Label("Switch", systemImage: "return")
+            if query.isEmpty {
+                Label("1-9 jumps", systemImage: "number")
+            }
             Label("Close", systemImage: "escape")
             Spacer()
             Button {
@@ -237,6 +267,17 @@ struct CharacterSwitcherPalette: View {
         guard let id = selectedID ?? filtered.first?.id,
               let personality = filtered.first(where: { $0.id == id }) else { return }
         switchTo(personality)
+    }
+
+    /// Bare 1-9 while the search field is empty switches straight to that
+    /// visible row and closes the palette. Returns whether the digit was
+    /// consumed; when false the caller lets it type into the search field.
+    private func switchToVisibleRow(_ digit: Int) -> Bool {
+        guard query.isEmpty else { return false }
+        if let personality = PersonalityDigitSwitch.resolve(digit: digit, visible: filtered, searchIsEmpty: true) {
+            switchTo(personality)
+        }
+        return true
     }
 
     private func switchTo(_ personality: Personality) {
