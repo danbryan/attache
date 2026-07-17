@@ -16,6 +16,11 @@ public enum AttacheContextItemSource: String, Equatable, Sendable, CaseIterable 
     case retrievedFileEvidence
     case toolDefinitions
     case toolResults
+    /// A recap's waiting-inbox items (INF-353). These ride as structured,
+    /// summarize-eligible evidence rather than being concatenated into the
+    /// protected `currentUserTurn`, so an unbounded inbox stages instead of
+    /// overflowing the protected-content budget.
+    case recapEvidence
 
     /// These sources can only exist inside a request authorized for one exact
     /// focused work session. This is enforced by the compiler itself, even if
@@ -595,6 +600,15 @@ public enum ContextCompiler {
            provenance.hasPrefix("memory:") {
             return provenance
         }
+        if item.source == .recapEvidence,
+           let provenance = item.provenance,
+           provenance.hasPrefix("recap-item:") {
+            // A staged recap must prove the exact card IDs a stage's receipt
+            // covered, not merely that some number of generic recap items was
+            // serialized, so "never silently drop an item" is provable rather
+            // than assumed. The prefix and card ID are content-free.
+            return provenance
+        }
         if item.source == .retrievedTranscriptEvidence,
            let provenance = item.provenance,
            provenance.hasPrefix("exhaustive-review:") {
@@ -642,6 +656,11 @@ public enum ContextCompiler {
             case .olderChatSummary:
                 evidenceParts.append(untrustedEvidence(
                     label: "older conversation summary",
+                    content: entry.item.content
+                ))
+            case .recapEvidence:
+                evidenceParts.append(untrustedEvidence(
+                    label: "waiting inbox update",
                     content: entry.item.content
                 ))
             case .currentUserTurn:

@@ -81,6 +81,11 @@ extension AttacheRootView {
                 Divider().overlay(Color.primary.opacity(0.12))
             }
 
+            if let preview = model.recapCostPreview {
+                recapCostPreviewBanner(preview)
+                Divider().overlay(Color.primary.opacity(0.12))
+            }
+
             if visibleCards.isEmpty {
                 VStack(spacing: 12) {
                     Spacer(minLength: 48)
@@ -826,6 +831,41 @@ extension AttacheRootView {
         .padding(.vertical, 10)
         .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red.opacity(0.18)))
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+    }
+
+    /// The recap cost preview (INF-353): shown instead of making any model
+    /// calls when a recap exceeds 40 items or would run in more than one
+    /// stage, mirroring the whole-session-review pre-flight notice's style
+    /// and Start/Not now shape.
+    @ViewBuilder
+    func recapCostPreviewBanner(_ preview: RecapCostPreviewUIState) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(
+                "Recapping \(preview.itemCount) update\(preview.itemCount == 1 ? "" : "s")"
+                    + " across \(preview.sessionCount) session\(preview.sessionCount == 1 ? "" : "s")"
+                    + " will take \(preview.estimatedCalls) model call\(preview.estimatedCalls == 1 ? "" : "s")."
+            )
+            .typoCaption()
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(
+                "Recap cost preview: \(preview.itemCount) updates across \(preview.sessionCount) sessions,"
+                    + " about \(preview.estimatedCalls) model calls"
+            )
+            HStack(spacing: 8) {
+                Button("Start recap") { model.startPendingRecap() }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("Start recap")
+                Button("Not now") { model.cancelRecapCostPreview() }
+                    .accessibilityLabel("Cancel recap cost preview")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.12)))
         .padding(.horizontal, 14)
         .padding(.top, 4)
     }
