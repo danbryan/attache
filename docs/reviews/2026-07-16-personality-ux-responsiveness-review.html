@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attaché: Personality Manager, UX, and Responsiveness Review</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080c12;
+      --panel: #101722;
+      --panel-2: #151e2b;
+      --text: #edf4fb;
+      --muted: #9aaabd;
+      --line: #273446;
+      --blue: #41a8ff;
+      --cyan: #59e0d0;
+      --gold: #f1c75b;
+      --red: #ff7a88;
+      --green: #83df9a;
+      --radius: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 78% -10%, rgba(65,168,255,.17), transparent 33rem),
+        radial-gradient(circle at 5% 28%, rgba(89,224,208,.08), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.58;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .shell { max-width: 1180px; margin: 0 auto; padding: 34px 28px 80px; }
+    .eyebrow { color: var(--cyan); font-size: 12px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { font-size: clamp(34px, 6vw, 64px); line-height: 1.02; letter-spacing: -.05em; margin: 14px 0 20px; max-width: 950px; }
+    h2 { margin: 0 0 15px; font-size: 28px; letter-spacing: -.025em; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 14px; }
+    .lead { color: #c5d4e3; font-size: 20px; max-width: 900px; }
+    .meta { color: var(--muted); font-size: 13px; margin-top: 20px; }
+    nav {
+      position: sticky; top: 0; z-index: 20; margin: 28px -12px 34px;
+      padding: 10px 12px; display: flex; gap: 9px; flex-wrap: wrap;
+      background: rgba(8,12,18,.82); backdrop-filter: blur(18px);
+      border: 1px solid rgba(39,52,70,.75); border-radius: 14px;
+    }
+    nav a { color: #bed0e2; font-size: 13px; padding: 6px 10px; border-radius: 8px; }
+    nav a:hover { background: var(--panel-2); text-decoration: none; }
+    section { margin-top: 54px; scroll-margin-top: 80px; }
+    .card {
+      background: linear-gradient(145deg, rgba(21,30,43,.96), rgba(13,19,28,.96));
+      border: 1px solid var(--line); border-radius: var(--radius); padding: 24px;
+      box-shadow: 0 18px 55px rgba(0,0,0,.22);
+    }
+    .verdict { border-color: rgba(89,224,208,.38); position: relative; overflow: hidden; }
+    .verdict:after { content: ""; position: absolute; width: 260px; height: 260px; border-radius: 50%; right: -120px; top: -170px; background: rgba(89,224,208,.09); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .stat { padding: 18px; background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 14px; }
+    .stat strong { display: block; color: var(--cyan); font-size: 15px; margin-bottom: 5px; }
+    .muted { color: var(--muted); }
+    .status { display: inline-flex; gap: 7px; align-items: center; padding: 4px 9px; border-radius: 99px; font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+    .verified { color: var(--green); background: rgba(131,223,154,.1); border: 1px solid rgba(131,223,154,.25); }
+    .gap { color: var(--gold); background: rgba(241,199,91,.1); border: 1px solid rgba(241,199,91,.25); }
+    .future { color: var(--blue); background: rgba(65,168,255,.1); border: 1px solid rgba(65,168,255,.25); }
+    .riskb { color: var(--red); background: rgba(255,122,136,.1); border: 1px solid rgba(255,122,136,.25); }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+    th, td { padding: 13px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    tr:last-child td { border-bottom: 0; }
+    code { color: #b8e6ff; background: rgba(65,168,255,.08); border: 1px solid rgba(65,168,255,.14); padding: 2px 6px; border-radius: 6px; }
+    ul, ol { margin: 8px 0 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .callout { border-left: 3px solid var(--gold); padding: 12px 15px; margin-top: 15px; background: rgba(241,199,91,.055); border-radius: 0 10px 10px 0; }
+    .good { border-left-color: var(--green); background: rgba(131,223,154,.05); }
+    .risk { border-left-color: var(--red); background: rgba(255,122,136,.05); }
+    footer { margin-top: 54px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 820px) {
+      .grid, .grid.three { grid-template-columns: 1fr; }
+      .shell { padding-left: 18px; padding-right: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="eyebrow">Product and engineering review · 16 July 2026</div>
+    <h1>Personality manager, UX niceties, and responsiveness</h1>
+    <p class="lead">The personality manager is built well and the keyboard-palette experience is a real differentiator worth doubling down on. The Advanced-pane sluggishness has a specific, fixable cause. Recap is the one feature with a genuine unbounded-input problem. Private call and right-click menus have clear designs ready to build.</p>
+    <p class="meta">Evidence states: <span class="status verified">Verified</span> checked in code or logs; <span class="status gap">Gap</span> real issue with a proposed fix; <span class="status future">Recommendation</span> proposed design.</p>
+
+    <nav>
+      <a href="#verdict">Verdict</a>
+      <a href="#personality">Personality manager</a>
+      <a href="#responsiveness">Responsiveness</a>
+      <a href="#recap">Recap bounding</a>
+      <a href="#private">Private call</a>
+      <a href="#rightclick">Right-click</a>
+      <a href="#delight">Sprite and delight</a>
+      <a href="#harnesses">New harnesses</a>
+      <a href="#worklist">Worklist</a>
+    </nav>
+
+    <section id="verdict">
+      <div class="card verdict">
+        <div class="eyebrow">Verdict</div>
+        <h2>Strong foundation, four concrete work areas</h2>
+        <div class="grid three">
+          <div class="stat"><strong>Personality manager: good</strong>The one-unit model (brain, voice, presence, model) is the right architecture and the palette UX is polished. Findings below are refinements, not rework.</div>
+          <div class="stat"><strong>Advanced slowness: real, fixable</strong>Settings panes observe the whole AppModel and re-render at activity/playback frequency. No OS hang reports exist; this is render churn, not a hang. Measure first, then scope observation.</div>
+          <div class="stat"><strong>Recap: the one true gap</strong>Recap input is uncapped. A huge inbox fails with an overflow error instead of staging. Fix by clustering and staging like whole-session review.</div>
+        </div>
+        <div class="callout good"><strong>The direction is right:</strong> keyboard palettes, playback that honors system media conventions, clickable karaoke captions, and a living character are exactly the "most pleasant app" ingredients. The plan below adds more of these without diluting what exists.</div>
+      </div>
+    </section>
+
+    <section id="personality">
+      <h2>Personality manager: build quality</h2>
+      <div class="card">
+        <h3>Verdict: well built, one real UX gap, one real perf gap</h3>
+        <p>The one-unit model holds up in code, not just in docs: a <code>Personality</code> is a single Codable value owning brain (prompt, model ref, context strategy), voice, presence, and pace. Migration is layered and careful (legacy key aliasing, retired built-in pruning, LM Studio to Ollama coercion, nil backfill, a one-time guarded voice-and-character fold, and strategy validation with a user-visible recovery notice). The store and switch behavior carry roughly 60 focused tests. The ⇧⌘P palette is genuinely keyboard-first: arrow/Return/Escape handling, multi-term AND search across name, presence, voice, model, and prompt, hover-select, auto-scroll, and per-row accessibility labels. The editor works on a local draft, so edits invalidate only the sheet, never the whole app.</p>
+        <table>
+          <thead><tr><th>Finding</th><th>Detail</th><th>Impact</th></tr></thead>
+          <tbody>
+            <tr><td><span class="status riskb">Delete has no confirm, no undo</span></td><td>The Delete action removes a personality immediately (PersonalitiesPane.swift:139); deleting the active one silently reassigns to the first in the list. History and Memory both use confirmation dialogs; this is the one destructive action in the app without one. Hours of prompt-crafting can vanish on a misclick.</td><td>Highest. Add a confirmation naming the personality, and ideally a brief undo window.</td></tr>
+            <tr><td><span class="status gap">Voice catalog blocks launch</span></td><td><code>AttacheVoiceCatalog.installedOptions</code> enumerates every installed system voice synchronously; the code's own comment says it can take seconds. It runs on the main thread during app init through the personality-load path (AppModel.swift:1057 → Personality.swift:518).</td><td>The single biggest hang risk in the app. Move enumeration off-main with a cached snapshot.</td></tr>
+            <tr><td><span class="status gap">Single-click switch waits for a double-click</span></td><td>Wardrobe cards stack a double-tap (edit) over a single-tap (switch), so the primary action always waits out the disambiguation delay (PersonalitiesPane.swift:177-180). This reads as sluggishness on the most common interaction.</td><td>Medium. Make single-click switch immediate; move edit to the visible Edit control and context menu.</td></tr>
+            <tr><td><span class="status gap">Voice settings are dual-sourced</span></td><td>A personality owns its voiceRef, but applying it writes back onto about 11 global speech preference keys, and edits get folded back into the active personality afterward. It works, and it is tested, but it is a standing drift hazard every future voice feature must respect.</td><td>Medium, architectural. Worth converging on personality-owned voice with globals as a derived cache.</td></tr>
+            <tr><td><span class="status gap">Small polish items</span></td><td>Per-render voice-summary lookups re-filter the whole catalog for every wardrobe card (a cached lookup exists and should be used); a canceled greeting preview can leave a stuck "Preparing…" spinner; palette filtering logic lives inside the view, so its behavior has no unit tests.</td><td>Low each; the palette-logic extraction also buys testability.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="responsiveness">
+      <h2>Responsiveness: what is slow, how to measure it, how to fix it</h2>
+      <div class="card">
+        <h3>What I found</h3>
+        <table>
+          <thead><tr><th>Finding</th><th>Evidence</th></tr></thead>
+          <tbody>
+            <tr><td><span class="status verified">No hard hangs</span></td><td>macOS writes <code>.hang</code>/<code>.spin</code> reports to DiagnosticReports when an app stalls; none exist for Attaché. The "little slow" feel is sub-second render latency, not a beachball.</td></tr>
+            <tr><td><span class="status gap">God-object observation</span></td><td><code>ContextSettingsPane</code> declares <code>@ObservedObject var model: AppModel</code>. AppModel publishes at high frequency during narration, character animation, and playback, so the whole Settings pane re-renders on every tick even though nothing it shows changed.</td></tr>
+            <tr><td><span class="status gap">Per-render recomputation</span></td><td><code>activeCapabilitySummary</code> (ContextStrategyViews.swift:420) rebuilds the capability profile and its formatted labels on every body evaluation. The cache read is in-memory (cheap), but the rebuild plus label formatting runs at the re-render frequency above, and the Advanced <code>DisclosureGroup</code> animates its expansion while that churn is happening.</td></tr>
+            <tr><td><span class="status gap">Voice catalog blocks the main thread</span></td><td>Found during the personality review below: system-voice enumeration runs synchronously on the main thread during app init, and the code's own comment says it can take seconds. This is a launch-time stall rather than an Advanced-pane one, but it is the largest single main-thread block in the app.</td></tr>
+            <tr><td><span class="status verified">No instrumentation exists</span></td><td>Zero <code>os_signpost</code>, MetricKit, or timing probes anywhere in Sources. Today the only responsiveness signal is human perception, which is why "maybe it was just my Mac" is unanswerable.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid" style="margin-top:16px">
+        <div class="card">
+          <h3>How to measure (build this first)</h3>
+          <ol>
+            <li><strong>Main-thread watchdog:</strong> a background queue pings the main runloop every 100ms and records any stall over 250ms with the frontmost pane name. Content-free, always on, surfaces in Diagnostics. About a day of work, answers "was it the app or my Mac" forever.</li>
+            <li><strong>Signpost intervals</strong> around the expensive moments: settings pane switch, Advanced expansion, palette open, personality switch, first caption render. Instruments' Hangs and Time Profiler then attribute every slow interval to real code.</li>
+            <li><strong>A latency gate in ui-smoke:</strong> the AX harness already opens Settings and palettes; assert each opens under a budget (for example 300ms) so regressions fail CI instead of reaching your hands.</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3>How to fix (after measuring)</h3>
+          <ol>
+            <li><strong>Scope observation.</strong> Give Settings panes a small focused observable (strategy, capability summary, provider label) instead of all of AppModel. The character renderer keeps its high-frequency feed; Settings stops re-rendering per animation frame.</li>
+            <li><strong>Compute capability summaries on change, not on render.</strong> Recompute when provider, model, base URL, or override changes; store the formatted summary; body just reads it.</li>
+            <li><strong>Keep the Advanced expansion animation light.</strong> Once the two fixes above land, the DisclosureGroup animates against a quiet pane and should feel instant.</li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section id="recap">
+      <h2>Recap: the unbounded-input problem is real</h2>
+      <div class="card">
+        <p><span class="status verified">Verified</span> The earlier warning was correct and still stands, with one improvement since: the recap request now compiles through the context compiler, so a huge recap can no longer silently ship an oversized request to a provider. But the assembly layer (<code>AppModel.swift:2390</code>) maps <em>every</em> unread card into the prompt with no item cap, and because the items are baked into the current user turn they count as protected content that must always fit. The dynamic sentence ceiling bounds the <em>output</em>, not the input.</p>
+        <div class="callout risk"><strong>Failure mode today:</strong> recap over a very large inbox hits protected-content overflow and errors out. Nothing leaks and nothing silently truncates, which is correct, but the user asked for a recap and gets an error instead of a recap.</div>
+        <h3>Recommended fix: stage it like whole-session review</h3>
+        <ul>
+          <li>Move recap items out of the protected user turn and into context items with the <code>summarizeEligible</code> treatment, so the compiler can compress or stage them instead of failing.</li>
+          <li>Cluster cards by session (the recap prompt already clusters conceptually), cap each stage to what the budget planner allows, and roll stage summaries into the final spoken recap. The staged machinery from whole-session review (INF-329) is the pattern to reuse.</li>
+          <li>Above a threshold (say 40 items), show the same cost-preview affordance whole-session review has: "Recapping 214 updates across 12 sessions will take N model calls."</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="private">
+      <h2>Private call: keep fail-closed, add two entry points</h2>
+      <div class="card">
+        <p>Your instinct is right that the current flow is awkward: privacy is a decision you have to make before the call exists, at the moment you are least thinking about it. Both of your ideas work, and they compose:</p>
+        <table>
+          <thead><tr><th>Proposal</th><th>Design</th><th>Assessment</th></tr></thead>
+          <tbody>
+            <tr><td><span class="status future">Right-click Call → Private Call</span></td><td>Context menu on the Call control with "Start Private Call". Keeps the storage decision frozen at call start, which the current architecture already guarantees (the storage mode is captured when the call begins and never mutates).</td><td><strong>Build first.</strong> Cheap, discoverable, zero semantic risk, consistent with the right-click direction below.</td></tr>
+            <tr><td><span class="status future">Switch to private mid-call</span></td><td>"Make this call private" action during a saved call. Semantics must be <em>retroactive</em>: hard-delete every already-persisted card, capsule, and reply for this conversation id, then continue in memory only. The pieces exist: saved calls carry a conversation id, and the store now has secure-delete with WAL truncation. If the retroactive scrub fails, the call stays saved and says so; never claim private when storage still holds turns.</td><td><strong>Build second.</strong> More work and needs the fail-closed rule, but it matches how people actually realize a call should be off the record: partway through.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout"><strong>One-way door:</strong> allow saved→private, never private→saved. Retroactively persisting turns the user believed were ephemeral is the worst possible surprise. If they want a record, they can start a new saved call.</div>
+        <p style="margin-top:12px">Whichever entry is used, show a persistent, unmistakable PRIVATE badge in the call HUD for the whole call. Privacy states users cannot see get distrusted.</p>
+      </div>
+    </section>
+
+    <section id="rightclick">
+      <h2>Right-click everywhere in the bottom bar</h2>
+      <div class="card">
+        <p><span class="status future">Recommendation</span> Strong yes. macOS users expect secondary-click menus on everything, the personality switcher already sets the precedent in-app, and it gives mouse users the same shortcut depth the palettes give keyboard users. Proposed menus, kept to at most six items each:</p>
+        <table>
+          <thead><tr><th>Control</th><th>Context menu</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Settings</strong></td><td>Appearance · Voice &amp; Captions · Personalities · Context · Integrations · Memory. Each jumps straight to that pane. (About stays behind the plain click.)</td></tr>
+            <tr><td><strong>Voicemail</strong></td><td>Play Recap · Play Latest · Mark All Read · Open Inbox (⌘I). Play Recap is exactly right as the headline item; it is the highest-value action buried furthest today.</td></tr>
+            <tr><td><strong>Call</strong></td><td>Start Private Call · Start Call as… (personality submenu). Pairs with the private-call design above.</td></tr>
+            <tr><td><strong>Personality</strong> (exists)</td><td>Keep as is: Switch Character · Edit Personalities. Consider adding the previous/next personality pair with their ⌘[ ⌘] hints.</td></tr>
+          </tbody>
+        </table>
+        <ul>
+          <li>Every menu item needs an AX label and a ui-smoke assertion, same as the palettes; the harness drives by label.</li>
+          <li>Show keyboard equivalents in the menus. Context menus are how mouse users discover the shortcuts.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="delight">
+      <h2>The character, playback, and what to add next</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>The sprite is a moat, not a gimmick</h3>
+          <p>Agreed on the novelty. Nobody else in this category has a presence that watches sessions, follows dragged cards, and reacts to activity. It converts an infrastructure product into something people show their friends, and it is the single most screenshot-able thing in the app.</p>
+          <ul>
+            <li><strong>Guard it with Reduce Motion.</strong> Honor the system accessibility setting with a calm variant. Delight that ignores accessibility settings reads as neglect.</li>
+            <li><strong>Keep it out of the data's way.</strong> The character should yield (dim, step aside) whenever captions or cards are the user's focus.</li>
+            <li><strong>Its animation feed is the same publish churn hitting Settings.</strong> Fixing scoped observation makes the sprite cheaper too.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>More of what already works</h3>
+          <ul>
+            <li><strong>Drag a session card onto the character</strong> to focus that session. The physicality matches the pet interaction you already have.</li>
+            <li><strong>Number keys 1 through 9</strong> switch to that personality while the ⇧⌘P palette is open.</li>
+            <li><strong>j / k navigation</strong> in the ⌘I inbox and ⌘Y history, matching the type-to-filter that exists.</li>
+            <li><strong>Hover-scrub captions:</strong> hovering a karaoke word previews position, click jumps (click already works).</li>
+            <li><strong>Global summon hotkey</strong> (user-configurable) to bring the mini window or dock forward from any app, since Attaché is a background companion by design.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="harnesses">
+      <h2>Supporting more harnesses and open-source models</h2>
+      <div class="card">
+        <h3>Good news: the architecture is closer to pluggable than you might think</h3>
+        <p>Two clean protocols already exist: <code>SessionScanner</code> (discovery and parsing) and <code>InstructionDeliveryAdapter</code> (two-way replies). Once a transcript is parsed, everything downstream is source-agnostic: FTS indexing, cards, captions, playback, memory, and personalities all carry the source as an opaque string. The hardcoded seams are the <code>TranscriptFormat</code> enum (currently exactly claude and codex), the live watcher's directory list and source classifier, and the two-way readiness and correlation scanners.</p>
+        <table>
+          <thead><tr><th>Tier</th><th>What a harness gets</th><th>What it takes</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Tier 0: event POST</strong> <span class="status verified">works today</span></td><td>Narrated voicemail cards with a sensible badge, playback, recap inclusion. No live transcript tail, no activity phrases, no two-way.</td><td>Zero app changes. The local event server accepts any <code>source</code> string on <code>POST /events</code> with the per-launch token. The missing piece is a documented public event schema and an "integrate your harness" guide; today the JSON shape is only a de facto contract.</td></tr>
+            <tr><td><strong>Tier 1: watched and indexed</strong></td><td>Everything above plus live narration, session discovery and search, activity phrases, the character reacting to the session.</td><td>Roughly five required files per harness: a SourceKind case, a TranscriptFormat case, a paths helper, a SessionScanner implementation, and a parser branch; plus extending the two watchers from binary claude-or-codex classification to a multi-source registry. That watcher generalization is the one-time structural investment that makes the third, fourth, fifth harness cheap.</td></tr>
+            <tr><td><strong>Tier 2: full two-way</strong></td><td>Reply into the session from a call, with the existing frozen-target safety model.</td><td>Readiness classifier, reply correlation, and a delivery adapter per harness. Hard feasibility gate: the harness must offer a scriptable, non-interactive "resume session by id" that writes to the same transcript and emits verifiable completion evidence. Claude Code and Codex have this; candidates vary widely here.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout good"><strong>Recommended sequence:</strong> first publish the Tier 0 event schema (a docs page plus a stable versioned JSON contract; near-zero code), then do the watcher generalization once, then add the first new harness at Tier 1 to prove the abstraction. Pick the first harness by measurable demand: Gemini CLI and opencode both keep on-disk session files and are the strongest Tier 1 candidates; Cline and Roo Code live inside VS Code and fit Tier 0 best initially. Promote a harness to Tier 2 only after its resume primitive is verified against docs/two-way.md's safety rules.</div>
+      </div>
+      <div class="grid" style="margin-top:16px">
+        <div class="card">
+          <h3>Open-source models: already a solved path</h3>
+          <p><span class="status verified">Verified</span> The personality (narration) model is fully decoupled from which harnesses are watched, and Ollama is a first-class provider: model discovery, capability detection through <code>/api/show</code> (context length, reasoning support), correct on-device egress classification, no API key, and canary scripts proving tool calling. Groq and any OpenAI-compatible endpoint are also in. Anyone running open-source models locally can use Attaché fully today; sessions from open-source <em>harnesses</em> are the Tier 1 work above.</p>
+        </div>
+        <div class="card">
+          <h3>One clarification needed: "ROD 4.5"</h3>
+          <p>I could not confidently resolve this from the transcript, so here is coverage for the likely readings. <strong>Grok 4.5</strong>: already supported and in the verified capability catalog; it is the model your personalities run now. <strong>GLM-4.5</strong> (the popular open-source model): works today through Ollama or any OpenAI-compatible endpoint; if you want its hosted API as a named provider with detected capabilities, that is a small capability-parser addition. <strong>Roo Code</strong> (the VS Code agent): that is a harness, covered by the tier table above. Tell me which you meant and I will scope it precisely.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="worklist">
+      <h2>Prioritized worklist</h2>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Work item</th><th>Why this order</th><th>Size</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Personality delete confirmation (and ideally undo)</td><td>Only unguarded destructive action in the app; a misclick destroys real work</td><td>XS</td></tr>
+            <tr><td>2</td><td>Responsiveness instrumentation: watchdog + signposts + smoke latency gate</td><td>Cheap, and every later perf claim becomes measurable instead of vibes</td><td>S</td></tr>
+            <tr><td>3</td><td>Move voice-catalog enumeration off the main thread</td><td>Largest single main-thread block; also speeds launch</td><td>S</td></tr>
+            <tr><td>4</td><td>Scoped observation for Settings panes + cached capability summary; single-click switch without double-click delay</td><td>Directly fixes the sluggishness you felt; measured by #2</td><td>M</td></tr>
+            <tr><td>5</td><td>Recap staging: summarizeEligible items, session clustering, cost preview</td><td>The one real correctness gap; reuses INF-329 staging machinery</td><td>M</td></tr>
+            <tr><td>6</td><td>Right-click menus on Settings, Voicemail, Call</td><td>High delight per unit effort; establishes the pattern app-wide</td><td>S</td></tr>
+            <tr><td>7</td><td>Private call entry points: right-click start, then mid-call retroactive switch</td><td>Depends on #6 for the menu; retroactive scrub reuses secure delete</td><td>M</td></tr>
+            <tr><td>8</td><td>Publish the Tier 0 event schema for third-party harnesses</td><td>Near-zero code, opens integrations while Tier 1 is planned</td><td>S</td></tr>
+            <tr><td>9</td><td>Watcher generalization, then first new harness at watch-only tier</td><td>Biggest strategic item; one-time cost makes every later harness cheap</td><td>L</td></tr>
+            <tr><td>10</td><td>Keyboard niceties batch: number-key switch, j/k nav, hover-scrub, global summon</td><td>Post-pattern polish, each independently shippable</td><td>S each</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top:12px">Each row is one Linear-ticket-shaped unit. Happy to file them under a new umbrella when you say go.</p>
+      </div>
+    </section>
+
+    <footer>Prepared from the Attaché repository at local main (35 commits ahead of origin) on 16 July 2026, running app 0.4.1-dev. Code references verified against source; responsiveness findings cross-checked against DiagnosticReports.</footer>
+  </main>
+</body>
+</html>

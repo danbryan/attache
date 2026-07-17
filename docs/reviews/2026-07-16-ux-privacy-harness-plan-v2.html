@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attaché Plan v2: Voice Picker, Privacy, Right-Click, Roundtable, Harnesses</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080c12; --panel: #101722; --panel-2: #151e2b; --text: #edf4fb;
+      --muted: #9aaabd; --line: #273446; --blue: #41a8ff; --cyan: #59e0d0;
+      --gold: #f1c75b; --red: #ff7a88; --green: #83df9a; --radius: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 78% -10%, rgba(65,168,255,.17), transparent 33rem),
+        radial-gradient(circle at 5% 28%, rgba(89,224,208,.08), transparent 30rem),
+        var(--bg);
+      color: var(--text); line-height: 1.58;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .shell { max-width: 1180px; margin: 0 auto; padding: 34px 28px 80px; }
+    .eyebrow { color: var(--cyan); font-size: 12px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { font-size: clamp(32px, 5.5vw, 58px); line-height: 1.02; letter-spacing: -.05em; margin: 14px 0 20px; max-width: 980px; }
+    h2 { margin: 0 0 15px; font-size: 28px; letter-spacing: -.025em; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 14px; }
+    .lead { color: #c5d4e3; font-size: 20px; max-width: 920px; }
+    .meta { color: var(--muted); font-size: 13px; margin-top: 20px; }
+    nav {
+      position: sticky; top: 0; z-index: 20; margin: 28px -12px 34px;
+      padding: 10px 12px; display: flex; gap: 9px; flex-wrap: wrap;
+      background: rgba(8,12,18,.82); backdrop-filter: blur(18px);
+      border: 1px solid rgba(39,52,70,.75); border-radius: 14px;
+    }
+    nav a { color: #bed0e2; font-size: 13px; padding: 6px 10px; border-radius: 8px; }
+    nav a:hover { background: var(--panel-2); text-decoration: none; }
+    section { margin-top: 54px; scroll-margin-top: 80px; }
+    .card {
+      background: linear-gradient(145deg, rgba(21,30,43,.96), rgba(13,19,28,.96));
+      border: 1px solid var(--line); border-radius: var(--radius); padding: 24px;
+      box-shadow: 0 18px 55px rgba(0,0,0,.22);
+    }
+    .verdict { border-color: rgba(89,224,208,.38); position: relative; overflow: hidden; }
+    .verdict:after { content: ""; position: absolute; width: 260px; height: 260px; border-radius: 50%; right: -120px; top: -170px; background: rgba(89,224,208,.09); }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .stat { padding: 18px; background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 14px; }
+    .stat strong { display: block; color: var(--cyan); font-size: 15px; margin-bottom: 5px; }
+    .muted { color: var(--muted); }
+    .status { display: inline-flex; gap: 7px; align-items: center; padding: 4px 9px; border-radius: 99px; font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+    .verified { color: var(--green); background: rgba(131,223,154,.1); border: 1px solid rgba(131,223,154,.25); }
+    .gap { color: var(--gold); background: rgba(241,199,91,.1); border: 1px solid rgba(241,199,91,.25); }
+    .future { color: var(--blue); background: rgba(65,168,255,.1); border: 1px solid rgba(65,168,255,.25); }
+    .parked { color: var(--muted); background: rgba(154,170,189,.1); border: 1px solid rgba(154,170,189,.3); }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+    th, td { padding: 13px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    tr:last-child td { border-bottom: 0; }
+    code { color: #b8e6ff; background: rgba(65,168,255,.08); border: 1px solid rgba(65,168,255,.14); padding: 2px 6px; border-radius: 6px; }
+    ul, ol { margin: 8px 0 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .callout { border-left: 3px solid var(--gold); padding: 12px 15px; margin-top: 15px; background: rgba(241,199,91,.055); border-radius: 0 10px 10px 0; }
+    .good { border-left-color: var(--green); background: rgba(131,223,154,.05); }
+    .risk { border-left-color: var(--red); background: rgba(255,122,136,.05); }
+    footer { margin-top: 54px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 820px) {
+      .grid, .grid.three { grid-template-columns: 1fr; }
+      .shell { padding-left: 18px; padding-right: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="eyebrow">Plan v2 · 16 July 2026 · incorporates Dan's review comments</div>
+    <h1>Voice picker, privacy model, right-click, Roundtable, and the real harness list</h1>
+    <p class="lead">Revised plan from your walkthrough. Three of your instincts got stronger with evidence: the voice picker should mirror the macOS picker, private needs a visible incognito identity and a no-call variant, and the harness targets are now verified against what is actually installed on this Mac. One correction in your favor: your Ollama-backed Claude Code sessions are already being watched today.</p>
+    <p class="meta">Evidence states: <span class="status verified">Verified</span> checked on this machine or in code; <span class="status future">Design</span> proposed; <span class="status parked">Parked</span> discussed, deliberately not scheduled.</p>
+
+    <nav>
+      <a href="#voice">Voice picker</a>
+      <a href="#privacy">Privacy model</a>
+      <a href="#rightclick">Right-click + Option</a>
+      <a href="#yield">Character yielding</a>
+      <a href="#roundtable">Roundtable</a>
+      <a href="#harnesses">Harnesses</a>
+      <a href="#worklist">Worklist v2</a>
+    </nav>
+
+    <section id="voice">
+      <h2>Voice picker: rebuild inside the personality studio</h2>
+      <div class="card">
+        <p>Agreed on all points, including the instinct <em>not</em> to make this another ⌘K-style global palette. Voice choice belongs inside the personality editor because a voice only means something as part of a character. The current single flat list of every installed voice is the worst of both worlds: long, unsearchable, and unfiltered.</p>
+        <h3>Design: the macOS voice picker, embedded</h3>
+        <table>
+          <thead><tr><th>Element</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Search field</strong></td><td>Type-to-filter on name and language, same interaction grammar as the ⇧⌘P palette so the muscle memory transfers, just scoped to the studio sheet.</td></tr>
+            <tr><td><strong>Engine filter</strong></td><td>Chips for the engines the app actually has: <code>System</code>, <code>Grok (xAI)</code>, <code>OpenAI</code>. Cloud engines keep their existing consent-sheet behavior when selected.</td></tr>
+            <tr><td><strong>Quality filter</strong></td><td>For system voices: Premium, Enhanced, Compact. The catalog already knows these tiers (the compact-only testing flag proves it); they are just not surfaced as a filter.</td></tr>
+            <tr><td><strong>Language grouping</strong></td><td>Group rows by language with the user's locale first, exactly like System Settings. A long flat list becomes a short scannable one.</td></tr>
+            <tr><td><strong>Row anatomy</strong></td><td>Name, quality badge, language, a play-sample button per row (preview machinery exists), and a Recommended section on top reusing the catalog's existing recommendation ordering.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout good"><strong>Pairs with the perf fix:</strong> the same ticket moves voice-catalog enumeration off the main thread with a cached snapshot (the several-second launch stall found in the review). One ticket, both wins: the picker gets fast and the app launch gets faster.</div>
+        <p style="margin-top:12px"><span class="status future">Optional follow-on</span> <strong>Kokoro engine.</strong> You already run Kokoro TTS in your media stack; the app has no Kokoro engine today. It exposes an OpenAI-compatible speech endpoint, so it would slot in as a fourth engine with local egress classification (loopback), giving fully-local premium-quality voices. Small-to-medium ticket, listed as optional in the worklist.</p>
+      </div>
+    </section>
+
+    <section id="privacy">
+      <h2>Privacy: what "private" means, and extending it beyond live calls</h2>
+      <div class="card">
+        <h3>Answering your questions precisely</h3>
+        <table>
+          <thead><tr><th>Question</th><th>Answer</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Encrypted on disk, or incognito?</strong></td><td><span class="status verified">Incognito.</span> Private call means no record is created: no history cards, no direct-chat capsules, no memory proposals, and the in-memory turn state is erased at hangup. It is not an encryption feature. Disk encryption is FileVault's job; Attaché's stores are additionally locked to your user account (0600/0700 permissions, hardened in the audit).</td></tr>
+            <tr><td><strong>What does it cover: what I say, or what Attaché says?</strong></td><td>Both directions of the conversation, plus derived artifacts (capsules, proposals). What it does <em>not</em> change is transport: if the active personality uses a cloud model, the turn still goes to that provider under the existing egress rules. Private controls the record, egress class controls the wire. The UI should say this in one line: "Private call with a local model: nothing leaves this Mac. Private call with a cloud model: no record kept here."</td></tr>
+            <tr><td><strong>Voicemails on a call?</strong></td><td>Correct, there are none: voicemail cards come from watched agent sessions, not from calls. Which is exactly why privacy needs a second surface:</td></tr>
+          </tbody>
+        </table>
+        <h3 style="margin-top:20px">New concept: Private Session (privacy without a call)</h3>
+        <p><span class="status future">Design</span> The voicemail-side answer to your "what if someone wants a session private but they're not in a live call" question. A per-session control with two actions:</p>
+        <ul>
+          <li><strong>Don't record this session:</strong> while enabled, the session produces no persisted cards (playback becomes ephemeral, like the recap fallback path), is excluded from the FTS index and session maps, and builds no capsules. Watching and live narration still work; nothing is written.</li>
+          <li><strong>Forget this session:</strong> retroactive scrub. Hard-deletes every card, index entry, capsule, and alternate take linked to that session. The machinery exists: conversation-scoped secure delete landed in the audit commit, and the FTS index already supports invalidation.</li>
+        </ul>
+        <div class="callout"><strong>One-way door, same as calls:</strong> a session can become private mid-flight (with retroactive scrub), but a private session's past is never retroactively persisted. And fail closed: if any scrub step fails, the UI says "still recorded" rather than pretending.</div>
+        <h3 style="margin-top:20px">The incognito indicator</h3>
+        <p>Your crown-band instinct is right, and it should be layered like Chrome's treatment (which works because you cannot miss it):</p>
+        <ul>
+          <li><strong>The sprite wears it:</strong> a visor band in the crown area of the character for the entire private call or private session. The character is the emotional center of the app; making <em>it</em> visibly go incognito is the strongest possible signal, and it is on-brand in a way a mere icon is not. Echo (voice bars) gets a matching treatment on its frame.</li>
+            <li><strong>The surface says it:</strong> a persistent PRIVATE chip in the call HUD and on the session row, plus a subtle accent-tint shift on the window edge. Also shown in the mini window.</li>
+          <li><strong>Accessibility announces it:</strong> VoiceOver announcement on entering and leaving private mode, and the state is in the AX tree so the smoke harness can assert it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="rightclick">
+      <h2>Right-click menus, with the Option convention</h2>
+      <div class="card">
+        <p>Your sound-menu observation is the real macOS convention: Option is the "power tier" modifier (Option-click the volume icon for input devices, Option in menus swaps Save for Save As, Option-click Wi-Fi for diagnostics). AppKit even supports it natively: an <code>NSMenuItem</code> can be marked as the alternate of another, and the menu swaps live while Option is held. So this costs almost nothing to adopt properly.</p>
+        <h3>Rules, then menus</h3>
+        <ul>
+          <li>Option reveals <strong>power or destructive variants</strong> of visible items. It is never the only path to a feature; everything reachable with Option is also reachable somewhere discoverable.</li>
+          <li>Privacy is never hidden behind Option. Start Private Call stays a first-class visible item.</li>
+          <li>Every item shows its keyboard equivalent, carries an AX label, and gets a ui-smoke assertion.</li>
+        </ul>
+        <table>
+          <thead><tr><th>Control</th><th>Right-click</th><th>Holding Option</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Settings</strong></td><td>Appearance · Voice &amp; Captions · Personalities · Context · Integrations · Memory</td><td>adds Diagnostics and Open Support Folder</td></tr>
+            <tr><td><strong>Voicemail</strong></td><td>Play Recap · Play Latest · Mark All Read · Open Inbox (⌘I)</td><td>Mark All Read becomes Archive All; adds Forget Session… for the focused session (the private-session scrub)</td></tr>
+            <tr><td><strong>Call</strong></td><td>Start Call · Start Private Call · Call as… (personality submenu)</td><td>Call as… variants start private with that personality</td></tr>
+            <tr><td><strong>Personality</strong> (exists)</td><td>Switch Character (⇧⌘P) · Edit Personalities · Previous ⌘[ · Next ⌘]</td><td>adds Export Personality…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="yield">
+      <h2>Character yielding: what I meant, and what to verify</h2>
+      <div class="card">
+        <p>You likely already satisfy most of this; the report line was a design guardrail, not a defect claim. Reserved space answers the <em>layout</em> half: the character never occludes captions or cards. The other half is <em>attention</em>: motion in peripheral vision pulls the eye even when nothing overlaps, and reading karaoke captions is exactly the moment the eye should not be pulled. Concretely, the checklist worth a one-time audit:</p>
+        <ul>
+          <li>While captions are actively highlighting words, the character's ambient motion should damp to near-still (breathing only), and the rare-idle animation should be suppressed entirely.</li>
+          <li>When a palette or overlay (⌘K, ⌘I, ⌘Y, ⇧⌘P) is open, the character behind it should hold pose rather than animate under the blur.</li>
+          <li>Reduce Motion honors all of the above unconditionally.</li>
+        </ul>
+        <p>If those three already hold, this item closes with no work. If any fails, each is a small, contained fix in the renderer's activity gating.</p>
+      </div>
+    </section>
+
+    <section id="roundtable">
+      <h2>Roundtable: multiple Attachés discussing a session</h2>
+      <div class="card">
+        <p><span class="status parked">Parked by your call, and I agree with parking it</span> — but I want to be clear: I think this is the best product idea you have raised, and here is my honest read.</p>
+        <div class="grid">
+          <div class="stat"><strong>Why it fits this app unusually well</strong>You already have the atoms nobody else has: personalities as complete units with distinct voices and temperaments, "another take" proving multi-personality narration over one artifact, frozen-session authorization so every panelist argues from the same verified evidence, and a listening-first user base. For the "I can't articulate my objection yet" moment, hearing a skeptic, an expert, and a big-picture voice argue it out is genuinely how many people think. Podcast-as-thinking-tool, grounded in your actual session.</div>
+          <div class="stat"><strong>Why parking it is right</strong>It multiplies model cost per round, it needs real audio direction (turn-taking, no crosstalk, interruptibility), it needs a strict safety boundary (panelists are narration-only; exactly one designated line back to the working agent, through the existing explicit send pipeline), and it is a new interaction paradigm to teach. Shipping it before responsiveness, privacy, and the harness wave would dilute all three.</div>
+        </div>
+        <h3 style="margin-top:16px">The shape I would prototype later</h3>
+        <ul>
+          <li><strong>Entry:</strong> drag a second personality onto the character during a focused session, or "Add to call…" from the ⇧⌘P palette. Your drag instinct matches the existing physicality.</li>
+          <li><strong>Format:</strong> two or three personalities, role archetypes assignable (Skeptic, Subject Expert, Big Picture, User Advocate), bounded rounds (say three) then a synthesis turn, all compiled through the existing context compiler with a cost preview up front, same as whole-session review.</li>
+          <li><strong>Exit:</strong> the roundtable ends with a spoken synthesis and one voicemail card capturing positions and open questions, so the listening session converts into an artifact you take back to the working agent. You then express <em>your</em> view through the normal Tell Agent path.</li>
+          <li><strong>Steelman mode:</strong> your instinct not to frame it as debate is right. Prompt panelists to build the strongest version of each position, not to win.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="harnesses">
+      <h2>Harnesses: the corrected list, verified on this Mac</h2>
+      <div class="card">
+        <p>Cline, Roo Code, and Gemini CLI are out. Here is what your actual targets look like, from direct inspection of their on-disk state on this machine today:</p>
+        <table>
+          <thead><tr><th>Target</th><th>What I found</th><th>Work required</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Claude Code on Ollama</strong> (your <code>claude-oss</code>)</td><td><span class="status verified">Already works today.</span> The wrapper sets <code>ANTHROPIC_BASE_URL</code> to the local Ollama and runs the real <code>claude</code> CLI with its normal config home, so sessions land in <code>~/.claude</code> in normal Claude Code format. Attaché watches, indexes, and narrates them right now, and two-way delivery uses the same <code>claude --resume</code> path. Your mental model was exactly right.</td><td><strong>None.</strong> Optionally: a small badge distinction ("local model") derived from session metadata, purely cosmetic.</td></tr>
+            <tr><td><strong>Grok Build</strong></td><td><span class="status verified">Inspected.</span> Sessions at <code>~/.grok/sessions/&lt;encoded-project-path&gt;/&lt;session-uuid&gt;/</code> with <code>chat_history.jsonl</code> (typed records), <code>events.jsonl</code>, <code>plan.md</code>, and diff records. Per-project layout closely mirrors Claude Code's. JSONL transcript means the existing parser architecture fits directly. Its models (Build 0.1 line) are already in the verified capability catalog on the personality side.</td><td><strong>Tier 1 is the natural first new harness:</strong> SourceKind + TranscriptFormat cases, a paths helper, a scanner, a parser branch, watcher registration. Two-way (Tier 2) pending one scoping check: whether <code>grok</code> exposes a non-interactive resume-session-by-id command with verifiable completion output.</td></tr>
+            <tr><td><strong>opencode</strong></td><td><span class="status verified">Inspected.</span> Sessions are rows in a SQLite database (<code>~/.local/share/opencode/opencode.db</code>: <code>session</code>, <code>message</code>, <code>part</code>, <code>project</code> tables), not transcript files. Attaché's scanner protocol supports this, but it is a different scanner shape: read-only SQLite polling (WAL-aware) instead of file watching.</td><td><strong>Tier 1, second:</strong> a SQLite-backed <code>SessionScanner</code> plus change detection off the db's WAL mtime. Slightly more work than Grok Build. Two-way pending the same resume-primitive check (<code>opencode run --session</code> exists and is the candidate).</td></tr>
+            <tr><td><strong>Ollama native REPL</strong> (<code>ollama run</code>)</td><td><span class="status verified">Inspected.</span> <code>~/.ollama/history</code> is readline prompt history only; no per-session transcripts exist on disk. There is no session artifact to watch.</td><td><strong>Not a harness target.</strong> Anyone wanting narrated Ollama sessions gets them by running a harness against Ollama (as claude-oss proves). If demand appears for raw REPL narration, the Tier 0 event-POST path is the answer, via a tiny shim.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout good"><strong>Sequence:</strong> (1) publish the Tier 0 event schema doc, near-zero code; (2) generalize the two watchers from the binary claude-or-codex classifier to a source registry, the one-time structural cost; (3) Grok Build Tier 1, proving the abstraction on a JSONL cousin; (4) opencode Tier 1, proving it on a SQLite shape; (5) evaluate both for Tier 2 against docs/two-way.md's safety gate (scriptable resume-by-id plus verifiable completion evidence). Grok 4.5 the model, to close the earlier question, is already fully supported on the personality side.</div>
+      </div>
+    </section>
+
+    <section id="worklist">
+      <h2>Worklist v2: the umbrella, ticket-shaped</h2>
+      <div class="card">
+        <p>Ordered for execution. Each row becomes one Linear child with acceptance criteria seeded from this brief; the two starred rows carry the perf instrumentation that makes later claims measurable.</p>
+        <table>
+          <thead><tr><th>#</th><th>Ticket</th><th>Scope anchor</th><th>Size</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Personality delete confirmation and undo window</td><td>Only unguarded destructive action; matches History/Memory patterns</td><td>XS</td></tr>
+            <tr><td>2 ★</td><td>Responsiveness instrumentation: main-thread watchdog, signposts, smoke latency gate</td><td>Review §responsiveness; makes #3/#4 measurable</td><td>S</td></tr>
+            <tr><td>3</td><td>Voice catalog off the main thread with cached snapshot</td><td>Largest single main-thread block; prerequisite for #5</td><td>S</td></tr>
+            <tr><td>4</td><td>Scoped observation for Settings panes; immediate single-click character switch</td><td>Fixes the Advanced-pane feel; removes double-click delay</td><td>M</td></tr>
+            <tr><td>5</td><td>Voice picker rebuild: search, engine/quality/language filters, grouped rows, per-row preview</td><td>§voice above; inside personality studio, macOS-picker mental model</td><td>M</td></tr>
+            <tr><td>6</td><td>Recap staging: summarize-eligible items, session clustering, cost preview</td><td>Unbounded-input fix; reuses whole-session-review machinery</td><td>M</td></tr>
+            <tr><td>7</td><td>Right-click menus with Option alternates: Settings, Voicemail, Call, Personality</td><td>§rightclick rules and menu tables</td><td>S</td></tr>
+            <tr><td>8</td><td>Private call entries: Start Private Call in menu; mid-call switch with retroactive scrub; one-way door</td><td>§privacy; depends on #7</td><td>M</td></tr>
+            <tr><td>9</td><td>Incognito identity: sprite crown band, PRIVATE chip, tint, VoiceOver announcement, AX-assertable</td><td>§privacy indicator; ships with #8</td><td>S</td></tr>
+            <tr><td>10</td><td>Private Session: don't-record toggle and Forget Session retroactive scrub</td><td>§privacy; voicemail-side privacy, fail-closed</td><td>M</td></tr>
+            <tr><td>11</td><td>Character yield audit: caption-time damping, overlay hold, Reduce Motion</td><td>§yield checklist; may close with no code</td><td>XS-S</td></tr>
+            <tr><td>12</td><td>Publish Tier 0 event schema and integration guide</td><td>§harnesses; versioned JSON contract for the local event server</td><td>S</td></tr>
+            <tr><td>13</td><td>Watcher generalization: multi-source registry replacing the binary classifier</td><td>One-time structural cost enabling #14/#15</td><td>M</td></tr>
+            <tr><td>14</td><td>Grok Build watch tier: paths, scanner, parser, badge; Tier 2 scoping spike</td><td>§harnesses recon; JSONL format verified on this Mac</td><td>M</td></tr>
+            <tr><td>15</td><td>opencode watch tier: SQLite scanner with WAL-aware change detection; Tier 2 scoping spike</td><td>§harnesses recon; db schema verified on this Mac</td><td>M-L</td></tr>
+            <tr><td>16</td><td>Keyboard niceties: number-key switch in palette, j/k in inbox and history, caption hover-scrub, global summon hotkey</td><td>Each independently shippable</td><td>S each</td></tr>
+            <tr><td>17</td><td>Optional: Kokoro voice engine (OpenAI-compatible local TTS, loopback egress)</td><td>§voice; fully-local premium voices</td><td>S-M</td></tr>
+            <tr><td>P</td><td><span class="status parked">Parked</span> Roundtable prototype behind a flag</td><td>§roundtable design sketch; revisit after this wave ships</td><td>L</td></tr>
+          </tbody>
+        </table>
+        <p class="muted" style="margin-top:12px">On your go: I will create the Linear umbrella with this table as children, each carrying detailed acceptance criteria from the relevant section, sized, ordered, and with the verification commands named per ticket.</p>
+      </div>
+    </section>
+
+    <footer>Prepared 16 July 2026 from the Attaché repository at local main and direct inspection of ~/.claude, ~/.grok, ~/.local/share/opencode, and ~/.ollama on this machine. Supersedes the harness section of the same-day personality/UX review; all other sections of that review remain current.</footer>
+  </main>
+</body>
+</html>
