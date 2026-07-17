@@ -1,7 +1,8 @@
 import AppKit
+import AttacheCore
 import Foundation
 
-struct AttacheVoiceOption: Identifiable, Equatable {
+struct AttacheVoiceOption: Identifiable, Equatable, Codable {
     var id: String
     var name: String
     var gender: String
@@ -17,21 +18,176 @@ struct AttacheVoiceOption: Identifiable, Equatable {
     }
 }
 
+/// The on-disk cache written by `AttacheVoiceCatalog.Catalog`. Versioned so a
+/// format change (or a future field) discards any older snapshot instead of
+/// misreading it (INF-350).
+struct AttacheVoiceCatalogSnapshot: Codable, Equatable {
+    var version: Int
+    var voices: [AttacheVoiceOption]
+}
+
+/// Reads and writes the disk-cached voice catalog. Pure I/O, no enumeration,
+/// so it is trivially unit-testable without touching NSSpeechSynthesizer.
+enum AttacheVoiceCatalogSnapshotStore {
+    static let currentVersion = 1
+    static let fileName = "voice-catalog-snapshot.json"
+
+    static func defaultURL() -> URL {
+        AttacheAppSupport.supportDirectory().appendingPathComponent(fileName)
+    }
+
+    /// Returns the cached voice list, or nil if there is no snapshot yet or
+    /// the stored version does not match `currentVersion` (a stale format is
+    /// discarded rather than misread).
+    static func read(from url: URL) -> [AttacheVoiceOption]? {
+        guard let data = try? Data(contentsOf: url),
+              let snapshot = try? JSONDecoder().decode(AttacheVoiceCatalogSnapshot.self, from: data),
+              snapshot.version == currentVersion else {
+            return nil
+        }
+        return snapshot.voices
+    }
+
+    @discardableResult
+    static func write(_ voices: [AttacheVoiceOption], to url: URL) -> Bool {
+        let snapshot = AttacheVoiceCatalogSnapshot(version: currentVersion, voices: voices)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return false }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+}
+
 enum AttacheVoiceCatalog {
     // NSSpeechSynthesizer's registry is process-cached but enumerating and
-    // reading every voice's attributes can still take several seconds. Cache
-    // the raw catalog once; freshOptions() remains the explicit helper-process
-    // path for detecting voices installed after launch.
-    private static let installedOptions: [AttacheVoiceOption] =
-        NSSpeechSynthesizer.availableVoices.map(option)
+    // reading every voice's attributes can still take several seconds
+    // (INF-350: previously the largest single main-thread block in the
+    // app). `Catalog` loads a disk-cached snapshot synchronously (a fast
+    // JSON read) so `options()` never blocks on enumeration, then
+    // re-enumerates on a background queue to catch anything the snapshot
+    // missed and rewrites the snapshot for next launch.
+    static let catalog = Catalog()
+
+    /// Coordinates the cached snapshot plus background re-enumeration.
+    /// Dependency-injectable (`snapshotURL`, `enumerate`) so tests exercise
+    /// the round-trip and staleness/backfill behavior without ever calling
+    /// into real voice enumeration.
+    final class Catalog {
+        private let snapshotURL: URL
+        private let enumerate: () -> [AttacheVoiceOption]
+        private let lock = NSLock()
+        private var voices: [AttacheVoiceOption]
+        /// True from construction until the first background/foreground scan
+        /// publishes a result. Only ever true when there was no usable
+        /// snapshot on disk (first-ever launch or a stale/missing one).
+        private(set) var isScanning: Bool
+
+        /// Called on the main thread whenever the in-memory voice list
+        /// changes (a completed background scan, first-launch scan, or a
+        /// diff against the previous snapshot). UI observers (AppModel)
+        /// use this to republish `speechVoiceOptions`.
+        var onUpdate: (() -> Void)?
+
+        init(
+            snapshotURL: URL = AttacheVoiceCatalogSnapshotStore.defaultURL(),
+            enumerate: @escaping () -> [AttacheVoiceOption] = {
+                NSSpeechSynthesizer.availableVoices.map(AttacheVoiceCatalog.makeOption)
+            },
+            autoStart: Bool = true
+        ) {
+            self.snapshotURL = snapshotURL
+            self.enumerate = enumerate
+            if let cached = AttacheVoiceCatalogSnapshotStore.read(from: snapshotURL) {
+                self.voices = cached
+                self.isScanning = false
+                if autoStart { refreshInBackground() }
+            } else {
+                self.voices = []
+                self.isScanning = true
+                if autoStart { scanFirstLaunch() }
+            }
+        }
+
+        /// Current in-memory catalog: the snapshot if one was loaded, else
+        /// whatever the most recent scan produced (possibly still empty
+        /// while a first-launch scan is in flight).
+        func currentVoices() -> [AttacheVoiceOption] {
+            lock.lock()
+            defer { lock.unlock() }
+            return voices
+        }
+
+        func currentlyScanning() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return isScanning
+        }
+
+        /// First-ever launch (no usable snapshot): enumerate on a background
+        /// queue and publish as soon as it's ready.
+        func scanFirstLaunch() {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                let fresh = self.enumerate()
+                self.apply(fresh, persist: true)
+            }
+        }
+
+        /// Re-enumerates in the background to refresh a snapshot that was
+        /// already loaded synchronously. Lower priority than the
+        /// first-launch scan since the UI already has voices to show.
+        func refreshInBackground() {
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                guard let self else { return }
+                let fresh = self.enumerate()
+                self.apply(fresh, persist: true)
+            }
+        }
+
+        /// Test seam: applies a result synchronously, as if a background
+        /// scan just completed, without touching a dispatch queue.
+        func simulateScanCompletion(_ fresh: [AttacheVoiceOption], persist: Bool = true) {
+            apply(fresh, persist: persist)
+        }
+
+        private func apply(_ fresh: [AttacheVoiceOption], persist: Bool) {
+            lock.lock()
+            let changed = fresh != voices || isScanning
+            voices = fresh
+            isScanning = false
+            lock.unlock()
+            if persist {
+                AttacheVoiceCatalogSnapshotStore.write(fresh, to: snapshotURL)
+            }
+            guard changed else { return }
+            if Thread.isMainThread {
+                onUpdate?()
+            } else {
+                DispatchQueue.main.async { [weak self] in self?.onUpdate?() }
+            }
+        }
+    }
 
     static func options() -> [AttacheVoiceOption] {
-        // QA affordance: render the compact-only experience (onboarding
-        // guidance box, recommendations) without deleting installed voices.
-        // The --print-voices helper inherits the environment, so download
-        // detection stays consistent with the simulated catalog.
+        options(from: catalog.currentVoices())
+    }
+
+    /// QA affordance: render the compact-only experience (onboarding
+    /// guidance box, recommendations) without deleting installed voices.
+    /// The --print-voices helper inherits the environment, so download
+    /// detection stays consistent with the simulated catalog. Exposed on
+    /// an explicit voice list so callers (PersonalityStore) can filter and
+    /// sort an injected snapshot the same way, without going through the
+    /// shared `catalog` singleton.
+    static func options(from voices: [AttacheVoiceOption]) -> [AttacheVoiceOption] {
         let hidePremium = ProcessInfo.processInfo.environment["ATTACHE_COMPACT_VOICES_ONLY"] != nil
-        return installedOptions
+        return voices
             .filter { !hidePremium || (!$0.id.contains(".premium.") && !$0.id.contains(".enhanced.")) }
             .sorted { lhs, rhs in
                 if lhs.localeIdentifier == "en_US", rhs.localeIdentifier != "en_US" { return true }
@@ -94,6 +250,14 @@ enum AttacheVoiceCatalog {
     }
 
     static func fileExportFallbackVoiceID() -> String? {
+        fileExportFallbackVoiceID(in: options())
+    }
+
+    /// Same fallback logic as `fileExportFallbackVoiceID()`, but against an
+    /// explicit voice list rather than the shared `catalog` singleton, so
+    /// callers with an already-loaded snapshot (PersonalityStore) never
+    /// force a catalog read.
+    static func fileExportFallbackVoiceID(in voices: [AttacheVoiceOption]) -> String? {
         let candidates = [
             "com.apple.speech.synthesis.voice.Alex",
             "com.apple.voice.compact.en-GB.Daniel",
@@ -101,10 +265,10 @@ enum AttacheVoiceCatalog {
             "com.apple.voice.compact.en-AU.Karen",
             "com.apple.voice.compact.en-IE.Moira"
         ]
-        let availableIDs = Set(options().map(\.id))
+        let availableIDs = Set(voices.map(\.id))
         return candidates.first { availableIDs.contains($0) }
-            ?? options().first(where: { $0.localeIdentifier == "en_US" })?.id
-            ?? options().first?.id
+            ?? voices.first(where: { $0.localeIdentifier == "en_US" })?.id
+            ?? voices.first?.id
     }
 
     static func statusText(for identifier: String?) -> String {
@@ -119,7 +283,7 @@ enum AttacheVoiceCatalog {
         return "Assistant voice: \(option.title)"
     }
 
-    private static func option(_ voice: NSSpeechSynthesizer.VoiceName) -> AttacheVoiceOption {
+    static func makeOption(_ voice: NSSpeechSynthesizer.VoiceName) -> AttacheVoiceOption {
         let attributes = NSSpeechSynthesizer.attributes(forVoice: voice)
         let name = attributes[.name] as? String ?? voice.rawValue
         let gender = attributes[.gender] as? String ?? ""
