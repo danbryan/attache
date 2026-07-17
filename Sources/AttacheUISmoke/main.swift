@@ -3010,6 +3010,33 @@ if enabled("personality") {
         try waitForElementGone("character switcher after named selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
         _ = try waitForElement("active character in dock", in: try mainWindow(), containing: "Active character Smoke Character")
     }
+
+    // INF-351: wardrobe cards used to stack a double-tap (edit) gesture over
+    // the single-tap (switch) gesture, so the primary single-click switch
+    // always waited out double-click disambiguation. A single AXPress on a
+    // non-active card must now flip it to active immediately, with Edit
+    // still reachable through the visible ellipsis Menu and the card's
+    // context menu (not exercised by AXPress; see PersonalitiesPane.swift).
+    run.step("personality-studio", "a single click on a non-active wardrobe card switches to it immediately") {
+        app.key(Key.comma, command: true)
+        try waitUntil("settings window reopens", timeout: 10) { (try? settingsWindow()) != nil }
+        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        // The character-switcher steps above left "Smoke Character" active,
+        // so the built-in "Attaché" card is available, not active.
+        let card = try waitForElement(
+            "non-active Attaché wardrobe card",
+            in: try settingsWindow(),
+            containing: "Attaché, available personality"
+        )
+        guard card.press() else { throw SmokeError(message: "AXPress failed on \(card.summary)") }
+        _ = try waitForElement(
+            "activated Attaché wardrobe card",
+            in: try settingsWindow(),
+            containing: "Attaché, active personality"
+        )
+        app.key(Key.escape)
+        try waitUntil("settings window closes after single-click switch", timeout: 10) { (try? settingsWindow()) == nil }
+    }
 }
 
 // MARK: Context-management release surface. This flow is opt-in because it

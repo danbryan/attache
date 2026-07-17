@@ -715,7 +715,9 @@ final class AppModel: ObservableObject {
             refreshPresentationStatus()
         }
     }
-    @Published var presentationModelOptions: [AttachePresentationModelOption] = []
+    @Published var presentationModelOptions: [AttachePresentationModelOption] = [] {
+        didSet { refreshSettingsPaneState() }
+    }
     @Published private(set) var presentationModelDiscoveryStatus: String = "Model discovery not checked"
     @Published private(set) var presentationStatus: String = "Presentation LLM not checked"
     // MARK: Per-role model overrides (Settings > Model > Advanced disclosure, INF-253/D3)
@@ -832,6 +834,10 @@ final class AppModel: ObservableObject {
     /// events prepare and persist in arrival order (INF-163).
     private var sessionPrepareTasks: [String: Task<Void, Never>] = [:]
     private let mediaRemote = MediaRemoteController()
+    /// Narrow render-only surface for Settings panes (INF-351). See
+    /// `SettingsPaneState` doc comment: a pane should observe this instead of
+    /// `self` so it does not re-render on unrelated AppModel churn.
+    let settingsPaneState = SettingsPaneState()
     private var cancellables = Set<AnyCancellable>()
     private var silenceTimer: Timer?
     private var revealTimer: Timer?
@@ -1167,6 +1173,7 @@ final class AppModel: ObservableObject {
         setupMediaRemote()
         setupConversationObservers()
         setupAttacheActivityObservers()
+        refreshSettingsPaneState()
         // Screenshot-matrix pose support (INF-244): inert unless
         // ATTACHE_UI_TEST_FORCE_LISTENING=1 rides alongside ATTACHE_UI_TEST=1
         // (see MicTranscriptController.shouldForceListeningForPose). Applied
@@ -4864,6 +4871,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshPresentationStatus() {
+        defer { refreshSettingsPaneState() }
         guard presentationLLMEnabled else {
             presentationStatus = "Plain readback enabled"
             return
@@ -4880,6 +4888,38 @@ final class AppModel: ObservableObject {
             return
         }
         presentationStatus = "Presentation LLM: \(provider.title) / \(presentationModel)"
+    }
+
+    /// Recomputes the Settings-pane render surface (INF-351: provider/model
+    /// label, detected capability profile, capability notice) and publishes
+    /// it through `settingsPaneState` only if it changed. Called whenever a
+    /// presentation property that feeds it changes (provider, base URL,
+    /// model, or discovered model list).
+    private func refreshSettingsPaneState() {
+        let profile = presentationModelOptions
+            .first(where: { $0.id == presentationModel })?
+            .capabilityProfile
+            ?? AttachePresentationModelService.capabilityProfile(
+                provider: presentationProvider,
+                baseURLText: presentationBaseURL,
+                modelID: presentationModel
+            )
+        let capabilityNotice: String?
+        if presentationProvider == .ollama,
+           !presentationModelOptions.isEmpty,
+           !presentationModelOptions.contains(where: { $0.id == presentationModel }) {
+            capabilityNotice = "\(presentationModel) is not installed on this Ollama server. Choose a listed model or install it, then refresh to inspect its capacity and reasoning support."
+        } else {
+            capabilityNotice = nil
+        }
+        settingsPaneState.update(
+            SettingsPaneSnapshot(
+                providerSummary: presentationProviderSummary,
+                modelLabel: presentationProviderSummary,
+                profile: profile,
+                capabilityNotice: capabilityNotice
+            )
+        )
     }
 
     func openAttacheMemoryFile() {
