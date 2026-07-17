@@ -131,6 +131,34 @@ func waitUntil(_ what: String,
     throw SmokeError(message: "timed out after \(Int(timeout))s waiting for \(what)")
 }
 
+// MARK: Latency gate (INF-349)
+
+/// Generous CI budget for a UI action to open: catches order-of-magnitude
+/// regressions, not fine-grained perf drift. Overridable so
+/// `scripts/ui-smoke.sh` can prove the gate actually fails
+/// (`SMOKE_LATENCY_BUDGET_MS=1`) as well as pass at the default.
+let smokeLatencyBudgetMS: Double = {
+    if let raw = ProcessInfo.processInfo.environment["SMOKE_LATENCY_BUDGET_MS"], let value = Double(raw), value > 0 {
+        return value
+    }
+    return 1500
+}()
+
+/// Runs `body`, wall-clock timing it, and fails the step if it took longer
+/// than `smokeLatencyBudgetMS`. Used to wrap opening Settings and the
+/// palettes, so a real order-of-magnitude UI stall shows up as a smoke
+/// failure instead of only as a stall event in the diagnostics surface.
+@discardableResult
+func assertWithinLatencyBudget<T>(_ label: String, _ body: () throws -> T) throws -> T {
+    let start = Date()
+    let result = try body()
+    let elapsedMS = Date().timeIntervalSince(start) * 1000
+    guard elapsedMS <= smokeLatencyBudgetMS else {
+        throw SmokeError(message: "\(label) took \(Int(elapsedMS))ms, exceeding SMOKE_LATENCY_BUDGET_MS=\(Int(smokeLatencyBudgetMS))")
+    }
+    return result
+}
+
 /// Waits for an element matching the query to exist, returning it. On timeout
 /// the failure names the query and dumps the nearest tree so the missing or
 /// mislabeled AX element is identifiable from the message alone.

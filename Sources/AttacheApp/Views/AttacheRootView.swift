@@ -434,21 +434,25 @@ struct AttacheRootView: View {
             scheduleIdleFade()
         }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenInbox)) { _ in
-            withAnimation(.easeInOut(duration: 0.16)) {
-                surfaceMode = .live
-                paletteVisible = false
-                personalitySwitcherVisible = false
-                historyVisible = false
-                inboxVisible = true
+            AttacheLog.uiLatency.withIntervalSignpost("openInboxPalette") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    surfaceMode = .live
+                    paletteVisible = false
+                    personalitySwitcherVisible = false
+                    historyVisible = false
+                    inboxVisible = true
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenHistory)) { _ in
-            withAnimation(.easeInOut(duration: 0.16)) {
-                surfaceMode = .live
-                paletteVisible = false
-                personalitySwitcherVisible = false
-                inboxVisible = false
-                historyVisible = true
+            AttacheLog.uiLatency.withIntervalSignpost("openHistoryPalette") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    surfaceMode = .live
+                    paletteVisible = false
+                    personalitySwitcherVisible = false
+                    inboxVisible = false
+                    historyVisible = true
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenVoicemailSurface)) { _ in
@@ -459,25 +463,29 @@ struct AttacheRootView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenPalette)) { _ in
-            withAnimation(.easeInOut(duration: 0.16)) {
-                surfaceMode = .live
-                inboxVisible = false
-                personalitySwitcherVisible = false
-                historyVisible = false
-                paletteVisible = true
+            AttacheLog.uiLatency.withIntervalSignpost("openCommandPalette") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    surfaceMode = .live
+                    inboxVisible = false
+                    personalitySwitcherVisible = false
+                    historyVisible = false
+                    paletteVisible = true
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenCharacterSwitcher)) { _ in
-            withAnimation(.easeInOut(duration: 0.16)) {
-                surfaceMode = .live
-                chromeAwake = true
-                paletteVisible = false
-                inboxVisible = false
-                historyVisible = false
-                shortcutsVisible = false
-                personalitySwitcherVisible = true
+            AttacheLog.uiLatency.withIntervalSignpost("openCharacterSwitcherPalette") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    surfaceMode = .live
+                    chromeAwake = true
+                    paletteVisible = false
+                    inboxVisible = false
+                    historyVisible = false
+                    shortcutsVisible = false
+                    personalitySwitcherVisible = true
+                }
+                scheduleIdleFade()
             }
-            scheduleIdleFade()
         }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenActivitySimulator)) { _ in
             withAnimation(.easeInOut(duration: 0.16)) {

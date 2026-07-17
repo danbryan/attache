@@ -9,8 +9,11 @@ private final class SettingsWindow: NSWindow {
 
 /// Hosts the dedicated Settings window (opened with Cmd-comma). Separate from the
 /// live Attaché window so the main surface is never disturbed.
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+    private weak var model: AppModel?
+
     init(model: AppModel) {
+        self.model = model
         let hosting = NSHostingController(rootView: SettingsView(model: model))
         let window = SettingsWindow(contentViewController: hosting)
         window.title = "\(AttacheAppSupport.appDisplayName) Settings"
@@ -22,6 +25,7 @@ final class SettingsWindowController: NSWindowController {
             window.center()
         }
         super.init(window: window)
+        window.delegate = self
     }
 
     required init?(coder: NSCoder) { nil }
@@ -31,5 +35,12 @@ final class SettingsWindowController: NSWindowController {
         // Placement persists via the frame autosave name; no re-centering.
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        model?.settingsWindowVisible = true
+    }
+
+    // Feeds the responsiveness watchdog's context label (INF-349): once the
+    // window closes, stalls stop being attributed to a settings pane.
+    func windowWillClose(_ notification: Notification) {
+        model?.settingsWindowVisible = false
     }
 }

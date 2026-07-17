@@ -74,6 +74,14 @@ struct SettingsView: View {
                 section = target
             }
         }
+        .onChange(of: section) { newValue in
+            AttacheLog.uiLatency.withIntervalSignpost("settingsPaneSwitch") {
+                model.activeSettingsSection = newValue ?? .appearance
+            }
+        }
+        .onAppear {
+            model.activeSettingsSection = section ?? .appearance
+        }
     }
 
     @ViewBuilder private var pane: some View {
@@ -84,7 +92,7 @@ struct SettingsView: View {
         case .context: ContextSettingsPane(model: model, state: .shared)
         case .integrations: IntegrationsPane(model: model)
         case .memory: MemorySettingsPane(model: model, state: .shared)
-        case .about: AboutPane()
+        case .about: AboutPane(model: model)
         }
     }
 

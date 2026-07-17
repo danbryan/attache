@@ -2114,9 +2114,11 @@ if enabled("f6") {
     run.step("f6-palettes", "Command-I inbox palette filters as you type") {
         _ = try runShell("scripts/send-event.sh")
         app.activate()
-        app.key(Key.i, command: true)
-        let field = try waitForElement("inbox search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search inbox")
+        let field = try assertWithinLatencyBudget("opening the inbox palette") {
+            app.key(Key.i, command: true)
+            return try waitForElement("inbox search field", in: try mainWindow(),
+                                      role: kAXTextFieldRole as String, containing: "Search inbox")
+        }
         _ = field.setFocused()
         if !field.setValue("smoke") { app.type("smoke") }
         _ = try waitForElement("filtered inbox card", in: try mainWindow(), containing: "Shell smoke update")
@@ -2142,9 +2144,11 @@ if enabled("f6") {
     }
     run.step("f6-palettes", "Command-Y history palette opens, filters, closes") {
         app.activate()
-        app.key(Key.y, command: true)
-        let field = try waitForElement("history search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search history")
+        let field = try assertWithinLatencyBudget("opening the history palette") {
+            app.key(Key.y, command: true)
+            return try waitForElement("history search field", in: try mainWindow(),
+                                      role: kAXTextFieldRole as String, containing: "Search history")
+        }
         _ = field.setFocused()
         if !field.setValue("zzz-no-match") { app.type("zzz-no-match") }
         _ = try waitForElement("empty-state message", in: try mainWindow(), containing: "No history matches")
@@ -2192,10 +2196,12 @@ var originalTextScale = 1.0
 
 if enabled("f5") {
     run.step("f5-settings", "settings window opens with Command-comma") {
-        app.activate()
-        app.key(Key.comma, command: true)
-        try waitUntil("settings window", timeout: 10) {
-            (try? settingsWindow()) != nil
+        try assertWithinLatencyBudget("opening Settings") {
+            app.activate()
+            app.key(Key.comma, command: true)
+            try waitUntil("settings window", timeout: 10) {
+                (try? settingsWindow()) != nil
+            }
         }
     }
     run.step("f5-settings", "theme switches to a different value") {

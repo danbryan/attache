@@ -17,6 +17,13 @@ public enum AttacheLog {
     public static let server = Logger(subsystem: subsystem, category: "server")
     public static let secrets = Logger(subsystem: subsystem, category: "secrets")
     public static let twoWay = Logger(subsystem: subsystem, category: "two-way")
+
+    /// Signpost intervals around UI actions that have been reported as slow
+    /// (opening Settings, switching panes, expanding Advanced, opening a
+    /// palette, applying a personality switch), so they can be attributed in
+    /// Instruments' Points of Interest / os_signpost track (INF-349).
+    /// Measurement only: emitting a signpost never changes behavior.
+    public static let uiLatency = OSSignposter(subsystem: subsystem, category: "ui-latency")
 }
 
 /// A privacy-safe diagnostic snapshot for a bug report: app version, enabled

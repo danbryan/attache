@@ -253,6 +253,41 @@ final class AppModel: ObservableObject {
     /// and publishing it here replaces nothing about today's rendering.
     @Published private(set) var callPhase: CallPhase = .idle
 
+    // MARK: - Responsiveness instrumentation (INF-349)
+    //
+    // Measurement only: nothing here changes app behavior. The watchdog is
+    // started once by AppDelegate on launch; this model supplies the
+    // frontmost-pane context string it stamps on any stall it observes, and
+    // the diagnostics surface (AboutPane) reads `mainThreadWatchdog.report()`.
+
+    /// True while the Settings window is on screen; set by
+    /// `SettingsWindowController.show()`/`windowWillClose`.
+    @Published var settingsWindowVisible: Bool = false
+    /// The sidebar section currently showing in Settings; kept in sync from
+    /// `SettingsView.onChange(of:)`.
+    @Published var activeSettingsSection: SettingsSection = .appearance
+
+    /// Background main-thread stall detector. `lazy` so its context-provider
+    /// closure can capture `self` after the rest of the model has finished
+    /// initializing.
+    lazy var mainThreadWatchdog: MainThreadWatchdog = {
+        MainThreadWatchdog(contextProvider: { [weak self] in
+            self?.responsivenessContext ?? "idle"
+        })
+    }()
+
+    /// Content-free label for whatever the user is looking at right now:
+    /// a live call, a specific Settings pane, or idle. Never user text.
+    var responsivenessContext: String {
+        if isLiveCallActive {
+            return "call.live"
+        }
+        if settingsWindowVisible {
+            return "settings.\(activeSettingsSection.rawValue)"
+        }
+        return "idle"
+    }
+
     // MARK: - Recap / follow-up recovery (INF-254)
     //
     // Same shape as the live call's `conversationRecovery` above, extended to
@@ -5633,16 +5668,18 @@ final class AppModel: ObservableObject {
     }
 
     func selectPersonality(_ id: String) {
-        guard personalities.contains(where: { $0.id == id }) else { return }
-        guard id != activePersonalityID else { return }
-        cancelPendingReplyForPersonalitySwitch()
-        activePersonalityID = id
-        personalityStore.save(personalities, activeID: id)
-        writeActivePersonalityToDefaults()
-        refreshPresentationStatus()
-        if let personality = activePersonality {
-            let issue = applyPersonalityConfiguration(personality)
-            intakeStatus = issue ?? "Personality set to \(personality.name)."
+        AttacheLog.uiLatency.withIntervalSignpost("personalitySwitch") {
+            guard personalities.contains(where: { $0.id == id }) else { return }
+            guard id != activePersonalityID else { return }
+            cancelPendingReplyForPersonalitySwitch()
+            activePersonalityID = id
+            personalityStore.save(personalities, activeID: id)
+            writeActivePersonalityToDefaults()
+            refreshPresentationStatus()
+            if let personality = activePersonality {
+                let issue = applyPersonalityConfiguration(personality)
+                intakeStatus = issue ?? "Personality set to \(personality.name)."
+            }
         }
     }
 
