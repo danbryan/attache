@@ -85,6 +85,9 @@ struct AttacheRootView: View {
     // and sheet per surface, since the consent moment is identical everywhere
     // except which underlying `select...RecoveryProvider` runs on Enable.
     @State var pendingRecoveryProviderSwitch: PendingRecoveryProviderSwitch?
+    // "Forget This Session…" confirmation (INF-357), shared by every session
+    // row context menu and the Voicemail control's Option alternate.
+    @State var pendingForgetSession: SessionForgetRequest?
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
     @State private var echoExpanded = false
@@ -377,6 +380,7 @@ struct AttacheRootView: View {
             }
         }
         .onAppear { scheduleIdleFade() }
+        .sessionForgetConfirmation(model: model, request: $pendingForgetSession)
         .sheet(isPresented: $model.showOnboarding) {
             OnboardingSheet(model: model)
         }

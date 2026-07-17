@@ -253,8 +253,19 @@ extension AttacheRootView {
                     model.markAllHeard()
                 }
             }
-            // TODO(Private Session ticket): add "Forget Session" here once the
-            // Private Session work lands; out of scope for INF-354.
+            // "Forget Session…" as the Option alternate on the focused/attached
+            // session, once one is watched (INF-357).
+            if optionKeyMonitor.isHeld, let focused = model.attachedCodexSession {
+                Button("Forget Session…", role: .destructive) {
+                    let counts = model.forgetSessionImpactCounts(externalSessionID: focused.id)
+                    pendingForgetSession = SessionForgetRequest(
+                        sessionID: focused.id,
+                        title: focused.displayTitle,
+                        cardCount: counts.cards,
+                        indexCount: counts.indexEntries
+                    )
+                }
+            }
             Divider()
             Button("Open Inbox") {
                 withAnimation(.easeInOut(duration: 0.16)) { inboxVisible = true }

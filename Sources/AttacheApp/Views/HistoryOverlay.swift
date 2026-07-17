@@ -17,6 +17,7 @@ struct HistoryOverlay: View {
     @State private var hoveredID: String?
     @State private var collapsedGroups: Set<String> = []
     @State private var pendingDeletion: HistoryDeletionRequest?
+    @State private var pendingForgetSession: SessionForgetRequest?
     @FocusState private var fieldFocused: Bool
 
     /// All / Recaps / Sent filter over history. All and Recaps are heard
@@ -251,6 +252,7 @@ struct HistoryOverlay: View {
                  ? "This permanently deletes all \(request.count) saved replies and alternate takes in this Attaché conversation."
                  : "This permanently deletes the selected saved reply. Legacy replies cannot always be grouped into a whole conversation.")
         }
+        .sessionForgetConfirmation(model: model, request: $pendingForgetSession)
     }
 
     private var emptyStateText: String {
@@ -333,6 +335,10 @@ struct HistoryOverlay: View {
                     if let marker {
                         PersonalityMarkerBadge(marker: marker, accent: model.theme.signatureColor, compact: true)
                     }
+                    if let externalSessionID = card.externalSessionID,
+                       model.isSessionRecordingDisabled(sessionID: externalSessionID) {
+                        SessionNotRecordedGlyph()
+                    }
                 }
                 HStack(spacing: 5) {
                     Text(Self.relativeFormatter.localizedString(for: card.createdAt, relativeTo: Date()))
@@ -375,6 +381,15 @@ struct HistoryOverlay: View {
                 Label(
                     model.conversationID(for: card) == nil ? "Delete History Item" : "Delete Conversation",
                     systemImage: "trash"
+                )
+            }
+            if let externalSessionID = card.externalSessionID {
+                Divider()
+                SessionPrivacyMenuItems(
+                    model: model,
+                    sessionID: externalSessionID,
+                    title: card.sessionTitle ?? rowTitle(for: card),
+                    pendingForget: $pendingForgetSession
                 )
             }
         }

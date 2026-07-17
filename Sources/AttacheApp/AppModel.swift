@@ -929,6 +929,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var claudeCodeSourceEnabled = false
     private lazy var curatedProjectPaths: [String] = Self.loadCuratedProjectPaths()
     let store: CardStore
+    /// Sessions marked "do not record" (INF-357). Consulted before persisting
+    /// any event, before FTS reindexing, and before session-map/capsule
+    /// building; toggling is exposed through `setSessionDoNotRecord`.
+    @Published private(set) var sessionPrivacyRegistry: SessionPrivacyRegistry
 
     private var eventServer: LocalEventServer?
     private let projectPath = FileManager.default.currentDirectoryPath
@@ -1008,11 +1012,18 @@ final class AppModel: ObservableObject {
     /// can seed capsules with `AttacheDirectChatSummaryStore` directly before
     /// exercising `convertActiveCallToPrivate()` (INF-355); production callers
     /// never pass it and get the derived path below.
-    init(store: CardStore? = nil, directChatDatabaseURLOverride: URL? = nil) {
+    init(
+        store: CardStore? = nil,
+        directChatDatabaseURLOverride: URL? = nil,
+        sessionPrivacyRegistryURLOverride: URL? = nil
+    ) {
         let environment = ProcessInfo.processInfo.environment
         presentationEnvironment = environment
         presentationService = AttachePresentationService(environment: environment)
         attacheMemoryStore = AttacheMemoryStore(environment: environment)
+        let sessionPrivacyRegistryURL = sessionPrivacyRegistryURLOverride
+            ?? AttacheAppSupport.sessionPrivacyRegistryURL()
+        sessionPrivacyRegistry = SessionPrivacyRegistry(fileURL: sessionPrivacyRegistryURL)
 
         do {
             if let store {
@@ -2048,7 +2059,19 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func persist(_ event: NormalizedEvent) {
+    /// Not `private`: INF-357's tests call this directly to verify the
+    /// don't-record gate without standing up the full async LLM-presentation
+    /// pipeline (`prepareAndPersist` -> `presentationService.prepare`).
+    func persist(_ event: NormalizedEvent) {
+        // A session marked "do not record" (INF-357) still gets live
+        // narration, but nothing is written: no card, no FTS row, no
+        // session-map entry, no capsule. Mirrors the ephemeral preview path
+        // `playInboxRecap(for:)` uses when no presentation model is
+        // configured (speak it once, persist nothing).
+        if let sessionID = event.externalSessionID, sessionPrivacyRegistry.isRecordingDisabled(sessionID: sessionID) {
+            persistEphemeral(event)
+            return
+        }
         do {
             let card = try store.insertEvent(event)
             // If this narration is the agent's reply to an instruction we sent,
@@ -2107,6 +2130,21 @@ final class AppModel: ObservableObject {
         } catch {
             intakeStatus = "Card creation failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Speaks a "do not record" session's update once, live, without ever
+    /// calling `store.insertEvent` (INF-357). There is no persisted card to
+    /// select, queue, or notify about, so this intentionally skips
+    /// `reloadCards`, `livePlaybackQueue`, and `AttacheNotifier`.
+    private func persistEphemeral(_ event: NormalizedEvent) {
+        guard let normalized = try? EventNormalizer.normalize(event) else {
+            intakeStatus = "Not recorded: could not narrate this update."
+            return
+        }
+        let summary = EventNormalizer.storedSummary(for: normalized)
+        let spokenText = EventNormalizer.storedSpokenText(for: normalized, summary: summary)
+        playback.preview(spokenText)
+        intakeStatus = "Played a not-recorded update live; nothing was saved."
     }
 
     /// Right-click affordance on the mini attache (INF-272): replay the
@@ -2846,6 +2884,84 @@ final class AppModel: ObservableObject {
                 return "\(count) card\(count == 1 ? "" : "s") survived deletion."
             case .capsulesRemain(let count):
                 return "\(count) capsule\(count == 1 ? "" : "s") survived deletion."
+            }
+        }
+    }
+
+    // MARK: - Session privacy (INF-357)
+
+    /// True while `sessionID` is marked "do not record": new events for it are
+    /// spoken live but never persisted, indexed, or mapped.
+    func isSessionRecordingDisabled(sessionID: String) -> Bool {
+        sessionPrivacyRegistry.isRecordingDisabled(sessionID: sessionID)
+    }
+
+    /// Toggle for the "Don't Record This Session" context-menu item. Only
+    /// affects events from this point forward; anything already recorded is
+    /// untouched (use `forgetSession` to retroactively remove it).
+    @discardableResult
+    func setSessionDoNotRecord(_ disabled: Bool, sessionID: String) -> Bool {
+        guard !sessionID.isEmpty else { return false }
+        let ok = disabled
+            ? sessionPrivacyRegistry.setRecordingDisabled(sessionID: sessionID)
+            : sessionPrivacyRegistry.clearRecordingDisabled(sessionID: sessionID)
+        if !ok {
+            intakeStatus = "Still recorded: could not update the don't-record setting for this session."
+        }
+        return ok
+    }
+
+    /// Counts of what "Forget This Session…" would remove, for the
+    /// confirmation dialog's real-count copy (INF-357 step 4).
+    func forgetSessionImpactCounts(externalSessionID: String) -> (cards: Int, indexEntries: Int) {
+        let cardCount = (try? store.fetchCards(forExternalSessionID: externalSessionID).count) ?? 0
+        let indexCount = sessionContextRuntime.ftsChunkCount(forSessionID: externalSessionID)
+        return (cardCount, indexCount)
+    }
+
+    /// Retroactive scrub for one watched session (INF-357): hard-deletes every
+    /// card linked to it and purges its FTS index rows (which also drops it
+    /// from the in-memory session catalog, so no session map is ever built
+    /// from it again). Fails closed exactly like `convertActiveCallToPrivate`:
+    /// verify zero rows remain in every store before reporting success; on
+    /// any failure, report "still recorded" with specifics and leave
+    /// whatever could not be deleted in place rather than claim success.
+    @discardableResult
+    func forgetSession(externalSessionID: String) -> Bool {
+        guard !externalSessionID.isEmpty else { return false }
+        do {
+            _ = try store.deleteCards(forExternalSessionID: externalSessionID)
+            let remainingChunks = sessionContextRuntime.forgetSession(sessionID: externalSessionID)
+
+            let remainingCards = try store.fetchCards(forExternalSessionID: externalSessionID)
+            guard remainingCards.isEmpty else {
+                throw ForgetSessionError.cardsRemain(remainingCards.count)
+            }
+            guard remainingChunks == 0 else {
+                throw ForgetSessionError.indexRowsRemain(remainingChunks)
+            }
+
+            reloadCards()
+            sessionIndexRevision += 1
+            conversationStatus = "Forgot this session. Its cards and search index entries were removed."
+            AccessibilityAnnouncer.announce("Forgot this session")
+            return true
+        } catch {
+            conversationStatus = "Still recorded: could not forget this session. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private enum ForgetSessionError: LocalizedError {
+        case cardsRemain(Int)
+        case indexRowsRemain(Int)
+
+        var errorDescription: String? {
+            switch self {
+            case .cardsRemain(let count):
+                return "\(count) card\(count == 1 ? "" : "s") survived deletion."
+            case .indexRowsRemain(let count):
+                return "\(count) search index entr\(count == 1 ? "y" : "ies") survived deletion."
             }
         }
     }
@@ -6708,11 +6824,20 @@ final class AppModel: ObservableObject {
         guard !isIndexingSessions else { return }
         isIndexingSessions = true
         let enabledSources = enabledAgentSources
+        let privacyRegistry = sessionPrivacyRegistry
         sessionIndexQueue.async { [weak self] in
             guard let self else { return }
             let records = enabledSources.isEmpty ? [] : self.sessionIndexer.refresh()
             let filteredRecords = records.filter { enabledSources.contains($0.sourceKind) }
-            let reconciliation = self.sessionContextRuntime.reconcile(records: filteredRecords)
+            // A "do not record" session (INF-357) still shows its row (so the
+            // user can see it, and un-toggle or forget it), but its files are
+            // excluded here so the FTS indexer never indexes them and the
+            // session map is never built from them. Any rows already indexed
+            // before the session was marked "do not record" are removed by
+            // `reconcile`'s own stale-id cleanup, since they no longer appear
+            // in `indexableRecords`.
+            let indexableRecords = filteredRecords.filter { !privacyRegistry.isRecordingDisabled(sessionID: $0.id) }
+            let reconciliation = self.sessionContextRuntime.reconcile(records: indexableRecords)
             DispatchQueue.main.async {
                 self.sessionRecords = filteredRecords
                 self.applySessionContextReconciliation(reconciliation)

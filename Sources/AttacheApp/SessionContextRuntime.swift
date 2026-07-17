@@ -247,6 +247,38 @@ final class SessionContextRuntime: @unchecked Sendable {
         return Reconciliation(removedSessionIDs: removed, invalidatedFocusedSessionID: invalidated)
     }
 
+    /// Number of FTS chunks currently indexed for a session, for the "Forget
+    /// This Session…" confirmation dialog's real-count copy (INF-357) and for
+    /// verifying a scrub removed everything.
+    func ftsChunkCount(forSessionID sessionID: String) -> Int {
+        ftsIndex.chunkCount(forSessionID: sessionID)
+    }
+
+    /// Retroactive scrub for one session's FTS index rows (INF-357, step of
+    /// "Forget This Session…"). Removes the session's chunks and bookkeeping,
+    /// drops it from the in-memory catalog so it stops surfacing in
+    /// Command-K/session-map building, and verifies zero chunks remain before
+    /// returning, mirroring `convertActiveCallToPrivate`'s fail-closed shape.
+    /// Returns the number of chunks that survived (0 means success).
+    @discardableResult
+    func forgetSession(sessionID: String) -> Int {
+        ftsIndex.remove(sessionID: sessionID)
+
+        lock.lock()
+        recordsByID.removeValue(forKey: sessionID)
+        indexedSessionIDs.remove(sessionID)
+        indexedFingerprints.removeValue(forKey: sessionID)
+        let remainingIDs = indexedSessionIDs
+        let remainingFingerprints = indexedFingerprints
+        if focusedSession?.sessionID == sessionID {
+            focusedSession = nil
+        }
+        lock.unlock()
+
+        persistManifest(sessionIDs: remainingIDs, fingerprints: remainingFingerprints)
+        return ftsIndex.chunkCount(forSessionID: sessionID)
+    }
+
     /// The Command-K compatibility surface. Ranking comes exclusively from the
     /// unified service, then maps back to the row type the existing picker uses.
     /// Search records a selectable snapshot but never grants focus.

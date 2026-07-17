@@ -25,6 +25,12 @@ public enum AttacheAppSupport {
         supportDirectory(fileManager: fileManager).appendingPathComponent("event-token")
     }
 
+    /// Persisted "do not record" session set (INF-357). See
+    /// `SessionPrivacyRegistry`.
+    public static func sessionPrivacyRegistryURL(fileManager: FileManager = .default) -> URL {
+        supportDirectory(fileManager: fileManager).appendingPathComponent("SessionPrivacyRegistry.json")
+    }
+
     public static func databaseURL(fileManager: FileManager = .default) -> URL {
         let support = supportDirectory(fileManager: fileManager)
         let current = support.appendingPathComponent(databaseFileName)
