@@ -27,6 +27,69 @@ final class EventNormalizerTests: XCTestCase {
         XCTAssertEqual(event.metadata["cwd"], "/tmp/demo")
     }
 
+    func testDecodeAcceptsAbsentSchemaVersion() throws {
+        let json =
+            """
+            {
+              "source": "codex",
+              "event_type": "assistant.completed",
+              "title": "Build finished",
+              "text": "No schema_version field at all.",
+              "metadata": {}
+            }
+            """
+
+        let event = try EventNormalizer.decode(data: Data(json.utf8))
+
+        XCTAssertEqual(event.schemaVersion, 1)
+    }
+
+    func testDecodeAcceptsExplicitSchemaVersionOne() throws {
+        let json =
+            """
+            {
+              "source": "codex",
+              "event_type": "assistant.completed",
+              "title": "Build finished",
+              "text": "Explicit schema_version 1.",
+              "metadata": {},
+              "schema_version": 1
+            }
+            """
+
+        let event = try EventNormalizer.decode(data: Data(json.utf8))
+
+        XCTAssertEqual(event.schemaVersion, 1)
+    }
+
+    func testDecodeRejectsUnsupportedSchemaVersion() {
+        let json =
+            """
+            {
+              "source": "codex",
+              "event_type": "assistant.completed",
+              "title": "Build finished",
+              "text": "Schema version 2 is not understood yet.",
+              "metadata": {},
+              "schema_version": 2
+            }
+            """
+
+        XCTAssertThrowsError(try EventNormalizer.decode(data: Data(json.utf8))) { error in
+            guard let normalizerError = error as? EventNormalizerError,
+                  case .unsupportedSchemaVersion(let requested, let supported) = normalizerError else {
+                XCTFail("expected EventNormalizerError.unsupportedSchemaVersion, got \(error)")
+                return
+            }
+            XCTAssertEqual(requested, 2)
+            XCTAssertEqual(supported, 1)
+            XCTAssertEqual(
+                normalizerError.errorDescription,
+                "Unsupported schema_version 2; this server supports schema_version 1."
+            )
+        }
+    }
+
     func testSummaryCompactsLongText() {
         let event = NormalizedEvent(
             source: "codex",

@@ -266,6 +266,10 @@ final class LocalEventServer {
             return
         }
         if request.method == "POST", request.path == "/events" {
+            if let rejectionBody = Self.schemaVersionRejectionBody(for: request.body) {
+                respond(on: clientFD, status: "400 Bad Request", body: rejectionBody)
+                return
+            }
             eventHandler(request.body)
             respond(on: clientFD, status: "202 Accepted", body: #"{"status":"accepted"}"#)
         } else if request.method == "POST", let command = LocalCardCommand(method: request.method, path: request.path) {
@@ -276,6 +280,28 @@ final class LocalEventServer {
             }
         } else {
             respond(on: clientFD, status: "404 Not Found", body: #"{"error":"not found"}"#)
+        }
+    }
+
+    /// JSON error body when `body` names a `schema_version` this server
+    /// doesn't support, or nil otherwise (INF-359). This is the one place the
+    /// server rejects a `POST /events` payload synchronously; every other
+    /// malformed body still gets a 202 and is discarded further down the
+    /// async pipeline (`AppModel.ingestEventData`), unchanged by this ticket.
+    /// Uses `EventNormalizer` so the wire message stays identical to what
+    /// `EventNormalizer.decode` throws for the same payload.
+    private static func schemaVersionRejectionBody(for body: Data) -> String? {
+        do {
+            _ = try EventNormalizer.decode(data: body)
+            return nil
+        } catch EventNormalizerError.unsupportedSchemaVersion(let requested, let supported) {
+            let message = EventNormalizerError
+                .unsupportedSchemaVersion(requested: requested, supported: supported)
+                .errorDescription ?? "unsupported schema_version"
+            let escaped = message.replacingOccurrences(of: "\"", with: "\\\"")
+            return #"{"error":"\#(escaped)"}"#
+        } catch {
+            return nil
         }
     }
 
