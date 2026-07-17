@@ -82,4 +82,65 @@ final class ClaudeHookInstallerTests: XCTestCase {
         let installed = try ClaudeHookInstaller.settings(byInstalling: entries, into: nil, managedScriptPath: script)
         XCTAssertTrue(ClaudeHookInstaller.isUpToDate(installed, entries: entries, managedScriptPath: script))
     }
+
+    // MARK: - Guarded command migration (INF-369)
+
+    /// Old, unguarded managed entries: bare `'<path>' <type>`, no missing-script guard.
+    private func unguardedEntries(script: String) -> [ClaudeHookInstaller.Entry] {
+        [
+            .init(event: "Notification", command: "'\(script)' needs_attention"),
+            .init(event: "Stop", command: "'\(script)' turn_complete")
+        ]
+    }
+
+    /// New, guarded managed entries: silent no-op when the script is missing.
+    private func guardedEntries(script: String) -> [ClaudeHookInstaller.Entry] {
+        [
+            .init(event: "Notification", command: "[ -x '\(script)' ] && '\(script)' needs_attention || true"),
+            .init(event: "Stop", command: "[ -x '\(script)' ] && '\(script)' turn_complete || true")
+        ]
+    }
+
+    func testIsManagedRecognizesOldUnguardedForm() {
+        let matcher: [String: Any] = [
+            "hooks": [["type": "command", "command": "'\(script)' turn_complete"]]
+        ]
+        XCTAssertTrue(ClaudeHookInstaller.isManaged(matcher, scriptPath: script))
+    }
+
+    func testIsManagedRecognizesNewGuardedForm() {
+        let matcher: [String: Any] = [
+            "hooks": [["type": "command", "command": "[ -x '\(script)' ] && '\(script)' turn_complete || true"]]
+        ]
+        XCTAssertTrue(ClaudeHookInstaller.isManaged(matcher, scriptPath: script))
+    }
+
+    func testInstallMigratesOldUnguardedEntriesToGuardedAndPreservesUserHooks() throws {
+        // A settings.json that already has Attaché's OLD unguarded entries plus
+        // the user's own tmux hooks (byte-sensitive: must survive untouched).
+        let tmuxCommand = "/opt/homebrew/bin/tmux display-message 'claude done'"
+        let existing = try ClaudeHookInstaller.settings(
+            byInstalling: unguardedEntries(script: script),
+            into: """
+            {"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\(tmuxCommand)"}]}]}}
+            """.data(using: .utf8),
+            managedScriptPath: script)
+
+        let migrated = try ClaudeHookInstaller.settings(
+            byInstalling: guardedEntries(script: script),
+            into: existing,
+            managedScriptPath: script)
+        let s = parse(migrated)
+
+        let stopCommands = commands(s, event: "Stop")
+        XCTAssertTrue(stopCommands.contains(tmuxCommand), "the user's own tmux hook must survive byte-untouched")
+        XCTAssertTrue(stopCommands.contains("[ -x '\(script)' ] && '\(script)' turn_complete || true"),
+                      "the guarded form must be present")
+        XCTAssertFalse(stopCommands.contains("'\(script)' turn_complete"),
+                        "the old unguarded form must be removed, not left alongside the guarded one")
+
+        let notifCommands = commands(s, event: "Notification")
+        XCTAssertEqual(notifCommands, ["[ -x '\(script)' ] && '\(script)' needs_attention || true"])
+        XCTAssertFalse(notifCommands.contains("'\(script)' needs_attention"))
+    }
 }
