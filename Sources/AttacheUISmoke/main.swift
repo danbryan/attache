@@ -691,6 +691,61 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 app.key(Key.l, command: true)
                 try waitForConversationStatus(containingAll: ["Release the mic"], timeout: 20)
 
+            case "saved-call":
+                // A saved (non-private) call, for the crown-band-absent and
+                // PRIVATE-chip-absent comparison screenshots (INF-356).
+                try dismissOnboardingIfPresent()
+                app.key(Key.l, command: true)
+                _ = try waitForElement("saved call composer", in: try mainWindow(),
+                                       containing: "Live call composer", timeout: 10)
+
+            case "private", "private-echo":
+                // Incognito identity screenshots (INF-356): the default
+                // character crown band + PRIVATE chip, and the same on
+                // Echo's voice-bars presence. ATTACHE_POSE_THEME optionally
+                // switches the theme first, for the window-tint matrix.
+                try dismissOnboardingIfPresent()
+                _ = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                       role: kAXButtonRole as String, containing: "Open inbox", timeout: 15)
+                if let themeName = ProcessInfo.processInfo.environment["ATTACHE_POSE_THEME"] {
+                    app.activate()
+                    app.key(Key.comma, command: true)
+                    try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+                    let popup = try waitForElement("Theme picker", in: try settingsWindow(),
+                                                   role: kAXPopUpButtonRole as String, containing: "Theme")
+                    try selectPopup(popup, item: themeName)
+                    try waitUntil("theme picker to read \(themeName)", timeout: 5) {
+                        popup.stringValue.contains(themeName)
+                    }
+                    try settingsWindow().descendants(where: { $0.subrole == "AXCloseButton" }, collectLimit: 1)
+                        .first.map { _ = $0.press() }
+                    try waitUntil("settings window to close", timeout: 5) { (try? settingsWindow()) == nil }
+                }
+                if state == "private-echo" {
+                    app.activate()
+                    app.key(Key.p, command: true, shift: true)
+                    let search = try waitForElement("character search", in: try mainWindow(),
+                                                    role: kAXTextFieldRole as String, containing: "Search characters")
+                    _ = search.setFocused()
+                    if !search.setValue("Echo") { app.type("Echo") }
+                    _ = try waitForElement("filtered Echo character", in: try mainWindow(), containing: "Echo")
+                    app.key(Key.returnKey)
+                    try waitForElementGone("character switcher after Echo selection", in: try mainWindow(),
+                                           containing: "Character switcher", timeout: 5)
+                }
+                // The pre-call chevron (not yet on a call) offers "Start
+                // Private Call" directly; pressing Cmd+L first would start a
+                // SAVED call and swap this button for the on-call overflow
+                // menu, whose item reads "Make This Call Private" instead.
+                app.activate()
+                let more = try waitForElement("more call options", in: try mainWindow(),
+                                              containing: "More call options")
+                try selectPopup(more, item: "Start Private Call")
+                _ = try waitForElement("private call composer", in: try mainWindow(),
+                                       containing: "Private call composer", timeout: 10)
+                _ = try waitForElement("PRIVATE indicator chip", in: try mainWindow(),
+                                       exactly: "PRIVATE", timeout: 10)
+
             default:
                 print("unknown pose state: \(state)")
             }
