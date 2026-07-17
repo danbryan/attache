@@ -331,17 +331,28 @@ final class PersonalityTests: XCTestCase {
     // MARK: - T3: manager UI summaries
 
     func testVoiceSummaryAndCharacterAvatarLabels() {
-        XCTAssertEqual(Personality(id: "a", name: "A", prompt: "p").voiceSummary, "Voice not set")
-        XCTAssertEqual(Personality(id: "b", name: "B", prompt: "p", voiceRef: .systemVoice(nil)).voiceSummary, "Voice not set")
+        XCTAssertEqual(Personality(id: "a", name: "A", prompt: "p").voiceSummary(in: []), "Voice not set")
+        XCTAssertEqual(Personality(id: "b", name: "B", prompt: "p", voiceRef: .systemVoice(nil)).voiceSummary(in: []), "Voice not set")
         XCTAssertEqual(
             Personality(id: "c", name: "C", prompt: "p",
-                        voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceName: "Rae")).voiceSummary,
+                        voiceRef: PersonalityVoiceRef(provider: .elevenLabs, elevenLabsVoiceName: "Rae")).voiceSummary(in: []),
             "ElevenLabs: Rae"
         )
         XCTAssertEqual(
             Personality(id: "d", name: "D", prompt: "p",
-                        voiceRef: PersonalityVoiceRef(provider: .xai)).voiceSummary,
+                        voiceRef: PersonalityVoiceRef(provider: .xai)).voiceSummary(in: []),
             "xAI voice"
+        )
+        // System voices resolve against the supplied options list, not a
+        // fresh AttacheVoiceCatalog.options() call (INF-352 step 6).
+        let systemOptions = [AttacheVoiceOption(id: "voice.x", name: "Xena", gender: "female", localeIdentifier: "en_US")]
+        XCTAssertEqual(
+            Personality(id: "j", name: "J", prompt: "p", voiceRef: .systemVoice("voice.x")).voiceSummary(in: systemOptions),
+            "Xena (en-US)"
+        )
+        XCTAssertEqual(
+            Personality(id: "k", name: "K", prompt: "p", voiceRef: .systemVoice("voice.missing")).voiceSummary(in: systemOptions),
+            "voice.missing"
         )
         XCTAssertEqual(Personality(id: "e", name: "E", prompt: "p", character: .cowboy).characterAvatarEmoji, "🤠")
         XCTAssertEqual(Personality(id: "f", name: "F", prompt: "p").characterAvatarEmoji, "🤖")

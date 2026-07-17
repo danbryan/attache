@@ -61,7 +61,7 @@ struct PersonalitiesPane: View {
 
                 HStack(spacing: 7) {
                     CharacterDetailChip(icon: "person.crop.circle", text: personality.presenceSummary)
-                    CharacterDetailChip(icon: "speaker.wave.2", text: personality.voiceSummary)
+                    CharacterDetailChip(icon: "speaker.wave.2", text: personality.voiceSummary(in: model.speechVoiceOptions))
                     CharacterDetailChip(icon: "cpu", text: personality.modelSummary)
                 }
 
@@ -159,7 +159,7 @@ struct PersonalitiesPane: View {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(model.theme.signatureColor)
                 }
             }
-            Text("\(personality.presenceSummary) · \(personality.voiceSummary)")
+            Text("\(personality.presenceSummary) · \(personality.voiceSummary(in: model.speechVoiceOptions))")
                 .typoCaption()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -254,6 +254,8 @@ struct PersonalityStudioSheet: View {
     @State private var modelDiscoveryStatus = ""
     @State private var pendingCloudVoice: AttacheSpeechProvider?
     @State private var previewAfterCloudVoiceConsent = false
+    @State private var pendingVoicePickerSelection: VoicePickerEntry?
+    @State private var voicePickerPresented = false
     @State private var pendingCloudModel: AttachePresentationProvider?
     @State private var personalityLibraryPresented = false
     @State private var personalityQuery = ""
@@ -358,7 +360,12 @@ struct PersonalityStudioSheet: View {
                         for: engine,
                         xaiBaseURL: requestedXAIBaseURL
                     )
-                    setVoiceProvider(engine)
+                    if let entry = pendingVoicePickerSelection {
+                        applyVoiceSelection(entry)
+                        pendingVoicePickerSelection = nil
+                    } else {
+                        setVoiceProvider(engine)
+                    }
                     pendingCloudVoice = nil
                     if previewAfterCloudVoiceConsent {
                         previewAfterCloudVoiceConsent = false
@@ -367,6 +374,7 @@ struct PersonalityStudioSheet: View {
                 },
                 onCancel: {
                     previewAfterCloudVoiceConsent = false
+                    pendingVoicePickerSelection = nil
                     pendingCloudVoice = nil
                 }
             )
@@ -400,7 +408,7 @@ struct PersonalityStudioSheet: View {
                 Text(draft.name.isEmpty ? "Your character" : draft.name)
                     .typoDisplay(size: 25, .semibold)
                     .multilineTextAlignment(.center)
-                Text("\(draft.presenceSummary) · \(draft.voiceSummary)")
+                Text("\(draft.presenceSummary) · \(draft.voiceSummary(in: model.speechVoiceOptions))")
                     .typoCaption()
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -702,14 +710,8 @@ struct PersonalityStudioSheet: View {
 
     @ViewBuilder private func voicePicker(for provider: AttacheSpeechProvider) -> some View {
         switch provider {
-        case .system:
-            Picker("Voice", selection: Binding(
-                get: { draft.voiceRef?.systemVoiceIdentifier ?? "" },
-                set: { id in updateVoice { $0.systemVoiceIdentifier = id } }
-            )) {
-                ForEach(model.speechVoiceOptions) { option in Text(option.title).tag(option.id) }
-            }
-            .accessibilityLabel("On-device character voice")
+        case .system, .xai, .openai:
+            voicePickerLauncher
         case .elevenLabs:
             remoteVoicePicker(
                 options: model.elevenLabsVoiceOptions,
@@ -718,23 +720,78 @@ struct PersonalityStudioSheet: View {
                 select: { option in updateVoice { $0.elevenLabsVoiceID = option.id; $0.elevenLabsVoiceName = option.name } },
                 reload: { model.loadElevenLabsVoices() }
             )
-        case .xai:
-            remoteVoicePicker(
-                options: model.xaiVoiceOptions,
-                selectedID: draft.voiceRef?.xaiVoiceID ?? "",
-                fallbackName: draft.voiceRef?.xaiVoiceName,
-                select: { option in updateVoice { $0.xaiVoiceID = option.id; $0.xaiVoiceName = option.name } },
-                reload: { model.loadXAIVoices() }
-            )
-        case .openai:
-            remoteVoicePicker(
-                options: model.openaiVoiceOptions,
-                selectedID: draft.voiceRef?.openaiVoiceID ?? "",
-                fallbackName: draft.voiceRef?.openaiVoiceName,
-                select: { option in updateVoice { $0.openaiVoiceID = option.id; $0.openaiVoiceName = option.name } },
-                reload: { model.loadOpenAIVoices() }
+        }
+    }
+
+    /// System, xAI, and OpenAI voice choice all go through the rebuilt
+    /// picker (INF-352): search, engine/quality/language filters, grouped
+    /// rows, and per-row preview, presented as a sheet within the studio.
+    /// ElevenLabs keeps the pre-existing plain picker above.
+    private var voicePickerLauncher: some View {
+        Button {
+            voicePickerPresented = true
+        } label: {
+            HStack {
+                Image(systemName: "waveform")
+                Text(draft.voiceSummary(in: model.speechVoiceOptions))
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel("Browse voices")
+        .accessibilityValue(draft.voiceSummary(in: model.speechVoiceOptions))
+        .sheet(isPresented: $voicePickerPresented) {
+            VoicePickerView(
+                model: model,
+                currentEngine: draft.voiceRef?.provider ?? .system,
+                currentSystemVoiceID: draft.voiceRef?.systemVoiceIdentifier,
+                currentXAIVoiceID: draft.voiceRef?.xaiVoiceID,
+                currentOpenAIVoiceID: draft.voiceRef?.openaiVoiceID,
+                onSelect: { entry in requestVoiceSelection(entry) },
+                onClose: { voicePickerPresented = false }
             )
         }
+    }
+
+    private func requestVoiceSelection(_ entry: VoicePickerEntry) {
+        previewAfterCloudVoiceConsent = false
+        let provider = entry.engine
+        if provider.sendsToCloud,
+           !model.cloudVoiceConsentAcknowledged(
+               for: provider,
+               xaiBaseURL: draftXAIBaseURL(for: provider)
+           ) {
+            // Close the voice picker sheet first so the consent sheet
+            // presents on the studio itself rather than stacking on top of
+            // an already-presented sheet.
+            pendingVoicePickerSelection = entry
+            voicePickerPresented = false
+            pendingCloudVoice = provider
+        } else {
+            applyVoiceSelection(entry)
+        }
+    }
+
+    private func applyVoiceSelection(_ entry: VoicePickerEntry) {
+        setVoiceProvider(entry.engine)
+        updateVoice { ref in
+            switch entry.engine {
+            case .system:
+                ref.systemVoiceIdentifier = entry.voiceID
+            case .xai:
+                ref.xaiVoiceID = entry.voiceID
+                ref.xaiVoiceName = entry.name
+            case .openai:
+                ref.openaiVoiceID = entry.voiceID
+                ref.openaiVoiceName = entry.name
+            case .elevenLabs:
+                break
+            }
+        }
+        voicePickerPresented = false
     }
 
     private func remoteVoicePicker(

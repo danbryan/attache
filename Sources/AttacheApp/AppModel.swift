@@ -5996,6 +5996,21 @@ final class AppModel: ObservableObject {
         personalityPreviewRequestID = nil
     }
 
+    /// Speaks a short sample in one specific voice, for the voice picker's
+    /// per-row preview button (INF-352). Only ever called from an explicit
+    /// button click, never on picker open or row selection/highlight, per
+    /// the off-call audio safety rule. Callers are responsible for gating
+    /// cloud engines behind `cloudVoiceConsentAcknowledged` before invoking
+    /// this: it does not itself block on consent, matching how
+    /// `previewPersonality` and `previewAssistantVoice` already speak
+    /// whatever voice is configured without a consent check of their own.
+    func previewVoiceSample(
+        for ref: PersonalityVoiceRef,
+        sampleText: String = "Hi, this is a quick preview of this voice."
+    ) {
+        playback.preview(sampleText, configuration: speechConfiguration(for: ref))
+    }
+
     private func personalityPreviewSettings(for personality: Personality) -> AttachePresentationSettings? {
         guard let ref = personality.modelRef,
               connectedTextProviders.contains(ref.provider),

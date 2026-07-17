@@ -2871,6 +2871,69 @@ if enabled("personality") {
         _ = try waitForElement("created Echo presence", in: try settingsWindow(), containing: "Echo voice bars")
     }
 
+    run.step("personality-studio", "the voice picker opens, filters by search, and the row count shrinks") {
+        let create = try waitForElement(
+            "Create character button",
+            in: try settingsWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Create character"
+        )
+        guard create.press() else { throw SmokeError(message: "AXPress failed on \(create.summary)") }
+        try waitUntil("character studio window for voice picker check", timeout: 10) { (try? personalityStudioWindow()) != nil }
+        let studio = try personalityStudioWindow()
+
+        let browseVoices = try waitForElement(
+            "Browse voices button",
+            in: studio,
+            role: kAXButtonRole as String,
+            containing: "Browse voices"
+        )
+        guard browseVoices.press() else { throw SmokeError(message: "AXPress failed on \(browseVoices.summary)") }
+        try waitUntil("voice picker sheet", timeout: 10) {
+            (try? personalityStudioWindow())?.firstDescendant(containing: "Voice picker") != nil
+        }
+
+        func rowCount() -> Int {
+            (try? personalityStudioWindow())?.descendants(
+                where: { $0.matches("Play sample of") },
+                collectLimit: 200
+            ).count ?? 0
+        }
+        try waitUntil("voice picker rows to populate", timeout: 5) { rowCount() > 0 }
+        let before = rowCount()
+
+        let search = try waitForElement(
+            "voice search field",
+            in: try personalityStudioWindow(),
+            role: kAXTextFieldRole as String,
+            containing: "Search voices"
+        )
+        _ = search.setFocused()
+        if !search.setValue("zzz-no-such-voice-xyz") { app.type("zzz-no-such-voice-xyz") }
+        try waitUntil("voice picker rows to shrink after search", timeout: 5) {
+            rowCount() < before
+        }
+        let after = rowCount()
+        guard after < before else {
+            throw SmokeError(message: "voice picker row count did not shrink after search: before=\(before) after=\(after)")
+        }
+
+        let done = try waitForElement(
+            "voice picker done button",
+            in: try personalityStudioWindow(),
+            role: kAXButtonRole as String,
+            exactly: "Done"
+        )
+        guard done.press() else { throw SmokeError(message: "AXPress failed on \(done.summary)") }
+        try waitUntil("voice picker sheet closes", timeout: 5) {
+            (try? personalityStudioWindow())?.firstDescendant(containing: "Voice picker") == nil
+        }
+
+        // Discard this scratch draft rather than saving it.
+        app.key(Key.escape)
+        try waitUntil("character studio closes after voice picker check", timeout: 10) { (try? personalityStudioWindow()) == nil }
+    }
+
     run.step("personality-studio", "a complete personality JSON imports through the app workflow") {
         let importButton = try waitForElement(
             "Import personality button",

@@ -366,12 +366,21 @@ extension Personality {
 extension Personality {
     /// A short, human label for this personality's voice, for list rows and the
     /// editor. Never surfaces provider internals like a raw voice id.
-    var voiceSummary: String {
+    ///
+    /// Takes an already-computed system voice options list (e.g.
+    /// `AppModel.speechVoiceOptions`) rather than calling
+    /// `AttacheVoiceCatalog.options()` itself, which re-filters and re-sorts
+    /// the whole catalog on every call. Wardrobe cards recompute this on
+    /// every render, so a fresh catalog call there was the largest avoidable
+    /// per-render cost in the personality list (INF-352 step 6). Callers with
+    /// no options handy (e.g. a personality known not to use a system voice)
+    /// can pass an empty array; only the `.system` branch consults it.
+    func voiceSummary(in systemOptions: [AttacheVoiceOption]) -> String {
         guard let ref = voiceRef else { return "Voice not set" }
         switch ref.provider {
         case .system:
             guard let identifier = ref.systemVoiceIdentifier else { return "Voice not set" }
-            return AttacheVoiceCatalog.option(for: identifier)?.title ?? identifier
+            return systemOptions.first(where: { $0.id == identifier })?.title ?? identifier
         case .elevenLabs:
             return "ElevenLabs" + (ref.elevenLabsVoiceName.map { ": \($0)" } ?? " voice")
         case .xai:
