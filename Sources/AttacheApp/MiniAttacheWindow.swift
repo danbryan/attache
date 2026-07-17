@@ -1,4 +1,5 @@
 import AppKit
+import AttacheCore
 import Combine
 import SwiftUI
 
@@ -209,8 +210,14 @@ struct MiniAttacheView: View {
                 model?.characterFocusAngle = angle
             },
             character: model.character,
-            fleetNotificationsOnly: true
+            fleetNotificationsOnly: true,
+            isPrivate: model.isPrivateConversation
         )
+        .overlay(alignment: .top) {
+            if model.isPrivateConversation {
+                miniPrivateChip
+            }
+        }
         .contentShape(Rectangle())
         .contextMenu {
             Button("Replay Last Update") { model.replayLastUpdate() }
@@ -235,6 +242,26 @@ struct MiniAttacheView: View {
             Button("Quit Attaché") { NSApp.terminate(nil) }
         }
         .accessibilityLabel("Mini window")
+    }
+
+    // The mini window's PRIVATE chip (INF-356): the main window's HUD is not
+    // present here, so the mini window needs its own persistent indicator
+    // while storage mode is .privateCall. Same copy and tooltip rule as the
+    // call HUD's chip (`PrivateModeIndicator.chipTooltip`).
+    private var miniPrivateChip: some View {
+        Text("PRIVATE")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.6)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.black.opacity(0.72), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.35)))
+            .padding(.top, 6)
+            .help(PrivateModeIndicator.chipTooltip(modelIsLocal: !model.presentationSendsToCloud))
+            .accessibilityLabel("PRIVATE")
+            .accessibilityValue(PrivateModeIndicator.chipTooltip(modelIsLocal: !model.presentationSendsToCloud))
+            .allowsHitTesting(false)
     }
 }
 

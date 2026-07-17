@@ -38,6 +38,10 @@ struct EchoformRendererView: View {
     /// renderer grows to the immersive size.
     var compactBars = false
     var onToggleBarsExpansion: (() -> Void)?
+    /// Incognito identity (INF-356): true while the active conversation is
+    /// private, so the shared character renderer draws its crown band
+    /// overlay in both character mode and Echo's voice-bars presence.
+    var isPrivate = false
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -65,7 +69,8 @@ struct EchoformRendererView: View {
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch,
                     focusAngle: characterFocusAngle,
-                    onFocusAngleChanged: onCharacterFocusAngleChanged
+                    onFocusAngleChanged: onCharacterFocusAngleChanged,
+                    isPrivate: isPrivate
                 )
                 .contextMenu {
                     Button("Edit personalities…") {
@@ -111,7 +116,8 @@ struct EchoformRendererView: View {
             onFleetFocus: onFleetFocus,
             onFleetSwitch: onFleetSwitch,
             focusAngle: characterFocusAngle,
-            onFocusAngleChanged: onCharacterFocusAngleChanged
+            onFocusAngleChanged: onCharacterFocusAngleChanged,
+            isPrivate: isPrivate
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Echo voice bars, \(activity.phase.accessibilityTitle)")

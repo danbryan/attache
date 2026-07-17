@@ -54,6 +54,34 @@ extension AttacheRootView {
             }
         }
         .onHover { hoveredDockItem = $0 ? .talk : nil }
+        .contextMenu {
+            Button("Start Call") {
+                withAnimation(.easeInOut(duration: 0.16)) { model.startCall() }
+            }
+            .disabled(model.onCall)
+            Button("Start Private Call") {
+                withAnimation(.easeInOut(duration: 0.16)) { model.startPrivateCall() }
+            }
+            .disabled(model.onCall)
+            if !model.personalities.isEmpty {
+                Menu("Call as…") {
+                    ForEach(model.personalities) { personality in
+                        Button(personality.name) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                if optionKeyMonitor.isHeld {
+                                    // Option variant: call as this personality,
+                                    // privately (no Attaché conversation record).
+                                    model.startPrivateCall(as: personality.id)
+                                } else {
+                                    model.startCall(as: personality.id)
+                                }
+                            }
+                        }
+                        .disabled(model.onCall)
+                    }
+                }
+            }
+        }
     }
 
     // A standard chat composer for the live call: destination toggle, one input
@@ -64,7 +92,10 @@ extension AttacheRootView {
             if model.isPrivateConversation {
                 privateCallBanner
             } else {
-                callDestinationPicker
+                HStack(spacing: 8) {
+                    callDestinationPicker
+                    callOverflowMenu
+                }
             }
 
             ContextOverflowRecoveryBanner()
@@ -135,26 +166,88 @@ extension AttacheRootView {
         .accessibilityLabel(model.isPrivateConversation ? "Private call composer" : "Live call composer")
     }
 
+    // Call HUD overflow menu (INF-355): the mid-call, saved-to-private
+    // switch. Only offered on a saved call; a private call already shows
+    // privateCallBanner instead of this row, and there is no action here to
+    // switch a private call back to saved (one-way door).
+    var callOverflowMenu: some View {
+        Menu {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    _ = model.convertActiveCallToPrivate()
+                }
+            } label: {
+                Label("Make This Call Private", systemImage: "eye.slash.fill")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .typoIcon(size: 13, .semibold)
+                .foregroundStyle(Color.primary.opacity(0.62))
+                .frame(width: 28, height: 28)
+                .background(Color.primary.opacity(0.06), in: Circle())
+                .overlay(Circle().stroke(Color.primary.opacity(0.12)))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("More call options")
+        .accessibilityLabel("More call options")
+    }
+
     var privateCallBanner: some View {
         HStack(alignment: .top, spacing: 9) {
-            Image(systemName: "eye.slash.fill")
-                .typoIcon(size: 12, .semibold)
-                .foregroundStyle(accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Private Call")
-                    .typoLabel(.bold)
-                Text(model.privateConversationDisclosure)
-                    .typoCaption()
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            // The disclosure text combines into one AX element for a clean
+            // VoiceOver read; the PRIVATE chip stays OUTSIDE that combine
+            // scope so it remains its own discoverable element with its own
+            // exact "PRIVATE" label, the way ui-smoke and any other
+            // automation must find it (`.accessibilityElement(children:
+            // .combine)` otherwise flattens every descendant's label into
+            // one, which would swallow the chip's identity).
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: "eye.slash.fill")
+                    .typoIcon(size: 12, .semibold)
+                    .foregroundStyle(accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Private Call")
+                        .typoLabel(.bold)
+                    Text(model.privateConversationDisclosure)
+                        .typoCaption()
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Private Call. \(model.privateConversationDisclosure)")
+
+            Spacer(minLength: 0)
+            privateChip
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Private Call. \(model.privateConversationDisclosure)")
+    }
+
+    // The persistent PRIVATE chip (INF-356): shown in the call HUD and the
+    // mini window while storage mode is .privateCall. Its tooltip is derived
+    // from the active presentation model's egress classification (local vs
+    // cloud) rather than a static disclosure, so it stays accurate as the
+    // user switches models mid-call.
+    var privateChip: some View {
+        Text("PRIVATE")
+            .typoCaption(.bold)
+            .tracking(0.6)
+            .foregroundStyle(accent)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(accent.opacity(0.16), in: Capsule())
+            .overlay(Capsule().stroke(accent.opacity(0.4)))
+            .help(privateChipTooltip)
+            .accessibilityLabel("PRIVATE")
+            .accessibilityValue(privateChipTooltip)
+    }
+
+    var privateChipTooltip: String {
+        PrivateModeIndicator.chipTooltip(modelIsLocal: !model.presentationSendsToCloud)
     }
 
     // One status row for the whole call-phase surface (INF-244): icon (or

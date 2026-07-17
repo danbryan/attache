@@ -59,6 +59,11 @@ struct AttacheRootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var playback: SpeechPlaybackController
     @ObservedObject var micTranscript: MicTranscriptController
+    // Drives the dock's right-click context menus' Option-held alternates
+    // (INF-354); a real `@Published` property so SwiftUI swaps the alternate
+    // items in live while a menu is open, matching the native macOS
+    // hold-Option convention.
+    @ObservedObject var optionKeyMonitor = OptionKeyMonitor.shared
     @State var hoveredDockItem: DockItem?
     @State private var chromeAwake = true
     @State private var idleWorkItem: DispatchWorkItem?
@@ -80,6 +85,9 @@ struct AttacheRootView: View {
     // and sheet per surface, since the consent moment is identical everywhere
     // except which underlying `select...RecoveryProvider` runs on Enable.
     @State var pendingRecoveryProviderSwitch: PendingRecoveryProviderSwitch?
+    // "Forget This Session…" confirmation (INF-357), shared by every session
+    // row context menu and the Voicemail control's Option alternate.
+    @State var pendingForgetSession: SessionForgetRequest?
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
     @State private var echoExpanded = false
@@ -107,6 +115,29 @@ struct AttacheRootView: View {
     // The active theme's signature color (e.g. Cyberpunk pink), used for every
     // highlight and selection accent in Attaché window.
     var accent: Color { model.theme.signatureColor }
+
+    // The private-mode window edge tint (INF-356 step 3): a subtle border
+    // glow in the active theme's accent, so a private call is visible even
+    // at a glance from across the room, layered on top of everything else
+    // and never intercepting clicks. Reuses `accent` (the same theme
+    // machinery every other highlight in this view follows) rather than
+    // inventing a new color, so it automatically holds the same WCAG floor
+    // `ThemeContrastTests`/`PrivateModeWindowTintTests` verify for every
+    // built-in theme's accent.
+    private var privateModeWindowTint: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [accent.opacity(0.55), accent.opacity(0.18), accent.opacity(0.55)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 3
+            )
+            .padding(1.5)
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
+    }
 
     // Ambient home: the chrome is visible while the pointer is recently active (or
     // pinned, or you're interacting), and fades to the bare glow when still.
@@ -189,7 +220,8 @@ struct AttacheRootView: View {
                         echoExpanded.toggle()
                     }
                     window.toggleFullScreen(nil)
-                }
+                },
+                isPrivate: model.isPrivateConversation
             )
             // A personality change reads like changing characters: the old
             // presence eases out and the new one settles in. No spoken greeting
@@ -306,7 +338,14 @@ struct AttacheRootView: View {
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
 
+            if model.isPrivateConversation {
+                privateModeWindowTint
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
         }
+        .animation(.easeInOut(duration: 0.22), value: model.isPrivateConversation)
         .contentShape(Rectangle())
         .attacheTextScale(model.uiTextScale)
         .onPreferenceChange(BottomOverlayHeightKey.self) { bottomOverlayHeight = $0 }
@@ -341,6 +380,7 @@ struct AttacheRootView: View {
             }
         }
         .onAppear { scheduleIdleFade() }
+        .sessionForgetConfirmation(model: model, request: $pendingForgetSession)
         .sheet(isPresented: $model.showOnboarding) {
             OnboardingSheet(model: model)
         }

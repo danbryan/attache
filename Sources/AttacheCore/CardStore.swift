@@ -504,6 +504,39 @@ public final class CardStore: @unchecked Sendable {
         return try queryCards(sql: sql, bindings: [.text(externalSessionID), .int(limit)])
     }
 
+    /// All cards linked to a watched session, unbounded and including
+    /// archived, for the "Forget This Session…" scrub (INF-357): callers
+    /// delete every id this returns, then re-query to verify zero remain
+    /// before reporting success.
+    public func fetchCards(forExternalSessionID externalSessionID: String) throws -> [VoicemailCard] {
+        let sql =
+            """
+            SELECT
+                c.id, c.source_id, src.kind, src.display_name, c.session_id,
+                sess.external_session_id, sess.project_path, sess.title,
+                c.kind, c.raw_text, c.summary, c.spoken_text, c.status,
+                c.created_at, c.heard_at, c.metadata_json,
+                COALESCE(aa.duration_ms, 0), aa.alignment_json
+            FROM cards c
+            JOIN sources src ON src.id = c.source_id
+            LEFT JOIN sessions sess ON sess.id = c.session_id
+            LEFT JOIN audio_assets aa ON aa.card_id = c.id
+            WHERE sess.external_session_id = ?
+            ORDER BY c.created_at DESC
+            """
+        return try queryCards(sql: sql, bindings: [.text(externalSessionID)])
+    }
+
+    /// Permanently removes every card linked to a watched session. Thin
+    /// wrapper over `deleteCards(ids:)` so the INF-357 forget-session scrub
+    /// does not have to duplicate the lookup-then-delete shape.
+    @discardableResult
+    public func deleteCards(forExternalSessionID externalSessionID: String) throws -> Int {
+        let ids = try fetchCards(forExternalSessionID: externalSessionID).map(\.id)
+        guard !ids.isEmpty else { return 0 }
+        return try deleteCards(ids: ids)
+    }
+
     public func markHeard(cardID: String, at date: Date = Date()) throws {
         try execute(
             "UPDATE cards SET status = ?, heard_at = ? WHERE id = ?",

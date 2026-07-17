@@ -30,6 +30,7 @@ struct SessionCommandPalette: View {
     @State private var suppressNextRowAttach = false
     @State private var hoveredPinID: String?
     @State private var sourceFilter: SourceKind?   // nil = all tools
+    @State private var pendingForgetSession: SessionForgetRequest?
     @FocusState private var fieldFocused: Bool
 
     /// Tools that actually have sessions in the index, in a stable order, so the
@@ -185,6 +186,7 @@ struct SessionCommandPalette: View {
         } message: {
             Text("Sets how Attaché labels this session. Codex is unchanged.")
         }
+        .sessionForgetConfirmation(model: model, request: $pendingForgetSession)
     }
 
     private var emptyStateText: String {
@@ -376,6 +378,9 @@ struct SessionCommandPalette: View {
                             .typoIcon(size: 8, .bold)
                             .foregroundStyle(.secondary)
                     }
+                    if model.isSessionRecordingDisabled(sessionID: record.id) {
+                        SessionNotRecordedGlyph()
+                    }
                     if hit.matchedContent {
                         Text("in transcript")
                             .typoCaption(.semibold)
@@ -458,6 +463,13 @@ struct SessionCommandPalette: View {
             } else {
                 Button("Pin to Watching") { model.watchSearchHit(hit, focus: false); recompute() }
             }
+            Divider()
+            SessionPrivacyMenuItems(
+                model: model,
+                sessionID: record.id,
+                title: model.displaySessionTitle(record),
+                pendingForget: $pendingForgetSession
+            )
         }
     }
 

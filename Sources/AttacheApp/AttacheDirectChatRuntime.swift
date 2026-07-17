@@ -36,6 +36,12 @@ final class AttacheDirectChatRuntime {
         _ = store.delete(callID: callID.uuidString)
     }
 
+    /// Number of capsules still linked to a call id, used to verify a scrub
+    /// removed everything before the UI is told a call is private (INF-355).
+    func capsuleCount(_ callID: UUID) -> Int {
+        store.count(callID: callID.uuidString)
+    }
+
     func capture(
         turns: [ConversationTurn],
         callID: UUID,

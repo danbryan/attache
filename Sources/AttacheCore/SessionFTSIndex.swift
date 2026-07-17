@@ -441,6 +441,21 @@ public final class SessionFTSIndex: @unchecked Sendable {
         """)
     }
 
+    /// Number of chunks currently indexed for one session. Used to verify a
+    /// scrub removed everything before the caller reports success (INF-357),
+    /// the same fail-closed shape as `AttacheDirectChatRuntime.capsuleCount`.
+    public func chunkCount(forSessionID sessionID: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, "SELECT COUNT(*) FROM session_chunks WHERE session_id = ?;", -1, &stmt, nil) == SQLITE_OK else {
+            return 0
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, sessionID, -1, sessionFTSTransient)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int(stmt, 0))
+    }
+
     /// Remove a session that was deleted from disk so the index does not keep
     /// stale hits (INF-306).
     public func remove(sessionID: String) {

@@ -573,6 +573,21 @@ public final class AttacheDirectChatSummaryStore: @unchecked Sendable {
         return deleted
     }
 
+    /// Count of capsules (active or invalidated) still linked to one call.
+    /// Used to verify a scrub actually removed everything before a caller
+    /// flips UI state to private (INF-355).
+    public func count(callID: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard let handle else { return 0 }
+        let sql = "SELECT COUNT(*) FROM direct_chat_capsules WHERE call_id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, callID, -1, transient)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
     public func deleteAll() {
         lock.lock(); defer { lock.unlock() }
         if let handle {
