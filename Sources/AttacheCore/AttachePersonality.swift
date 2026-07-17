@@ -400,18 +400,67 @@ public enum AttachePersonality {
         memoryContext: String?,
         spokenLanguageName: String? = nil
     ) -> AttachePresentationPrompt {
+        let itemCount = items.count
+        let sessionCount = recapSessionCount(items.map(\.sessionTitle))
+        let system = recapSystemPromptText(
+            itemCount: itemCount,
+            sessionCount: sessionCount,
+            profilePrompt: profilePrompt,
+            memoryContext: memoryContext,
+            spokenLanguageName: spokenLanguageName
+        )
+
+        var lines: [String] = ["Waiting inbox items to recap:"]
+        for (index, item) in items.enumerated() {
+            let title = item.sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let summary = item.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            let spoken = item.spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = summary.isEmpty ? spoken : summary
+            let decision = item.needsDecision ? " [needs a decision from the user]" : ""
+            lines.append("\(index + 1). \(title.isEmpty ? "Update" : title): \(detail)\(decision)")
+        }
+        let user = lines.joined(separator: "\n") + "\n\nWrite the spoken recap now."
+
+        return AttachePresentationPrompt(
+            messages: [
+                AttacheChatMessage(role: "system", content: system),
+                AttacheChatMessage(role: "user", content: user)
+            ],
+            memoryContext: memoryContext,
+            rawOutputCharacterCount: user.count,
+            truncatedRawOutput: false
+        )
+    }
+
+    /// Number of distinct, non-empty session titles among a set of recap
+    /// items. Shared by the concatenated and staged recap prompt builders so
+    /// their "N updates across S sessions" framing always agrees.
+    public static func recapSessionCount(_ sessionTitles: [String]) -> Int {
+        Set(sessionTitles.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+            .filter { !$0.isEmpty }
+            .count
+    }
+
+    /// The recap system prompt text, shared by the legacy concatenated-user-turn
+    /// builder (`recapPrompt`), the staged single/multi-call builder
+    /// (`recapStagedSystemPrompt`), and the final synthesis call
+    /// (`recapSynthesisPrompt`), so brevity rules never drift between paths
+    /// (INF-353).
+    static func recapSystemPromptText(
+        itemCount: Int,
+        sessionCount: Int,
+        profilePrompt: String,
+        memoryContext: String?,
+        spokenLanguageName: String?
+    ) -> String {
         let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
         let languageBlock = spokenLanguageName.map {
             "\n- Write the recap in \($0), translating what matters even if the source items are in another language."
         } ?? ""
-        let itemCount = items.count
-        let sessionCount = Set(items.map { $0.sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
-            .filter { !$0.isEmpty }
-            .count
         let ceiling = recapSentenceCeiling(itemCount: itemCount)
         let scale = "\(itemCount) waiting update\(itemCount == 1 ? "" : "s")"
             + (sessionCount > 1 ? " across \(sessionCount) sessions" : "")
-        let system = """
+        return """
         \(attacheIdentityPrompt)
 
         \(profilePrompt.trimmingCharacters(in: .whitespacesAndNewlines))\(memoryBlock)
@@ -429,17 +478,90 @@ public enum AttachePersonality {
         - The items below are already condensed summaries, not raw output. Do not recite code, logs, paths, hashes, URLs, or IDs.
         - Output only the spoken recap. No labels, no markdown fences, no stage directions, no CARD_SUMMARY line.
         """
+    }
 
-        var lines: [String] = ["Waiting inbox items to recap:"]
-        for (index, item) in items.enumerated() {
+    /// Staged recap system prompt (INF-353): identical brevity contract to
+    /// `recapPrompt`, but items are not embedded in this text at all. Callers
+    /// pass the items separately as `.recapEvidence` context items via
+    /// `recapContextItems(from:)`, so the protected user turn stays this fixed
+    /// instruction text regardless of inbox size.
+    public static func recapStagedSystemPrompt(
+        itemCount: Int,
+        sessionCount: Int,
+        profilePrompt: String = defaultProfilePrompt,
+        memoryContext: String?,
+        spokenLanguageName: String? = nil
+    ) -> String {
+        recapSystemPromptText(
+            itemCount: itemCount,
+            sessionCount: sessionCount,
+            profilePrompt: profilePrompt,
+            memoryContext: memoryContext,
+            spokenLanguageName: spokenLanguageName
+        )
+    }
+
+    /// The fixed instruction text for a staged recap's protected user turn
+    /// (INF-353). It never grows with inbox size; the items themselves ride
+    /// as separate `.recapEvidence` context items with `treatment:
+    /// .summarizeEligible`, so the current user turn stays cheap to budget.
+    public static func recapStagedUserInstruction() -> String {
+        "Using the waiting inbox items provided above as evidence, write the spoken recap now."
+    }
+
+    /// Build the `.recapEvidence` context items for a set of recap items
+    /// (INF-353). Each carries a stable `recap-item:<id>` provenance so a
+    /// compiler receipt can name exactly which items were included or
+    /// omitted, and `treatment: .summarizeEligible` so the compiler may stage
+    /// rather than silently drop items that do not fit.
+    public static func recapContextItems(
+        from items: [(id: String, item: RecapItem)],
+        priorityBase: Int = 500
+    ) -> [AttacheContextItem] {
+        items.enumerated().map { index, entry in
+            let (id, item) = entry
             let title = item.sessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
             let summary = item.summary.trimmingCharacters(in: .whitespacesAndNewlines)
             let spoken = item.spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
             let detail = summary.isEmpty ? spoken : summary
             let decision = item.needsDecision ? " [needs a decision from the user]" : ""
-            lines.append("\(index + 1). \(title.isEmpty ? "Update" : title): \(detail)\(decision)")
+            let content = "\(title.isEmpty ? "Update" : title): \(detail)\(decision)"
+            return AttacheContextItem(
+                source: .recapEvidence,
+                content: content,
+                provenance: "recap-item:\(id)",
+                priority: priorityBase - index,
+                treatment: .summarizeEligible
+            )
         }
-        let user = lines.joined(separator: "\n") + "\n\nWrite the spoken recap now."
+    }
+
+    /// The final synthesis call over per-stage recap summaries (INF-353),
+    /// producing one combined spoken recap. Used only when a plan yields more
+    /// than one stage; the single-stage case uses that stage's own completion
+    /// directly, with no synthesis call.
+    public static func recapSynthesisPrompt(
+        stageSummaries: [String],
+        itemCount: Int,
+        sessionCount: Int,
+        profilePrompt: String = defaultProfilePrompt,
+        memoryContext: String?,
+        spokenLanguageName: String? = nil
+    ) -> AttachePresentationPrompt {
+        let system = recapSystemPromptText(
+            itemCount: itemCount,
+            sessionCount: sessionCount,
+            profilePrompt: profilePrompt,
+            memoryContext: memoryContext,
+            spokenLanguageName: spokenLanguageName
+        )
+        + "\n- The material below is already your own condensed summaries of earlier stages, not raw updates. Combine them into one recap; do not re-summarize them as a list of stages."
+
+        var lines: [String] = ["Stage summaries to combine into one final spoken recap:"]
+        for (index, summary) in stageSummaries.enumerated() {
+            lines.append("\(index + 1). \(summary.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        let user = lines.joined(separator: "\n") + "\n\nWrite the single combined spoken recap now."
 
         return AttachePresentationPrompt(
             messages: [

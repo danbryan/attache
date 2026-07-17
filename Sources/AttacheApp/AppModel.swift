@@ -265,6 +265,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var recapRecovery: ConversationRecovery?
     @Published private(set) var recapRecoveryConfirmation: String?
     private var recapRetryCards: [VoicemailCard] = []
+    /// A pending cost-preview notice for a large or multi-stage recap
+    /// (INF-353), shown above the item-count/stage-count thresholds instead
+    /// of spending model calls immediately. `nil` below both thresholds.
+    @Published private(set) var recapCostPreview: RecapCostPreviewUIState?
+    private var pendingRecapExecution: PendingRecapExecution?
     @Published private(set) var followUpRecovery: ConversationRecovery?
     @Published private(set) var liveFollowUpRecovery: ConversationRecovery?
     /// Incremented whenever background topic tagging (`.tagging` role) fails.
@@ -2383,10 +2388,13 @@ final class AppModel: ObservableObject {
 
         // A fresh attempt (whether the user pressed "Play recap" again or this
         // is the explicit retry after a failure) supersedes any stale recovery
-        // banner from a previous attempt (INF-254).
+        // banner or pending cost preview from a previous attempt (INF-254,
+        // INF-353).
         recapRecovery = nil
         recapRecoveryConfirmation = nil
         recapRetryCards = []
+        recapCostPreview = nil
+        pendingRecapExecution = nil
 
         let summarized = cards
         guard !summarized.isEmpty else {
@@ -2401,87 +2409,308 @@ final class AppModel: ObservableObject {
             return
         }
 
-        // Snapshot everything the background Task needs from observed state here,
-        // on the calling (main) actor, so the Task never reads @Published state
-        // off-main.
         let personality = activePersonality
+        let stageItems = summarized.map { recapStageItem(for: $0) }
+        let contextStrategy = AttacheContextStrategy.resolving(
+            override: personality?.contextStrategy,
+            global: AttacheContextUIState.persistedGlobalStrategy(defaults: defaults)
+        )
+        let capability = recapCapabilityProfile()
+        let budgetPlan = recapBudgetPlan(capability: capability, strategy: contextStrategy)
+        let decision = RecapStaging.decision(for: stageItems, budgetPlan: budgetPlan)
+
+        // Cost preview (INF-353): a large or multi-stage recap makes more than
+        // one model call, so ask before spending them, mirroring the
+        // whole-session-review pre-flight notice. Below both thresholds this
+        // is a no-op and behavior is identical to before staging existed.
+        guard !decision.needsCostPreview else {
+            pendingRecapExecution = PendingRecapExecution(cards: summarized, plan: decision.plan, personality: personality)
+            recapCostPreview = RecapCostPreviewUIState(
+                id: UUID().uuidString,
+                itemCount: summarized.count,
+                sessionCount: decision.sessionCount,
+                estimatedCalls: decision.plan.estimatedCallCount
+            )
+            intakeStatus = "Recapping \(summarized.count) update\(summarized.count == 1 ? "" : "s")"
+                + " across \(decision.sessionCount) session\(decision.sessionCount == 1 ? "" : "s")"
+                + " will take \(decision.plan.estimatedCallCount) model call\(decision.plan.estimatedCallCount == 1 ? "" : "s")."
+            return
+        }
+
+        executeRecapPlan(cards: summarized, plan: decision.plan, personality: personality)
+    }
+
+    /// User confirmed the recap cost preview: run the pending staged recap
+    /// exactly as planned.
+    func startPendingRecap() {
+        guard let pending = pendingRecapExecution else { return }
+        recapCostPreview = nil
+        pendingRecapExecution = nil
+        executeRecapPlan(cards: pending.cards, plan: pending.plan, personality: pending.personality)
+    }
+
+    /// User declined the recap cost preview: discard it without making any
+    /// model calls or touching the inbox.
+    func cancelRecapCostPreview() {
+        recapCostPreview = nil
+        pendingRecapExecution = nil
+        intakeStatus = "Recap canceled."
+    }
+
+    /// Run a planned recap (INF-353). A single-stage plan makes exactly one
+    /// model call, behaviorally identical to the pre-staging recap. A
+    /// multi-stage plan runs each stage sequentially through the presentation
+    /// service, then one synthesis call over the stage summaries. A stage that
+    /// fails does not abort the run: its items are simply not covered, and the
+    /// final result honestly reports "recapped N of M updates" rather than
+    /// silently dropping them or fabricating their content. Only covered
+    /// cards are archived, so an uncovered item remains available in the
+    /// inbox for a later recap attempt.
+    private func executeRecapPlan(cards: [VoicemailCard], plan: RecapStagePlan, personality: Personality?) {
+        guard !plan.stages.isEmpty else {
+            playback.preview(inboxDigestText(for: cards))
+            return
+        }
+
         let profilePrompt = resolvedProfilePrompt(for: personality)
         let spokenLanguageName = AttachePresentationService.spokenLanguageName(defaults: defaults)
-        let prompt = AttachePersonality.recapPrompt(
-            items: summarized.map { recapItem(for: $0) },
-            profilePrompt: profilePrompt,
-            memoryContext: nil,
-            spokenLanguageName: spokenLanguageName
-        )
-        let system = prompt.messages.first(where: { $0.role == "system" })?.content ?? ""
-        let user = prompt.messages.first(where: { $0.role == "user" })?.content ?? ""
-        let snapshot = captureRequestSnapshot(
+        let cardsByID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
+        let totalItemCount = cards.count
+        let sessionCount = AttachePersonality.recapSessionCount(cards.map { recapStageItem(for: $0).sessionTitle })
+        let stages = plan.stages
+        let instruction = AttachePersonality.recapStagedUserInstruction()
+
+        // Build the shared request authority once, on the calling (main)
+        // actor, exactly like the pre-staging path did: session, personality,
+        // profile prompt, and model settings never change across stages, only
+        // the evidence context items do (INF-329 staged-processing
+        // convention).
+        let baseSnapshot = captureRequestSnapshot(
             role: .recap,
-            userInput: user,
+            userInput: instruction,
             personalityOverride: personality
         )
 
-        intakeStatus = "Writing your recap…"
+        intakeStatus = stages.count > 1
+            ? "Writing your recap in \(stages.count) stages…"
+            : "Writing your recap…"
 
         Task { [weak self] in
             guard let self else { return }
-            do {
-                let completion = try await self.presentationService.complete(
-                    snapshot: snapshot,
-                    system: system,
-                    user: user
-                )
-                // persist/play mutate @Published state and the store, so hop back
-                // to the main actor before touching either (mutating observed
-                // state off-main re-enters SwiftUI's body and overflows the stack).
-                await MainActor.run {
-                    let trimmed = AttachePersonality.stripDashes(completion.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
-                    guard !trimmed.isEmpty else {
-                        // The LLM was configured but returned nothing usable: fall
-                        // back to the deterministic digest and leave the inbox as
-                        // is. Not a classified failure (no thrown error), so no
-                        // recovery is offered, matching prior behavior exactly.
-                        self.playback.preview(self.inboxDigestText(for: summarized))
-                        self.intakeStatus = "Recap unavailable; played the quick digest instead."
-                        AttacheContextUIState.shared.publishReceipt(completion.inference.receiptView)
-                        return
-                    }
-                    self.deliverRecap(
-                        trimmed,
-                        summarizing: summarized,
-                        personality: personality,
-                        inference: completion.inference
-                    )
+            var stageSummaries: [(stageNumber: Int, text: String, itemIDs: [String])] = []
+            var lastInference: AttacheInferenceMetadata?
+            var lastError: Error?
+
+            for stage in stages {
+                let stageCards = stage.itemIDs.compactMap { cardsByID[$0] }
+                let stageItems: [(id: String, item: AttachePersonality.RecapItem)] = stageCards.map {
+                    ($0.id, self.recapItem(for: $0))
                 }
-            } catch {
-                // The deterministic fallback itself is unchanged (INF-254): still
-                // play the digest. This only ADDS a recovery affordance alongside
-                // it when the failure is structurally recoverable.
-                await MainActor.run {
-                    self.playback.preview(self.inboxDigestText(for: summarized))
-                    self.intakeStatus = "Recap unavailable; played the quick digest instead."
-                    let underlyingError = (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
-                    let presentationError = underlyingError as? AttachePresentationError
-                    let recovery = ConversationRecovery.classify(
-                        errorMessage: error.localizedDescription,
-                        failedPrompt: "",
-                        httpStatus: presentationError?.httpStatus,
-                        urlErrorCode: presentationError?.urlErrorCode ?? (underlyingError as? URLError)?.code,
-                        isCLIProvider: self.recapEffectiveProvider.isCLI
+                let stageContextItems = AttachePersonality.recapContextItems(from: stageItems)
+                let system = AttachePersonality.recapStagedSystemPrompt(
+                    itemCount: totalItemCount,
+                    sessionCount: sessionCount,
+                    profilePrompt: profilePrompt,
+                    memoryContext: nil,
+                    spokenLanguageName: spokenLanguageName
+                )
+                let stageSnapshot = AttacheRequestSnapshot(
+                    role: baseSnapshot.role,
+                    personality: baseSnapshot.personality,
+                    profilePrompt: baseSnapshot.profilePrompt,
+                    userInput: baseSnapshot.userInput,
+                    session: baseSnapshot.session,
+                    modelSettings: baseSnapshot.modelSettings,
+                    contextItems: stageContextItems,
+                    contextStrategy: baseSnapshot.contextStrategy,
+                    memorySelectionReceipt: baseSnapshot.memorySelectionReceipt,
+                    directChatMessages: baseSnapshot.directChatMessages,
+                    directChatMessageSources: baseSnapshot.directChatMessageSources
+                )
+
+                do {
+                    let completion = try await self.presentationService.complete(
+                        snapshot: stageSnapshot,
+                        system: system,
+                        user: instruction
                     )
-                    if let attempted = error as? AttacheBrokerAttemptFailure {
-                        AttacheContextUIState.shared.publishReceipt(attempted.inference.receiptView)
+                    lastInference = completion.inference
+                    let trimmed = AttachePersonality.stripDashes(
+                        completion.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    )
+                    if !trimmed.isEmpty {
+                        stageSummaries.append((stage.stageNumber, trimmed, stage.itemIDs))
                     }
-                    if recovery.offersModelSwitch {
-                        self.recapRecovery = recovery
-                        self.recapRetryCards = summarized
-                        // Model discovery for the recap recovery menu (same
-                        // pattern the live-call failure handler already uses).
-                        self.loadPresentationModels(preserveCurrentSelection: true)
+                    await MainActor.run {
+                        AttacheContextUIState.shared.publishReceipt(completion.inference.receiptView)
+                    }
+                } catch {
+                    // A failing middle stage never aborts the whole recap
+                    // (INF-329 convention): its items simply are not covered,
+                    // and the run continues to the next stage.
+                    lastError = error
+                    if let attempted = error as? AttacheBrokerAttemptFailure {
+                        lastInference = attempted.inference
+                        await MainActor.run {
+                            AttacheContextUIState.shared.publishReceipt(attempted.inference.receiptView)
+                        }
                     }
                 }
             }
+
+            let coveredIDs = Set(stageSummaries.flatMap(\.itemIDs))
+            let coveredCards = cards.filter { coveredIDs.contains($0.id) }
+
+            guard !stageSummaries.isEmpty else {
+                await MainActor.run {
+                    self.playback.preview(self.inboxDigestText(for: cards))
+                    self.intakeStatus = "Recap unavailable; played the quick digest instead."
+                    if let error = lastError {
+                        let underlyingError = (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
+                        let presentationError = underlyingError as? AttachePresentationError
+                        let recovery = ConversationRecovery.classify(
+                            errorMessage: error.localizedDescription,
+                            failedPrompt: "",
+                            httpStatus: presentationError?.httpStatus,
+                            urlErrorCode: presentationError?.urlErrorCode ?? (underlyingError as? URLError)?.code,
+                            isCLIProvider: self.recapEffectiveProvider.isCLI
+                        )
+                        if recovery.offersModelSwitch {
+                            self.recapRecovery = recovery
+                            self.recapRetryCards = cards
+                            self.loadPresentationModels(preserveCurrentSelection: true)
+                        }
+                    }
+                }
+                return
+            }
+
+            let orderedSummaries = stageSummaries.sorted { $0.stageNumber < $1.stageNumber }.map(\.text)
+            var finalText = orderedSummaries[0]
+            var finalInference = lastInference ?? AttacheInferenceMetadata.noModel(snapshot: baseSnapshot)
+
+            if stages.count > 1 {
+                // One synthesis call over the (already condensed) per-stage
+                // summaries, per INF-353 step 3. These are Attaché's own
+                // output, not raw waiting items, so they ride as the ordinary
+                // protected user turn rather than as recap evidence items.
+                let synthesisPrompt = AttachePersonality.recapSynthesisPrompt(
+                    stageSummaries: orderedSummaries,
+                    itemCount: totalItemCount,
+                    sessionCount: sessionCount,
+                    profilePrompt: profilePrompt,
+                    memoryContext: nil,
+                    spokenLanguageName: spokenLanguageName
+                )
+                let synthesisSystem = synthesisPrompt.messages.first(where: { $0.role == "system" })?.content ?? ""
+                let synthesisUser = synthesisPrompt.messages.first(where: { $0.role == "user" })?.content ?? ""
+                let synthesisSnapshot = AttacheRequestSnapshot(
+                    role: baseSnapshot.role,
+                    personality: baseSnapshot.personality,
+                    profilePrompt: baseSnapshot.profilePrompt,
+                    userInput: synthesisUser,
+                    session: baseSnapshot.session,
+                    modelSettings: baseSnapshot.modelSettings,
+                    contextItems: [],
+                    contextStrategy: baseSnapshot.contextStrategy,
+                    memorySelectionReceipt: baseSnapshot.memorySelectionReceipt,
+                    directChatMessages: baseSnapshot.directChatMessages,
+                    directChatMessageSources: baseSnapshot.directChatMessageSources
+                )
+                do {
+                    let synthesisCompletion = try await self.presentationService.complete(
+                        snapshot: synthesisSnapshot,
+                        system: synthesisSystem,
+                        user: synthesisUser
+                    )
+                    let trimmed = AttachePersonality.stripDashes(
+                        synthesisCompletion.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    )
+                    if !trimmed.isEmpty {
+                        finalText = trimmed
+                        finalInference = synthesisCompletion.inference
+                    } else {
+                        // Synthesis returned nothing usable: fall back to the
+                        // per-stage summaries joined together rather than
+                        // losing everything already recapped.
+                        finalText = orderedSummaries.joined(separator: " ")
+                    }
+                    await MainActor.run {
+                        AttacheContextUIState.shared.publishReceipt(synthesisCompletion.inference.receiptView)
+                    }
+                } catch {
+                    // Synthesis failed but per-stage summaries exist: still
+                    // deliver them rather than losing already-recapped work.
+                    finalText = orderedSummaries.joined(separator: " ")
+                }
+            }
+
+            let partial = coveredCards.count < cards.count
+            let reportedText = partial
+                ? "Recapped \(coveredCards.count) of \(cards.count) updates; some updates could not be summarized right now. " + finalText
+                : finalText
+
+            await MainActor.run {
+                self.deliverRecap(
+                    reportedText,
+                    summarizing: coveredCards,
+                    personality: personality,
+                    inference: finalInference
+                )
+            }
         }
+    }
+
+    /// The capability profile used to plan recap staging, resolved the same
+    /// way `captureRequestSnapshot` resolves model settings for a role, but
+    /// callable before a request snapshot exists (INF-353).
+    private func recapCapabilityProfile() -> AttacheModelCapabilityProfile {
+        let settings = AttachePresentationSettings.load(
+            role: Self.modelRole(for: .recap),
+            defaults: defaults,
+            environment: presentationEnvironment,
+            resolveSecrets: false
+        )
+        return AttachePresentationModelService.capabilityProfile(
+            provider: settings.provider,
+            baseURLText: settings.baseURL.absoluteString,
+            modelID: settings.model
+        )
+    }
+
+    /// The evidence budget plan recap staging plans against. Falls back to
+    /// the unknown-capacity envelope rather than propagating a planning
+    /// failure, since the protected content for a staged recap is always the
+    /// small fixed instruction text and essentially never overflows.
+    private func recapBudgetPlan(
+        capability: AttacheModelCapabilityProfile,
+        strategy: AttacheContextStrategy
+    ) -> AttacheContextBudgetPlan {
+        let estimator = AttacheFallbackTokenEstimator()
+        let instruction = AttachePersonality.recapStagedUserInstruction()
+        if let plan = try? ContextBudgetPlanner.plan(
+            capability: capability,
+            strategy: strategy,
+            role: .recap,
+            currentUserInput: instruction,
+            estimator: estimator
+        ) {
+            return plan
+        }
+        return AttacheContextBudgetPlan(
+            effectiveHardLimit: nil,
+            outputReserve: 0,
+            toolReserve: 0,
+            safetyMargin: 0,
+            retrievalReserve: 0,
+            framingOverhead: 0,
+            currentUserInputTokens: 0,
+            remainingEvidenceBudget: ContextBudgetPlanner.unknownCapacityEnvelope,
+            strategy: strategy,
+            unknownCapacity: true,
+            estimatorFamily: estimator.family,
+            estimatorVersion: estimator.version
+        )
     }
 
     /// Persist the generated recap as a replayable history card, archive the
@@ -2553,6 +2782,19 @@ final class AppModel: ObservableObject {
             sessionTitle: displaySessionTitle(forCard: card) ?? card.sourceDisplayName,
             summary: card.summary,
             spokenText: card.spokenText,
+            needsDecision: card.needsDecision
+        )
+    }
+
+    /// The `RecapStagePlanner` input for one card (INF-353): its stable id
+    /// (so a plan's stages can be traced back to the exact cards they cover),
+    /// display title, condensed text, and creation time.
+    private func recapStageItem(for card: VoicemailCard) -> RecapStageItem {
+        RecapStageItem(
+            id: card.id,
+            sessionTitle: displaySessionTitle(forCard: card) ?? card.sourceDisplayName,
+            summaryText: card.summary.isEmpty ? card.spokenText : card.summary,
+            createdAt: card.createdAt,
             needsDecision: card.needsDecision
         )
     }
