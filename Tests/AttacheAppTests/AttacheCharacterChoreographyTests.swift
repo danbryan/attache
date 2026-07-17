@@ -73,6 +73,41 @@ final class AttacheCharacterChoreographyTests: XCTestCase {
         XCTAssertEqual(targets.pose.agentSignals[0].brightness, 0.4)
     }
 
+    func testSpeakingDampsToBreathingLevelWhileCaptioning() {
+        // INF-358 check 1: karaoke captions on screen should damp the
+        // speaking phase's ambient flourishes to a minimal tier while the
+        // mouth still tracks audio (the informative signal, not ambient
+        // motion).
+        let targets = AttacheCharacterChoreography.targets(
+            for: state(.speaking, agent: .codex),
+            isCaptioning: true
+        )
+        XCTAssertTrue(targets.mouthTracksAudio)
+        XCTAssertFalse(targets.sways)
+        XCTAssertLessThan(targets.pose.arcGlow, 0.5)
+        XCTAssertLessThan(targets.pose.arcRipple, 0.5)
+    }
+
+    func testSpeakingWithoutCaptioningStaysFullyLively() {
+        // The default (isCaptioning: false, e.g. captions toggled off)
+        // preserves today's lively speaking choreography.
+        let targets = AttacheCharacterChoreography.targets(
+            for: state(.speaking, agent: .codex),
+            isCaptioning: false
+        )
+        XCTAssertTrue(targets.sways)
+        XCTAssertEqual(targets.pose.arcGlow, 1)
+        XCTAssertEqual(targets.pose.arcRipple, 1)
+    }
+
+    func testCaptioningIsIgnoredOutsideSpeaking() {
+        // isCaptioning only ever applies to the speaking phase; every other
+        // phase's targets are unaffected.
+        let idleUnaffected = AttacheCharacterChoreography.targets(for: state(.idle), isCaptioning: true)
+        let idleBaseline = AttacheCharacterChoreography.targets(for: state(.idle), isCaptioning: false)
+        XCTAssertEqual(idleUnaffected, idleBaseline)
+    }
+
     func testBlockedIsWorriedPaleAndUrgent() {
         let targets = AttacheCharacterChoreography.targets(for: state(.blockedOnUser, agent: .claude))
         XCTAssertEqual(targets.pose.browWorry, 1)
@@ -369,5 +404,26 @@ final class AttacheCharacterChoreographyTests: XCTestCase {
             maxLiftLater = max(maxLiftLater, pose.agentSignals[0].lift)
         }
         XCTAssertLessThan(maxLiftLater, 3, "the same moment id must not replay")
+    }
+
+    // MARK: - INF-358 check 2: overlay hold
+
+    func testAnimationRunsWhenWindowVisibleAndNoOverlay() {
+        XCTAssertFalse(AttacheCharacterAnimationGate.isPaused(windowVisible: true, overlayVisible: false))
+    }
+
+    func testAnimationPausesWhenOverlayVisible() {
+        // A command palette / inbox / history / character switcher overlay
+        // open above the character means it should hold pose even though
+        // the host window itself is still fully visible.
+        XCTAssertTrue(AttacheCharacterAnimationGate.isPaused(windowVisible: true, overlayVisible: true))
+    }
+
+    func testAnimationPausesWhenWindowOccluded() {
+        XCTAssertTrue(AttacheCharacterAnimationGate.isPaused(windowVisible: false, overlayVisible: false))
+    }
+
+    func testAnimationStaysPausedWhenBothWindowOccludedAndOverlayVisible() {
+        XCTAssertTrue(AttacheCharacterAnimationGate.isPaused(windowVisible: false, overlayVisible: true))
     }
 }

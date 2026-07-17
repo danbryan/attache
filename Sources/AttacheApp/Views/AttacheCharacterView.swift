@@ -125,7 +125,13 @@ enum AttacheCharacterChoreography {
         return base + side * Double(slot) * 0.22
     }
 
-    static func targets(for activity: AttacheActivityState) -> Targets {
+    /// - Parameter isCaptioning: Karaoke captions are on screen for the
+    ///   current speaking turn (INF-358 check 1). The user's attention is on
+    ///   the caption text, so the speaking phase's ambient flourishes (arc
+    ///   glow, ripple, body sway) damp to a minimal, breathing-level tier;
+    ///   the mouth still tracks audio since that is the informative signal,
+    ///   not ambient motion. Ignored outside `.speaking`.
+    static func targets(for activity: AttacheActivityState, isCaptioning: Bool = false) -> Targets {
         var targets = Targets()
         let active = agentIndex(for: activity.activeAgent)
         targets.activeAgentIndex = active
@@ -183,12 +189,20 @@ enum AttacheCharacterChoreography {
 
         case .speaking:
             targets.pose.overhead = .arcs
-            targets.pose.arcGlow = 1
-            targets.pose.arcRipple = 1
             targets.mouthTracksAudio = true
-            targets.sways = true
             targets.breathePeriod = 2.8
             spotlight(1, others: 0.4)
+            if isCaptioning {
+                // Breathing-level tier: the caption text owns the user's
+                // attention, so the ambient arc/sway flourishes damp down.
+                targets.pose.arcGlow = 0.35
+                targets.pose.arcRipple = 0.15
+                targets.sways = false
+            } else {
+                targets.pose.arcGlow = 1
+                targets.pose.arcRipple = 1
+                targets.sways = true
+            }
 
         case .paused:
             targets.pose.overhead = .paused
@@ -315,7 +329,8 @@ final class AttacheCharacterMotor: ObservableObject {
         moment: AttacheActivityMoment? = nil,
         delights: CharacterDelights = .none,
         hoverGaze: CGSize? = nil,
-        reduceMotion: Bool
+        reduceMotion: Bool,
+        isCaptioning: Bool = false
     ) -> AttachePose {
         let now = date.timeIntervalSinceReferenceDate
         let dt = min(1.0 / 15.0, max(0, now - (lastTick ?? now)))
@@ -326,7 +341,7 @@ final class AttacheCharacterMotor: ObservableObject {
             queuedMoments.append(moment)
         }
 
-        let targets = AttacheCharacterChoreography.targets(for: activity)
+        let targets = AttacheCharacterChoreography.targets(for: activity, isCaptioning: isCaptioning)
         var pose = targets.pose
 
         func drive(_ spring: inout Spring, toward target: Double, _ params: (response: Double, damping: Double)) -> Double {
@@ -1144,6 +1159,14 @@ struct AttacheCharacterView: View {
     /// (INF-269) is untouched: `--render-character-poses`, which instantiates
     /// `AttacheCharacterFigure` directly, never sees this view at all.
     var isPrivate = false
+    /// Karaoke captions are on screen for the current speaking turn
+    /// (INF-358 check 1): the choreography damps its ambient flourishes.
+    var isCaptioning = false
+    /// An app overlay (command palette, inbox, history, character switcher,
+    /// shortcuts) is open above this view (INF-358 check 2): the character
+    /// holds its current pose instead of continuing to animate under the
+    /// dimmed overlay.
+    var overlayVisible = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1158,7 +1181,10 @@ struct AttacheCharacterView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                TimelineView(.animation(minimumInterval: frameInterval, paused: !windowVisible)) { context in
+                TimelineView(.animation(
+                    minimumInterval: frameInterval,
+                    paused: AttacheCharacterAnimationGate.isPaused(windowVisible: windowVisible, overlayVisible: overlayVisible)
+                )) { context in
                     AttacheCharacterFigure(
                         pose: motor.pose(
                             at: context.date,
@@ -1166,7 +1192,8 @@ struct AttacheCharacterView: View {
                             moment: moment,
                             delights: delights,
                             hoverGaze: hoverGaze,
-                            reduceMotion: reduceMotion
+                            reduceMotion: reduceMotion,
+                            isCaptioning: isCaptioning
                         ),
                         arcColor: arcColor,
                         headroom: Self.headroom,
@@ -1355,6 +1382,18 @@ private struct PrivateCrownBand: View {
             .shadow(color: .black.opacity(0.35), radius: 2 * s, y: 1 * s)
             .position(x: ox + Self.bandCenterX * s, y: oy + Self.bandCenterY * s)
             .accessibilityHidden(true)
+    }
+}
+
+/// Pure gating (INF-358 check 2): whether the character's animation clock
+/// should pause and hold its current pose. True when the host window is
+/// occluded (the existing CPU-budget gate) OR an app overlay (command
+/// palette, inbox, history, character switcher, keyboard shortcuts) is open
+/// above it, so the character never keeps animating unseen under a dimmed
+/// overlay.
+enum AttacheCharacterAnimationGate {
+    static func isPaused(windowVisible: Bool, overlayVisible: Bool) -> Bool {
+        !windowVisible || overlayVisible
     }
 }
 
