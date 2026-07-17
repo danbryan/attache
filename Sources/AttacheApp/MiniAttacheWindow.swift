@@ -209,7 +209,8 @@ struct MiniAttacheView: View {
                 model?.characterFocusAngle = angle
             },
             character: model.character,
-            fleetNotificationsOnly: true
+            fleetNotificationsOnly: true,
+            isPrivate: model.isPrivateConversation
         )
         .contentShape(Rectangle())
         .contextMenu {

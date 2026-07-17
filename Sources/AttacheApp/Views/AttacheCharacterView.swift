@@ -1137,6 +1137,13 @@ struct AttacheCharacterView: View {
     /// user finishes dragging it (INF-280).
     var focusAngle: Double = AttacheCharacterChoreography.defaultFocusAngle
     var onFocusAngleChanged: ((Double) -> Void)?
+    /// Incognito identity (INF-356): a visor-band overlay drawn above the
+    /// crown whenever the active conversation is private. This is a pure
+    /// sibling overlay layer composited on top of `AttacheCharacterFigure`,
+    /// never a change to its drawing code, so the geometry-locked rig
+    /// (INF-269) is untouched: `--render-character-poses`, which instantiates
+    /// `AttacheCharacterFigure` directly, never sees this view at all.
+    var isPrivate = false
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1150,27 +1157,33 @@ struct AttacheCharacterView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            TimelineView(.animation(minimumInterval: frameInterval, paused: !windowVisible)) { context in
-                AttacheCharacterFigure(
-                    pose: motor.pose(
-                        at: context.date,
-                        activity: activity,
-                        moment: moment,
-                        delights: delights,
-                        hoverGaze: hoverGaze,
-                        reduceMotion: reduceMotion
-                    ),
-                    arcColor: arcColor,
-                    headroom: Self.headroom,
-                    anatomy: .head,
-                    character: character,
-                    rendersEchoBars: rendersEchoBars,
-                    fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion, notificationsOnly: fleetNotificationsOnly),
-                    accentColor: colorScheme == .dark
-                        ? .white
-                        : Color(red: 0.10, green: 0.11, blue: 0.14),
-                    accentIsLight: colorScheme == .dark
-                )
+            ZStack {
+                TimelineView(.animation(minimumInterval: frameInterval, paused: !windowVisible)) { context in
+                    AttacheCharacterFigure(
+                        pose: motor.pose(
+                            at: context.date,
+                            activity: activity,
+                            moment: moment,
+                            delights: delights,
+                            hoverGaze: hoverGaze,
+                            reduceMotion: reduceMotion
+                        ),
+                        arcColor: arcColor,
+                        headroom: Self.headroom,
+                        anatomy: .head,
+                        character: character,
+                        rendersEchoBars: rendersEchoBars,
+                        fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion, notificationsOnly: fleetNotificationsOnly),
+                        accentColor: colorScheme == .dark
+                            ? .white
+                            : Color(red: 0.10, green: 0.11, blue: 0.14),
+                        accentIsLight: colorScheme == .dark
+                    )
+                }
+                if isPrivate {
+                    PrivateCrownBand(headroom: Self.headroom, size: proxy.size)
+                        .allowsHitTesting(false)
+                }
             }
             .contentShape(Rectangle())
             .onContinuousHover { phase in
@@ -1299,6 +1312,49 @@ struct AttacheCharacterView: View {
         default:
             return 1.0 / 40.0
         }
+    }
+}
+
+/// The incognito visor band (INF-356): a dark, reflective strip drawn across
+/// the character's forehead, above the eyes, whenever the active conversation
+/// is private. Positioned with `AttacheCharacterFigure.designTransform`, the
+/// same design-to-view mapping the rig itself uses for hit-testing, so the
+/// band tracks the head precisely across every frame size without ever
+/// reading or altering the rig's own drawing code. This is a sibling overlay
+/// layer, composited by `AttacheCharacterView` on top of the figure; the
+/// figure's `Canvas` body (what `--render-character-poses` renders) never
+/// draws it and is never touched by it.
+private struct PrivateCrownBand: View {
+    var headroom: CGFloat
+    var size: CGSize
+
+    /// Design-unit placement: a strip spanning the top of the robot/cowboy
+    /// face plate (x 82...158, plate itself is 88...152) just above the eye
+    /// band (y 92 in un-dropped design coords), shifted down by
+    /// `AttacheCharacterFigure.headAnatomyDrop` (26) to match the `.head`
+    /// anatomy this view always renders (see `AttacheCharacterView.body`).
+    private static let bandCenterX: CGFloat = 120
+    private static let bandCenterY: CGFloat = 82 + AttacheCharacterFigure.headAnatomyDrop
+    private static let bandWidth: CGFloat = 78
+    private static let bandHeight: CGFloat = 13
+
+    var body: some View {
+        let (s, ox, oy) = AttacheCharacterFigure.designTransform(size: size, headroom: headroom)
+        Capsule()
+            .fill(
+                LinearGradient(
+                    colors: [Color.black.opacity(0.93), Color.black.opacity(0.78)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                Capsule().stroke(Color.white.opacity(0.32), lineWidth: max(0.5, s * 0.5))
+            )
+            .frame(width: Self.bandWidth * s, height: Self.bandHeight * s)
+            .shadow(color: .black.opacity(0.35), radius: 2 * s, y: 1 * s)
+            .position(x: ox + Self.bandCenterX * s, y: oy + Self.bandCenterY * s)
+            .accessibilityHidden(true)
     }
 }
 

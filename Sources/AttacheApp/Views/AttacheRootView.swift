@@ -194,7 +194,8 @@ struct AttacheRootView: View {
                         echoExpanded.toggle()
                     }
                     window.toggleFullScreen(nil)
-                }
+                },
+                isPrivate: model.isPrivateConversation
             )
             // A personality change reads like changing characters: the old
             // presence eases out and the new one settles in. No spoken greeting
