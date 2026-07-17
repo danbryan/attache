@@ -12,7 +12,15 @@ public enum TranscriptParser {
 
     /// Parse a chunk of complete transcript lines. `carriedCWD` is the cwd left
     /// over from the previous chunk for this session.
-    public static func parse(text: String, format: TranscriptFormat, carriedCWD: String?) -> Result {
+    ///
+    /// `includeSidechain` defaults to false: a `.claude` line marked
+    /// `isSidechain: true` is subagent traffic interleaved inline in a
+    /// PARENT session's own transcript, which is never that session's main
+    /// narration. Pass true only when the text chunk itself came from a
+    /// dedicated subagent transcript file (`<session>/subagents/agent-*.jsonl`,
+    /// INF-368 Part B) - there, every line is legitimately sidechain-marked
+    /// and IS the content to narrate, attributed to the parent session.
+    public static func parse(text: String, format: TranscriptFormat, carriedCWD: String?, includeSidechain: Bool = false) -> Result {
         var cwd = carriedCWD
         var records: [ParsedTranscriptRecord] = []
         // Grok Build's chat_history.jsonl carries no per-line timestamp
@@ -45,7 +53,7 @@ public enum TranscriptParser {
 
             switch format {
             case .claude:
-                parseClaudeLine(object, type: type, timestamp: timestamp, cwd: &cwd, into: &records)
+                parseClaudeLine(object, type: type, timestamp: timestamp, cwd: &cwd, includeSidechain: includeSidechain, into: &records)
             case .codex:
                 parseCodexLine(object, type: type, timestamp: timestamp, cwd: &cwd, into: &records)
             case .grokBuild:
@@ -63,6 +71,7 @@ public enum TranscriptParser {
         type: String,
         timestamp: Date,
         cwd: inout String?,
+        includeSidechain: Bool = false,
         into records: inout [ParsedTranscriptRecord]
     ) {
         // Claude lines carry cwd on every line and the message at top level (no
@@ -71,8 +80,10 @@ public enum TranscriptParser {
         if let lineCwd = object["cwd"] as? String, !lineCwd.isEmpty {
             cwd = lineCwd
         }
-        // Sidechain (subagent) traffic is never the main narration.
-        if object["isSidechain"] as? Bool == true { return }
+        // Sidechain (subagent) traffic inline in a parent transcript is never
+        // that session's main narration, unless the caller explicitly opted
+        // in (a dedicated subagent transcript file, INF-368 Part B).
+        if !includeSidechain, object["isSidechain"] as? Bool == true { return }
 
         switch type {
         case "assistant":
