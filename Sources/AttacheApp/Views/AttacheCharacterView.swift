@@ -1207,10 +1207,6 @@ struct AttacheCharacterView: View {
                         accentIsLight: colorScheme == .dark
                     )
                 }
-                if isPrivate {
-                    PrivateCrownBand(headroom: Self.headroom, size: proxy.size)
-                        .allowsHitTesting(false)
-                }
             }
             .contentShape(Rectangle())
             .onContinuousHover { phase in
@@ -1339,49 +1335,6 @@ struct AttacheCharacterView: View {
         default:
             return 1.0 / 40.0
         }
-    }
-}
-
-/// The incognito visor band (INF-356): a dark, reflective strip drawn across
-/// the character's forehead, above the eyes, whenever the active conversation
-/// is private. Positioned with `AttacheCharacterFigure.designTransform`, the
-/// same design-to-view mapping the rig itself uses for hit-testing, so the
-/// band tracks the head precisely across every frame size without ever
-/// reading or altering the rig's own drawing code. This is a sibling overlay
-/// layer, composited by `AttacheCharacterView` on top of the figure; the
-/// figure's `Canvas` body (what `--render-character-poses` renders) never
-/// draws it and is never touched by it.
-private struct PrivateCrownBand: View {
-    var headroom: CGFloat
-    var size: CGSize
-
-    /// Design-unit placement: a strip spanning the top of the robot/cowboy
-    /// face plate (x 82...158, plate itself is 88...152) just above the eye
-    /// band (y 92 in un-dropped design coords), shifted down by
-    /// `AttacheCharacterFigure.headAnatomyDrop` (26) to match the `.head`
-    /// anatomy this view always renders (see `AttacheCharacterView.body`).
-    private static let bandCenterX: CGFloat = 120
-    private static let bandCenterY: CGFloat = 82 + AttacheCharacterFigure.headAnatomyDrop
-    private static let bandWidth: CGFloat = 78
-    private static let bandHeight: CGFloat = 13
-
-    var body: some View {
-        let (s, ox, oy) = AttacheCharacterFigure.designTransform(size: size, headroom: headroom)
-        Capsule()
-            .fill(
-                LinearGradient(
-                    colors: [Color.black.opacity(0.93), Color.black.opacity(0.78)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .overlay(
-                Capsule().stroke(Color.white.opacity(0.32), lineWidth: max(0.5, s * 0.5))
-            )
-            .frame(width: Self.bandWidth * s, height: Self.bandHeight * s)
-            .shadow(color: .black.opacity(0.35), radius: 2 * s, y: 1 * s)
-            .position(x: ox + Self.bandCenterX * s, y: oy + Self.bandCenterY * s)
-            .accessibilityHidden(true)
     }
 }
 

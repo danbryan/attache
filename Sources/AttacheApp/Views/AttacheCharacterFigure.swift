@@ -785,131 +785,74 @@ struct AttacheCharacterFigure: View {
         }
     }
 
-    /// Colt (INF-288, mustache INF-291): a cowboy. Expressive round eyes with
-    /// pupils that ride the gaze, a brown ten-gallon hat as the signature
-    /// silhouette, a handlebar mustache, and a red neckerchief. Everything is
-    /// drawn in the `head` layer, so the hat tilts with `headTilt`.
+    /// Colt (INF-288, mustache INF-291; robot unification 2026-07-17): the same
+    /// robot head as Attaché (steel plate, LED eyes, equalizer mouth that reacts
+    /// to `mouthOpen`) wearing the cowboy kit. The mustache droops below the
+    /// upper lip so the animated mouth stays visible and speaks; the bandana
+    /// sits at the collar and the hat, drawn last, covers where the antenna
+    /// would be. Everything is in the `head` layer, so the hat tilts with
+    /// `headTilt`.
     private func drawCowboyFace(in head: GraphicsContext, pose: AttachePose, p: (CGFloat, CGFloat) -> CGPoint, s: CGFloat) {
-        let cream = AttacheMascotMark.headColor
-        let ink = AttacheMascotMark.faceColor
         let hatBrown = Color(red: 0.45, green: 0.31, blue: 0.19)
         let hatBand = Color(red: 0.30, green: 0.20, blue: 0.12)
         let bandanaRed = Color(red: 0.82, green: 0.24, blue: 0.24)
         let stache = Color(red: 0.34, green: 0.22, blue: 0.13)
 
-        let skull = Path(ellipseIn: CGRect(
-            x: p(87, 79).x, y: p(87, 79).y, width: 66 * s, height: 66 * s
-        ))
-        head.fill(skull, with: .color(cream))
+        // The full robot head, including the animated LED-equalizer mouth.
+        drawRobotFace(in: head, pose: pose, p: p, s: s)
 
-        let gx = max(-3, min(3, pose.gaze.width))
-        let gy = max(-3, min(3, pose.gaze.height))
-        let eyeAlpha = 1 - pose.dizzy
-        let openness = pose.eyeOpenness * (1 - 0.35 * pose.browWorry)
-        for eyeX in [106.0, 134.0] {
-            let center = p(CGFloat(eyeX), 106)
-            if eyeAlpha > 0.01, openness > 0.12 {
-                let white = Path(ellipseIn: CGRect(
-                    x: center.x - 7 * s, y: center.y - 7 * s * openness,
-                    width: 14 * s, height: 14 * s * openness
-                ))
-                head.fill(white, with: .color(.white.opacity(eyeAlpha)))
-                let pupil = Path(ellipseIn: CGRect(
-                    x: center.x - 3.4 * s + gx * 1.6 * s,
-                    y: center.y - 3.4 * s * openness + gy * 1.4 * s,
-                    width: 6.8 * s, height: 6.8 * s * openness
-                ))
-                head.fill(pupil, with: .color(ink.opacity(eyeAlpha)))
-            } else if eyeAlpha > 0.01 {
-                var lid = Path()
-                lid.move(to: CGPoint(x: center.x - 7 * s, y: center.y))
-                lid.addQuadCurve(
-                    to: CGPoint(x: center.x + 7 * s, y: center.y),
-                    control: CGPoint(x: center.x, y: center.y + 5 * s)
-                )
-                head.stroke(lid, with: .color(ink.opacity(eyeAlpha)),
-                            style: StrokeStyle(lineWidth: 4 * s, lineCap: .round))
-            }
-            if pose.dizzy > 0.01 {
-                var cross = Path()
-                cross.move(to: CGPoint(x: center.x - 5 * s, y: center.y - 5 * s))
-                cross.addLine(to: CGPoint(x: center.x + 5 * s, y: center.y + 5 * s))
-                cross.move(to: CGPoint(x: center.x + 5 * s, y: center.y - 5 * s))
-                cross.addLine(to: CGPoint(x: center.x - 5 * s, y: center.y + 5 * s))
-                head.stroke(cross, with: .color(ink.opacity(pose.dizzy)),
-                            style: StrokeStyle(lineWidth: 3.5 * s, lineCap: .round))
-            }
-        }
-        if pose.browWorry > 0.01 {
-            var brows = Path()
-            brows.move(to: p(98, 97))
-            brows.addLine(to: p(113, 93))
-            brows.move(to: p(127, 93))
-            brows.addLine(to: p(142, 97))
-            head.stroke(brows, with: .color(ink.opacity(pose.browWorry)),
-                        style: StrokeStyle(lineWidth: 4 * s, lineCap: .round))
-        }
-
-        // Mouth: the same smile / open-mouth swap the mark uses.
-        if pose.mouthOpen < 0.15 {
-            let halfWidth = 11 * pose.smile
-            let depth = 13 * pose.smile
-            var mouth = Path()
-            mouth.move(to: p(120 - halfWidth, 121))
-            mouth.addCurve(
-                to: p(120 + halfWidth, 121),
-                control1: p(120 - halfWidth * 0.75, 121 + depth),
-                control2: p(120 + halfWidth * 0.75, 121 + depth)
-            )
-            mouth.closeSubpath()
-            head.fill(mouth, with: .color(ink))
-        } else {
-            let rx = 8 * (0.5 + 0.5 * pose.mouthOpen)
-            let ry = 3 + 9 * pose.mouthOpen
-            let mouthCenter = p(120, 123 + 3 * pose.mouthOpen)
-            let open = Path(ellipseIn: CGRect(
-                x: mouthCenter.x - rx * s, y: mouthCenter.y - ry * s,
-                width: rx * 2 * s, height: ry * 2 * s
-            ))
-            head.fill(open, with: .color(ink))
-        }
-
-        // Handlebar mustache above the mouth: thin curled tips, thick center.
-        var mustache = Path()
-        mustache.move(to: p(104, 114))
-        mustache.addCurve(to: p(120, 116), control1: p(109, 111), control2: p(114, 114))
-        mustache.addCurve(to: p(136, 114), control1: p(126, 114), control2: p(131, 111))
-        mustache.addCurve(to: p(120, 120), control1: p(132, 120), control2: p(126, 119))
-        mustache.addCurve(to: p(104, 114), control1: p(114, 119), control2: p(108, 120))
-        mustache.closeSubpath()
-        head.fill(mustache, with: .color(stache))
-
-        // Neckerchief at the collar: a red band across the bottom of the
-        // face with a knot dropping below the chin.
+        // Neckerchief at the collar: a red band across the bottom of the face
+        // plate with a knot dropping below the chin.
         let kerchief = Path(
-            roundedRect: CGRect(x: p(99, 137).x, y: p(99, 137).y, width: 42 * s, height: 9 * s),
+            roundedRect: CGRect(x: p(99, 141).x, y: p(99, 141).y, width: 42 * s, height: 9 * s),
             cornerRadius: 3 * s
         )
         head.fill(kerchief, with: .color(bandanaRed))
         var knot = Path()
-        knot.move(to: p(114, 143))
-        knot.addLine(to: p(126, 143))
-        knot.addLine(to: p(120, 152))
+        knot.move(to: p(113, 148))
+        knot.addLine(to: p(127, 148))
+        knot.addLine(to: p(120, 158))
         knot.closeSubpath()
         head.fill(knot, with: .color(bandanaRed))
 
-        // The hat, last, so its brim covers the forehead.
+        // Droopy handlebar mustache: two halves that start at the center of the
+        // upper lip (y 128) and fall downward beside the mouth, leaving the
+        // equalizer bars (x 106...134, growing down from y 134) clear.
+        for mirror in [1.0, -1.0] {
+            let mx: (CGFloat) -> CGFloat = { 120 + CGFloat(mirror) * ($0 - 120) }
+            var half = Path()
+            half.move(to: p(120, 129.5))
+            half.addCurve(
+                to: p(mx(107), 129),
+                control1: p(mx(116.5), 127),
+                control2: p(mx(111), 126.8)
+            )
+            half.addCurve(
+                to: p(mx(103), 138),
+                control1: p(mx(104), 130.7),
+                control2: p(mx(102.6), 134.4)
+            )
+            half.addCurve(
+                to: p(120, 131.8),
+                control1: p(mx(107.4), 133.2),
+                control2: p(mx(113.4), 131.3)
+            )
+            half.closeSubpath()
+            head.fill(half, with: .color(stache))
+        }
+
+        // The hat, last, so its brim covers the forehead and antenna.
         let brim = Path(ellipseIn: CGRect(
-            x: p(78, 77).x, y: p(78, 77).y, width: 84 * s, height: 13 * s
+            x: p(75, 77).x, y: p(75, 77).y, width: 90 * s, height: 14 * s
         ))
         head.fill(brim, with: .color(hatBrown))
         let crown = Path(
-            roundedRect: CGRect(x: p(101, 55).x, y: p(101, 55).y, width: 38 * s, height: 27 * s),
+            roundedRect: CGRect(x: p(100, 55).x, y: p(100, 55).y, width: 40 * s, height: 28 * s),
             cornerRadius: 11 * s
         )
         head.fill(crown, with: .color(hatBrown))
         let band = Path(
-            roundedRect: CGRect(x: p(101, 73).x, y: p(101, 73).y, width: 38 * s, height: 6 * s),
+            roundedRect: CGRect(x: p(100, 74).x, y: p(100, 74).y, width: 40 * s, height: 6 * s),
             cornerRadius: 2 * s
         )
         head.fill(band, with: .color(hatBand))

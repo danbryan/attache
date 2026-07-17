@@ -204,13 +204,14 @@ struct PersonalitiesPane: View {
                 .stroke(active ? model.theme.signatureColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: active ? 1.5 : 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 13))
-        // Single click switches immediately (INF-351): no competing
-        // double-tap gesture to wait out the disambiguation delay for.
-        // Edit/Customize stays reachable via the visible ellipsis Menu above
-        // and the context menu below.
+        // Double click opens the editor; single click switches. Also reachable
+        // via the ellipsis Menu above and the context menu below.
+        .onTapGesture(count: 2) {
+            openStudio(personality.isBuiltIn ? .customize(personality) : .edit(personality))
+        }
         .onTapGesture { model.switchPersonalityFromUI(personality.id) }
         .contextMenu { wardrobeCardMenuItems(personality) }
-        .help("Click to switch. Use the \u{2022}\u{2022}\u{2022} menu or right-click to \(personality.isBuiltIn ? "customize" : "edit").")
+        .help("Click to switch, double-click to \(personality.isBuiltIn ? "customize" : "edit").")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(personality.name), \(active ? "active" : "available") personality")
         .accessibilityAddTraits(.isButton)

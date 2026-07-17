@@ -90,7 +90,10 @@ extension AttacheRootView {
     var onCallHUD: some View {
         VStack(alignment: .leading, spacing: 8) {
             if model.isPrivateConversation {
-                privateCallBanner
+                HStack(spacing: 8) {
+                    privateChip
+                    Spacer(minLength: 0)
+                }
             } else {
                 HStack(spacing: 8) {
                     callDestinationPicker
@@ -193,40 +196,6 @@ extension AttacheRootView {
         .accessibilityLabel("More call options")
     }
 
-    var privateCallBanner: some View {
-        HStack(alignment: .top, spacing: 9) {
-            // The disclosure text combines into one AX element for a clean
-            // VoiceOver read; the PRIVATE chip stays OUTSIDE that combine
-            // scope so it remains its own discoverable element with its own
-            // exact "PRIVATE" label, the way ui-smoke and any other
-            // automation must find it (`.accessibilityElement(children:
-            // .combine)` otherwise flattens every descendant's label into
-            // one, which would swallow the chip's identity).
-            HStack(alignment: .top, spacing: 9) {
-                Image(systemName: "eye.slash.fill")
-                    .typoIcon(size: 12, .semibold)
-                    .foregroundStyle(accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Private Call")
-                        .typoLabel(.bold)
-                    Text(model.privateConversationDisclosure)
-                        .typoCaption()
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Private Call. \(model.privateConversationDisclosure)")
-
-            Spacer(minLength: 0)
-            privateChip
-        }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-    }
-
     // The persistent PRIVATE chip (INF-356): shown in the call HUD and the
     // mini window while storage mode is .privateCall. Its tooltip is derived
     // from the active presentation model's egress classification (local vs
@@ -247,7 +216,10 @@ extension AttacheRootView {
     }
 
     var privateChipTooltip: String {
-        PrivateModeIndicator.chipTooltip(modelIsLocal: !model.presentationSendsToCloud)
+        // The full private-session disclosure now lives here, on hover, instead
+        // of a persistent banner: what is and isn't kept, plus the egress note.
+        model.privateConversationDisclosure + "\n\n"
+            + PrivateModeIndicator.chipTooltip(modelIsLocal: !model.presentationSendsToCloud)
     }
 
     // One status row for the whole call-phase surface (INF-244): icon (or

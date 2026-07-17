@@ -1,65 +1,15 @@
 import SwiftUI
 
-/// Voice engine and caption settings. Selection-only; provider credentials live
-/// in Integrations.
+/// Caption and voice-input settings. The voice a character speaks with is now
+/// chosen per-personality in the Personalities editor, so this pane holds only
+/// caption display and conversation-input controls.
 struct VoicePane: View {
     @ObservedObject var model: AppModel
-    @State private var pendingCloudEngine: AttacheSpeechProvider?
-
-    // Show every voice engine, not just connected ones, so providers like OpenAI are
-    // discoverable here (selecting an unconfigured one points you to Integrations to
-    // add its key) instead of silently hidden until a key exists.
-    private var engineOptions: [AttacheSpeechProvider] {
-        AttacheSpeechProvider.allCases
-    }
-
-    private var engineNeedsKey: Bool {
-        !model.connectedVoiceEngines.contains(model.speechProvider) && model.speechProvider != .system
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Voice & Captions").typoTitle()
-            activeHeader
 
-            settingRow("Voice engine") {
-                Picker("", selection: engineBinding) {
-                    ForEach(engineOptions) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 360)
-                .accessibilityLabel("Voice engine")
-            }
-            dataResidencyCaption
-
-            if engineNeedsKey {
-                HStack(spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                    Text("\(model.speechProvider.title) needs an")
-                    Button("API key") { model.focusIntegration(for: model.speechProvider) }
-                        .buttonStyle(.link)
-                    Text("under Integrations, then Save & Test.")
-                }
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            if let fallback = model.voicePlaybackFallbackDescription {
-                Label(fallback, systemImage: "speaker.wave.2")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            engineControls
-
-            HStack {
-                Button { model.previewAssistantVoice() } label: { Label("Preview voice", systemImage: "play.circle") }
-                Spacer()
-            }
-            if !model.voiceProviderStatus.isEmpty {
-                Text(model.voiceProviderStatus).font(.caption).foregroundStyle(.secondary)
-            }
-            Divider().padding(.vertical, 4)
             Text("Captions").typoBody(.semibold)
             Toggle("Show captions", isOn: $model.captionsEnabled)
             settingRow("Caption size") {
@@ -104,18 +54,6 @@ struct VoicePane: View {
             Text("Cached recap audio is reused when replaying cards with the same voice. Session history and text cards stay available after cached audio expires.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider().padding(.vertical, 4)
-            Text("Narration").typoBody(.semibold)
-            settingRow("Detail") {
-                Picker("", selection: $model.narrationDetail) {
-                    ForEach(AttacheNarrationDetail.allCases) { Text($0.title).tag($0) }
-                }
-                .labelsHidden().frame(width: 200)
-            }
-            Text(model.narrationDetail.detail)
-                .typoCaption().foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Divider().padding(.vertical, 4)
@@ -177,66 +115,6 @@ struct VoicePane: View {
                 .foregroundStyle(.secondary)
         }
         .onAppear { model.refreshMicrophoneDevices() }
-        .sheet(item: $pendingCloudEngine) { engine in
-            let requestedXAIBaseURL = engine == .xai ? model.xaiBaseURL : nil
-            CloudConsentSheet(
-                providerName: engine.title,
-                produces: "speech",
-                sends: "your agent's recap text",
-                destination: model.voiceConsentDestination(
-                    for: engine,
-                    xaiBaseURL: requestedXAIBaseURL
-                ),
-                onEnable: {
-                    model.acknowledgeCloudVoiceConsent(
-                        for: engine,
-                        xaiBaseURL: requestedXAIBaseURL
-                    )
-                    model.speechProvider = engine
-                    pendingCloudEngine = nil
-                },
-                onCancel: { pendingCloudEngine = nil }
-            )
-        }
-    }
-
-    private var engineBinding: Binding<AttacheSpeechProvider> {
-        Binding(
-            get: { model.speechProvider },
-            set: { engine in
-                if engine != model.speechProvider,
-                   engine.sendsToCloud,
-                   !model.cloudVoiceConsentAcknowledged(
-                       for: engine,
-                       xaiBaseURL: engine == .xai ? model.xaiBaseURL : nil
-                   ) {
-                    pendingCloudEngine = engine
-                } else {
-                    model.speechProvider = engine
-                }
-            }
-        )
-    }
-
-    @ViewBuilder private var dataResidencyCaption: some View {
-        if model.voiceSendsToCloud {
-            Label("Cloud voice: recap text leaves this Mac.", systemImage: "cloud")
-                .font(.caption).foregroundStyle(.orange)
-        } else {
-            Label("On-device voice: nothing leaves this Mac.", systemImage: "lock.shield")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private var activeHeader: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "speaker.wave.2.fill").foregroundStyle(.green)
-            Text("Active voice: \(model.currentVoiceSummary)")
-                .typoLabel(.medium)
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 9).padding(.horizontal, 12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var replayRetentionBinding: Binding<Int> {
@@ -269,88 +147,6 @@ struct VoicePane: View {
                     .frame(width: 28, alignment: .leading)
             }
         }
-    }
-
-    @ViewBuilder private var engineControls: some View {
-        switch model.speechProvider {
-        case .system: systemControls
-        case .elevenLabs: remoteControls(
-            options: model.elevenLabsVoiceOptions,
-            selectedID: model.elevenLabsVoiceID,
-            reload: { model.loadElevenLabsVoices() },
-            select: { model.selectElevenLabsVoice($0) }
-        )
-        case .xai: remoteControls(
-            options: model.xaiVoiceOptions,
-            selectedID: model.xaiVoiceID,
-            reload: { model.loadXAIVoices() },
-            select: { model.selectXAIVoice($0) }
-        )
-        case .openai: remoteControls(
-            options: model.openaiVoiceOptions,
-            selectedID: model.openaiVoiceID,
-            reload: { model.loadOpenAIVoices() },
-            select: { model.selectOpenAIVoice($0) }
-        )
-        }
-    }
-
-    private var systemControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            settingRow("Voice") {
-                Picker("", selection: systemVoiceBinding) {
-                    Text("System default").tag(String?.none)
-                    ForEach(model.speechVoiceOptions) { Text($0.title).tag(Optional($0.id)) }
-                }
-                .labelsHidden().frame(width: 280)
-            }
-            if model.isScanningVoices && model.speechVoiceOptions.isEmpty {
-                Text("Scanning voices…")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Text("Tip: download a free Premium voice in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices for much better quality.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder
-    private func remoteControls(options: [RemoteVoiceOption], selectedID: String, reload: @escaping () -> Void, select: @escaping (RemoteVoiceOption) -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            settingRow("Voice") {
-                if options.isEmpty {
-                    Text("No voices loaded.").font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Picker("", selection: Binding(
-                        get: { selectedID },
-                        set: { id in if let voice = options.first(where: { $0.id == id }) { select(voice) } }
-                    )) {
-                        ForEach(options) { Text($0.title).tag($0.id) }
-                    }
-                    .labelsHidden().frame(width: 280)
-                }
-                Button("Reload", action: reload)
-            }
-            Button {
-                model.focusIntegration(for: model.speechProvider)
-            } label: {
-                Label("Set this provider's key in Integrations.", systemImage: "link")
-            }
-            .buttonStyle(.link)
-            .font(.caption2)
-        }
-    }
-
-    private var systemVoiceBinding: Binding<String?> {
-        Binding(
-            get: { model.speechVoiceIdentifier },
-            set: { id in
-                if let id, let option = model.speechVoiceOptions.first(where: { $0.id == id }) {
-                    model.selectSpeechVoice(option)
-                } else {
-                    model.selectSpeechVoice(nil)
-                }
-            }
-        )
     }
 
 }
