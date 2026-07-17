@@ -458,6 +458,16 @@ struct SessionCommandPalette: View {
             } else {
                 Button("Pin to Watching") { model.watchSearchHit(hit, focus: false); recompute() }
             }
+            Divider()
+            // INF-370: available for any indexed session regardless of watch
+            // state, including fully historic ones.
+            Button("Summarize Session…") {
+                model.requestHistoricSessionSummary(
+                    sessionID: record.id, sourceKind: record.sourceKind.rawValue,
+                    displayTitle: model.displaySessionTitle(record), workingDirectory: record.project
+                )
+            }
+            .accessibilityIdentifier("Summarize Session…")
         }
     }
 

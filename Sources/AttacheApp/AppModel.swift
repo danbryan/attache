@@ -516,6 +516,28 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// INF-370 "Summarize Session…": the entry point on any Command-K or
+    /// inbox/history session row. Setting this presents the cost preview
+    /// (session, model/strategy, estimated stages, egress class) before any
+    /// model call; the staged review + synthesis only runs once the user
+    /// explicitly confirms. Available for any indexed session regardless of
+    /// watch state, including fully historic ones the user never listened to.
+    @Published var pendingSessionSummaryRequest: HistoricSessionSummaryRequest?
+
+    /// Presents the summarize-session cost preview for a known session row.
+    /// This call IS the explicit user selection (INF-315): the row's
+    /// `sessionID`/`sourceKind` came from the reconciled index, never from a
+    /// model, so the resulting focus grant is fail-closed authorized the same
+    /// way a native picker selection is.
+    func requestHistoricSessionSummary(
+        sessionID: String, sourceKind: String, displayTitle: String, workingDirectory: String?
+    ) {
+        pendingSessionSummaryRequest = HistoricSessionSummaryRequest(
+            sessionID: sessionID, sourceKind: sourceKind,
+            displayTitle: displayTitle, workingDirectory: workingDirectory
+        )
+    }
+
     /// Ambient home: when on, the chrome (dock, banner, history) fades while the
     /// pointer is still and wakes on movement. Off keeps everything always visible.
     @Published var autoHideControls: Bool = true {

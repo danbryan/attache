@@ -642,6 +642,84 @@ final class SessionContextRuntime: @unchecked Sendable {
         )
     }
 
+    /// Freeze an opencode session for exhaustive review (INF-370). opencode
+    /// has no per-session transcript file to stream (INF-362): all sessions
+    /// share one SQLite database at `record.filePath`. This mirrors
+    /// `freezeReviewSource`'s authorization/fingerprint contract exactly, but
+    /// reads turns via `OpencodeReadOnlyDatabase.messages(forSessionID:)`
+    /// (already read-only, busy-timeout guarded) instead of streaming JSONL,
+    /// keyed to this one session's rows so editing another opencode session
+    /// cannot invalidate this review.
+    func freezeReviewSourceForOpencode(
+        focusedSession requestedSession: AttacheFocusedSession
+    ) throws -> FrozenReviewSource {
+        let record: SessionRecord
+        let initialFingerprint: String
+        lock.lock()
+        guard let current = focusedSession,
+              current.hasSameAuthorization(as: requestedSession),
+              let resolved = recordsByID[requestedSession.sessionID],
+              resolved.sourceKind.rawValue == requestedSession.sourceKind else {
+            lock.unlock()
+            throw ReviewSourceError.authorizationExpired
+        }
+        record = resolved
+        initialFingerprint = indexFingerprint(resolved)
+        lock.unlock()
+
+        guard fileManager.fileExists(atPath: record.filePath) else {
+            throw ReviewSourceError.missingTranscript
+        }
+        readHooks.beforeTranscriptDescriptorOpen?(record.filePath)
+        guard let database = OpencodeReadOnlyDatabase(url: URL(fileURLWithPath: record.filePath)) else {
+            throw ReviewSourceError.missingTranscript
+        }
+        defer { database.close() }
+        let rows = database.messages(forSessionID: record.id)
+        readHooks.afterTranscriptDescriptorOpen?(record.filePath)
+
+        var turns: [AttacheSessionMapTurn] = []
+        for (ordinal, row) in rows.enumerated() {
+            let text = row.parts
+                .filter { $0.type == "text" }
+                .compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n\n")
+            guard !text.isEmpty else { continue }
+            turns.append(AttacheSessionMapTurn(
+                ordinal: ordinal,
+                role: row.role ?? "unknown",
+                content: text,
+                timestamp: Date(timeIntervalSince1970: row.timeCreated / 1_000)
+            ))
+        }
+        guard !turns.isEmpty else { throw ReviewSourceError.emptyTranscript }
+
+        let map = AttacheSessionMapBuilder.build(
+            sessionID: requestedSession.sessionID,
+            sourceKind: requestedSession.sourceKind,
+            turns: turns
+        )
+        let sourceVersion = AttacheSessionMapEpisode.hash(
+            turns.map(\.contentHash).joined(separator: "|")
+        )
+
+        lock.lock(); defer { lock.unlock() }
+        guard let current = focusedSession,
+              current.hasSameAuthorization(as: requestedSession),
+              let currentRecord = recordsByID[requestedSession.sessionID],
+              indexFingerprint(currentRecord) == initialFingerprint else {
+            throw ReviewSourceError.sourceChanged
+        }
+        return FrozenReviewSource(
+            focusedSession: requestedSession,
+            sessionMap: map,
+            turns: turns,
+            sourceVersion: sourceVersion,
+            sourceFingerprint: initialFingerprint
+        )
+    }
+
     /// Cheap per-stage mutation and authorization check. The fingerprint uses
     /// the live inode, byte count, creation/modification times, and indexed
     /// metadata; the frozen content hash remains the final coverage identity.

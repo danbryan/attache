@@ -347,7 +347,7 @@ public enum AttacheSessionReader {
 
     private static func turn(fromLine data: Data) -> Turn? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return codexTurn(from: object) ?? claudeTurn(from: object)
+        return codexTurn(from: object) ?? claudeTurn(from: object) ?? grokBuildTurn(from: object)
     }
 
     /// A shallow listing of the working directory so Attaché can see what
@@ -426,11 +426,39 @@ public enum AttacheSessionReader {
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 continue
             }
-            if let turn = codexTurn(from: object) ?? claudeTurn(from: object) {
+            if let turn = codexTurn(from: object) ?? claudeTurn(from: object) ?? grokBuildTurn(from: object) {
                 turns.append(turn)
             }
         }
         return turns
+    }
+
+    /// Grok Build's `chat_history.jsonl` shape (INF-361/INF-370): `type` is
+    /// `"user"`/`"assistant"` like Claude Code, but content sits directly on
+    /// the record (`content`), not nested under a `message` key; assistant
+    /// content is a plain string, user content is a typed block list. Tried
+    /// last so a Claude Code line (which always has a `message` key) never
+    /// falls through here.
+    private static func grokBuildTurn(from object: [String: Any]) -> Turn? {
+        guard let role = object["type"] as? String, role == "user" || role == "assistant" else {
+            return nil
+        }
+        let text: String?
+        if let string = object["content"] as? String {
+            text = string
+        } else if let blocks = object["content"] as? [[String: Any]] {
+            let parts = blocks
+                .compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            text = parts.isEmpty ? nil : parts.joined(separator: "\n")
+        } else {
+            text = nil
+        }
+        guard let resolved = text?.trimmingCharacters(in: .whitespacesAndNewlines), !resolved.isEmpty else {
+            return nil
+        }
+        return Turn(role: role, text: resolved)
     }
 
     private static func codexTurn(from object: [String: Any]) -> Turn? {

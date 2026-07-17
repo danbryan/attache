@@ -111,6 +111,19 @@ extension AttacheRootView {
                                 model.playSelected()
                             }
                             .contextMenu {
+                                if let sessionID = card.externalSessionID {
+                                    // INF-370: available for any indexed
+                                    // session regardless of watch state,
+                                    // including fully historic ones.
+                                    Button("Summarize Session…") {
+                                        model.requestHistoricSessionSummary(
+                                            sessionID: sessionID, sourceKind: card.sourceKind,
+                                            displayTitle: card.sessionTitle ?? card.summary, workingDirectory: card.projectPath
+                                        )
+                                    }
+                                    .accessibilityIdentifier("Summarize Session…")
+                                    Divider()
+                                }
                                 Button("Delete Voicemail") {
                                     model.selectedCardID = card.id
                                     model.archiveSelected()
