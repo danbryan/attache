@@ -1,8 +1,12 @@
 import Foundation
 
-public enum EventNormalizerError: Error, LocalizedError {
+public enum EventNormalizerError: Error, LocalizedError, Equatable {
     case emptyText
     case unsupportedPayload
+    /// The event named a `schema_version` higher than this server understands
+    /// (INF-359). `requested` is what the sender sent; `supported` is the
+    /// highest version this build of Attaché accepts.
+    case unsupportedSchemaVersion(requested: Int, supported: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -10,6 +14,8 @@ public enum EventNormalizerError: Error, LocalizedError {
             return "Event text was empty."
         case .unsupportedPayload:
             return "Event payload could not be normalized."
+        case .unsupportedSchemaVersion(let requested, let supported):
+            return "Unsupported schema_version \(requested); this server supports schema_version \(supported)."
         }
     }
 }
@@ -18,8 +24,16 @@ public enum EventNormalizer {
     private static let decoder = JSONDecoder()
     private static let encoder = JSONEncoder()
 
+    /// Highest `schema_version` this build of Attaché accepts on `POST /events`
+    /// (INF-359, docs/integrations.md). Absent on the wire is treated as this
+    /// version; anything higher is rejected before normalization runs.
+    public static let supportedSchemaVersion = 1
+
     public static func decode(data: Data) throws -> NormalizedEvent {
         let event = try decoder.decode(NormalizedEvent.self, from: data)
+        if let requested = event.schemaVersion, requested > supportedSchemaVersion {
+            throw EventNormalizerError.unsupportedSchemaVersion(requested: requested, supported: supportedSchemaVersion)
+        }
         return try normalize(event)
     }
 
@@ -35,7 +49,8 @@ public enum EventNormalizer {
             projectPath: cleanOptional(event.projectPath),
             title: title.isEmpty ? "Agent update" : title,
             text: trimmedText,
-            metadata: event.metadata
+            metadata: event.metadata,
+            schemaVersion: event.schemaVersion ?? supportedSchemaVersion
         )
     }
 

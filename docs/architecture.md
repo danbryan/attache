@@ -62,7 +62,10 @@ agent activity
   request carrying an `Origin` or a non-loopback `Host` (anti DNS-rebinding),
   caps body size and concurrent connections, and exposes only an unauthenticated
   `GET /health`. `POST /cards/<id>/play` and `/cards/<id>/mark-heard` drive
-  playback for integrators.
+  playback for integrators. This is also the third-party integration surface
+  ("Tier 0"): any tool can post its own events the same way Codex and Claude
+  Code do. See `docs/integrations.md` for the full field-by-field contract,
+  the `schema_version` field, error responses, and a worked example.
 - **Session watcher.** `CodexSessionWatcher` polls the on-disk transcripts of the
   sessions you have pinned, on a ~2s timer, tracking a per-session byte offset so
   it parses only newly appended JSONL. It reads both vendors' storage: Codex

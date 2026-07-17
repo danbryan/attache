@@ -77,6 +77,35 @@ final class LocalEventServerTests: XCTestCase {
         XCTAssertTrue(receivedBodies.isEmpty)
     }
 
+    func testEventWithSupportedSchemaVersionAccepted() throws {
+        // INF-359: explicit schema_version 1 (the only supported version today)
+        // is accepted the same as an event that omits the field entirely.
+        let (status, _) = try request(
+            method: "POST", path: "/events",
+            headers: ["Authorization": "Bearer \(token)", "Content-Type": "application/json"],
+            body: #"{"source":"codex","event_type":"assistant.completed","title":"Hi","text":"There","metadata":{},"schema_version":1}"#
+        )
+        XCTAssertEqual(status, 202)
+        let deadline = Date().addingTimeInterval(1)
+        while receivedBodies.isEmpty && Date() < deadline { usleep(5000) }
+        XCTAssertEqual(receivedBodies.count, 1)
+    }
+
+    func testEventWithUnsupportedSchemaVersionRejectedWith400() throws {
+        // INF-359: a schema_version this build doesn't understand is rejected
+        // synchronously, naming the supported version, and never reaches the
+        // event handler.
+        let (status, body) = try request(
+            method: "POST", path: "/events",
+            headers: ["Authorization": "Bearer \(token)", "Content-Type": "application/json"],
+            body: #"{"source":"codex","event_type":"assistant.completed","title":"Hi","text":"There","metadata":{},"schema_version":2}"#
+        )
+        XCTAssertEqual(status, 400)
+        XCTAssertTrue(body.contains("schema_version 2"))
+        XCTAssertTrue(body.contains("supports schema_version 1"))
+        XCTAssertTrue(receivedBodies.isEmpty)
+    }
+
     func testHealthOpenWithoutToken() throws {
         let (status, body) = try request(method: "GET", path: "/health", headers: [:], body: nil)
         XCTAssertEqual(status, 200)

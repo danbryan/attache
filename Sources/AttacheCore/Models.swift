@@ -59,6 +59,10 @@ public struct NormalizedEvent: Codable, Equatable {
     public var title: String
     public var text: String
     public var metadata: [String: String]
+    /// Event schema version (INF-359). Absent on the wire means 1.
+    /// `EventNormalizer.normalize` fills this to `EventNormalizer.supportedSchemaVersion`
+    /// when the sender omits it, so a normalized event always carries an explicit value.
+    public var schemaVersion: Int?
 
     public init(
         source: String,
@@ -67,7 +71,8 @@ public struct NormalizedEvent: Codable, Equatable {
         projectPath: String? = nil,
         title: String,
         text: String,
-        metadata: [String: String] = [:]
+        metadata: [String: String] = [:],
+        schemaVersion: Int? = nil
     ) {
         self.source = source
         self.eventType = eventType
@@ -76,9 +81,10 @@ public struct NormalizedEvent: Codable, Equatable {
         self.title = title
         self.text = text
         self.metadata = metadata
+        self.schemaVersion = schemaVersion
     }
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case source
         case eventType = "event_type"
         case externalSessionID = "external_session_id"
@@ -86,6 +92,7 @@ public struct NormalizedEvent: Codable, Equatable {
         case title
         case text
         case metadata
+        case schemaVersion = "schema_version"
     }
 }
 
