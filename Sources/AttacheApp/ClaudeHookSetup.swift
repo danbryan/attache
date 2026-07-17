@@ -23,8 +23,12 @@ enum ClaudeHookSetup {
 
     static var entries: [ClaudeHookInstaller.Entry] {
         let path = scriptURL.path
+        // Guarded so an absent script (app uninstalled, or the ui-smoke harness's
+        // simulate-fresh-user swap moving the app-support directory aside) is a
+        // silent no-op: exit 0, zero output. Hook commands run via `/bin/sh -c`,
+        // so this form is valid there.
         func entry(_ event: String, _ type: String) -> ClaudeHookInstaller.Entry {
-            .init(event: event, command: "'\(path)' \(type)")
+            .init(event: event, command: "[ -x '\(path)' ] && '\(path)' \(type) || true")
         }
         return [
             entry("UserPromptSubmit", "turn_started"),   // instant "working"

@@ -158,10 +158,39 @@ final class AttacheNotifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// True when the OS will actually accept a native badge write for this
+    /// authorization status. Pure and testable so the short-circuit below can
+    /// be proven without a real `UNUserNotificationCenter` round trip: under
+    /// `ATTACHE_UI_TEST=1` the app never requests authorization (see
+    /// `requestAuthorizationIfUndetermined`), so status stays `.notDetermined`
+    /// for the life of every smoke run, and every unguarded `setBadgeCount`
+    /// call was failing with `UNErrorDomain error 1` and logging once per card,
+    /// burying real smoke output.
+    static func shouldAttemptBadgeUpdate(authorizationStatus: UNAuthorizationStatus) -> Bool {
+        authorizationStatus == .authorized || authorizationStatus == .provisional
+    }
+
+    /// Set once per launch so a denied/undetermined user is told about the skip
+    /// exactly once, in debug logs, rather than on every card.
+    private static var didLogSkippedBadgeUpdate = false
+
+    /// Read-only: this only queries current authorization, it never requests
+    /// it. Requesting permission is exclusively `requestAuthorizationIfUndetermined`
+    /// / `requestAuthorization`'s job, and both already respect
+    /// `ATTACHE_UI_TEST`.
     func setApplicationBadgeCount(_ count: Int) {
-        UNUserNotificationCenter.current().setBadgeCount(count) { error in
-            if let error {
-                NSLog("\(AttacheAppSupport.appDisplayName) badge count update failed: \(error.localizedDescription)")
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard Self.shouldAttemptBadgeUpdate(authorizationStatus: settings.authorizationStatus) else {
+                if !Self.didLogSkippedBadgeUpdate {
+                    Self.didLogSkippedBadgeUpdate = true
+                    AttacheLog.watcher.debug("skipping badge update: notifications not authorized (status=\(settings.authorizationStatus.rawValue, privacy: .public))")
+                }
+                return
+            }
+            UNUserNotificationCenter.current().setBadgeCount(count) { error in
+                if let error {
+                    NSLog("\(AttacheAppSupport.appDisplayName) badge count update failed: \(error.localizedDescription)")
+                }
             }
         }
     }
