@@ -332,6 +332,21 @@ func frontmostWindowID(forPID pid: pid_t) -> CGWindowID? {
     return candidates.max(by: { area(of: $0) < area(of: $1) })?[kCGWindowNumber as String] as? CGWindowID
 }
 
+/// Finds a window owned by `pid` whose title contains `titleContains` (e.g.
+/// "Settings"), so a pose that opens a secondary window can be captured
+/// specifically instead of falling back to whichever window has the largest
+/// area (`frontmostWindowID`, which picks the main window when it happens to
+/// be bigger than the window actually being posed).
+func windowID(forPID pid: pid_t, titleContains: String) -> CGWindowID? {
+    guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: AnyObject]] else {
+        return nil
+    }
+    return infoList.first { info in
+        (info[kCGWindowOwnerPID as String] as? pid_t) == pid
+            && (info[kCGWindowName as String] as? String)?.contains(titleContains) == true
+    }?[kCGWindowNumber as String] as? CGWindowID
+}
+
 /// Screenshots the app's own window by CGWindowID via `screencapture -l`,
 /// never the whole screen. This is INF-244's fix for the screenshot matrix:
 /// a full-screen `screencapture -x` captures whatever macOS Space is
@@ -342,8 +357,10 @@ func frontmostWindowID(forPID pid: pid_t) -> CGWindowID? {
 /// directly from the window server's buffer for that specific window,
 /// independent of which Space is frontmost, so the screenshot is guaranteed
 /// to show Attaché rather than whatever else happened to be on screen.
-func captureAppWindowScreenshot(to path: String) {
-    guard let windowID = frontmostWindowID(forPID: app.pid) else {
+func captureAppWindowScreenshot(to path: String, titleContains: String? = nil) {
+    let resolvedWindowID = titleContains.flatMap { windowID(forPID: app.pid, titleContains: $0) }
+        ?? frontmostWindowID(forPID: app.pid)
+    guard let windowID = resolvedWindowID else {
         print("screenshot: could not resolve a window id for pid \(app.pid); skipping capture to \(path)")
         return
     }
@@ -406,6 +423,13 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 app.activate()
                 app.key(Key.comma, command: true)
                 try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+            case "about":
+                // Poses the About pane so the Responsiveness section
+                // (INF-349) can be captured for evidence.
+                app.activate()
+                app.key(Key.comma, command: true)
+                try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+                try selectSettingsSection("About", paneMarker: "Responsiveness")
             case "live":
                 break
             case "play":
@@ -641,7 +665,8 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
         // screen) the instant the requested state is confirmed on screen,
         // before the hold-sleep even starts, if the wrapper asked for one.
         if let screenshotPath = ProcessInfo.processInfo.environment["ATTACHE_POSE_SCREENSHOT_PATH"] {
-            captureAppWindowScreenshot(to: screenshotPath)
+            let titleHint = pose.contains("settings") || pose.contains("about") ? "Settings" : nil
+            captureAppWindowScreenshot(to: screenshotPath, titleContains: titleHint)
         }
         print("posing \(pose) for \(Int(holdSeconds))s")
         // Wrapper scripts tail the log for this marker to time recordings;
