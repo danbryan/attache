@@ -43,9 +43,9 @@ final class SessionActivityWatcher {
         var agentKind: SourceKind = .codex
     }
 
-    private let sessionsDirectory: URL
-    private let archivedSessionsDirectory: URL
-    private let claudeProjectsDirectory: URL
+    /// See `CodexSessionWatcher.sourceRegistry`: the registered sources this
+    /// watcher polls and classifies files against (INF-360).
+    private let sourceRegistry: SessionSourceRegistry
     private var timer: Timer?
     private var sessions: [CodexSessionTarget] = []
     private var fileOffsets: [String: UInt64] = [:]
@@ -59,14 +59,14 @@ final class SessionActivityWatcher {
     init(
         sessionsDirectory: URL? = nil,
         archivedSessionsDirectory: URL? = nil,
-        claudeProjectsDirectory: URL? = nil
+        claudeProjectsDirectory: URL? = nil,
+        sourceRegistry: SessionSourceRegistry? = nil
     ) {
-        let codexHome = CodexPaths.home()
-        self.sessionsDirectory = sessionsDirectory ?? codexHome
-            .appendingPathComponent("sessions", isDirectory: true)
-        self.archivedSessionsDirectory = archivedSessionsDirectory ?? codexHome
-            .appendingPathComponent("archived_sessions", isDirectory: true)
-        self.claudeProjectsDirectory = claudeProjectsDirectory ?? ClaudePaths.projectsDirectory()
+        self.sourceRegistry = sourceRegistry ?? .production(
+            codexSessionsDirectory: sessionsDirectory,
+            codexArchivedSessionsDirectory: archivedSessionsDirectory,
+            claudeProjectsDirectory: claudeProjectsDirectory
+        )
     }
 
     func watch(_ sessions: [CodexSessionTarget]) {
@@ -145,13 +145,16 @@ final class SessionActivityWatcher {
         fileOffsets[session.id] = size
 
         let sourceKind = sourceKind(for: fileURL)
+        // Falls back to .codex when the registry has no format for this kind,
+        // matching CodexSessionWatcher's fallback (see its pollSession).
+        let format = sourceRegistry.transcriptFormat(for: sourceKind) ?? .codex
         let recentCutoff = firstRead ? now.addingTimeInterval(-firstReadWindow) : nil
-        for signal in activitySignals(inText: text, sourceKind: sourceKind, recentCutoff: recentCutoff) {
+        for signal in activitySignals(inText: text, sourceKind: sourceKind, format: format, recentCutoff: recentCutoff) {
             record(signal)
         }
     }
 
-    private func activitySignals(inText text: String, sourceKind: SourceKind, recentCutoff: Date?) -> [Signal] {
+    private func activitySignals(inText text: String, sourceKind: SourceKind, format: TranscriptFormat, recentCutoff: Date?) -> [Signal] {
         var signals: [Signal] = []
         for line in text.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
@@ -161,7 +164,10 @@ final class SessionActivityWatcher {
             }
             if let recentCutoff, timestamp < recentCutoff { continue }
 
-            if sourceKind == .claudeCode || object["payload"] == nil {
+            // Dispatch on the registered transcript format (not the source
+            // kind directly) so a future source registered with the Claude
+            // JSONL shape parses the same way Claude Code does (INF-360).
+            if format == .claude || object["payload"] == nil {
                 signals.append(contentsOf: claudeSignals(from: object, timestamp: timestamp))
             } else {
                 signals.append(contentsOf: codexSignals(from: object, timestamp: timestamp))
@@ -454,9 +460,13 @@ final class SessionActivityWatcher {
            FileManager.default.fileExists(atPath: cached.path) {
             return cached
         }
-        let located = findSessionFile(id: id, under: sessionsDirectory)
-            ?? findSessionFile(id: id, under: archivedSessionsDirectory)
-            ?? findSessionFile(id: id, under: claudeProjectsDirectory)
+        var located: URL?
+        for directory in sourceRegistry.allWatchedDirectories() {
+            if let match = findSessionFile(id: id, under: directory) {
+                located = match
+                break
+            }
+        }
         locatedFileURLs[id] = located
         return located
     }
@@ -483,14 +493,11 @@ final class SessionActivityWatcher {
         return matches.sorted { $0.modified > $1.modified }.first?.url
     }
 
-    /// See `CodexSessionWatcher.sourceKind(for:)`: classify by the actually
-    /// resolved `claudeProjectsDirectory` (which already honors a
-    /// `CLAUDE_CONFIG_DIR` override) rather than a literal `/.claude/`
-    /// substring, which misclassifies any override whose path does not
-    /// itself contain that substring.
+    /// See `CodexSessionWatcher.sourceKind(for:)`: classify via the registry's
+    /// symlink-resolved, longest-matching directory prefix, falling back to
+    /// `.codex` when nothing matches (preserving the old behavior exactly).
     func sourceKind(for fileURL: URL) -> SourceKind {
-        fileURL.resolvingSymlinksInPath().path.hasPrefix(claudeProjectsDirectory.resolvingSymlinksInPath().path)
-            ? .claudeCode : .codex
+        sourceRegistry.classify(fileURL: fileURL) ?? .codex
     }
 
     private func fileSize(_ fileURL: URL) -> UInt64? {

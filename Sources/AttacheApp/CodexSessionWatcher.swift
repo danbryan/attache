@@ -9,9 +9,13 @@ final class CodexSessionWatcher {
     /// Fires when a watched session's live sub-agent count changes (INF-275).
     var onSubAgents: ((String, Int) -> Void)?
 
-    private let sessionsDirectory: URL
-    private let archivedSessionsDirectory: URL
-    private let claudeProjectsDirectory: URL
+    /// The registered sources this watcher polls and classifies files
+    /// against. Defaults to production (Codex + Claude Code) built from the
+    /// explicit directory overrides below, if any; a caller (tests) can pass
+    /// a full custom registry instead, e.g. to register a synthetic source
+    /// and prove classification/format/watching are purely data-driven
+    /// (INF-360).
+    private let sourceRegistry: SessionSourceRegistry
     private let defaults: UserDefaults
     private var timer: Timer?
     private var sessions: [CodexSessionTarget] = []   // all attached sessions, watched concurrently
@@ -37,14 +41,14 @@ final class CodexSessionWatcher {
         sessionsDirectory: URL? = nil,
         archivedSessionsDirectory: URL? = nil,
         claudeProjectsDirectory: URL? = nil,
+        sourceRegistry: SessionSourceRegistry? = nil,
         defaults: UserDefaults = .standard
     ) {
-        let codexHome = CodexPaths.home()
-        self.sessionsDirectory = sessionsDirectory ?? codexHome
-            .appendingPathComponent("sessions", isDirectory: true)
-        self.archivedSessionsDirectory = archivedSessionsDirectory ?? codexHome
-            .appendingPathComponent("archived_sessions", isDirectory: true)
-        self.claudeProjectsDirectory = claudeProjectsDirectory ?? ClaudePaths.projectsDirectory()
+        self.sourceRegistry = sourceRegistry ?? .production(
+            codexSessionsDirectory: sessionsDirectory,
+            codexArchivedSessionsDirectory: archivedSessionsDirectory,
+            claudeProjectsDirectory: claudeProjectsDirectory
+        )
         self.defaults = defaults
     }
 
@@ -123,7 +127,10 @@ final class CodexSessionWatcher {
         }
 
         let sourceKind = sourceKind(for: fileURL)
-        let format: TranscriptFormat = sourceKind == .claudeCode ? .claude : .codex
+        // Falls back to .codex when the registry has no format for this kind
+        // (only reachable with a caller-supplied registry that omits it),
+        // matching the classification fallback below.
+        let format = sourceRegistry.transcriptFormat(for: sourceKind) ?? .codex
 
         classifyAttention(session: session, fileURL: fileURL, format: format)
 
@@ -221,7 +228,7 @@ final class CodexSessionWatcher {
             title: session.displayTitle,
             text: turn.text
         )
-        event.metadata["adapter"] = sourceKind == .claudeCode ? "claude-session-file" : "codex-session-file"
+        event.metadata["adapter"] = sourceRegistry.adapterTag(for: sourceKind) ?? "codex-session-file"
         event.metadata["codex_session_file"] = fileURL.path
         event.metadata["codex_target_category"] = session.category.rawValue
         // Source time = when the agent wrote the turn, not when we processed it, so
@@ -328,28 +335,26 @@ final class CodexSessionWatcher {
         }
     }
 
-    /// A session file is Claude Code's iff it resolved under
-    /// `claudeProjectsDirectory`, which itself already honors a
-    /// `CLAUDE_CONFIG_DIR` override (`ClaudePaths.projectsDirectory()`). This
-    /// used to be a literal `path.contains("/.claude/")` check, which broke
-    /// for any override that does not itself contain that substring, e.g. a
-    /// disposable test home (`/tmp/.../claude-home/projects/...`, INF-257/E2)
-    /// or a real user's own `CLAUDE_CONFIG_DIR`: the file was still located
-    /// correctly (`locateSessionFile` searches `claudeProjectsDirectory`), but
-    /// got misclassified as Codex and parsed with the wrong transcript
-    /// format, so its completed turns were silently dropped instead of
-    /// becoming cards.
+    /// Classifies a file by the longest matching directory prefix across
+    /// every registered source (`SessionSourceRegistry.classify`), falling
+    /// back to `.codex` when nothing matches, preserving this function's old
+    /// literal `... ? .claudeCode : .codex` fallback exactly.
     ///
-    /// Both sides are resolved with `resolvingSymlinksInPath()` before the
-    /// prefix check: `FileManager`'s enumerator (used by `findSessionFile`)
-    /// returns canonicalized paths, so a `claudeProjectsDirectory` built from
-    /// a `/tmp/...` override (a symlink to `/private/tmp/...` on macOS) would
-    /// otherwise never match the `/private/tmp/...` path the enumerator
-    /// actually handed back, silently falling through to `.codex` even though
-    /// the file was found under the right directory (INF-261).
+    /// This used to be a literal `path.contains("/.claude/")` check, which
+    /// broke for any override that does not itself contain that substring,
+    /// e.g. a disposable test home (`/tmp/.../claude-home/projects/...`,
+    /// INF-257/E2) or a real user's own `CLAUDE_CONFIG_DIR`: the file was
+    /// still located correctly, but got misclassified as Codex and parsed
+    /// with the wrong transcript format, so its completed turns were
+    /// silently dropped instead of becoming cards. It was then a direct
+    /// `hasPrefix` check against `claudeProjectsDirectory` alone (both sides
+    /// resolved with `resolvingSymlinksInPath()`, since `FileManager`'s
+    /// enumerator returns canonicalized paths and a `/tmp/...` override is a
+    /// symlink to `/private/tmp/...` on macOS, INF-261). The registry's
+    /// `classify` does the same symlink-resolved prefix check against every
+    /// registered source's directories instead of one hardcoded directory.
     func sourceKind(for fileURL: URL) -> SourceKind {
-        fileURL.resolvingSymlinksInPath().path.hasPrefix(claudeProjectsDirectory.resolvingSymlinksInPath().path)
-            ? .claudeCode : .codex
+        sourceRegistry.classify(fileURL: fileURL) ?? .codex
     }
 
     private func fileSize(_ fileURL: URL) -> UInt64? {
@@ -372,14 +377,18 @@ final class CodexSessionWatcher {
             return cached
         }
         // Negative cache: a session whose file is briefly missing must not trigger
-        // a full three-tree walk every 2s. After a miss, hold off re-walking until
-        // the re-check window elapses.
+        // a full walk of every watched directory every 2s. After a miss, hold off
+        // re-walking until the re-check window elapses.
         if let missedAt = locateMissTick[id], pollTick &- missedAt < missRecheckPolls {
             return nil
         }
-        let located = findSessionFile(id: id, under: sessionsDirectory)
-            ?? findSessionFile(id: id, under: archivedSessionsDirectory)
-            ?? findSessionFile(id: id, under: claudeProjectsDirectory)
+        var located: URL?
+        for directory in sourceRegistry.allWatchedDirectories() {
+            if let match = findSessionFile(id: id, under: directory) {
+                located = match
+                break
+            }
+        }
         if let located {
             locatedFileURLs[id] = located
             locateMissTick[id] = nil

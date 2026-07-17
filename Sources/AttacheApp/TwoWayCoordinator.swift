@@ -269,12 +269,13 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
         return SessionFileObservation(size: Int64(size), modifiedAt: modifiedAt, observedAt: now, tailLines: lines)
     }
 
+    /// Registry-driven (INF-360): an unrecognized raw value, or a recognized
+    /// `SourceKind` the registry has no descriptor for, both fall through to
+    /// nil, preserving the old fail-safe (two-way delivery refuses an
+    /// unrecognized source) exactly.
     private func transcriptFormat(for sourceKind: String) -> TranscriptFormat? {
-        switch SourceKind(rawValue: sourceKind) {
-        case .codex: return .codex
-        case .claudeCode: return .claude
-        default: return nil
-        }
+        guard let kind = SourceKind(rawValue: sourceKind) else { return nil }
+        return SessionSourceRegistry.production().transcriptFormat(for: kind)
     }
 
     private func tailLines(of url: URL, maxBytes: Int) -> [String]? {

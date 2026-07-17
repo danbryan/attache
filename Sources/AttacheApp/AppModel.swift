@@ -6726,9 +6726,13 @@ final class AppModel: ObservableObject {
 
     private func rebuildSessionIndexer() {
         guard !store.isInMemory else { return }
-        var scanners: [SessionScanner] = []
-        if codexSourceEnabled { scanners.append(CodexSessionScanner()) }
-        if claudeCodeSourceEnabled { scanners.append(ClaudeCodeSessionScanner()) }
+        // Registry-driven (INF-360): replaces the two hardcoded
+        // `if codexSourceEnabled { ... }` / `if claudeCodeSourceEnabled { ... }`
+        // appends with an iteration filtered by the same enabled set.
+        let enabledKinds = enabledAgentSources
+        let scanners = SessionSourceRegistry.production().descriptors
+            .filter { enabledKinds.contains($0.sourceKind) }
+            .map { $0.makeScanner() }
         sessionIndexer = SessionIndexer(cacheURL: Self.sessionIndexURL, scanners: scanners)
     }
 
