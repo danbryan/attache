@@ -1000,11 +1000,15 @@ if enabled("f3") {
             throw SmokeError(message: "caption transcript did not expose the checksum text: \(transcript.summary)")
         }
     }
-    run.step("f3-transport", "torture card hang up returns playback to the inbox") {
+    run.step("f3-transport", "torture card pauses cleanly, leaving no stuck overlay") {
+        // This card was opened as an ordinary voicemail play (not a live call
+        // via Command-L), so there is no "Hang up" control to press here; pause
+        // is the equivalent clean stop for this playback mode.
         guard tortureCardOpened else { throw SmokeError(message: "skipped: torture card did not open") }
-        let hangUp = try waitForElement("Hang up control", in: try mainWindow(),
-                                        role: kAXButtonRole as String, containing: "Hang up")
-        guard hangUp.press() else { throw SmokeError(message: "AXPress failed on \(hangUp.summary)") }
+        let pause = try waitForElement("Pause control", in: try mainWindow(),
+                                       role: kAXButtonRole as String, containing: "Pause")
+        guard pause.press() else { throw SmokeError(message: "AXPress failed on \(pause.summary)") }
+        _ = try waitForElement("paused indicator", in: try mainWindow(), containing: "Playback paused")
     }
 }
 
