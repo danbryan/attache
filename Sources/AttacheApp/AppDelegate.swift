@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AttacheTheme.auditContrastFloor()
         #endif
         AttacheNotifier.shared.configure()
+        OptionKeyMonitor.shared.start()
         updateAppIcon()
         setupMainMenu()
         if model.showInMenuBar { setupStatusItem() }

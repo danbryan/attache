@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension AttacheRootView {
     // The always-summoned bottom dock: the few actions one click away. Focus
@@ -164,6 +166,37 @@ extension AttacheRootView {
             Button("Edit personalities…") {
                 AttacheNavigation.openPersonalityManager()
             }
+            Divider()
+            Button("Previous Personality") {
+                model.selectAdjacentPersonality(offset: -1)
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            Button("Next Personality") {
+                model.selectAdjacentPersonality(offset: 1)
+            }
+            .keyboardShortcut("]", modifiers: .command)
+            if optionKeyMonitor.isHeld {
+                Divider()
+                Button("Export Personality…") {
+                    exportActivePersonality()
+                }
+            }
+        }
+    }
+
+    /// Saves the active personality to a user-chosen JSON file, the same
+    /// export payload `PersonalitiesPane` writes from its own Export button
+    /// (`PersonalityStore.exportData` via `model.exportPersonalityData(id:)`).
+    /// This is the dock's Option-held "Export Personality…" alternate; the
+    /// non-Option path to the same feature is Settings > Personalities.
+    func exportActivePersonality() {
+        guard let personality = model.activePersonality,
+              let data = model.exportPersonalityData(id: personality.id) else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(personality.name).json"
+        panel.allowedContentTypes = [.json]
+        if panel.runModal() == .OK, let url = panel.url {
+            try? data.write(to: url)
         }
     }
 
@@ -202,6 +235,32 @@ extension AttacheRootView {
         .accessibilityLabel("Open inbox")
         .accessibilityValue(model.unreadCount > 0 ? "\(model.unreadCount) unread" : "No unread")
         .onHover { setDockHover(.unread, $0) }
+        .contextMenu {
+            Button("Play Recap") {
+                model.playInboxRecapForAllUnread()
+            }
+            Button("Play Latest") {
+                model.playLatestCard()
+            }
+            if optionKeyMonitor.isHeld {
+                // Destructive variant of "Mark All Read": clears voicemail
+                // out of the inbox entirely rather than just marking it heard.
+                Button("Archive All", role: .destructive) {
+                    model.archiveAllCards()
+                }
+            } else {
+                Button("Mark All Read") {
+                    model.markAllHeard()
+                }
+            }
+            // TODO(Private Session ticket): add "Forget Session" here once the
+            // Private Session work lands; out of scope for INF-354.
+            Divider()
+            Button("Open Inbox") {
+                withAnimation(.easeInOut(duration: 0.16)) { inboxVisible = true }
+            }
+            .keyboardShortcut("i", modifiers: .command)
+        }
     }
 
     @ViewBuilder
@@ -224,7 +283,41 @@ extension AttacheRootView {
         .help("Open settings")
         .accessibilityLabel("Open settings")
         .onHover { setDockHover(.settings, $0) }
+        .contextMenu {
+            ForEach(Self.dockSettingsSections, id: \.self) { section in
+                Button(section.title) {
+                    surfaceMode = .live
+                    AttacheNavigation.openSettings(pane: section)
+                }
+            }
+            if optionKeyMonitor.isHeld {
+                Divider()
+                // REVIEW NEEDED: the ticket asks for an Option "Diagnostics"
+                // item that opens Settings to a Diagnostics pane, but no such
+                // pane exists anywhere in this app today (SettingsSection has
+                // no `.diagnostics` case, and there is no other diagnostics
+                // window/sheet to route to). Adding a whole new pane is out of
+                // scope for a context-menu ticket, so this item is disabled
+                // rather than fabricated or silently dropped. Leaving the
+                // "menus exist with exactly the items above" checkbox
+                // unchecked in Linear until product direction on where
+                // Diagnostics content should live is confirmed.
+                Button("Diagnostics") {}
+                    .disabled(true)
+                Button("Open Support Folder") {
+                    model.openSupportFolder()
+                }
+            }
+        }
     }
+
+    /// Settings sections reachable from the dock's right-click menu, in the
+    /// same order as the sidebar (INF-354). `.about` is left out: the ticket's
+    /// list is Appearance, Voice and Captions, Personalities, Context,
+    /// Integrations, Memory.
+    static let dockSettingsSections: [SettingsSection] = [
+        .appearance, .voice, .personalities, .context, .integrations, .memory
+    ]
 
     var talkButton: some View {
         Button {

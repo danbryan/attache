@@ -15,6 +15,12 @@ enum AttacheNavigation {
         }
     }
 
+    /// Named to match the dock's right-click "jump straight to a pane" menus
+    /// (INF-354); forwards to `openSettings(_:)`.
+    static func openSettings(pane: SettingsSection) {
+        openSettings(pane)
+    }
+
     static func openPersonalityManager() {
         openSettings(.personalities)
     }

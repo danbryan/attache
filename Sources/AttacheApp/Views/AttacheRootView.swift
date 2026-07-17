@@ -59,6 +59,11 @@ struct AttacheRootView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var playback: SpeechPlaybackController
     @ObservedObject var micTranscript: MicTranscriptController
+    // Drives the dock's right-click context menus' Option-held alternates
+    // (INF-354); a real `@Published` property so SwiftUI swaps the alternate
+    // items in live while a menu is open, matching the native macOS
+    // hold-Option convention.
+    @ObservedObject var optionKeyMonitor = OptionKeyMonitor.shared
     @State var hoveredDockItem: DockItem?
     @State private var chromeAwake = true
     @State private var idleWorkItem: DispatchWorkItem?

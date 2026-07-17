@@ -54,6 +54,34 @@ extension AttacheRootView {
             }
         }
         .onHover { hoveredDockItem = $0 ? .talk : nil }
+        .contextMenu {
+            Button("Start Call") {
+                withAnimation(.easeInOut(duration: 0.16)) { model.startCall() }
+            }
+            .disabled(model.onCall)
+            Button("Start Private Call") {
+                withAnimation(.easeInOut(duration: 0.16)) { model.startPrivateCall() }
+            }
+            .disabled(model.onCall)
+            if !model.personalities.isEmpty {
+                Menu("Call as…") {
+                    ForEach(model.personalities) { personality in
+                        Button(personality.name) {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                if optionKeyMonitor.isHeld {
+                                    // Option variant: call as this personality,
+                                    // privately (no Attaché conversation record).
+                                    model.startPrivateCall(as: personality.id)
+                                } else {
+                                    model.startCall(as: personality.id)
+                                }
+                            }
+                        }
+                        .disabled(model.onCall)
+                    }
+                }
+            }
+        }
     }
 
     // A standard chat composer for the live call: destination toggle, one input
