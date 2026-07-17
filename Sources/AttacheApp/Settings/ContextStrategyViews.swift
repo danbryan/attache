@@ -391,7 +391,12 @@ struct ContextStrategyEditor: View {
 }
 
 struct ContextSettingsPane: View {
-    @ObservedObject var model: AppModel
+    /// Render-only Settings surface (INF-351). No `@ObservedObject var
+    /// model: AppModel` here: AppModel publishes at high frequency during
+    /// narration, animation, and playback, and this pane only ever needs the
+    /// derived provider/model label, capability summary, and notices that
+    /// `SettingsPaneState` already recomputes with compare-before-publish.
+    @ObservedObject var paneState: SettingsPaneState
     @ObservedObject var state: AttacheContextUIState
 
     var body: some View {
@@ -407,8 +412,8 @@ struct ContextSettingsPane: View {
                 globalStrategy: state.globalStrategy,
                 allowsInheritance: false,
                 capabilitySummary: activeCapabilitySummary,
-                modelLabel: model.presentationProviderSummary,
-                capabilityNotice: activeCapabilityNotice,
+                modelLabel: paneState.snapshot.modelLabel,
+                capabilityNotice: paneState.snapshot.capabilityNotice,
                 migrationNotice: state.strategyMigrationNotice,
                 onDismissMigrationNotice: state.dismissStrategyMigrationNotice
             )
@@ -429,25 +434,14 @@ struct ContextSettingsPane: View {
         )
     }
 
+    /// Combines the detected profile `AppModel` already recomputed
+    /// (`paneState.snapshot.profile`, compare-before-published so this only
+    /// changes on a real provider/model/discovery change) with the live
+    /// Custom-policy override from `state`. A cheap, pure struct
+    /// construction, not the expensive capability lookup `paneState` exists
+    /// to avoid repeating on every AppModel publish.
     private var activeCapabilitySummary: AttacheCapabilitySummary {
-        let profile = model.presentationModelOptions
-            .first(where: { $0.id == model.presentationModel })?
-            .capabilityProfile
-            ?? AttachePresentationModelService.capabilityProfile(
-                provider: model.presentationProvider,
-                baseURLText: model.presentationBaseURL,
-                modelID: model.presentationModel
-            )
-        return .from(detected: profile, override: state.globalStrategy.custom)
-    }
-
-    private var activeCapabilityNotice: String? {
-        guard model.presentationProvider == .ollama,
-              !model.presentationModelOptions.isEmpty,
-              !model.presentationModelOptions.contains(where: { $0.id == model.presentationModel }) else {
-            return nil
-        }
-        return "\(model.presentationModel) is not installed on this Ollama server. Choose a listed model or install it, then refresh to inspect its capacity and reasoning support."
+        .from(detected: paneState.snapshot.profile, override: state.globalStrategy.custom)
     }
 }
 

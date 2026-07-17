@@ -127,17 +127,7 @@ struct PersonalitiesPane: View {
                     .frame(height: 112)
 
                 Menu {
-                    if personality.isBuiltIn {
-                        Button("Customize") { openStudio(.customize(personality)) }
-                    } else {
-                        Button("Edit") { openStudio(.edit(personality)) }
-                    }
-                    Button("Duplicate") { model.duplicatePersonality(id: personality.id) }
-                    Button("Export") { exportPersonality(personality) }
-                    if !personality.isBuiltIn {
-                        Divider()
-                        Button("Delete", role: .destructive) { model.deletePersonality(id: personality.id) }
-                    }
+                    wardrobeCardMenuItems(personality)
                 } label: {
                     Image(systemName: "ellipsis.circle.fill")
                         .typoIcon(size: 17)
@@ -174,17 +164,34 @@ struct PersonalitiesPane: View {
                 .stroke(active ? model.theme.signatureColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: active ? 1.5 : 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 13))
-        .onTapGesture(count: 2) {
-            openStudio(personality.isBuiltIn ? .customize(personality) : .edit(personality))
-        }
+        // Single click switches immediately (INF-351): no competing
+        // double-tap gesture to wait out the disambiguation delay for.
+        // Edit/Customize stays reachable via the visible ellipsis Menu above
+        // and the context menu below.
         .onTapGesture { model.switchPersonalityFromUI(personality.id) }
-        .help("Click to switch. Double-click to \(personality.isBuiltIn ? "customize" : "edit").")
+        .contextMenu { wardrobeCardMenuItems(personality) }
+        .help("Click to switch. Use the \u{2022}\u{2022}\u{2022} menu or right-click to \(personality.isBuiltIn ? "customize" : "edit").")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(personality.name), \(active ? "active" : "available") personality")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { model.switchPersonalityFromUI(personality.id) }
         .accessibilityAction(named: Text(personality.isBuiltIn ? "Customize character" : "Edit character")) {
             openStudio(personality.isBuiltIn ? .customize(personality) : .edit(personality))
+        }
+    }
+
+    @ViewBuilder
+    private func wardrobeCardMenuItems(_ personality: Personality) -> some View {
+        if personality.isBuiltIn {
+            Button("Customize") { openStudio(.customize(personality)) }
+        } else {
+            Button("Edit") { openStudio(.edit(personality)) }
+        }
+        Button("Duplicate") { model.duplicatePersonality(id: personality.id) }
+        Button("Export") { exportPersonality(personality) }
+        if !personality.isBuiltIn {
+            Divider()
+            Button("Delete", role: .destructive) { model.deletePersonality(id: personality.id) }
         }
     }
 

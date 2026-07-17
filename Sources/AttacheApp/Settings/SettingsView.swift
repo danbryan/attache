@@ -89,7 +89,7 @@ struct SettingsView: View {
         case .appearance: appearancePane
         case .voice: VoicePane(model: model)
         case .personalities: PersonalitiesPane(model: model)
-        case .context: ContextSettingsPane(model: model, state: .shared)
+        case .context: ContextSettingsPane(paneState: model.settingsPaneState, state: .shared)
         case .integrations: IntegrationsPane(model: model)
         case .memory: MemorySettingsPane(model: model, state: .shared)
         case .about: AboutPane(model: model)
