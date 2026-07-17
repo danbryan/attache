@@ -142,6 +142,28 @@ final class InstructionReplyEngineTests: XCTestCase {
         XCTAssertEqual(try store.fetchInstruction(id: created.id)?.state, .failed)
     }
 
+    /// INF-362 safety criterion (mirrors the grok_build test above): opencode
+    /// is registered for watching/indexing in `SessionSourceRegistry` with a
+    /// nil `transcriptFormat` (SQLite rows have no line/text shape to
+    /// parse), and `TwoWayCoordinator` never registers a delivery adapter
+    /// for it either. A confirmed instruction for an "opencode" session
+    /// fails closed with a clear error and is never silently sent.
+    func testConfirmedInstructionForOpencodeSourceFailsClosed() async throws {
+        let store = try makeStore()
+        let engine = InstructionReplyEngine(store: store)
+        engine.register(MockAdapter(sourceKind: "codex"))
+        engine.setTwoWayEnabled(true, forSessionID: "opencode-s1")
+
+        let created = try engine.submit(text: "run the tests again", sessionID: "opencode-s1", sourceKind: "opencode", now: now)
+        _ = try engine.confirm(id: created.id, now: now)
+
+        let delivered = await engine.deliverReadyInstructions(sessionIsIdle: { _ in true }, now: now)
+        XCTAssertEqual(delivered.count, 1)
+        XCTAssertEqual(delivered.first?.state, .failed)
+        XCTAssertEqual(delivered.first?.error, "No delivery adapter for opencode.")
+        XCTAssertEqual(try store.fetchInstruction(id: created.id)?.state, .failed)
+    }
+
     func testTwoWayDisabledRefusesSubmit() throws {
         let store = try makeStore()
         let engine = InstructionReplyEngine(store: store)

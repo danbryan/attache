@@ -925,6 +925,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var codexSourceEnabled = false
     @Published private(set) var claudeCodeSourceEnabled = false
     @Published private(set) var grokBuildSourceEnabled = false
+    @Published private(set) var opencodeSourceEnabled = false
     private lazy var curatedProjectPaths: [String] = Self.loadCuratedProjectPaths()
     let store: CardStore
 
@@ -6661,7 +6662,7 @@ final class AppModel: ObservableObject {
     }
 
     var localAgentSourcesEnabled: Bool {
-        codexSourceEnabled || claudeCodeSourceEnabled || grokBuildSourceEnabled
+        codexSourceEnabled || claudeCodeSourceEnabled || grokBuildSourceEnabled || opencodeSourceEnabled
     }
 
     func setCodexSourceEnabled(_ enabled: Bool) {
@@ -6724,6 +6725,28 @@ final class AppModel: ObservableObject {
         refreshSessionIndex()
     }
 
+    /// Toggle off stops indexing for opencode only, mirroring
+    /// `setGrokBuildSourceEnabled` exactly (INF-362): opencode has no live
+    /// watcher wiring (its sessions are SQLite rows, not a `.jsonl` file
+    /// `CodexSessionWatcher`/`SessionActivityWatcher` can byte-offset tail),
+    /// so this only rebuilds the background index and clears any attached
+    /// opencode target; there is no live-narration path to stop.
+    func setOpencodeSourceEnabled(_ enabled: Bool) {
+        guard opencodeSourceEnabled != enabled else { return }
+        opencodeSourceEnabled = enabled
+        defaults.set(enabled, forKey: AttachePreferenceKey.opencodeSourceEnabled)
+        if !enabled {
+            attachedTargets = attachedTargets.filter { $0.value.sourceKind != .opencode }
+            if attachedCodexSession?.sourceKind == .opencode {
+                attachedCodexSessionID = attachedSessionList.first?.id
+            }
+            synchronizeSessionContextFocus()
+            updateCodexWatcher()
+        }
+        rebuildSessionIndexer()
+        refreshSessionIndex()
+    }
+
     func focusIntegration(for provider: AttacheSpeechProvider) {
         switch provider {
         case .system:
@@ -6742,6 +6765,7 @@ final class AppModel: ObservableObject {
         if codexSourceEnabled { sources.insert(.codex) }
         if claudeCodeSourceEnabled { sources.insert(.claudeCode) }
         if grokBuildSourceEnabled { sources.insert(.grokBuild) }
+        if opencodeSourceEnabled { sources.insert(.opencode) }
         return sources
     }
 
@@ -8281,6 +8305,9 @@ final class AppModel: ObservableObject {
         if defaults.object(forKey: AttachePreferenceKey.grokBuildSourceEnabled) != nil {
             grokBuildSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.grokBuildSourceEnabled)
         }
+        if defaults.object(forKey: AttachePreferenceKey.opencodeSourceEnabled) != nil {
+            opencodeSourceEnabled = defaults.bool(forKey: AttachePreferenceKey.opencodeSourceEnabled)
+        }
         if let raw = defaults.string(forKey: AttachePreferenceKey.agentInstructionSendPolicy),
            let policy = AgentInstructionSendPolicy(rawValue: raw) {
             agentInstructionSendPolicy = policy
@@ -8664,7 +8691,8 @@ final class AppModel: ObservableObject {
             $0.category == .activeSession
                 && (($0.sourceKind == .codex && codexSourceEnabled)
                     || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled)
-                    || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled))
+                    || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled)
+                    || ($0.sourceKind == .opencode && opencodeSourceEnabled))
         }
         codexSessionWatcher.watch(enabledTargets)
         // Ambient verbs cover every watched session, not just the focused
@@ -8728,6 +8756,7 @@ final class AppModel: ObservableObject {
             ($0.sourceKind == .codex && codexSourceEnabled)
                 || ($0.sourceKind == .claudeCode && claudeCodeSourceEnabled)
                 || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled)
+                || ($0.sourceKind == .opencode && opencodeSourceEnabled)
         }
         attachedTargets = Dictionary(uniqueKeysWithValues: enabledSessions.map { ($0.id, $0) })
     }

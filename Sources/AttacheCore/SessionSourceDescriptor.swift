@@ -15,7 +15,14 @@ import Foundation
 /// registry construction time.
 public struct SessionSourceDescriptor {
     public let sourceKind: SourceKind
-    public let transcriptFormat: TranscriptFormat
+    /// Nil for a source with no line/text transcript shape `TranscriptParser`
+    /// can parse (opencode, INF-362: SQLite rows, not JSONL lines). Reading
+    /// this as nil is exactly `TwoWayCoordinator.transcriptFormat(for:)`'s
+    /// "no delivery adapter, fail closed" signal, the same outcome Grok
+    /// Build reaches via having no `InstructionDeliveryAdapter` registered;
+    /// opencode reaches it one layer earlier because there is no format to
+    /// even attempt correlation or readiness classification against.
+    public let transcriptFormat: TranscriptFormat?
     public let watchedDirectories: () -> [URL]
     /// Whether a file found under one of `watchedDirectories` belongs to this
     /// source. Both production sources currently just check the extension;
@@ -35,7 +42,7 @@ public struct SessionSourceDescriptor {
 
     public init(
         sourceKind: SourceKind,
-        transcriptFormat: TranscriptFormat,
+        transcriptFormat: TranscriptFormat?,
         watchedDirectories: @escaping () -> [URL],
         adapterTag: String,
         makeScanner: @escaping () -> SessionScanner,
@@ -73,7 +80,8 @@ public final class SessionSourceRegistry {
         codexSessionsDirectory: URL? = nil,
         codexArchivedSessionsDirectory: URL? = nil,
         claudeProjectsDirectory: URL? = nil,
-        grokSessionsDirectory: URL? = nil
+        grokSessionsDirectory: URL? = nil,
+        opencodeDataDirectory: URL? = nil
     ) -> SessionSourceRegistry {
         SessionSourceRegistry(descriptors: [
             SessionSourceDescriptor(
@@ -111,6 +119,24 @@ public final class SessionSourceRegistry {
                 },
                 adapterTag: "grok-build-session-file",
                 makeScanner: { GrokBuildSessionScanner() }
+            ),
+            // opencode (INF-362): watching/indexing/narration only. Sessions
+            // live as rows in one shared SQLite database, not one file per
+            // session, so `transcriptFormat` is nil here (see the field's
+            // doc comment) rather than a JSONL-oriented case: there is no
+            // line/text shape for `TranscriptParser` to parse, which is
+            // exactly the signal `TwoWayCoordinator.transcriptFormat(for:)`
+            // needs to fail Tell Agent closed instead of attempting
+            // correlation or readiness classification against SQL rows.
+            SessionSourceDescriptor(
+                sourceKind: .opencode,
+                transcriptFormat: nil,
+                watchedDirectories: {
+                    [opencodeDataDirectory ?? OpencodePaths.dataHome()]
+                },
+                adapterTag: "opencode-session-db",
+                makeScanner: { OpencodeSessionScanner() },
+                fileMatch: { $0.lastPathComponent == "opencode.db" }
             )
         ])
     }
