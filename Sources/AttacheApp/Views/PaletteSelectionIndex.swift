@@ -2,7 +2,7 @@ import Foundation
 
 /// Pure selection-index arithmetic shared by every palette/overlay that
 /// mirrors arrow-key movement over an ordered, possibly-filtered id list
-/// (⇧⌘P character switcher, ⌘I inbox, ⌘Y history — INF-365 j/k navigation).
+/// (⇧⌘P character switcher, ⌘I inbox, ⌘Y history; INF-365 j/k navigation).
 /// Kept free of SwiftUI state so the "does j/k move like the arrows"
 /// contract is unit-testable without a live view.
 enum PaletteSelectionIndex {
