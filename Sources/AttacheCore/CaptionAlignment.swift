@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 public struct WordTiming: Codable, Equatable, Identifiable {
     public var id: String { "\(charStart)-\(charEnd)-\(word)" }
@@ -159,6 +160,105 @@ public struct CaptionAlignment: Codable, Equatable {
     }
 }
 
+public extension WordTiming {
+    /// Spoken duration above which a token gets sub-word progressive highlighting
+    /// instead of being treated as a single frozen highlight block (INF-364). A
+    /// long checksum or URL can legitimately take over a second to read; without
+    /// this the whole token lights up at once and stays lit for that whole time.
+    static let subWordProgressThresholdMs = 1200
+
+    /// Splits this token's character range into roughly equal fragments so a long
+    /// unbreakable token (checksum, URL, identifier) can be highlighted
+    /// progressively as it is read, rather than as a single block. Only tokens
+    /// whose spoken duration exceeds `subWordProgressThresholdMs` are split; short
+    /// tokens return their own full range as the single fragment. Fragments
+    /// together exactly cover `charStart..<charEnd` with no gap or overlap.
+    func subWordFragments(maxFragmentChars: Int = 10) -> [Range<Int>] {
+        let length = charEnd - charStart
+        guard durationMs > Self.subWordProgressThresholdMs, length > maxFragmentChars else {
+            return [charStart..<charEnd]
+        }
+        let fragmentCount = max(1, Int((Double(length) / Double(maxFragmentChars)).rounded(.up)))
+        var fragments: [Range<Int>] = []
+        var cursor = charStart
+        for index in 0..<fragmentCount {
+            let remainingFragments = fragmentCount - index
+            let charsLeft = charEnd - cursor
+            let size = Int((Double(charsLeft) / Double(remainingFragments)).rounded(.up))
+            let end = index == fragmentCount - 1 ? charEnd : min(charEnd, cursor + max(1, size))
+            guard cursor < end else { continue }
+            fragments.append(cursor..<end)
+            cursor = end
+        }
+        return fragments.isEmpty ? [charStart..<charEnd] : fragments
+    }
+
+    /// Given elapsed time since this word started speaking, the index into
+    /// `fragments` that should currently be highlighted. Proportional to elapsed
+    /// time across the word's spoken duration, clamped to a valid index, and
+    /// monotonically non-decreasing as `elapsedMsSinceWordStart` increases.
+    func activeSubWordFragmentIndex(elapsedMsSinceWordStart: Int, fragments: [Range<Int>]) -> Int {
+        activeSubWordFragmentIndex(elapsedMsSinceWordStart: elapsedMsSinceWordStart, fragmentCount: fragments.count)
+    }
+
+    /// Same proportional math as the `fragments:` overload above, for callers
+    /// (like the caption rendering view's own box-width-based fragment split)
+    /// that only need the fragment count, not the character ranges themselves.
+    func activeSubWordFragmentIndex(elapsedMsSinceWordStart: Int, fragmentCount: Int) -> Int {
+        guard fragmentCount > 1 else { return 0 }
+        guard durationMs > 0 else { return 0 }
+        let clampedElapsed = max(0, min(durationMs, elapsedMsSinceWordStart))
+        let progress = Double(clampedElapsed) / Double(durationMs)
+        let index = Int(progress * Double(fragmentCount))
+        return max(0, min(fragmentCount - 1, index))
+    }
+}
+
+/// Pure layout math for wrapping a single unbreakable caption token (a checksum,
+/// URL, or long identifier) into fragments that each fit within the caption box,
+/// so the rendering view can wrap mid-token instead of overflowing or collapsing
+/// the box (INF-364). SwiftUI text measurement is not available in AttacheCore,
+/// so this uses a deliberately conservative average character-width estimate;
+/// the view is still free to further shrink a fragment, but wrapping to a new
+/// flow line means a single token can never exceed the box width by itself.
+public enum CaptionTokenLayout {
+    /// Rough average advance width of one character at `fontSize`, as a fraction
+    /// of the font size. Conservative (wide) on purpose so estimated fragments
+    /// undershoot rather than overshoot the box.
+    private static let averageCharacterWidthFactor: Double = 0.62
+
+    /// Safety margin so an estimated-to-fit fragment has room for measurement
+    /// error without touching the box edge.
+    private static let boxWidthUsageFactor: Double = 0.92
+
+    /// How many characters of a token can be expected to fit in `boxWidth` at
+    /// `fontSize`, using the conservative average-width estimate above.
+    public static func fragmentCharacterCount(boxWidth: Double, fontSize: Double) -> Int {
+        guard boxWidth > 0, fontSize > 0 else { return 1 }
+        let averageCharWidth = fontSize * averageCharacterWidthFactor
+        let usableWidth = boxWidth * boxWidthUsageFactor
+        return max(1, Int((usableWidth / averageCharWidth).rounded(.down)))
+    }
+
+    /// Splits `token` into fragments that each fit within `boxWidth` at
+    /// `fontSize`. Tokens that already fit are returned unsplit. Fragments
+    /// concatenate back to exactly `token` with no character lost or duplicated.
+    public static func fragments(for token: String, boxWidth: Double, fontSize: Double) -> [String] {
+        let maxChars = fragmentCharacterCount(boxWidth: boxWidth, fontSize: fontSize)
+        guard token.count > maxChars else { return [token] }
+
+        var fragments: [String] = []
+        var remaining = Substring(token)
+        while !remaining.isEmpty {
+            let count = min(maxChars, remaining.count)
+            let end = remaining.index(remaining.startIndex, offsetBy: count)
+            fragments.append(String(remaining[remaining.startIndex..<end]))
+            remaining = remaining[end...]
+        }
+        return fragments
+    }
+}
+
 public struct CaptionWordWindow: Equatable {
     public let words: [WordTiming]
     public let activeID: String?
@@ -259,8 +359,14 @@ public enum CaptionAlignmentBuilder {
 
     /// One whitespace-delimited token, sub-segmented when it is a long
     /// spaceless run. Latin tokens (with their punctuation) pass through
-    /// untouched; long runs split on locale word boundaries with the
-    /// remainder folded into the last piece so no character is lost.
+    /// untouched; long runs split on linguistic word boundaries (via
+    /// `NLTokenizer`, INF-364) with the remainder folded into the last piece so
+    /// no character is lost. `NLTokenizer` is used rather than
+    /// `String.enumerateSubstrings(options: [.byWords, .localized])` because the
+    /// latter does not reliably sub-segment spaceless Hangul runs (Korean is one
+    /// of the app's shipped caption languages): it returns the whole run as a
+    /// single boundary, which would otherwise show a whole Korean sentence as one
+    /// frozen caption token.
     private static func segmented(text: String, tokenRange: Range<String.Index>) -> [(String, Int, Int)] {
         let token = String(text[tokenRange])
         let tokenStart = text.distance(from: text.startIndex, to: tokenRange.lowerBound)
@@ -275,8 +381,11 @@ public enum CaptionAlignmentBuilder {
         guard token.count > spacelessRunThreshold else { return whole() }
 
         var boundaries: [Range<String.Index>] = []
-        token.enumerateSubstrings(in: token.startIndex..., options: [.byWords, .localized]) { _, range, _, _ in
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = token
+        tokenizer.enumerateTokens(in: token.startIndex..<token.endIndex) { range, _ in
             boundaries.append(range)
+            return true
         }
         guard boundaries.count > 1 else { return whole() }
 
