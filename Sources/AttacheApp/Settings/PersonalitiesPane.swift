@@ -8,6 +8,8 @@ import UniformTypeIdentifiers
 struct PersonalitiesPane: View {
     @ObservedObject var model: AppModel
 
+    @State private var pendingDeletePersonality: Personality?
+
     private let columns = [GridItem(.adaptive(minimum: 180, maximum: 230), spacing: 12)]
 
     var body: some View {
@@ -17,7 +19,45 @@ struct PersonalitiesPane: View {
                 activeCharacter(active)
             }
             wardrobe
+            if let deleted = model.recentlyDeletedPersonality {
+                undoBar(for: deleted)
+            }
         }
+        .onDisappear { model.clearRecentlyDeletedPersonality() }
+        .confirmationDialog(
+            pendingDeletePersonality.map { "Delete \($0.name)?" } ?? "Delete personality?",
+            isPresented: Binding(
+                get: { pendingDeletePersonality != nil },
+                set: { presented in if !presented { pendingDeletePersonality = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let target = pendingDeletePersonality {
+                    model.deletePersonality(id: target.id)
+                }
+                pendingDeletePersonality = nil
+            }
+            .accessibilityLabel("Delete personality confirm")
+            Button("Cancel", role: .cancel) { pendingDeletePersonality = nil }
+        } message: {
+            Text("This removes its prompt, voice, presence, and model choices. This cannot be undone after you leave Settings.")
+        }
+    }
+
+    private func undoBar(for deleted: AppModel.DeletedPersonalitySnapshot) -> some View {
+        HStack(spacing: 10) {
+            Text("Deleted \"\(deleted.personality.name)\".")
+                .typoCaption()
+                .foregroundStyle(.secondary)
+            Button("Undo") { model.undoDeletePersonality() }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Undo delete personality")
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
     }
 
     private var header: some View {
@@ -136,7 +176,7 @@ struct PersonalitiesPane: View {
                     Button("Export") { exportPersonality(personality) }
                     if !personality.isBuiltIn {
                         Divider()
-                        Button("Delete", role: .destructive) { model.deletePersonality(id: personality.id) }
+                        Button("Delete", role: .destructive) { pendingDeletePersonality = personality }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle.fill")

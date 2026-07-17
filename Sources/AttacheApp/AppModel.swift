@@ -984,6 +984,24 @@ final class AppModel: ObservableObject {
     @Published var activePersonalityID: String = ""
     private let personalityStore = PersonalityStore()
 
+    /// A transient record of the most recently deleted custom personality,
+    /// kept just long enough to offer Undo. Nil once the undo window has
+    /// expired, undo has been used, or another delete has happened.
+    @Published var recentlyDeletedPersonality: DeletedPersonalitySnapshot?
+
+    /// Testable clock seam for the undo window: production uses wall time,
+    /// tests inject a controllable clock so expiry can be asserted without
+    /// a real ten-second sleep.
+    var personalityUndoClock: () -> Date = Date.init
+    static let personalityUndoWindow: TimeInterval = 10
+
+    struct DeletedPersonalitySnapshot {
+        let personality: Personality
+        let index: Int
+        let wasActive: Bool
+        let deletedAt: Date
+    }
+
     @Published var groqAPIKey: String = ""
     @Published var customAPIKey: String = "" {
         didSet { applySpeechConfiguration() }   // an OpenAI key here can power OpenAI voices too
@@ -6140,13 +6158,56 @@ final class AppModel: ObservableObject {
 
     func deletePersonality(id: String) {
         guard let index = personalities.firstIndex(where: { $0.id == id }), !personalities[index].isBuiltIn else { return }
+        let removed = personalities[index]
         let wasActive = id == activePersonalityID
         personalities.remove(at: index)
+        recentlyDeletedPersonality = DeletedPersonalitySnapshot(
+            personality: removed,
+            index: index,
+            wasActive: wasActive,
+            deletedAt: personalityUndoClock()
+        )
         if wasActive {
             selectPersonality(personalities.first?.id ?? Personality.defaultActiveID)
         } else {
             personalityStore.save(personalities, activeID: activePersonalityID)
         }
+        scheduleRecentlyDeletedPersonalityExpiry(for: removed.id)
+    }
+
+    private func scheduleRecentlyDeletedPersonalityExpiry(for id: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.personalityUndoWindow) { [weak self] in
+            guard let self, self.recentlyDeletedPersonality?.personality.id == id else { return }
+            self.recentlyDeletedPersonality = nil
+        }
+    }
+
+    /// Restores the most recently deleted personality to its original index,
+    /// including active selection if it was active, provided the ten-second
+    /// undo window has not elapsed. A no-op once the window has expired.
+    func undoDeletePersonality() {
+        guard let snapshot = recentlyDeletedPersonality else { return }
+        let elapsed = personalityUndoClock().timeIntervalSince(snapshot.deletedAt)
+        guard elapsed < Self.personalityUndoWindow else {
+            recentlyDeletedPersonality = nil
+            return
+        }
+        let insertIndex = min(snapshot.index, personalities.count)
+        personalities.insert(snapshot.personality, at: insertIndex)
+        if snapshot.wasActive {
+            activePersonalityID = snapshot.personality.id
+            writeActivePersonalityToDefaults()
+            refreshPresentationStatus()
+        }
+        personalityStore.save(personalities, activeID: activePersonalityID)
+        recentlyDeletedPersonality = nil
+        intakeStatus = "Restored \"\(snapshot.personality.name)\"."
+    }
+
+    /// Called when Settings closes (or the pane leaves the tree) so the undo
+    /// offer does not outlive the surface that shows it.
+    func clearRecentlyDeletedPersonality() {
+        recentlyDeletedPersonality = nil
     }
 
     func personalityMarker(for card: VoicemailCard) -> CardPersonalityMarker? {
