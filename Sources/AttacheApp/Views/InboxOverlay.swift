@@ -242,7 +242,9 @@ struct InboxOverlay: View {
             onSelect: playSelection,
             onCommandReturn: followUpSelection,
             onCommandDelete: archiveSelection,
-            onShiftCommandDelete: archiveSelectionGroup
+            onShiftCommandDelete: archiveSelectionGroup,
+            vimKeysEnabled: true,
+            isFieldFocused: fieldFocused
         ))
         // Deferred so it lands after PaletteKeyMonitor makes the window key;
         // assigning in the same pass silently loses focus.
@@ -485,14 +487,7 @@ extension InboxOverlay {
     }
 
     func moveSelection(_ delta: Int) {
-        let cards = flatCards
-        guard !cards.isEmpty else { return }
-        guard let current = selectedID, let index = cards.firstIndex(where: { $0.id == current }) else {
-            selectedID = delta >= 0 ? cards.first?.id : cards.last?.id
-            return
-        }
-        let next = min(max(index + delta, 0), cards.count - 1)
-        selectedID = cards[next].id
+        selectedID = PaletteSelectionIndex.move(current: selectedID, ids: flatCards.map(\.id), delta: delta)
     }
 
     func playSelection() {

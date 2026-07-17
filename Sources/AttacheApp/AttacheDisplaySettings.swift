@@ -410,6 +410,10 @@ enum AttachePreferenceKey {
     static let showPersonalityNameInDock = "attache.showPersonalityNameInDock"
     static let notifyScope = "attache.notifyScope"
     static let showInMenuBar = "attache.showInMenuBar"
+    // INF-365: user-configurable global summon hotkey. Ships off (no keyCode
+    // stored) until the user records one in Settings > Appearance.
+    static let globalHotKeyCode = "attache.globalHotKeyCode"
+    static let globalHotKeyModifiers = "attache.globalHotKeyModifiers"
     static let playbackSpeed = "attache.playbackSpeed"
     static let showTips = "attache.showTips"
     static let showActivityInsights = "attache.showActivityInsights"

@@ -282,6 +282,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.rebuildMenu()
             }
             .store(in: &cancellables)
+
+        model.$globalHotKeySpec
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] spec in
+                self?.applyGlobalHotKey(spec)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// The state Attaché believes is currently registered with the OS
+    /// (INF-365). Driven purely by `GlobalHotKeyStateMachine` so set/replace/
+    /// clear all go through the same tested transition logic; this method
+    /// only performs the Carbon side effects the transition dictates.
+    private var globalHotKeyRegistration: GlobalHotKeyRegistrationState = .unregistered
+
+    private func applyGlobalHotKey(_ spec: GlobalHotKeySpec?) {
+        let transition = GlobalHotKeyStateMachine.apply(spec, to: globalHotKeyRegistration)
+        if transition.shouldUnregisterPrevious {
+            GlobalHotKeyMonitor.shared.unregister()
+        }
+        if let newSpec = transition.shouldRegister {
+            GlobalHotKeyMonitor.shared.register(newSpec) { [weak self] in
+                self?.windowController?.showAttache()
+            }
+        }
+        globalHotKeyRegistration = transition.next
     }
 
     private var cachedBrandTemplate: NSImage?

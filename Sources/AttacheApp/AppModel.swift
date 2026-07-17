@@ -601,6 +601,20 @@ final class AppModel: ObservableObject {
     @Published var showInMenuBar: Bool = true {
         didSet { defaults.set(showInMenuBar, forKey: AttachePreferenceKey.showInMenuBar) }
     }
+    /// The user-configurable global summon hotkey (INF-365). `nil` (the
+    /// default) means no shortcut is registered; AppDelegate observes this
+    /// and drives `GlobalHotKeyMonitor` through `GlobalHotKeyStateMachine`.
+    @Published var globalHotKeySpec: GlobalHotKeySpec? {
+        didSet {
+            if let spec = globalHotKeySpec {
+                defaults.set(spec.keyCode, forKey: AttachePreferenceKey.globalHotKeyCode)
+                defaults.set(spec.modifiers.rawValue, forKey: AttachePreferenceKey.globalHotKeyModifiers)
+            } else {
+                defaults.removeObject(forKey: AttachePreferenceKey.globalHotKeyCode)
+                defaults.removeObject(forKey: AttachePreferenceKey.globalHotKeyModifiers)
+            }
+        }
+    }
     @Published var showTips: Bool = true {
         didSet { defaults.set(showTips, forKey: AttachePreferenceKey.showTips) }
     }
@@ -9033,6 +9047,11 @@ final class AppModel: ObservableObject {
         }
         if defaults.object(forKey: AttachePreferenceKey.showInMenuBar) != nil {
             showInMenuBar = defaults.bool(forKey: AttachePreferenceKey.showInMenuBar)
+        }
+        if defaults.object(forKey: AttachePreferenceKey.globalHotKeyCode) != nil {
+            let keyCode = defaults.integer(forKey: AttachePreferenceKey.globalHotKeyCode)
+            let modifiers = defaults.integer(forKey: AttachePreferenceKey.globalHotKeyModifiers)
+            globalHotKeySpec = GlobalHotKeySpec(keyCode: keyCode, modifiers: GlobalHotKeyModifiers(rawValue: modifiers))
         }
         if defaults.object(forKey: AttachePreferenceKey.playbackSpeed) != nil {
             playbackSpeed = min(1.6, max(0.8, defaults.double(forKey: AttachePreferenceKey.playbackSpeed)))

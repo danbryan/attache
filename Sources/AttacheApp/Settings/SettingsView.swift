@@ -181,6 +181,13 @@ struct SettingsView: View {
                 Text("Show Attaché in the menu bar with fleet status and quick actions.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            settingRow("Global hotkey") {
+                VStack(alignment: .leading, spacing: 6) {
+                    GlobalHotKeyRecorderView(spec: $model.globalHotKeySpec)
+                    Text("Off by default (no shortcut recorded). Record one to bring Attaché to the front from any app.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             settingRow("Personality switcher") {
                 Toggle("", isOn: $model.showPersonalitySwitcher).labelsHidden()
                 Text("Show the personality switcher in the main controls.")

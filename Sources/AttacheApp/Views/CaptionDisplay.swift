@@ -221,10 +221,16 @@ struct CaptionWordView: View {
         return activeFragment == unit.fragmentIndex
     }
 
+    /// Pure position affordance: an underline plus the "m:ss" timestamp
+    /// tooltip on hover (INF-365). It never intercepts scroll or click; the
+    /// existing tap gestures below are unchanged.
+    private var isHoverable: Bool { onSeek != nil }
+
     var body: some View {
         Text(unit.text)
             .fontWeight(highlighted ? .bold : nil)
             .foregroundStyle(highlighted ? highlightColor : (hovering ? highlightColor.opacity(0.92) : baseColor))
+            .underline(hovering && isHoverable, pattern: .solid, color: highlightColor.opacity(0.85))
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
             .background(
@@ -235,9 +241,11 @@ struct CaptionWordView: View {
             .onTapGesture(count: 2) { onSeekAndResume?(unit.word.startMs) }
             .onTapGesture { onSeek?(unit.word.startMs) }
             .onHover { inside in
-                hovering = (onSeek != nil) && inside
+                hovering = isHoverable && inside
             }
-            .help("Click to jump. Double-click to jump and play.")
+            .help(isHoverable
+                ? "\(CaptionTimestampFormatter.format(ms: unit.word.startMs)) · Click to jump. Double-click to jump and play."
+                : "")
     }
 }
 
