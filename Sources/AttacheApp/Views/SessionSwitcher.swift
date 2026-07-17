@@ -471,15 +471,9 @@ struct SessionCommandPalette: View {
                 title: model.displaySessionTitle(record),
                 pendingForget: $pendingForgetSession
             )
-            // INF-370: available for any indexed session regardless of watch
-            // state, including fully historic ones.
-            Button("Summarize Session…") {
-                model.requestHistoricSessionSummary(
-                    sessionID: record.id, sourceKind: record.sourceKind.rawValue,
-                    displayTitle: model.displaySessionTitle(record), workingDirectory: record.project
-                )
-            }
-            .accessibilityIdentifier("Summarize Session…")
+            // "Summarize Session…" (INF-370) is hidden until its cost-preview
+            // sheet is built (tracked as a follow-up). The Core engine and the
+            // AppModel hook stay in place for that sheet to bind to.
         }
     }
 
