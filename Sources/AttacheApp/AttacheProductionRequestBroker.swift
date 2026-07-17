@@ -533,7 +533,8 @@ final class AttacheProductionRequestBroker {
         allowAgentInstructionTool: Bool,
         allowMemoryProposalTool: Bool,
         allowSessionDiscoveryTool: Bool = false,
-        allowExhaustiveReviewTool: Bool = false
+        allowExhaustiveReviewTool: Bool = false,
+        mcpToolObjects: [[String: Any]] = []
     ) throws -> Data {
         var tools: [[String: Any]] = []
         if allowSessionDiscoveryTool {
@@ -551,6 +552,10 @@ final class AttacheProductionRequestBroker {
         if allowMemoryProposalTool {
             tools.append(memoryProposalToolObject())
         }
+        // Granted MCP tools ride alongside the built-ins (INF-373). The caller
+        // has already filtered these through MCPToolPolicy, so anything here is
+        // offered (ask-first or always-allow) for this exact turn.
+        tools.append(contentsOf: mcpToolObjects)
         guard !tools.isEmpty else { return Data() }
         guard JSONSerialization.isValidJSONObject(tools) else {
             throw AttacheProductionBrokerError.invalidToolDefinitions

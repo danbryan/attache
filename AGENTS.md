@@ -53,6 +53,13 @@ one app process.
 - `Sources/AttacheApp`: the SwiftUI/AppKit app. Session watchers, the local event
   server, speech playback, two-way delivery adapters and coordinator, views.
 - `docs/two-way.md`: two-way channel design of record.
+- MCP tools (INF-373): config, permission policy, and namespacing are pure
+  Core (`MCPServerConfig`, `MCPConfigEditor`, `MCPToolPolicy`,
+  `MCPToolDescriptor`, `MCPToolPermission`); the client, registry, and
+  per-call coordinator are App (`MCPClient`, `MCPServerRegistry`,
+  `MCPToolCall`). UI surfaces are the Settings "MCP Servers" pane, the
+  personality editor's Tools picker, and the ask-first approval sheet. See
+  `docs/mcp-tools.md`.
 - `Sources/AttacheApp/Personality.swift`: a personality is one first-class unit
   that owns its brain (`prompt`), voice (`PersonalityVoiceRef`), visual presence
   (`visualMode` plus `AttacheCharacter`), and explicit preferred main model
@@ -148,6 +155,10 @@ swift test
   using. `scripts/claude-two-way-smoke.sh` (the f21 gate) sets it to a
   disposable directory holding only an extracted `claudeAiOauth` credential,
   never the real `~/.claude`.
+- `scripts/mock-mcp-server.py` is a dependency-free stdio MCP server (a
+  read-only `echo` tool and an effectful `write_note` tool) for exercising the
+  MCP client, registry, and permission surfaces locally without a real server;
+  point an `mcp.json` stdio entry at it.
 
 ## Safety Rules
 

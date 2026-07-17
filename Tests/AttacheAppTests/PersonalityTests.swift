@@ -427,4 +427,51 @@ final class PersonalityTests: XCTestCase {
             XCTAssertFalse(Personality.retiredBuiltInIDs.contains(entry.id), "onboarding references retired \(entry.id)")
         }
     }
+
+    // MARK: - MCP tool grants (INF-373)
+
+    func testDefaultMCPToolGrantsAreEmpty() {
+        let personality = Personality(id: "custom.mine", name: "Mine", prompt: "Be brief.")
+        XCTAssertTrue(personality.mcpToolGrants.isEmpty)
+    }
+
+    func testMCPToolGrantsRoundTripThroughCoding() throws {
+        var personality = Personality(id: "custom.grants", name: "Grants", prompt: "Be brief.")
+        personality.mcpToolGrants = [
+            "mcp__notes__search": .alwaysAllow,
+            "mcp__notes__write": .askFirst
+        ]
+        let data = try JSONEncoder().encode(personality)
+        let decoded = try JSONDecoder().decode(Personality.self, from: data)
+        XCTAssertEqual(decoded.mcpToolGrants, personality.mcpToolGrants)
+
+        // The interchange export path preserves grants too.
+        let exported = try PersonalityStore.exportData(personality)
+        let imported = try PersonalityStore.importPersonality(from: exported, newID: { "custom.new" })
+        XCTAssertEqual(imported.mcpToolGrants, personality.mcpToolGrants)
+    }
+
+    func testLegacyPersonalityJSONWithoutGrantsDecodesAsEmpty() throws {
+        let json = Data("""
+        [{"id":"custom.mine","name":"Mine","prompt":"Be brief.","isBuiltIn":false}]
+        """.utf8)
+        let list = try JSONDecoder().decode([Personality].self, from: json)
+        XCTAssertEqual(list.first?.mcpToolGrants, [:])
+    }
+
+    func testStorePersistsMCPToolGrants() {
+        let suiteName = "personality-mcp-grants-test"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
+        let store = PersonalityStore(defaults: suite)
+
+        var custom = Personality(id: "custom.mine", name: "Mine", prompt: "Be brief.")
+        custom.mcpToolGrants = ["mcp__notes__search": .alwaysAllow]
+        store.save([custom], activeID: custom.id)
+
+        let loaded = store.load().personalities.first { $0.id == "custom.mine" }
+        XCTAssertEqual(loaded?.mcpToolGrants, ["mcp__notes__search": .alwaysAllow])
+        suite.removePersistentDomain(forName: suiteName)
+    }
 }

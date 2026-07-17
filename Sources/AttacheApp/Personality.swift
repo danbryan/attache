@@ -143,6 +143,11 @@ struct Personality: Identifiable, Codable, Equatable {
     /// A visible, non-blocking explanation when an older Custom strategy could
     /// not be recovered safely. The invalid values are never applied silently.
     var contextStrategyMigrationNotice: String?
+    /// Per-personality MCP tool grants (INF-373), keyed by namespaced tool name
+    /// (`mcp__server__tool`). Servers are shared app-wide; capability is not.
+    /// A missing key (and a legacy personality without the field) decodes as
+    /// empty, i.e. every tool defaults to Not offered.
+    var mcpToolGrants: MCPToolGrants
 
     init(
         id: String,
@@ -156,7 +161,8 @@ struct Personality: Identifiable, Codable, Equatable {
         playbackSpeed: Double? = nil,
         accentColorHex: String? = nil,
         contextStrategy: AttacheContextStrategy? = nil,
-        contextStrategyMigrationNotice: String? = nil
+        contextStrategyMigrationNotice: String? = nil,
+        mcpToolGrants: MCPToolGrants = [:]
     ) {
         self.id = id
         self.name = name
@@ -170,12 +176,13 @@ struct Personality: Identifiable, Codable, Equatable {
         self.accentColorHex = accentColorHex
         self.contextStrategy = contextStrategy
         self.contextStrategyMigrationNotice = contextStrategyMigrationNotice
+        self.mcpToolGrants = mcpToolGrants
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, prompt, isBuiltIn, voiceRef, character, visualMode
         case modelRef, playbackSpeed, accentColorHex, contextStrategy
-        case contextStrategyMigrationNotice
+        case contextStrategyMigrationNotice, mcpToolGrants
         case legacyCharacter = "petCharacter"
     }
 
@@ -192,6 +199,7 @@ struct Personality: Identifiable, Codable, Equatable {
         modelRef = try container.decodeIfPresent(PersonalityModelRef.self, forKey: .modelRef)
         playbackSpeed = try container.decodeIfPresent(Double.self, forKey: .playbackSpeed)
         accentColorHex = try container.decodeIfPresent(String.self, forKey: .accentColorHex)
+        mcpToolGrants = try container.decodeIfPresent(MCPToolGrants.self, forKey: .mcpToolGrants) ?? [:]
         let decodedContextStrategy = try container.decodeIfPresent(
             AttacheContextStrategy.self,
             forKey: .contextStrategy
@@ -222,6 +230,9 @@ struct Personality: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(modelRef, forKey: .modelRef)
         try container.encodeIfPresent(playbackSpeed, forKey: .playbackSpeed)
         try container.encodeIfPresent(accentColorHex, forKey: .accentColorHex)
+        if !mcpToolGrants.isEmpty {
+            try container.encode(mcpToolGrants, forKey: .mcpToolGrants)
+        }
         try container.encodeIfPresent(contextStrategy, forKey: .contextStrategy)
         try container.encodeIfPresent(
             contextStrategyMigrationNotice,
@@ -258,7 +269,8 @@ extension Personality {
             playbackSpeed: playbackSpeed,
             accentColorHex: accentColorHex,
             contextStrategy: contextStrategy,
-            contextStrategyMigrationNotice: contextStrategyMigrationNotice
+            contextStrategyMigrationNotice: contextStrategyMigrationNotice,
+            mcpToolGrants: mcpToolGrants
         )
     }
 

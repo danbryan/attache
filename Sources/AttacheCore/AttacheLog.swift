@@ -17,6 +17,7 @@ public enum AttacheLog {
     public static let server = Logger(subsystem: subsystem, category: "server")
     public static let secrets = Logger(subsystem: subsystem, category: "secrets")
     public static let twoWay = Logger(subsystem: subsystem, category: "two-way")
+    public static let mcp = Logger(subsystem: subsystem, category: "mcp")
 
     /// Signpost intervals around UI actions that have been reported as slow
     /// (opening Settings, switching panes, expanding Advanced, opening a

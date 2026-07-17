@@ -407,6 +407,20 @@ struct AttacheRootView: View {
                 onCancel: { model.discardStagedInstruction() }
             )
         }
+        .sheet(item: Binding(
+            get: { model.pendingMCPApproval },
+            set: { newValue in
+                // A user-driven dismissal (no button) is a deny; button taps
+                // resolve first, so the pending is already nil here.
+                if newValue == nil { model.resolvePendingMCPApproval(.deny) }
+            }
+        )) { approval in
+            MCPApprovalSheet(
+                approval: approval,
+                personalityName: model.activePersonality?.name ?? "This character",
+                onDecision: { model.resolvePendingMCPApproval($0) }
+            )
+        }
         .sheet(item: $pendingCallPresentationProvider) { provider in
             CloudConsentSheet(
                 providerName: provider.title,

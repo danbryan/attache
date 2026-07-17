@@ -242,6 +242,10 @@ final class AppModel: ObservableObject {
     /// message while `callPhase` is still `.failed` (the phase itself does
     /// not change until the retry actually runs).
     @Published private(set) var conversationRecoveryConfirmation: String?
+    /// The pending ask-first MCP tool confirmation (INF-373), if any. The
+    /// interactive approval path publishes one here and suspends until the
+    /// phase-2 sheet (or a test) calls `resolvePendingMCPApproval`.
+    @Published private(set) var pendingMCPApproval: PendingMCPApproval?
     @Published private(set) var conversationElapsedSeconds: Int = 0
     @Published private(set) var pendingAssistantReply: String?
     private var pendingAssistantInference: AttacheInferenceMetadata?
@@ -1284,6 +1288,30 @@ final class AppModel: ObservableObject {
     @Published var activePersonalityID: String = ""
     private let personalityStore = PersonalityStore()
 
+    /// The app-wide MCP server registry (INF-373). Servers are shared;
+    /// per-personality grants decide which of their tools are ever offered.
+    let mcpRegistry: MCPServerRegistry
+    /// The ask-first approval hook for MCP tools. Defaults to fail-closed deny
+    /// so phase 1 is safe before the confirmation UI exists; the phase-2 sheet
+    /// wires it to `requestMCPApprovalInteractively`, and tests set it directly.
+    var mcpApprovalHandler: (MCPToolDescriptor, String) async -> MCPApprovalDecision = { descriptor, _ in
+        AttacheLog.mcp.info("mcp ask-first defaulted to deny tool=\(descriptor.toolName, privacy: .public)")
+        return .deny
+    }
+    private lazy var mcpToolCallCoordinator: MCPToolCallCoordinator = MCPToolCallCoordinator(
+        approvalHandler: { [weak self] descriptor, arguments in
+            guard let self else { return .deny }
+            return await self.mcpApprovalHandler(descriptor, arguments)
+        },
+        performCall: { [weak self] namespacedName, arguments in
+            guard let self else { throw MCPClientError.transportClosed }
+            return try await self.mcpRegistry.callTool(namespacedName: namespacedName, argumentsJSON: arguments)
+        },
+        persistGrant: { [weak self] namespacedName, permission in
+            Task { @MainActor in self?.applyMCPGrant(namespacedName, permission: permission) }
+        }
+    )
+
     /// A transient record of the most recently deleted custom personality,
     /// kept just long enough to offer Undo. Nil once the undo window has
     /// expired, undo has been used, or another delete has happened.
@@ -1326,11 +1354,16 @@ final class AppModel: ObservableObject {
     init(
         store: CardStore? = nil,
         directChatDatabaseURLOverride: URL? = nil,
-        sessionPrivacyRegistryURLOverride: URL? = nil
+        sessionPrivacyRegistryURLOverride: URL? = nil,
+        mcpConfigURLOverride: URL? = nil
     ) {
         let environment = ProcessInfo.processInfo.environment
         presentationEnvironment = environment
         presentationService = AttachePresentationService(environment: environment)
+        mcpRegistry = MCPServerRegistry(
+            configURL: mcpConfigURLOverride ?? MCPServerRegistry.defaultConfigURL(),
+            watchesFile: mcpConfigURLOverride == nil
+        )
         attacheMemoryStore = AttacheMemoryStore(environment: environment)
         let sessionPrivacyRegistryURL = sessionPrivacyRegistryURLOverride
             ?? AttacheAppSupport.sessionPrivacyRegistryURL()
@@ -1509,6 +1542,13 @@ final class AppModel: ObservableObject {
         if !self.store.isInMemory {
             updateCodexWatcher()
             startCodexSessionRefreshTimer()
+        }
+        // Make the interactive ask-first sheet the live behavior (INF-373 phase
+        // 2). The stored property remains injectable, so tests that set their
+        // own handler still win; only the app's own launch path is changed.
+        mcpApprovalHandler = { [weak self] descriptor, arguments in
+            guard let self else { return .deny }
+            return await self.requestMCPApprovalInteractively(descriptor: descriptor, arguments: arguments)
         }
     }
 
@@ -3272,9 +3312,19 @@ final class AppModel: ObservableObject {
         if voiceInputMode == .alwaysOn {
             beginConversationDictation()
         }
+        // Warm any granted MCP servers so their schemas are cached for the
+        // first turn (INF-373). Never connects a server nobody has granted.
+        warmGrantedMCPServers()
     }
 
     func endConversation() {
+        // A pending ask-first MCP confirmation cannot outlive the call it belongs
+        // to (INF-373): resolve it as deny so the suspended tool call unblocks and
+        // the sheet closes rather than lingering into the next call.
+        if let pendingApproval = pendingMCPApproval {
+            pendingMCPApproval = nil
+            pendingApproval.resolve(.deny)
+        }
         let wasPrivate = isPrivateConversation
         let endingConversationID = activeConversationID
         let endingReviewID = activeExhaustiveReview?.preparedID
@@ -3677,6 +3727,21 @@ final class AppModel: ObservableObject {
         let messages = buildConversationMessages(snapshot: snapshot)
         let allowMemoryProposalTool = conversationAllowsMemoryProposals
         let allowSessionDiscoveryTool = localAgentSourcesEnabled
+        // Offered MCP tools (INF-373): the active personality's grants, filtered
+        // by MCPToolPolicy for the private-call flag, over whatever schemas the
+        // registry has already cached. Connection is warmed asynchronously when
+        // a call starts and when grants change, so a first turn against a
+        // cold server simply offers nothing rather than blocking the main
+        // thread; later turns pick the tools up.
+        let mcpGrants = personalities.first(where: { $0.id == snapshot.personalityID })?.mcpToolGrants
+            ?? activePersonality?.mcpToolGrants
+            ?? [:]
+        let offeredMCPTools = MCPToolPolicy.offeredTools(
+            available: mcpRegistry.availableTools(),
+            grants: mcpGrants,
+            isPrivateCall: isPrivateConversation
+        )
+        let mcpToolObjects = MCPToolOffering.toolObjects(descriptors: offeredMCPTools)
         if conversationSessionToolRuntime == nil,
            let focusedSession = snapshot.focusedSession {
             let reserve = snapshot.contextStrategy.kind == .custom
@@ -3722,6 +3787,7 @@ final class AppModel: ObservableObject {
             allowMemoryProposalTool: allowMemoryProposalTool,
             allowSessionDiscoveryTool: allowSessionDiscoveryTool,
             allowExhaustiveReviewTool: snapshot.isFocused && !isPrivateConversation,
+            mcpToolObjects: mcpToolObjects,
             settingsOverride: settingsOverride,
             requestIsActive: { [weak self] in
                 guard let self else { return false }
@@ -3766,6 +3832,17 @@ final class AppModel: ObservableObject {
                     return await self.prepareExhaustiveReviewTool(
                         snapshot: snapshot,
                         authorization: authorization
+                    )
+                }
+                // MCP tools (mcp__server__tool) are app-wide lookups, not
+                // work-session tools, so they route before the focused-session
+                // guard and do not require a focused session.
+                if MCPToolNamespace.isNamespaced(name) {
+                    return await self.executeMCPToolCall(
+                        namespacedName: name,
+                        argumentsJSON: arguments,
+                        personalityID: snapshot.personalityID,
+                        isPrivateCall: self.isPrivateConversation
                     )
                 }
                 guard snapshot.isFocused, context != nil else {
@@ -3815,6 +3892,87 @@ final class AppModel: ObservableObject {
                 }
             }
         )
+    }
+
+    // MARK: MCP tools (INF-373)
+
+    /// Warm the connections for whatever MCP tools the active personality has
+    /// granted, so their schemas are cached before the next turn is built.
+    /// Never connects a server no personality has a grant for.
+    func warmGrantedMCPServers() {
+        let names = Array((activePersonality?.mcpToolGrants ?? [:]).keys)
+        guard !names.isEmpty else { return }
+        Task { [weak self] in
+            await self?.mcpRegistry.prepareTools(forNamespacedNames: names)
+        }
+    }
+
+    /// Resolve, confirm, and run one MCP tool call. Always returns a
+    /// spoken-path-friendly string; execution routes through the coordinator so
+    /// the policy clamp and the ask-first hook are applied in one place.
+    func executeMCPToolCall(
+        namespacedName: String,
+        argumentsJSON: String,
+        personalityID: String,
+        isPrivateCall: Bool
+    ) async -> String {
+        await mcpRegistry.prepareTools(forNamespacedNames: [namespacedName])
+        let descriptor: MCPToolDescriptor? = await MainActor.run {
+            self.mcpRegistry.descriptor(forNamespacedName: namespacedName)
+        }
+        guard let descriptor else {
+            let toolName = MCPToolNamespace.parse(namespacedName)?.tool ?? namespacedName
+            return "The \(toolName) tool is not available right now."
+        }
+        let grants: MCPToolGrants = await MainActor.run {
+            self.personalities.first(where: { $0.id == personalityID })?.mcpToolGrants
+                ?? self.activePersonality?.mcpToolGrants
+                ?? [:]
+        }
+        let grant = grants[namespacedName] ?? .defaultPermission
+        return await mcpToolCallCoordinator.execute(
+            descriptor: descriptor,
+            grant: grant,
+            isPrivateCall: isPrivateCall,
+            argumentsJSON: argumentsJSON
+        )
+    }
+
+    /// Persist a tool grant onto the active personality. Called by the
+    /// coordinator when the user chose "Always allow"; the coordinator has
+    /// already clamped this to read-only tools.
+    @MainActor
+    func applyMCPGrant(_ namespacedName: String, permission: MCPToolPermission) {
+        guard let index = personalities.firstIndex(where: { $0.id == activePersonalityID }) else { return }
+        if personalities[index].mcpToolGrants[namespacedName] == permission { return }
+        personalities[index].mcpToolGrants[namespacedName] = permission
+        personalityStore.save(personalities, activeID: activePersonalityID)
+    }
+
+    /// Interactive ask-first approval: publish the pending confirmation and
+    /// suspend until the phase-2 sheet (or a test) resolves it. Not the default
+    /// handler; phase 2 wires `mcpApprovalHandler` to this.
+    func requestMCPApprovalInteractively(
+        descriptor: MCPToolDescriptor,
+        arguments: String
+    ) async -> MCPApprovalDecision {
+        await withCheckedContinuation { continuation in
+            let pending = PendingMCPApproval(
+                descriptor: descriptor,
+                argumentsJSON: arguments,
+                continuation: continuation
+            )
+            Task { @MainActor in self.pendingMCPApproval = pending }
+        }
+    }
+
+    /// Resolve the pending MCP confirmation. Clears the published state and
+    /// resumes the suspended tool call.
+    @MainActor
+    func resolvePendingMCPApproval(_ decision: MCPApprovalDecision) {
+        let pending = pendingMCPApproval
+        pendingMCPApproval = nil
+        pending?.resolve(decision)
     }
 
     /// Issue the only token accepted by conversation effects. Keeping issuance

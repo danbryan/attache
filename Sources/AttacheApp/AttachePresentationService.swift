@@ -209,6 +209,7 @@ final class AttachePresentationService {
         allowMemoryProposalTool: Bool = false,
         allowSessionDiscoveryTool: Bool = false,
         allowExhaustiveReviewTool: Bool = false,
+        mcpToolObjects: [[String: Any]] = [],
         settingsOverride: AttachePresentationSettings? = nil,
         requestIsActive: @escaping () async -> Bool = { true },
         attemptDidCompile: ((AttacheInferenceMetadata) async -> Void)? = nil,
@@ -228,7 +229,8 @@ final class AttachePresentationService {
                 allowAgentInstructionTool: allowAgentInstructionTool,
                 allowMemoryProposalTool: allowMemoryProposalTool,
                 allowSessionDiscoveryTool: allowSessionDiscoveryTool,
-                allowExhaustiveReviewTool: allowExhaustiveReviewTool
+                allowExhaustiveReviewTool: allowExhaustiveReviewTool,
+                mcpToolObjects: mcpToolObjects
             )
         } catch {
             completion(.failure(error))
@@ -440,6 +442,10 @@ final class AttachePresentationService {
         case "list_working_directory", "read_file":
             return .retrievedFileEvidence
         default:
+            // MCP tool results (mcp__server__tool) and any other tool fall here.
+            // They are generic, context-free tool results: provenance-labeled
+            // like every other context item, subject to the same egress rules,
+            // and never carrying focused-session authority.
             return .toolResults
         }
     }

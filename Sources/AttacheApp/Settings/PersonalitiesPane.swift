@@ -308,6 +308,7 @@ struct PersonalityStudioSheet: View {
     @State private var personalityLibraryPresented = false
     @State private var personalityQuery = ""
     @State private var selectedTemplateID: String?
+    @State private var toolsPickerPresented = false
 
     init(model: AppModel, request: PersonalityStudioRequest, onClose: (() -> Void)? = nil) {
         self.model = model
@@ -363,6 +364,7 @@ struct PersonalityStudioSheet: View {
                                 voiceSection
                                 modelSection
                                 contextSection
+                                toolsSection
                             }
                             .frame(width: 390, alignment: .top)
                         }
@@ -438,6 +440,14 @@ struct PersonalityStudioSheet: View {
                     pendingCloudModel = nil
                 },
                 onCancel: { pendingCloudModel = nil }
+            )
+        }
+        .sheet(isPresented: $toolsPickerPresented) {
+            MCPToolPickerPalette(
+                model: model,
+                registry: model.mcpRegistry,
+                grants: $draft.mcpToolGrants,
+                isVisible: $toolsPickerPresented
             )
         }
     }
@@ -1048,6 +1058,20 @@ struct PersonalityStudioSheet: View {
         }
     }
 
+    private var toolsSection: some View {
+        studioSection(title: "Tools") {
+            Text(MCPToolGrantsSummary.line(for: draft.mcpToolGrants))
+                .typoBody(.medium)
+                .accessibilityIdentifier("MCP Tools Summary")
+            Button("Edit Tools…") { toolsPickerPresented = true }
+                .accessibilityIdentifier("Edit Tools…")
+            Text("MCP tools this character may call during a live call. Add servers under Settings → MCP Servers; read-only tools can be always-allowed, effectful tools always ask first.")
+                .typoCaption()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var footer: some View {
         HStack {
             Spacer()
@@ -1055,6 +1079,9 @@ struct PersonalityStudioSheet: View {
                 .keyboardShortcut(.cancelAction)
             Button(request.mode == .edit ? "Save character" : "Create character") {
                 _ = model.savePersonality(draft, replacingID: request.replacingID)
+                // The active personality's granted servers may have changed; warm
+                // their connections so schemas are cached for the next turn.
+                model.warmGrantedMCPServers()
                 closeStudio()
             }
             .keyboardShortcut(.defaultAction)
