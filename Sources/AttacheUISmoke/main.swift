@@ -440,6 +440,45 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 _ = try waitForElement("speaking indicator", in: try mainWindow(),
                                        containing: "Assistant speaking", timeout: 15)
 
+            case "checksum-torture":
+                // INF-364 evidence: a checksum-heavy card, paused on screen so
+                // a screenshot shows the caption box wrapping the oversized
+                // token instead of overflowing.
+                let tortureText = """
+                Build verification finished. The release checksum is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 and it matched the published artifact exactly.
+                """
+                _ = try runShell("EVENT_TITLE='Checksum torture card' EVENT_TEXT='\(tortureText)' scripts/send-event.sh")
+                let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, containing: "Open inbox")
+                _ = button.press()
+                let row = try waitForElement("card row play action", in: try mainWindow(),
+                                             containing: "Play Checksum torture card")
+                _ = row.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+                // Freeze the frame so the screenshot reliably shows the caption
+                // box, not a moment mid-transition.
+                let pause = try waitForElement("Pause control", in: try mainWindow(),
+                                               role: kAXButtonRole as String, containing: "Pause")
+                _ = pause.press()
+
+            case "checksum-torture-playing":
+                // Like "checksum-torture" but leaves narration running through
+                // the hold, for a short recording of the progressive sub-word
+                // highlight advancing across the checksum.
+                let tortureText = """
+                Build verification finished. The release checksum is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 and it matched the published artifact exactly.
+                """
+                _ = try runShell("EVENT_TITLE='Checksum torture card' EVENT_TEXT='\(tortureText)' scripts/send-event.sh")
+                let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, containing: "Open inbox")
+                _ = button.press()
+                let row = try waitForElement("card row play action", in: try mainWindow(),
+                                             containing: "Play Checksum torture card")
+                _ = row.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+
             case "press-celebrate":
                 // Moment-plumbing probe (INF-271): fires a celebrate through
                 // the simulator panel's button so a recording can verify the
@@ -648,7 +687,24 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
         // without a flush it sits in the block buffer until exit when stdout
         // is a file, which is exactly too late.
         fflush(stdout)
-        Thread.sleep(forTimeInterval: holdSeconds)
+        // INF-364 evidence: instead of one screenshot then a single sleep, a
+        // burst directory captures a short frame sequence (by CGWindowID,
+        // same as the single-shot path above) across the hold, so a wrapper
+        // script can stitch them into a short recording of the sub-word
+        // progressive highlight advancing across a long token.
+        if let burstDir = ProcessInfo.processInfo.environment["ATTACHE_POSE_BURST_DIR"] {
+            let intervalMs = Int(ProcessInfo.processInfo.environment["ATTACHE_POSE_BURST_INTERVAL_MS"] ?? "150") ?? 150
+            let deadline = Date().addingTimeInterval(holdSeconds)
+            var frame = 0
+            while Date() < deadline {
+                let framePath = burstDir + String(format: "/frame-%04d.png", frame)
+                captureAppWindowScreenshot(to: framePath)
+                frame += 1
+                Thread.sleep(forTimeInterval: Double(intervalMs) / 1000.0)
+            }
+        } else {
+            Thread.sleep(forTimeInterval: holdSeconds)
+        }
     } catch {
         print("pose failed: \(error)")
     }
