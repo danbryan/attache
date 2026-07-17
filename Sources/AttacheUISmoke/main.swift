@@ -941,6 +941,71 @@ if enabled("f3") {
                                         role: kAXButtonRole as String, containing: "Hang up")
         guard hangUp.press() else { throw SmokeError(message: "AXPress failed on \(hangUp.summary)") }
     }
+
+    // INF-364: a checksum-heavy torture card must not overflow the caption box.
+    let tortureEventTitle = "Caption torture card \(UUID().uuidString.prefix(8))"
+    var tortureCardOpened = false
+    run.step("f3-transport", "torture card with a checksum is accepted") {
+        let tortureText = """
+        Build verification finished. The release checksum is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 and it matched the published artifact exactly.
+        """
+        let output = try runShell("EVENT_TITLE='\(tortureEventTitle)' EVENT_TEXT='\(tortureText)' scripts/send-event.sh")
+        guard output.contains("accepted") else {
+            throw SmokeError(message: "server did not accept the torture card event: \(output)")
+        }
+    }
+    run.step("f3-transport", "torture card opens from the inbox") {
+        let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, containing: "Open inbox")
+        guard button.press() else {
+            throw SmokeError(message: "AXPress failed on \(button.summary); actions: \(button.actionNames)")
+        }
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox")
+        _ = field.setFocused()
+        if !field.setValue(tortureEventTitle) { app.type(tortureEventTitle) }
+        let row = try waitForElement("torture card row play action", in: try mainWindow(),
+                                     containing: "Play \(tortureEventTitle)")
+        guard row.press() else {
+            throw SmokeError(message: "AXPress failed on \(row.summary); actions: \(row.actionNames)")
+        }
+        _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                               containing: "Assistant speaking", timeout: 15)
+        tortureCardOpened = true
+    }
+    run.step("f3-transport", "checksum caption stays visible and never overflows the window") {
+        guard tortureCardOpened else { throw SmokeError(message: "skipped: torture card did not open") }
+        let window = try mainWindow()
+        guard let windowFrame = window.frame else {
+            throw SmokeError(message: "main window did not expose AX geometry")
+        }
+        let caption = try waitForElement("visible karaoke caption", in: try mainWindow(), timeout: 10) { element in
+            guard let frame = element.frame else { return false }
+            return element.matchesExactly("Assistant speaking")
+                && frame.width > 100
+                && frame.height > 20
+        }
+        guard let captionFrame = caption.frame else {
+            throw SmokeError(message: "caption element lost its AX geometry")
+        }
+        guard windowFrame.contains(captionFrame) || windowFrame.intersects(captionFrame) else {
+            throw SmokeError(message: "caption frame \(captionFrame) fell entirely outside the window \(windowFrame)")
+        }
+        guard captionFrame.width <= windowFrame.width, captionFrame.height <= windowFrame.height else {
+            throw SmokeError(message: "checksum caption overflowed the window: caption \(captionFrame), window \(windowFrame)")
+        }
+        let transcript = try waitForElement("caption transcript", in: try mainWindow(),
+                                            containing: "Assistant speaking transcript")
+        guard transcript.matchText.contains("e3b0c44298") else {
+            throw SmokeError(message: "caption transcript did not expose the checksum text: \(transcript.summary)")
+        }
+    }
+    run.step("f3-transport", "torture card hang up returns playback to the inbox") {
+        guard tortureCardOpened else { throw SmokeError(message: "skipped: torture card did not open") }
+        let hangUp = try waitForElement("Hang up control", in: try mainWindow(),
+                                        role: kAXButtonRole as String, containing: "Hang up")
+        guard hangUp.press() else { throw SmokeError(message: "AXPress failed on \(hangUp.summary)") }
+    }
 }
 
 // MARK: Flow 4: Command-K search opens, filters, and closes
