@@ -87,6 +87,21 @@ final class AppUnderTest {
         }
     }
 
+    /// Synthesizes a real Option-key modifier change (a pure-modifier key
+    /// generates AppKit's `.flagsChanged` NSEvent, not keyDown/keyUp), so
+    /// `OptionKeyMonitor`'s local flagsChanged monitor sees it exactly like a
+    /// physically held Option key. Used to drive and screenshot the dock
+    /// context menus' Option alternates (INF-354) without needing a human at
+    /// the keyboard.
+    func setOptionHeld(_ held: Bool) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        let leftOption: CGKeyCode = 58
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: leftOption, keyDown: held) else { return }
+        event.flags = held ? .maskAlternate : []
+        event.postToPid(pid)
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
     /// Types text as real key events into the focused control. Fallback for
     /// SwiftUI fields that ignore a programmatic AXValue set.
     func type(_ text: String) {

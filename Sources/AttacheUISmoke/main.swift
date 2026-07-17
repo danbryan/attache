@@ -211,6 +211,40 @@ func selectPopup(_ popup: AXElement, item: String) throws {
     }
 }
 
+/// Right-clicks a dock control (AXShowMenu, the accessibility action macOS
+/// maps a secondary click to) and returns the opened menu, for asserting item
+/// labels before optionally pressing one (INF-354's dock context menus).
+func openContextMenu(_ trigger: AXElement) throws -> AXElement {
+    guard trigger.perform("AXShowMenu") else {
+        throw SmokeError(message: "AXShowMenu failed on \(trigger.summary); actions: \(trigger.actionNames)")
+    }
+    var menu: AXElement?
+    try waitUntil("context menu for \(trigger.summary)", timeout: 5) {
+        menu = app.axApp.descendants(where: { $0.role == kAXMenuRole as String }, collectLimit: 4).first
+        return menu != nil
+    }
+    guard let menu else {
+        throw SmokeError(message: "context menu did not open for \(trigger.summary)")
+    }
+    return menu
+}
+
+/// Every visible item title in an already-open context menu (see
+/// `openContextMenu`), in AX discovery order.
+func contextMenuItemTitles(_ menu: AXElement) -> [String] {
+    menu.descendants(where: { $0.role == kAXMenuItemRole as String }).map(\.title)
+}
+
+/// Presses a titled item inside an already-open context menu.
+func pressContextMenuItem(_ menu: AXElement, item: String) throws {
+    guard let chosen = menu.firstDescendant(role: kAXMenuItemRole as String, containing: item) else {
+        throw SmokeError(message: "context menu item \"\(item)\" not found among \(contextMenuItemTitles(menu)). AX tree:\n\(menu.treeDump())")
+    }
+    guard chosen.press() else {
+        throw SmokeError(message: "could not press context menu item \"\(item)\"")
+    }
+}
+
 func dismissOnboardingIfPresent() throws {
     if (try mainWindow()).firstDescendant(containing: "Welcome to Attaché") != nil {
         let skip = try waitForElement("skip button", in: try mainWindow(),
@@ -2915,6 +2949,129 @@ if enabled("personality") {
         app.key(Key.returnKey)
         try waitForElementGone("character switcher after named selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
         _ = try waitForElement("active character in dock", in: try mainWindow(), containing: "Active character Smoke Character")
+    }
+}
+
+// MARK: Flow: dock right-click context menus (INF-354). Settings, Voicemail,
+// Call, and Personality each expose a right-click menu; this drives one
+// navigation item per menu via AXShowMenu and asserts the destination, the
+// same "AX label only, never coordinates" discipline as every other flow.
+// Runs by default (not in the opt-in blacklist above): none of these menu
+// items need a live backend or extra environment.
+
+if enabled("dock-menus") {
+    run.step("dock-menus", "Settings control's right-click menu lists every pane and Personalities navigates there") {
+        try dismissOnboardingIfPresent()
+        app.activate()
+        let settingsButton = try waitForElement("Open settings dock button", in: try mainWindow(),
+                                                 role: kAXButtonRole as String, containing: "Open settings")
+        let menu = try openContextMenu(settingsButton)
+        let titles = contextMenuItemTitles(menu)
+        for expected in ["Appearance", "Voice & Captions", "Personalities", "Context", "Integrations", "Memory"] {
+            guard titles.contains(where: { $0.contains(expected) }) else {
+                throw SmokeError(message: "Settings context menu missing \"\(expected)\"; saw \(titles)")
+            }
+        }
+        try pressContextMenuItem(menu, item: "Personalities")
+        try waitUntil("settings window opens to Personalities", timeout: 10) { (try? settingsWindow()) != nil }
+        _ = try waitForElement("Personalities pane content", in: try settingsWindow(), containing: "Create character")
+        app.key(Key.escape)
+        try waitUntil("settings window closes", timeout: 10) { (try? settingsWindow()) == nil }
+    }
+
+    run.step("dock-menus", "Settings control's Option-held menu adds Open Support Folder") {
+        let settingsButton = try waitForElement("Open settings dock button", in: try mainWindow(),
+                                                 role: kAXButtonRole as String, containing: "Open settings")
+        app.setOptionHeld(true)
+        defer { app.setOptionHeld(false) }
+        try waitUntil("Option-alternate items become live", timeout: 5) {
+            guard let menu = try? openContextMenu(settingsButton) else { return false }
+            let live = contextMenuItemTitles(menu).contains(where: { $0.contains("Open Support Folder") })
+            app.key(Key.escape)
+            return live
+        }
+    }
+
+    run.step("dock-menus", "Voicemail control's right-click menu lists quick actions and Open Inbox navigates there") {
+        let voicemailButton = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                  role: kAXButtonRole as String, containing: "Open inbox")
+        let menu = try openContextMenu(voicemailButton)
+        let titles = contextMenuItemTitles(menu)
+        for expected in ["Play Recap", "Play Latest", "Mark All Read", "Open Inbox"] {
+            guard titles.contains(where: { $0.contains(expected) }) else {
+                throw SmokeError(message: "Voicemail context menu missing \"\(expected)\"; saw \(titles)")
+            }
+        }
+        try pressContextMenuItem(menu, item: "Open Inbox")
+        _ = try waitForElement("inbox search field", in: try mainWindow(),
+                               role: kAXTextFieldRole as String, containing: "Search inbox")
+        app.key(Key.escape)
+    }
+
+    run.step("dock-menus", "Voicemail control's Option-held menu swaps Mark All Read for Archive All") {
+        let voicemailButton = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                  role: kAXButtonRole as String, containing: "Open inbox")
+        app.setOptionHeld(true)
+        defer { app.setOptionHeld(false) }
+        try waitUntil("Archive All replaces Mark All Read", timeout: 5) {
+            guard let menu = try? openContextMenu(voicemailButton) else { return false }
+            let titles = contextMenuItemTitles(menu)
+            let swapped = titles.contains(where: { $0.contains("Archive All") })
+                && !titles.contains(where: { $0.contains("Mark All Read") })
+            app.key(Key.escape)
+            return swapped
+        }
+    }
+
+    run.step("dock-menus", "Call control's right-click menu lists Start Call, Start Private Call, and Call as…") {
+        let callButton = try waitForElement("call dock button", in: try mainWindow(),
+                                            role: kAXButtonRole as String, containing: "Start saved call")
+        let menu = try openContextMenu(callButton)
+        let titles = contextMenuItemTitles(menu)
+        for expected in ["Start Call", "Start Private Call", "Call as"] {
+            guard titles.contains(where: { $0.contains(expected) }) else {
+                throw SmokeError(message: "Call context menu missing \"\(expected)\"; saw \(titles)")
+            }
+        }
+        try pressContextMenuItem(menu, item: "Start Call")
+        let hangUp = try waitForElement("Hang up control", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Hang up")
+        guard hangUp.press() else { throw SmokeError(message: "AXPress failed on \(hangUp.summary)") }
+        try waitForElementGone("Hang up control after ending the call", in: try mainWindow(),
+                               role: kAXButtonRole as String, containing: "Hang up", timeout: 10)
+    }
+
+    run.step("dock-menus", "Personality control's right-click menu adds Previous/Next Personality and cycles the active character") {
+        let personalityButton = try waitForElement("personality dock button", in: try mainWindow(),
+                                                    role: kAXButtonRole as String, containing: "Switch character")
+        let before = try waitForElement("active character value", in: try mainWindow(), containing: "Active character")
+        let beforeText = before.title.isEmpty ? before.axDescription : before.title
+        let menu = try openContextMenu(personalityButton)
+        let titles = contextMenuItemTitles(menu)
+        for expected in ["Switch character", "Edit personalities", "Previous Personality", "Next Personality"] {
+            guard titles.contains(where: { $0.contains(expected) }) else {
+                throw SmokeError(message: "Personality context menu missing \"\(expected)\"; saw \(titles)")
+            }
+        }
+        try pressContextMenuItem(menu, item: "Next Personality")
+        try waitUntil("active character changes after Next Personality", timeout: 5) {
+            guard let element = (try? mainWindow())?.firstDescendant(containing: "Active character") else { return false }
+            let text = element.title.isEmpty ? element.axDescription : element.title
+            return text != beforeText
+        }
+    }
+
+    run.step("dock-menus", "Personality control's Option-held menu adds Export Personality…") {
+        let personalityButton = try waitForElement("personality dock button", in: try mainWindow(),
+                                                    role: kAXButtonRole as String, containing: "Switch character")
+        app.setOptionHeld(true)
+        defer { app.setOptionHeld(false) }
+        try waitUntil("Export Personality becomes live", timeout: 5) {
+            guard let menu = try? openContextMenu(personalityButton) else { return false }
+            let live = contextMenuItemTitles(menu).contains(where: { $0.contains("Export Personality") })
+            app.key(Key.escape)
+            return live
+        }
     }
 }
 
