@@ -179,7 +179,9 @@ final class AttacheProjectFileToolsTests: XCTestCase {
             "GITHUB_TOKEN=ghp_012345678901234567890123456789012345",
             "AUTH_TOKEN=opaque-auth-token-value",
             "OPENAI_KEY=opaque-openai-value",
-            "SLACK_BOT_TOKEN=xoxb-123456789012-123456789012-abcdefghijklmnop",
+            // Split so the synthetic sample never matches provider-shaped
+            // literals in secret scanners while the runtime string still does.
+            "SLACK_BOT_TOKEN=xoxb-" + "123456789012-123456789012-abcdefghijklmnop",
             "NPM_TOKEN=npm_012345678901234567890123456789012345",
             "token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature123",
             "Cookie: sessionid=0123456789abcdef",
