@@ -112,20 +112,31 @@ private struct LyricsTranscript: View {
         return alignment.words[index].id
     }
 
+    // Matches the expanded panel width (330pt) minus its horizontal padding, so
+    // an oversized token (checksum, URL, identifier) wraps mid-token instead of
+    // overflowing this narrower side panel (INF-364).
+    private static let boxWidth: Double = 280
+    private static let fontSize: Double = 15
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
+                let units = captionDisplayUnits(for: alignment.words, boxWidth: Self.boxWidth, fontSize: Self.fontSize)
                 CenteredFlowLayout(spacing: 3, lineSpacing: 7, centered: false) {
-                    ForEach(alignment.words) { word in
+                    ForEach(units) { unit in
                         CaptionWordView(
-                            word: word,
-                            isActive: word.id == activeID,
+                            unit: unit,
+                            isActiveWord: unit.word.id == activeID,
+                            currentTimeMs: clock.currentTimeMs + syncOffsetMs,
                             highlightColor: highlightColor,
                             baseColor: .primary.opacity(0.82),
                             onSeek: onSeek,
                             onSeekAndResume: onSeekAndResume
                         )
-                        .id(word.id)
+                        // Scroll-to-active targets the word's id, carried by its
+                        // first fragment; later fragments keep their own unique
+                        // id so multi-fragment words never collide.
+                        .id(unit.fragmentIndex == 0 ? unit.word.id : unit.id)
                     }
                 }
                 .typoSection(.medium)

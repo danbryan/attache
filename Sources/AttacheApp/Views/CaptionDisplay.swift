@@ -113,6 +113,11 @@ private struct KaraokeCaptionView: View {
             .accessibilityValue(text)
     }
 
+    // The karaoke caption box is capped at this width (see `.frame(maxWidth:)`
+    // below); oversized-token wrapping (INF-364) is planned against this same
+    // number so a fragment that "fits" here also fits the rendered box.
+    private static let boxWidth: Double = 700
+
     @ViewBuilder
     private var content: some View {
         if let alignment, !alignment.words.isEmpty {
@@ -121,14 +126,16 @@ private struct KaraokeCaptionView: View {
             let end = min(count, start + windowSize)
             let slice = Array(alignment.words[start..<end])
             let activeID = alignment.activeWordIndex(at: currentTimeMs).map { alignment.words[$0].id }
+            let units = captionDisplayUnits(for: slice, boxWidth: Self.boxWidth, fontSize: Double(fontSize))
             CenteredFlowLayout(spacing: 2, lineSpacing: 4) {
                 if start > 0 {
                     Text("…").foregroundStyle(.white.opacity(0.45)).padding(.horizontal, 2)
                 }
-                ForEach(slice) { word in
+                ForEach(units) { unit in
                     CaptionWordView(
-                        word: word,
-                        isActive: word.id == activeID,
+                        unit: unit,
+                        isActiveWord: unit.word.id == activeID,
+                        currentTimeMs: currentTimeMs,
                         highlightColor: highlightColor,
                         onSeek: onSeek,
                         onSeekAndResume: onSeekAndResume
@@ -138,7 +145,7 @@ private struct KaraokeCaptionView: View {
                     Text("…").foregroundStyle(.white.opacity(0.45)).padding(.horizontal, 2)
                 }
             }
-            .frame(maxWidth: 700)
+            .frame(maxWidth: Self.boxWidth)
         } else {
             Text(text)
                 .foregroundStyle(.white)
@@ -149,21 +156,75 @@ private struct KaraokeCaptionView: View {
     }
 }
 
-// A single caption word: highlighted when it's the spoken word, and on hover it
-// gets a themed pill (like the session list) to advertise that it's clickable.
+/// One caption word, possibly split into display fragments (INF-364) so a
+/// single unbreakable token (checksum, URL, long identifier) that is wider than
+/// the caption box wraps mid-token instead of overflowing or collapsing it.
+/// Each unit is its own flow item so `CenteredFlowLayout` can wrap between
+/// fragments exactly like it wraps between ordinary words.
+struct CaptionDisplayUnit: Identifiable {
+    let id: String
+    let word: WordTiming
+    let text: String
+    let fragmentIndex: Int
+    let fragmentCount: Int
+}
+
+/// Expands a window of words into display units, splitting any word wider than
+/// `boxWidth` at `fontSize` into multiple fragments via `CaptionTokenLayout`.
+/// Ordinary words that already fit pass through as a single one-fragment unit,
+/// identical to their previous rendering.
+func captionDisplayUnits(for words: [WordTiming], boxWidth: Double, fontSize: Double) -> [CaptionDisplayUnit] {
+    words.flatMap { word -> [CaptionDisplayUnit] in
+        let fragments = CaptionTokenLayout.fragments(for: word.word, boxWidth: boxWidth, fontSize: fontSize)
+        return fragments.enumerated().map { index, fragment in
+            CaptionDisplayUnit(
+                id: "\(word.id)#\(index)",
+                word: word,
+                text: fragment,
+                fragmentIndex: index,
+                fragmentCount: fragments.count
+            )
+        }
+    }
+}
+
+// A single caption word fragment: highlighted when its word is active, and on
+// hover it gets a themed pill (like the session list) to advertise that it's
+// clickable. A word that was too wide for the caption box arrives here as
+// multiple fragments (INF-364); when the word's spoken duration exceeds
+// `WordTiming.subWordProgressThresholdMs`, only the fragment matching current
+// elapsed progress through the word lights up, so a long checksum highlights
+// progressively instead of as one frozen block.
 struct CaptionWordView: View {
-    var word: WordTiming
-    var isActive: Bool
+    var unit: CaptionDisplayUnit
+    var isActiveWord: Bool
+    var currentTimeMs: Int = 0
     var highlightColor: Color
     var baseColor: Color = .white
     var onSeek: ((Int) -> Void)?
     var onSeekAndResume: ((Int) -> Void)?
     @State private var hovering = false
 
+    private var highlighted: Bool {
+        guard isActiveWord else { return false }
+        guard unit.fragmentCount > 1, unit.word.durationMs > WordTiming.subWordProgressThresholdMs else {
+            // Short word, or a word that only needed wrapping (not pacing):
+            // every fragment lights up together, matching the pre-INF-364
+            // whole-word highlight behavior.
+            return true
+        }
+        let elapsed = currentTimeMs - unit.word.startMs
+        let activeFragment = unit.word.activeSubWordFragmentIndex(
+            elapsedMsSinceWordStart: elapsed,
+            fragmentCount: unit.fragmentCount
+        )
+        return activeFragment == unit.fragmentIndex
+    }
+
     var body: some View {
-        Text(word.word)
-            .fontWeight(isActive ? .bold : nil)
-            .foregroundStyle(isActive ? highlightColor : (hovering ? highlightColor.opacity(0.92) : baseColor))
+        Text(unit.text)
+            .fontWeight(highlighted ? .bold : nil)
+            .foregroundStyle(highlighted ? highlightColor : (hovering ? highlightColor.opacity(0.92) : baseColor))
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
             .background(
@@ -171,8 +232,8 @@ struct CaptionWordView: View {
                     .fill(hovering ? highlightColor.opacity(0.22) : Color.clear)
             )
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { onSeekAndResume?(word.startMs) }
-            .onTapGesture { onSeek?(word.startMs) }
+            .onTapGesture(count: 2) { onSeekAndResume?(unit.word.startMs) }
+            .onTapGesture { onSeek?(unit.word.startMs) }
             .onHover { inside in
                 hovering = (onSeek != nil) && inside
             }

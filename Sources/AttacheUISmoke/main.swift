@@ -390,18 +390,18 @@ func frontmostWindowID(forPID pid: pid_t) -> CGWindowID? {
     return candidates.max(by: { area(of: $0) < area(of: $1) })?[kCGWindowNumber as String] as? CGWindowID
 }
 
-/// Finds a window owned by `pid` whose title contains `titleContains` (e.g.
-/// "Settings"), so a pose that opens a secondary window can be captured
-/// specifically instead of falling back to whichever window has the largest
-/// area (`frontmostWindowID`, which picks the main window when it happens to
-/// be bigger than the window actually being posed).
-func windowID(forPID pid: pid_t, titleContains: String) -> CGWindowID? {
+/// Resolves a window by title substring rather than by largest area, for poses
+/// that need to capture a specific secondary window (like Settings) instead of
+/// the app's main window, which `frontmostWindowID` would otherwise pick
+/// whenever it happens to be the larger of the two.
+func windowID(forPID pid: pid_t, titleContains needle: String) -> CGWindowID? {
     guard let infoList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: AnyObject]] else {
         return nil
     }
     return infoList.first { info in
         (info[kCGWindowOwnerPID as String] as? pid_t) == pid
-            && (info[kCGWindowName as String] as? String)?.contains(titleContains) == true
+            && (info[kCGWindowLayer as String] as? Int) == 0
+            && ((info[kCGWindowName as String] as? String)?.localizedCaseInsensitiveContains(needle) ?? false)
     }?[kCGWindowNumber as String] as? CGWindowID
 }
 
@@ -426,6 +426,28 @@ func captureAppWindowScreenshot(to path: String, titleContains: String? = nil) {
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     // -x: no sound. -o: no window shadow (keeps the crop to just the window's
     // own content). -l<id>: capture exactly this window, any Space.
+    process.arguments = ["-x", "-o", "-l\(windowID)", path]
+    do {
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            print("screenshot: screencapture exited \(process.terminationStatus) for window \(windowID)")
+        }
+    } catch {
+        print("screenshot: failed to launch screencapture: \(error)")
+    }
+}
+
+/// Same as `captureAppWindowScreenshot`, but targets a specific window by
+/// title substring (see `windowID(forPID:titleContains:)`) rather than the
+/// largest window owned by the app.
+func captureNamedWindowScreenshot(to path: String, titleContains needle: String) {
+    guard let windowID = windowID(forPID: app.pid, titleContains: needle) else {
+        print("screenshot: could not resolve a window id containing \"\(needle)\" for pid \(app.pid); skipping capture to \(path)")
+        return
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     process.arguments = ["-x", "-o", "-l\(windowID)", path]
     do {
         try process.run()
@@ -511,6 +533,29 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 app.key(Key.comma, command: true)
                 try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
                 try selectSettingsSection("About", paneMarker: "Responsiveness")
+
+            case "voice-pane":
+                // INF-364 multilingual audit (b): the Voice & Captions pane
+                // holds the Spoken language picker, independent of app UI
+                // language (a macOS AppleLanguages / localization concern).
+                app.activate()
+                app.key(Key.comma, command: true)
+                try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+                try selectSettingsSection("Voice & Captions", paneMarker: "Spoken language")
+                // The Spoken language row sits below the fold; scroll the
+                // pane's own scroll view down so the screenshot shows it
+                // without depending on inconsistent scroll-into-view support.
+                if let scrollBar = try? waitForElement(
+                    "Voice & Captions pane scroll bar",
+                    in: try settingsWindow(),
+                    timeout: 5,
+                    matching: { element in element.role == kAXScrollBarRole as String }
+                ) {
+                    _ = scrollBar.setValue(1.0)
+                    Thread.sleep(forTimeInterval: 0.4)
+                }
+                _ = try waitForElement("Spoken language row", in: try settingsWindow(),
+                                       containing: "Spoken language", timeout: 10)
             case "live":
                 break
             case "play":
@@ -580,6 +625,89 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 try waitForElementGone("speaking indicator", in: try mainWindow(),
                                        containing: "Assistant speaking", timeout: 20)
                 Thread.sleep(forTimeInterval: 8)
+            case "korean-voice-torture":
+                // INF-364 multilingual audit (c): pick an on-device Korean
+                // system voice for the active personality, then play a
+                // Korean-text card, so captions render Korean while every
+                // fixed app control around them (Pause, Hang up, the sidebar)
+                // stays in English UI chrome. ATTACHE_FORCE_PLAIN_READBACK=1
+                // (set by the wrapper) speaks the event text verbatim, so this
+                // is deterministic and does not depend on a live presentation
+                // LLM translating into Korean.
+                app.activate()
+                app.key(Key.comma, command: true)
+                try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
+                try selectSettingsSection("Voice & Captions", paneMarker: "Voice engine")
+                // The "Voice" row's popup can show the same "System default"
+                // text as the unrelated "Input source" popup further down the
+                // same pane, so disambiguate by picking the topmost match
+                // (Voice appears near the top of the pane, Input source near
+                // the bottom, see the pane layout in VoicePane.swift).
+                var candidatePopups: [AXElement] = []
+                try waitUntil("system voice popup", timeout: 10) {
+                    candidatePopups = (try? settingsWindow())?.descendants(where: { element in
+                        element.role == kAXPopUpButtonRole as String
+                            && (element.matchText.contains("en-US") || element.matchText.contains("ko-KR")
+                                || element.matchText == "System default")
+                    }, collectLimit: 20) ?? []
+                    return !candidatePopups.isEmpty
+                }
+                guard let voicePopup = candidatePopups.min(by: { ($0.frame?.minY ?? .infinity) < ($1.frame?.minY ?? .infinity) }) else {
+                    throw SmokeError(message: "no system voice popup found")
+                }
+                try selectPopup(voicePopup, item: "ko-KR")
+                try settingsWindow().descendants(where: { $0.subrole == "AXCloseButton" }, collectLimit: 1)
+                    .first.map { _ = $0.press() }
+
+                let koreanText = "안녕하세요 저는 앱 개발자입니다 오늘은 날씨가 정말 좋습니다"
+                _ = try runShell("EVENT_TITLE='Korean voice torture card' EVENT_TEXT='\(koreanText)' scripts/send-event.sh")
+                let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, containing: "Open inbox")
+                _ = button.press()
+                let row = try waitForElement("card row play action", in: try mainWindow(),
+                                             containing: "Play Korean voice torture card")
+                _ = row.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+
+            case "checksum-torture":
+                // INF-364 evidence: a checksum-heavy card, paused on screen so
+                // a screenshot shows the caption box wrapping the oversized
+                // token instead of overflowing.
+                let tortureText = """
+                Build verification finished. The release checksum is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 and it matched the published artifact exactly.
+                """
+                _ = try runShell("EVENT_TITLE='Checksum torture card' EVENT_TEXT='\(tortureText)' scripts/send-event.sh")
+                let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, containing: "Open inbox")
+                _ = button.press()
+                let row = try waitForElement("card row play action", in: try mainWindow(),
+                                             containing: "Play Checksum torture card")
+                _ = row.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+                // Freeze the frame so the screenshot reliably shows the caption
+                // box, not a moment mid-transition.
+                let pause = try waitForElement("Pause control", in: try mainWindow(),
+                                               role: kAXButtonRole as String, containing: "Pause")
+                _ = pause.press()
+
+            case "checksum-torture-playing":
+                // Like "checksum-torture" but leaves narration running through
+                // the hold, for a short recording of the progressive sub-word
+                // highlight advancing across the checksum.
+                let tortureText = """
+                Build verification finished. The release checksum is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 and it matched the published artifact exactly.
+                """
+                _ = try runShell("EVENT_TITLE='Checksum torture card' EVENT_TEXT='\(tortureText)' scripts/send-event.sh")
+                let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                role: kAXButtonRole as String, containing: "Open inbox")
+                _ = button.press()
+                let row = try waitForElement("card row play action", in: try mainWindow(),
+                                             containing: "Play Checksum torture card")
+                _ = row.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
 
             case "press-celebrate":
                 // Moment-plumbing probe (INF-271): fires a celebrate through
@@ -836,16 +964,39 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
         // Screenshot the app's own window (by CGWindowID, never the whole
         // screen) the instant the requested state is confirmed on screen,
         // before the hold-sleep even starts, if the wrapper asked for one.
+        // Poses that land on a secondary window (Settings) target it by
+        // title, since it is usually smaller than the main window and the
+        // largest-window heuristic would otherwise capture the wrong one.
         if let screenshotPath = ProcessInfo.processInfo.environment["ATTACHE_POSE_SCREENSHOT_PATH"] {
-            let titleHint = pose.contains("settings") || pose.contains("about") ? "Settings" : nil
-            captureAppWindowScreenshot(to: screenshotPath, titleContains: titleHint)
+            if pose.contains("settings") || pose.contains("about") || pose.contains("voice-pane") {
+                captureNamedWindowScreenshot(to: screenshotPath, titleContains: "Settings")
+            } else {
+                captureAppWindowScreenshot(to: screenshotPath)
+            }
         }
         print("posing \(pose) for \(Int(holdSeconds))s")
         // Wrapper scripts tail the log for this marker to time recordings;
         // without a flush it sits in the block buffer until exit when stdout
         // is a file, which is exactly too late.
         fflush(stdout)
-        Thread.sleep(forTimeInterval: holdSeconds)
+        // INF-364 evidence: instead of one screenshot then a single sleep, a
+        // burst directory captures a short frame sequence (by CGWindowID,
+        // same as the single-shot path above) across the hold, so a wrapper
+        // script can stitch them into a short recording of the sub-word
+        // progressive highlight advancing across a long token.
+        if let burstDir = ProcessInfo.processInfo.environment["ATTACHE_POSE_BURST_DIR"] {
+            let intervalMs = Int(ProcessInfo.processInfo.environment["ATTACHE_POSE_BURST_INTERVAL_MS"] ?? "150") ?? 150
+            let deadline = Date().addingTimeInterval(holdSeconds)
+            var frame = 0
+            while Date() < deadline {
+                let framePath = burstDir + String(format: "/frame-%04d.png", frame)
+                captureAppWindowScreenshot(to: framePath)
+                frame += 1
+                Thread.sleep(forTimeInterval: Double(intervalMs) / 1000.0)
+            }
+        } else {
+            Thread.sleep(forTimeInterval: holdSeconds)
+        }
     } catch {
         print("pose failed: \(error)")
     }
@@ -1153,6 +1304,75 @@ if enabled("f3") {
         let hangUp = try waitForElement("Hang up control", in: try mainWindow(),
                                         role: kAXButtonRole as String, containing: "Hang up")
         guard hangUp.press() else { throw SmokeError(message: "AXPress failed on \(hangUp.summary)") }
+    }
+
+    // INF-364: a checksum-heavy torture card must not overflow the caption box.
+    let tortureEventTitle = "Caption torture card \(UUID().uuidString.prefix(8))"
+    var tortureCardOpened = false
+    run.step("f3-transport", "torture card with a checksum is accepted") {
+        let tortureText = """
+        Build verification finished. The release checksum is e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 and it matched the published artifact exactly.
+        """
+        let output = try runShell("EVENT_TITLE='\(tortureEventTitle)' EVENT_TEXT='\(tortureText)' scripts/send-event.sh")
+        guard output.contains("accepted") else {
+            throw SmokeError(message: "server did not accept the torture card event: \(output)")
+        }
+    }
+    run.step("f3-transport", "torture card opens from the inbox") {
+        let button = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, containing: "Open inbox")
+        guard button.press() else {
+            throw SmokeError(message: "AXPress failed on \(button.summary); actions: \(button.actionNames)")
+        }
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox")
+        _ = field.setFocused()
+        if !field.setValue(tortureEventTitle) { app.type(tortureEventTitle) }
+        let row = try waitForElement("torture card row play action", in: try mainWindow(),
+                                     containing: "Play \(tortureEventTitle)")
+        guard row.press() else {
+            throw SmokeError(message: "AXPress failed on \(row.summary); actions: \(row.actionNames)")
+        }
+        _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                               containing: "Assistant speaking", timeout: 15)
+        tortureCardOpened = true
+    }
+    run.step("f3-transport", "checksum caption stays visible and never overflows the window") {
+        guard tortureCardOpened else { throw SmokeError(message: "skipped: torture card did not open") }
+        let window = try mainWindow()
+        guard let windowFrame = window.frame else {
+            throw SmokeError(message: "main window did not expose AX geometry")
+        }
+        let caption = try waitForElement("visible karaoke caption", in: try mainWindow(), timeout: 10) { element in
+            guard let frame = element.frame else { return false }
+            return element.matchesExactly("Assistant speaking")
+                && frame.width > 100
+                && frame.height > 20
+        }
+        guard let captionFrame = caption.frame else {
+            throw SmokeError(message: "caption element lost its AX geometry")
+        }
+        guard windowFrame.contains(captionFrame) || windowFrame.intersects(captionFrame) else {
+            throw SmokeError(message: "caption frame \(captionFrame) fell entirely outside the window \(windowFrame)")
+        }
+        guard captionFrame.width <= windowFrame.width, captionFrame.height <= windowFrame.height else {
+            throw SmokeError(message: "checksum caption overflowed the window: caption \(captionFrame), window \(windowFrame)")
+        }
+        let transcript = try waitForElement("caption transcript", in: try mainWindow(),
+                                            containing: "Assistant speaking transcript")
+        guard transcript.matchText.contains("e3b0c44298") else {
+            throw SmokeError(message: "caption transcript did not expose the checksum text: \(transcript.summary)")
+        }
+    }
+    run.step("f3-transport", "torture card pauses cleanly, leaving no stuck overlay") {
+        // This card was opened as an ordinary voicemail play (not a live call
+        // via Command-L), so there is no "Hang up" control to press here; pause
+        // is the equivalent clean stop for this playback mode.
+        guard tortureCardOpened else { throw SmokeError(message: "skipped: torture card did not open") }
+        let pause = try waitForElement("Pause control", in: try mainWindow(),
+                                       role: kAXButtonRole as String, containing: "Pause")
+        guard pause.press() else { throw SmokeError(message: "AXPress failed on \(pause.summary)") }
+        _ = try waitForElement("paused indicator", in: try mainWindow(), containing: "Playback paused")
     }
 }
 
