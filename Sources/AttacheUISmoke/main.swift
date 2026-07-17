@@ -768,6 +768,11 @@ if enabled("f1") {
                 && element.matchesExactly("Call message")
         }
     }
+    run.step("f1-boundary", "saved call shows no PRIVATE indicator") {
+        guard (try mainWindow()).firstDescendant(exactly: "PRIVATE") == nil else {
+            throw SmokeError(message: "Saved (non-private) call unexpectedly exposed the PRIVATE indicator")
+        }
+    }
     run.step("f1-boundary", "hang up closes the context-free call") {
         let hangUp = try waitForElement("context-free Hang up control", in: try mainWindow(),
                                        role: kAXButtonRole as String, containing: "Hang up")
@@ -805,6 +810,14 @@ if enabled("f1") {
         guard (try mainWindow()).firstDescendant(exactly: "Tell Agent") == nil else {
             throw SmokeError(message: "Private Call exposed the disabled Tell Agent destination")
         }
+        // INF-356: the persistent PRIVATE chip in the call HUD, discoverable
+        // by automation via its exact accessibility label.
+        _ = try waitForElement(
+            "PRIVATE indicator chip",
+            in: try mainWindow(),
+            exactly: "PRIVATE",
+            timeout: 10
+        )
     }
     run.step("f1-private", "hang up erases the private call surface") {
         let hangUp = try waitForElement(
@@ -822,6 +835,9 @@ if enabled("f1") {
             containing: "Private call composer",
             timeout: 10
         )
+        guard (try mainWindow()).firstDescendant(exactly: "PRIVATE") == nil else {
+            throw SmokeError(message: "PRIVATE indicator survived hang-up")
+        }
     }
 }
 
