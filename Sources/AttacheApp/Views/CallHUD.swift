@@ -92,7 +92,10 @@ extension AttacheRootView {
             if model.isPrivateConversation {
                 privateCallBanner
             } else {
-                callDestinationPicker
+                HStack(spacing: 8) {
+                    callDestinationPicker
+                    callOverflowMenu
+                }
             }
 
             ContextOverflowRecoveryBanner()
@@ -161,6 +164,33 @@ extension AttacheRootView {
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(model.isPrivateConversation ? "Private call composer" : "Live call composer")
+    }
+
+    // Call HUD overflow menu (INF-355): the mid-call, saved-to-private
+    // switch. Only offered on a saved call; a private call already shows
+    // privateCallBanner instead of this row, and there is no action here to
+    // switch a private call back to saved (one-way door).
+    var callOverflowMenu: some View {
+        Menu {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    _ = model.convertActiveCallToPrivate()
+                }
+            } label: {
+                Label("Make This Call Private", systemImage: "eye.slash.fill")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .typoIcon(size: 13, .semibold)
+                .foregroundStyle(Color.primary.opacity(0.62))
+                .frame(width: 28, height: 28)
+                .background(Color.primary.opacity(0.06), in: Circle())
+                .overlay(Circle().stroke(Color.primary.opacity(0.12)))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("More call options")
+        .accessibilityLabel("More call options")
     }
 
     var privateCallBanner: some View {

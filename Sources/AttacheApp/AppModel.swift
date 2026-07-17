@@ -807,7 +807,10 @@ final class AppModel: ObservableObject {
     private var conversationRequestTask: Task<Void, Never>?
     private var conversationCompiledInference: (requestID: UUID, inference: AttacheInferenceMetadata)?
     private var activeConversationRequestID: UUID?
-    private var activeConversationID: UUID?
+    /// Read-only outside this file so the call HUD can gate "Make This Call
+    /// Private" and tests can seed matching cards/capsules; only this file
+    /// may set it (startConversation, endConversation, convertActiveCallToPrivate).
+    private(set) var activeConversationID: UUID?
     /// Receipt disclosures for ephemeral chat bubbles. Remove them at the call
     /// boundary so a private call leaves no content-free trace in UI state.
     private var conversationReceiptResponseIDs: Set<String> = []
@@ -1001,7 +1004,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    init(store: CardStore? = nil) {
+    /// `directChatDatabaseURLOverride` lets a test point at a known path so it
+    /// can seed capsules with `AttacheDirectChatSummaryStore` directly before
+    /// exercising `convertActiveCallToPrivate()` (INF-355); production callers
+    /// never pass it and get the derived path below.
+    init(store: CardStore? = nil, directChatDatabaseURLOverride: URL? = nil) {
         let environment = ProcessInfo.processInfo.environment
         presentationEnvironment = environment
         presentationService = AttachePresentationService(environment: environment)
@@ -1033,7 +1040,9 @@ final class AppModel: ObservableObject {
                 defaults: defaults
             )
             let directChatDatabaseURL: URL
-            if self.store.isInMemory {
+            if let directChatDatabaseURLOverride {
+                directChatDatabaseURL = directChatDatabaseURLOverride
+            } else if self.store.isInMemory {
                 directChatDatabaseURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("attache-direct-chat-\(UUID().uuidString).sqlite")
             } else {
@@ -2748,6 +2757,89 @@ final class AppModel: ObservableObject {
     /// Remote model and voice providers can still receive a private call.
     var privateConversationDisclosure: String {
         "Not saved by Attaché. New memory and agent sends are off. Your selected model and voice providers still receive what they normally receive."
+    }
+
+    /// Mid-call, saved-to-private conversion (INF-355). This is the only API
+    /// that may move `conversationStorageMode` away from `.saved` while a call
+    /// is already active; the enum itself is never mutated silently elsewhere.
+    /// Retroactive and fail-closed, in order:
+    ///   (a) freeze further persistence immediately by flipping the runtime
+    ///       storage mode, so no turn produced while the scrub below runs can
+    ///       slip through as a newly saved card or capsule,
+    ///   (b) hard-delete every already-persisted card, reply, and alternate
+    ///       take linked to this conversation id (they all share the
+    ///       `companion_conversation_id` metadata tag), plus its direct-chat
+    ///       capsules,
+    ///   (c) verify the deletions by re-querying for zero remaining rows,
+    ///   (d) only once verification succeeds, finalize the UI-facing status.
+    /// If any step throws, the freeze from (a) is rolled back: the call
+    /// REMAINS saved and the failure is surfaced, never silently discarded.
+    /// This rollback is not a private-to-saved transition (INF-355 step 3):
+    /// the call was never successfully private, so nothing recorded while it
+    /// was private is now exposed as saved. There is deliberately no API to
+    /// move a call that HAS become private back to saved.
+    @discardableResult
+    func convertActiveCallToPrivate() -> Bool {
+        guard conversationActive, conversationStorageMode == .saved, let conversationID = activeConversationID else {
+            return false
+        }
+        let conversationIDString = conversationID.uuidString
+        do {
+            // (a) Freeze further persistence.
+            conversationStorageMode = .privateCall
+
+            // (b) Hard-delete every linked card, reply, and alternate take,
+            // plus this call's direct-chat capsules.
+            let idsToDelete = try store.fetchCards(includeArchived: true)
+                .filter { self.conversationID(for: $0) == conversationIDString }
+                .map(\.id)
+            if !idsToDelete.isEmpty {
+                _ = try store.deleteCards(ids: idsToDelete)
+            }
+            directChatRuntime.endCall(conversationID)
+
+            // (c) Verify before ever telling the UI this call is private.
+            let remainingCards = try store.fetchCards(includeArchived: true)
+                .filter { self.conversationID(for: $0) == conversationIDString }
+            guard remainingCards.isEmpty else {
+                throw ConvertToPrivateError.cardsRemain(remainingCards.count)
+            }
+            let remainingCapsules = directChatRuntime.capsuleCount(conversationID)
+            guard remainingCapsules == 0 else {
+                throw ConvertToPrivateError.capsulesRemain(remainingCapsules)
+            }
+
+            // (d) Verified: finalize the private state.
+            reloadCards()
+            Task { @MainActor in
+                for id in idsToDelete {
+                    AttacheContextUIState.shared.removeReceipt(for: id)
+                }
+            }
+            conversationStatus = "This call is now private. Its recorded history was deleted."
+            return true
+        } catch {
+            // Fail closed: roll the freeze back so the call remains saved
+            // rather than silently reporting private with stale data left
+            // behind.
+            conversationStorageMode = .saved
+            conversationStatus = "Still recorded: could not make this call private. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private enum ConvertToPrivateError: LocalizedError {
+        case cardsRemain(Int)
+        case capsulesRemain(Int)
+
+        var errorDescription: String? {
+            switch self {
+            case .cardsRemain(let count):
+                return "\(count) card\(count == 1 ? "" : "s") survived deletion."
+            case .capsulesRemain(let count):
+                return "\(count) capsule\(count == 1 ? "" : "s") survived deletion."
+            }
+        }
     }
 
     func clearConversation() {

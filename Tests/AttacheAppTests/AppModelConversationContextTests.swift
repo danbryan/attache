@@ -132,6 +132,25 @@ final class AppModelConversationContextTests: XCTestCase {
         XCTAssertTrue(model.conversationMessages.isEmpty)
     }
 
+    /// INF-355 acceptance criterion: Start Private Call starts a call in
+    /// privateCall mode, and the whole call leaves zero saved cards behind.
+    func testStartPrivateCallEntersPrivateModeAndLeavesZeroCardsAfterHangup() throws {
+        _ = NSApplication.shared
+        let store = try CardStore.inMemory()
+        let model = AppModel(store: store)
+
+        model.startPrivateCall()
+
+        XCTAssertEqual(model.conversationStorageMode, .privateCall)
+        XCTAssertTrue(model.isPrivateConversation)
+        XCTAssertTrue(try store.fetchCards(includeArchived: true).isEmpty)
+
+        model.endConversation()
+
+        XCTAssertEqual(model.conversationStorageMode, .saved)
+        XCTAssertTrue(try store.fetchCards(includeArchived: true).isEmpty)
+    }
+
     func testDeletingConversationRemovesEveryLinkedTakeButNotOtherHistory() throws {
         _ = NSApplication.shared
         let store = try CardStore.inMemory()
