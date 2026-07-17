@@ -402,6 +402,29 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 let button = try waitForElement("voicemail dock button", in: try mainWindow(),
                                                 role: kAXButtonRole as String, containing: "Open inbox")
                 _ = button.press()
+
+            // The four overlay poses (INF-358 check 2): each opens its
+            // overlay by keyboard shortcut and waits for its own AX marker,
+            // so a screenshot taken right after confirms the character is
+            // visible (dimmed) behind a real, on-screen overlay rather than
+            // guessing a fixed delay.
+            case "palette":
+                app.activate()
+                app.key(Key.k, command: true)
+                _ = try waitForElement("switcher search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search name")
+
+            case "history":
+                app.activate()
+                app.key(Key.y, command: true)
+                _ = try waitForElement("history search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search history")
+
+            case "charswitcher":
+                app.activate()
+                app.key(Key.p, command: true, shift: true)
+                _ = try waitForElement("character switcher", in: try mainWindow(), containing: "Character switcher")
+
             case "settings":
                 app.activate()
                 app.key(Key.comma, command: true)
@@ -439,6 +462,42 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                 _ = row.press()
                 _ = try waitForElement("speaking indicator", in: try mainWindow(),
                                        containing: "Assistant speaking", timeout: 15)
+
+            case "playing-hold6":
+                // INF-358 check 1: same as "playing", but the screenshot is
+                // deliberately delayed 6s into the (~7s) demo narration
+                // instead of firing the instant speech starts. Paired with
+                // ATTACHE_CHARACTER_RARE_IDLE_SECONDS=5 this proves rare idle
+                // stayed suppressed well past its forced interval while
+                // still actively speaking.
+                _ = try runShell("scripts/send-event.sh")
+                let holdButton = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                    role: kAXButtonRole as String, containing: "Open inbox")
+                _ = holdButton.press()
+                let holdRow = try waitForElement("card row play action", in: try mainWindow(),
+                                                 containing: "Play Shell smoke update")
+                _ = holdRow.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+                Thread.sleep(forTimeInterval: 6)
+
+            case "playing-settled":
+                // INF-358 check 1: plays the demo narration to completion
+                // (speaking indicator disappears), then waits 8s at idle.
+                // Paired with ATTACHE_CHARACTER_RARE_IDLE_SECONDS=5 this
+                // proves rare idle resumes once playback is over.
+                _ = try runShell("scripts/send-event.sh")
+                let settledButton = try waitForElement("voicemail dock button", in: try mainWindow(),
+                                                       role: kAXButtonRole as String, containing: "Open inbox")
+                _ = settledButton.press()
+                let settledRow = try waitForElement("card row play action", in: try mainWindow(),
+                                                    containing: "Play Shell smoke update")
+                _ = settledRow.press()
+                _ = try waitForElement("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 15)
+                try waitForElementGone("speaking indicator", in: try mainWindow(),
+                                       containing: "Assistant speaking", timeout: 20)
+                Thread.sleep(forTimeInterval: 8)
 
             case "press-celebrate":
                 // Moment-plumbing probe (INF-271): fires a celebrate through

@@ -73,6 +73,12 @@ struct AttacheRootView: View {
     @State var inboxVisible = false
     @State var personalitySwitcherVisible = false
     @State private var historyVisible = false
+    /// Any of the four overlays (⌘K, ⌘I, ⌘Y, ⇧⌘P) or the keyboard shortcuts
+    /// sheet is open above the character (INF-358 check 2): it should hold
+    /// its pose rather than keep animating unseen underneath.
+    var anyOverlayVisible: Bool {
+        paletteVisible || inboxVisible || historyVisible || personalitySwitcherVisible || shortcutsVisible
+    }
     @State var callHolding = false
     @State var pendingCallPresentationProvider: AttachePresentationProvider?
     // Cloud consent for the recap / follow-up / live follow-up recovery
@@ -189,7 +195,9 @@ struct AttacheRootView: View {
                         echoExpanded.toggle()
                     }
                     window.toggleFullScreen(nil)
-                }
+                },
+                isCaptioning: model.captionsEnabled,
+                overlayVisible: anyOverlayVisible
             )
             // A personality change reads like changing characters: the old
             // presence eases out and the new one settles in. No spoken greeting

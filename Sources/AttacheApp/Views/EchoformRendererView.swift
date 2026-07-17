@@ -38,6 +38,12 @@ struct EchoformRendererView: View {
     /// renderer grows to the immersive size.
     var compactBars = false
     var onToggleBarsExpansion: (() -> Void)?
+    /// Karaoke captions are on screen for the current speaking turn
+    /// (INF-358 check 1), character mode only.
+    var isCaptioning = false
+    /// An app overlay is open above this renderer (INF-358 check 2): the
+    /// character holds its pose instead of animating unseen underneath.
+    var overlayVisible = false
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
@@ -65,7 +71,9 @@ struct EchoformRendererView: View {
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch,
                     focusAngle: characterFocusAngle,
-                    onFocusAngleChanged: onCharacterFocusAngleChanged
+                    onFocusAngleChanged: onCharacterFocusAngleChanged,
+                    isCaptioning: isCaptioning,
+                    overlayVisible: overlayVisible
                 )
                 .contextMenu {
                     Button("Edit personalities…") {
@@ -111,7 +119,9 @@ struct EchoformRendererView: View {
             onFleetFocus: onFleetFocus,
             onFleetSwitch: onFleetSwitch,
             focusAngle: characterFocusAngle,
-            onFocusAngleChanged: onCharacterFocusAngleChanged
+            onFocusAngleChanged: onCharacterFocusAngleChanged,
+            isCaptioning: isCaptioning,
+            overlayVisible: overlayVisible
         )
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Echo voice bars, \(activity.phase.accessibilityTitle)")
