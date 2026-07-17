@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attaché: What to Test in This Build</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080c12; --panel: #101722; --panel-2: #151e2b; --text: #edf4fb;
+      --muted: #9aaabd; --line: #273446; --blue: #41a8ff; --cyan: #59e0d0;
+      --gold: #f1c75b; --red: #ff7a88; --green: #83df9a; --radius: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(circle at 80% -10%, rgba(65,168,255,.15), transparent 34rem), var(--bg); color: var(--text); line-height: 1.6; }
+    .shell { max-width: 1000px; margin: 0 auto; padding: 34px 26px 80px; }
+    .eyebrow { color: var(--cyan); font-size: 12px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { font-size: clamp(30px, 5vw, 50px); line-height: 1.03; letter-spacing: -.04em; margin: 12px 0 16px; }
+    h2 { margin: 40px 0 6px; font-size: 24px; letter-spacing: -.02em; }
+    .lead { color: #c5d4e3; font-size: 19px; max-width: 780px; }
+    .meta { color: var(--muted); font-size: 13px; margin-top: 16px; }
+    .card { background: linear-gradient(150deg, rgba(21,30,43,.96), rgba(13,19,28,.96)); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; margin-top: 14px; }
+    .kbd { display: inline-block; padding: 1px 7px; border-radius: 6px; background: rgba(255,255,255,.08); border: 1px solid var(--line); font-family: ui-monospace, "SF Mono", monospace; font-size: 13px; color: #dfe9f4; }
+    ol { margin: 6px 0 0; padding-left: 20px; } li { margin: 8px 0; }
+    .tag { display: inline-block; font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; padding: 2px 8px; border-radius: 99px; margin-left: 8px; vertical-align: middle; }
+    .flagship { color: var(--gold); background: rgba(241,199,91,.12); border: 1px solid rgba(241,199,91,.3); }
+    .privacy { color: var(--green); background: rgba(131,223,154,.12); border: 1px solid rgba(131,223,154,.3); }
+    .known { border-left: 3px solid var(--gold); padding: 12px 15px; margin-top: 12px; background: rgba(241,199,91,.06); border-radius: 0 10px 10px 0; }
+    .muted { color: var(--muted); }
+    a { color: var(--blue); }
+    code { color: #b8e6ff; background: rgba(65,168,255,.08); border: 1px solid rgba(65,168,255,.14); padding: 1px 5px; border-radius: 5px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="eyebrow">Test brief · INF-347 wave · 17 July 2026</div>
+    <h1>What to check in this build</h1>
+    <p class="lead">This build integrates 19 features and fixes from the INF-347 wave. Here's what changed and exactly how to exercise each one, grouped by where it lives in the app. Start with the flagship items; the rest are quick confirmations.</p>
+    <p class="meta">Every item below passed unit tests and integrated ui-smoke. This is your human confirmation pass on real hardware, the thing automation can't do.</p>
+
+    <h2>Performance (you should feel these immediately)</h2>
+    <div class="card">
+      <ol>
+        <li><strong>Launch speed.</strong> Cold-launch the app. It should reach the dock noticeably faster than before (voice-catalog enumeration moved off the launch path; init dropped from ~2.1s to ~0.5s in testing).</li>
+        <li><strong>Settings → Context → Advanced.</strong> Open Settings, go to Context, expand Advanced <em>while a voicemail is playing</em>. It should feel instant now, not sluggish. This was the specific lag you reported.</li>
+        <li><strong>Single-click character switch.</strong> In Settings → Personalities, single-click a wardrobe card. It switches immediately, no double-click delay. Double-click still opens the editor... actually now Edit is via the card's Edit control and right-click menu.</li>
+        <li><strong>New Diagnostics.</strong> Settings → About has a "Responsiveness" section showing any main-thread stalls by duration bucket. Should be empty or near-empty in normal use.</li>
+      </ol>
+    </div>
+
+    <h2>Voice picker <span class="tag flagship">rebuilt</span></h2>
+    <div class="card">
+      <ol>
+        <li>Open a personality in the editor (Settings → Personalities → Edit / Create). The voice picker is now a searchable, filtered list modeled on the macOS voice picker, not one long flat list.</li>
+        <li>Try the <strong>search field</strong> (type a name or language), the <strong>engine chips</strong> (System / Grok / OpenAI), the <strong>quality chips</strong> (Premium / Enhanced / Compact), and the <strong>language filter</strong>. Voices group by language with your locale first.</li>
+        <li>Each row has a <strong>play-sample button</strong>. Confirm it previews on click and nothing auto-plays when the picker opens.</li>
+      </ol>
+    </div>
+
+    <h2>Right-click menus, everywhere <span class="tag flagship">new</span></h2>
+    <div class="card">
+      <p class="muted">Secondary-click each bottom-bar control. Hold <span class="kbd">Option</span> to reveal the power/destructive variants.</p>
+      <ol>
+        <li><strong>Settings icon:</strong> jumps straight to Appearance / Voice / Personalities / Context / Integrations / Memory. Option adds Diagnostics + Open Support Folder.</li>
+        <li><strong>Voicemail:</strong> Play Recap, Play Latest, Mark All Read, Open Inbox. Option turns Mark All Read into Archive All, and adds Forget Session.</li>
+        <li><strong>Call:</strong> Start Call, <strong>Start Private Call</strong>, Call as… (personality submenu). Option variants start private.</li>
+        <li><strong>Personality:</strong> Switch Character, Edit, Previous/Next. Option adds Export.</li>
+      </ol>
+      <p class="known"><strong>Known limitation:</strong> the "Diagnostics" item under Option is disabled (no Diagnostics pane exists yet, it's a placeholder). And on this macOS build, driving these menus via accessibility automation doesn't work, so they're human-tested only, click them yourself.</p>
+    </div>
+
+    <h2>Privacy <span class="tag privacy">incognito</span></h2>
+    <div class="card">
+      <ol>
+        <li><strong>Start Private Call</strong> (right-click Call). The character should wear a dark <strong>crown band</strong>, a <strong>PRIVATE</strong> chip appears in the call HUD, and the window edge tints. Confirm no history card is written after you hang up.</li>
+        <li><strong>Make This Call Private mid-call.</strong> Start a normal call, then use the HUD action to convert it. Everything already recorded for that conversation is scrubbed; if the scrub fails it says "Still recorded" rather than lying. There is no way back to saved (one-way door, by design).</li>
+        <li><strong>Private Session</strong> (right-click a session row in <span class="kbd">⌘K</span> or the inbox): "Don't Record This Session" (shows an incognito glyph) and "Forget This Session…" (states the real card/index counts before deleting).</li>
+        <li><strong>Echo + Reduce Motion.</strong> Switch to the Echo personality, turn on System Settings → Accessibility → Reduce Motion. Echo's voice bars should calm down (this was a real bug the wave fixed).</li>
+      </ol>
+    </div>
+
+    <h2>Captions (the checksum problem)</h2>
+    <div class="card">
+      <ol>
+        <li>Play a card whose text contains a <strong>long checksum, a URL, or a long identifier</strong>. The oversized token should wrap or scale instead of overflowing the caption box, and a long token now highlights progressively across its fragments instead of freezing as one block.</li>
+        <li><strong>Hover a caption word:</strong> an underline plus a <span class="kbd">m:ss</span> timestamp tooltip appears; click still jumps to that word (unchanged).</li>
+        <li><strong>Other languages:</strong> a personality set to a Korean or Spanish voice should caption that language while the app chrome stays in your UI language.</li>
+      </ol>
+    </div>
+
+    <h2>Keyboard niceties</h2>
+    <div class="card">
+      <ol>
+        <li><span class="kbd">⇧⌘P</span> palette: press <span class="kbd">1</span>–<span class="kbd">9</span> (with the search empty) to switch straight to that personality.</li>
+        <li><span class="kbd">⌘I</span> inbox and <span class="kbd">⌘Y</span> history: <span class="kbd">j</span>/<span class="kbd">k</span> move the selection like arrow keys (when the search field isn't focused).</li>
+        <li><strong>Global summon hotkey:</strong> off by default. Set one in Settings, then confirm it brings Attaché forward from another app. Clear it to unregister.</li>
+      </ol>
+    </div>
+
+    <h2>New agent sources</h2>
+    <div class="card">
+      <ol>
+        <li><strong>Grok Build</strong> and <strong>opencode</strong> sessions now appear in <span class="kbd">⌘K</span> search and the session list (enable them in Settings → Integrations). Grok Build produces live narrated cards; opencode currently does search/index only (live narration is a known follow-up).</li>
+        <li><strong>Local-model badge:</strong> your <code>claude-oss</code> (Ollama-backed) Claude Code sessions now show a small "local" chip distinguishing them from cloud sessions.</li>
+        <li><strong>Session titles:</strong> rename a Claude Code session in the CLI mid-session, and Attaché should pick up the new name (this fixes the "local-command-caveat" title bug you hit).</li>
+        <li><strong>Subagent activity:</strong> when a watched session delegates to subagents, you should now get narration/activity during their work instead of silence.</li>
+      </ol>
+    </div>
+
+    <div class="known" style="border-radius:12px; border-left-width:4px; margin-top:34px">
+      <h2 style="margin-top:0">Two things intentionally not finished</h2>
+      <ol style="margin-top:8px">
+        <li><strong>Summarize Session</strong> appears in session right-click menus (⌘K, inbox, history) but is currently a no-op: the engine is built and safe, but the cost-preview sheet that runs it wasn't built yet. Clicking it does nothing on purpose. This is the top follow-up.</li>
+        <li><strong>Kokoro voice engine</strong> (INF-366) was never built, dropped from this wave. Not in this build.</li>
+      </ol>
+    </div>
+
+    <p class="meta" style="margin-top:30px">Build: integrated INF-347 wave on <code>main</code>. If anything here behaves differently than described, note the item number and I'll investigate against the specific ticket.</p>
+  </main>
+</body>
+</html>
