@@ -183,6 +183,19 @@ public struct CaptionSegment: Equatable {
     }
 }
 
+/// Formats a caption word's start time for the hover-scrub tooltip
+/// (INF-365): hovering a karaoke or transcript word shows "m:ss" so the
+/// click-to-jump target is legible before the click, without changing the
+/// existing click/double-click behavior.
+public enum CaptionTimestampFormatter {
+    public static func format(ms: Int) -> String {
+        let totalSeconds = max(0, ms) / 1000
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
 public enum CaptionAlignmentBuilder {
     public static let minimumWordDurationMs = 90
 
