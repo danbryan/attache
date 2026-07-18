@@ -11,7 +11,7 @@ struct SettingsOverlay: View {
     @Environment(\.themeAccent) private var accent
 
     /// Section selection is model-backed so section deep-links (dock context
-    /// menu, "Edit character model…", "Change idle screen…") land on the right
+    /// menu, "Edit Attaché model…", "Change idle screen…") land on the right
     /// pane whether or not the overlay was already open.
     private var section: SettingsSection { model.activeSettingsSection }
 

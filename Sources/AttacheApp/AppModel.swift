@@ -565,7 +565,10 @@ final class AppModel: ObservableObject {
             defaults.set(captionLineCount, forKey: AttachePreferenceKey.captionLineCount)
         }
     }
-    @Published var audioCacheRetentionMinutes: Int = 24 * 60 {
+    /// Default when the user has never chosen a value (INF-391): seven days, so
+    /// recap audio stays replayable across a work week. An explicitly persisted
+    /// choice is loaded in `restoreDisplaySettings` and always wins over this.
+    @Published var audioCacheRetentionMinutes: Int = 7 * 24 * 60 {
         didSet {
             let preset = Self.nearestAudioCacheRetentionOption(to: audioCacheRetentionMinutes).minutes
             if audioCacheRetentionMinutes != preset {
@@ -591,8 +594,13 @@ final class AppModel: ObservableObject {
 
     static func nearestAudioCacheRetentionOption(to minutes: Int) -> (label: String, minutes: Int) {
         audioCacheRetentionOptions.min { abs($0.minutes - minutes) < abs($1.minutes - minutes) }
-            ?? ("1 day", 24 * 60)
+            ?? ("7 days", 7 * 24 * 60)
     }
+
+    /// Inline status for the About > Data controls (INF-391): the last back up,
+    /// restore, or reset outcome, shown next to the buttons and cleared when a
+    /// new action starts.
+    @Published var dataManagementStatus: String?
     @Published var spokenLanguage: String = "en" {
         didSet {
             defaults.set(spokenLanguage, forKey: AttachePreferenceKey.spokenLanguage)
@@ -1396,7 +1404,6 @@ final class AppModel: ObservableObject {
         let deletedAt: Date
     }
 
-    @Published var groqAPIKey: String = ""
     @Published var customAPIKey: String = "" {
         didSet { applySpeechConfiguration() }   // an OpenAI key here can power OpenAI voices too
     }
@@ -6122,7 +6129,7 @@ final class AppModel: ObservableObject {
         switch provider {
         case .ollama: return ollamaBaseURL
         case .custom: return customBaseURL
-        case .xai, .groq: return provider.defaultBaseURL
+        case .xai: return provider.defaultBaseURL
         case .claudeCLI, .codexCLI: return ""
         }
     }
@@ -6131,7 +6138,6 @@ final class AppModel: ObservableObject {
         AttachePresentationProvider.personalityInferenceCases.filter { provider in
             switch provider {
             case .xai: return !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .groq: return !groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .custom: return !customAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .ollama: return true
             case .claudeCLI: return CLILanguageModel.isLikelyInstalled(.claude)
@@ -6182,7 +6188,6 @@ final class AppModel: ObservableObject {
         refreshPresentationStatus()
     }
 
-    func saveGroqIntegration() { saveIntegrationTextKey(groqAPIKey, provider: .groq) }
     func saveCustomIntegration() { saveIntegrationTextKey(customAPIKey, provider: .custom) }
 
     private func saveIntegrationTextKey(_ key: String, provider: AttachePresentationProvider) {
@@ -6224,7 +6229,7 @@ final class AppModel: ObservableObject {
 
     func checkAllIntegrations() {
         let now = Date()
-        for id in ["xai", "elevenlabs", "openai", "groq", "ollama", "custom", "codex", "claude", "ondevice"] {
+        for id in ["xai", "elevenlabs", "openai", "ollama", "custom", "codex", "claude", "ondevice"] {
             if case .checking = healthStatus(id) { continue }
             if case .healthy = healthStatus(id),
                let last = integrationLastChecked[id], now.timeIntervalSince(last) < 60 {
@@ -6246,11 +6251,6 @@ final class AppModel: ObservableObject {
             runHealthCheck(id, configured: isSet(xaiAPIKey)) {
                 _ = try await AttachePresentationModelService.fetchModels(
                     provider: .xai, baseURLText: AttachePresentationProvider.xai.defaultBaseURL, apiKey: self.xaiAPIKey)
-            }
-        case "groq":
-            runHealthCheck(id, configured: isSet(groqAPIKey)) {
-                _ = try await AttachePresentationModelService.fetchModels(
-                    provider: .groq, baseURLText: AttachePresentationProvider.groq.defaultBaseURL, apiKey: self.groqAPIKey)
             }
         case "custom":
             runHealthCheck(id, configured: isSet(customAPIKey)) {
@@ -6279,7 +6279,6 @@ final class AppModel: ObservableObject {
         switch provider {
         case .xai: return "xai"
         case .ollama: return "ollama"
-        case .groq: return "groq"
         case .custom: return "custom"
         case .codexCLI: return "codex"
         case .claudeCLI: return "claude"
@@ -6649,7 +6648,6 @@ final class AppModel: ObservableObject {
         switch provider {
         case .xai: integrationFocusProviderID = "xai"
         case .ollama: integrationFocusProviderID = "ollama"
-        case .groq: integrationFocusProviderID = "groq"
         case .custom: integrationFocusProviderID = "custom"
         case .claudeCLI, .codexCLI: integrationFocusProviderID = nil
         }
@@ -7057,7 +7055,10 @@ final class AppModel: ObservableObject {
     /// Plays the bundled Attaché Premium (Azelma) sample instantly: no download,
     /// no neural runtime load, no network. Explicit Preview action only.
     func previewPremiumVoiceSample(
-        sampleText: String = "Hi, I'm Azelma, your Attaché Premium voice, running entirely on this Mac."
+        // Matches the words in the bundled clip so captions line up, and the
+        // same line the system voice previews speak, so users can A/B Azelma
+        // against Ava/Zoe/Jamie on identical text (INF-387a).
+        sampleText: String = "Hi, I'm your Attaché, looking forward to working with you."
     ) {
         guard let url = PremiumVoicePreviewClip.url() else { return }
         playback.previewClip(at: url, text: sampleText)
@@ -7284,11 +7285,24 @@ final class AppModel: ObservableObject {
         intakeStatus = "Personality \"\(personalities[index].name)\" saved."
     }
 
+    /// Whether any built-in is currently tombstoned. Drives the "Restore default
+    /// personalities" affordance; SwiftUI re-evaluates it when a delete, undo, or
+    /// restore mutates the published personality list.
+    var hasDeletedBuiltInPersonalities: Bool { personalityStore.hasDeletedBuiltIns }
+
+    /// Built-ins are deletable (INF-390), so this deletes both customs and
+    /// built-ins. Deleting a built-in records a tombstone so `load()` does not
+    /// re-seed it; undo clears that tombstone. Deleting the last remaining
+    /// personality is refused so the app is never left with none.
     func deletePersonality(id: String) {
-        guard let index = personalities.firstIndex(where: { $0.id == id }), !personalities[index].isBuiltIn else { return }
+        guard personalities.count > 1 else { return }
+        guard let index = personalities.firstIndex(where: { $0.id == id }) else { return }
         let removed = personalities[index]
         let wasActive = id == activePersonalityID
         personalities.remove(at: index)
+        if removed.isBuiltIn {
+            personalityStore.recordDeletedBuiltIn(removed.id)
+        }
         recentlyDeletedPersonality = DeletedPersonalitySnapshot(
             personality: removed,
             index: index,
@@ -7301,6 +7315,15 @@ final class AppModel: ObservableObject {
             personalityStore.save(personalities, activeID: activePersonalityID)
         }
         scheduleRecentlyDeletedPersonalityExpiry(for: removed.id)
+    }
+
+    /// Clears every built-in tombstone and restores any missing built-ins in
+    /// canonical form. Custom personalities and their order are untouched.
+    func restoreDefaultPersonalities() {
+        let restored = personalityStore.restoringDefaultBuiltIns(into: personalities)
+        personalities = restored
+        personalityStore.save(personalities, activeID: activePersonalityID)
+        intakeStatus = "Restored the default personalities."
     }
 
     private func scheduleRecentlyDeletedPersonalityExpiry(for id: String) {
@@ -7322,6 +7345,9 @@ final class AppModel: ObservableObject {
         }
         let insertIndex = min(snapshot.index, personalities.count)
         personalities.insert(snapshot.personality, at: insertIndex)
+        if snapshot.personality.isBuiltIn {
+            personalityStore.clearDeletedBuiltIn(snapshot.personality.id)
+        }
         if snapshot.wasActive {
             activePersonalityID = snapshot.personality.id
             writeActivePersonalityToDefaults()
@@ -7493,7 +7519,7 @@ final class AppModel: ObservableObject {
     func previewAssistantVoice() {
         applySpeechConfiguration()
         voiceProviderStatus = "Previewing \(currentVoiceSummary)."
-        playback.preview("Attaché is ready now.")
+        playback.preview("Hi, I'm your Attaché, looking forward to working with you.")
     }
 
     func saveElevenLabsKeyAndLoadVoices() {
@@ -9704,14 +9730,12 @@ final class AppModel: ObservableObject {
                 ?? self.environmentValue("COMPANION_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY")
                 ?? ""
             let xai = self.readConfiguredSecret(account: Self.xaiDevelopmentSecretAccount) ?? ""
-            let groq = self.readConfiguredSecret(account: AttachePresentationProvider.groq.developmentSecretAccount) ?? ""
             let custom = self.readConfiguredSecret(account: AttachePresentationProvider.custom.developmentSecretAccount) ?? ""
             let openai = self.readConfiguredSecret(account: Self.openaiDevelopmentSecretAccount) ?? ""
             DispatchQueue.main.async {
                 self.presentationAPIKey = presentation
                 self.elevenLabsAPIKey = elevenLabs
                 self.xaiAPIKey = xai
-                self.groqAPIKey = groq
                 self.customAPIKey = custom
                 self.openaiVoiceAPIKey = openai
                 self.applyStoredCloudVoicePreferences()
@@ -10047,6 +10071,324 @@ final class AppModel: ObservableObject {
         var seen = Set<String>()
         return targets.filter { target in
             seen.insert(target.id).inserted
+        }
+    }
+}
+
+// MARK: - Data management (back up / restore / reset, INF-391)
+//
+// The user-facing entry points live in Settings > About ("Data" group). The
+// impure file/defaults/relaunch work is here; the archive's manifest,
+// inclusion/exclusion, and version gating are pure in `AttacheDataArchive`.
+//
+// Statics take explicit directories and a `UserDefaults` so they are unit
+// tested against temp dirs and throwaway suites and never touch the real
+// profile. Instance methods bind them to `UserDefaults.standard`, the live
+// app-support directory, save/open panels, and a relaunch.
+extension AppModel {
+    /// Suggested file name for a new backup, e.g. `Attache-Backup-2026-07-18`.
+    static func suggestedBackupFileName(date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return "Attache-Backup-\(formatter.string(from: date)).attachebackup"
+    }
+
+    /// The app's own preference domain name (bundle id), used to export/import
+    /// only Attaché's defaults, never the whole global domain.
+    static var preferenceDomainName: String {
+        Bundle.main.bundleIdentifier ?? "com.bryanlabs.attache"
+    }
+
+    /// Exports the app's own defaults domain, stripped of any sensitive keys by
+    /// name (`AttacheDataArchive.redactingSensitiveKeys`). Provider secrets live
+    /// in the keychain and are never in the domain, but the inline-key and
+    /// secret-ref keys are removed as defense in depth.
+    static func exportedArchiveDefaults(
+        from defaults: UserDefaults,
+        domainName: String
+    ) -> [String: Any] {
+        let raw = defaults.persistentDomain(forName: domainName) ?? [:]
+        return AttacheDataArchive.redactingSensitiveKeys(raw).kept
+    }
+
+    /// Packs the app-support directory and an exported defaults dictionary into
+    /// a single archive file. Returns the manifest that was written.
+    @discardableResult
+    static func packDataArchive(
+        supportDirectory: URL,
+        exportedDefaults: [String: Any],
+        destination: URL,
+        includePremiumVoice: Bool,
+        appVersion: String,
+        createdAt: Date = Date(),
+        fileManager: FileManager = .default
+    ) throws -> AttacheDataArchive.Manifest {
+        let staging = fileManager.temporaryDirectory
+            .appendingPathComponent("attache-backup-stage-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: staging) }
+        let supportStage = staging.appendingPathComponent(
+            AttacheDataArchive.supportDirectoryName, isDirectory: true)
+        try fileManager.createDirectory(at: supportStage, withIntermediateDirectories: true)
+
+        let entries = (try? fileManager.contentsOfDirectory(atPath: supportDirectory.path)) ?? []
+        let planned = AttacheDataArchive.plannedContents(
+            fromEntryNames: entries, includePremiumVoice: includePremiumVoice)
+        for name in planned {
+            try fileManager.copyItem(
+                at: supportDirectory.appendingPathComponent(name),
+                to: supportStage.appendingPathComponent(name))
+        }
+
+        let defaultsData = try PropertyListSerialization.data(
+            fromPropertyList: exportedDefaults, format: .binary, options: 0)
+        try defaultsData.write(to: staging.appendingPathComponent(AttacheDataArchive.defaultsFileName))
+
+        var contents = planned
+        contents.append(AttacheDataArchive.defaultsFileName)
+        let manifest = AttacheDataArchive.Manifest(
+            createdAt: createdAt, appVersion: appVersion, contents: contents)
+        try AttacheDataArchive.encodeManifest(manifest)
+            .write(to: staging.appendingPathComponent(AttacheDataArchive.manifestFileName))
+
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try runDitto(["-c", "-k", "--sequesterRsrc", staging.path, destination.path])
+        return manifest
+    }
+
+    /// Extracts an archive and validates its manifest, refusing a newer format.
+    /// Returns the manifest and the extraction root (caller cleans it up).
+    static func extractDataArchive(
+        _ archive: URL,
+        fileManager: FileManager = .default
+    ) throws -> (manifest: AttacheDataArchive.Manifest, root: URL) {
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("attache-restore-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        do {
+            try runDitto(["-x", "-k", archive.path, root.path])
+            let manifestData = try Data(
+                contentsOf: root.appendingPathComponent(AttacheDataArchive.manifestFileName))
+            let manifest = try AttacheDataArchive.decodeManifest(from: manifestData)
+            try AttacheDataArchive.validateRestorable(manifest: manifest)
+            return (manifest, root)
+        } catch {
+            try? fileManager.removeItem(at: root)
+            throw error
+        }
+    }
+
+    /// Swaps the archived app-support entries into `supportDirectory`. The
+    /// current directory is moved aside first; a failure rolls it back so the
+    /// live profile is never left half-restored.
+    static func restoreDataArchive(
+        from archive: URL,
+        intoSupportDirectory supportDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        let (_, root) = try extractDataArchive(archive, fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: root) }
+        let restoredSupport = root.appendingPathComponent(
+            AttacheDataArchive.supportDirectoryName, isDirectory: true)
+
+        let rollback = supportDirectory.deletingLastPathComponent()
+            .appendingPathComponent("Attache-restore-rollback-\(UUID().uuidString)", isDirectory: true)
+        let hadExisting = fileManager.fileExists(atPath: supportDirectory.path)
+        if hadExisting {
+            try fileManager.moveItem(at: supportDirectory, to: rollback)
+        }
+        do {
+            try fileManager.createDirectory(
+                at: supportDirectory, withIntermediateDirectories: true)
+            let names = (try? fileManager.contentsOfDirectory(atPath: restoredSupport.path)) ?? []
+            for name in names {
+                try fileManager.copyItem(
+                    at: restoredSupport.appendingPathComponent(name),
+                    to: supportDirectory.appendingPathComponent(name))
+            }
+            if hadExisting { try? fileManager.removeItem(at: rollback) }
+        } catch {
+            try? fileManager.removeItem(at: supportDirectory)
+            if hadExisting { try? fileManager.moveItem(at: rollback, to: supportDirectory) }
+            throw error
+        }
+    }
+
+    /// Imports a restored archive's defaults into a preference domain. Sensitive
+    /// keys were already stripped at pack time, so this replays only safe keys.
+    static func importArchiveDefaults(
+        fromArchiveRoot root: URL,
+        into defaults: UserDefaults,
+        domainName: String,
+        fileManager: FileManager = .default
+    ) {
+        let url = root.appendingPathComponent(AttacheDataArchive.defaultsFileName)
+        guard let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil),
+              let dictionary = plist as? [String: Any] else { return }
+        defaults.setPersistentDomain(dictionary, forName: domainName)
+    }
+
+    /// Clears the app-support directory's contents (INF-391 reset), keeping
+    /// `PremiumVoice/` unless `alsoRemovePremiumVoice` is true (its download is a
+    /// public asset that is expensive to re-fetch).
+    static func resetSupportDirectory(
+        _ supportDirectory: URL,
+        alsoRemovePremiumVoice: Bool,
+        fileManager: FileManager = .default
+    ) throws {
+        let entries = (try? fileManager.contentsOfDirectory(atPath: supportDirectory.path)) ?? []
+        for name in entries {
+            if name == AttacheDataArchive.premiumVoiceEntryName && !alsoRemovePremiumVoice {
+                continue
+            }
+            try fileManager.removeItem(at: supportDirectory.appendingPathComponent(name))
+        }
+    }
+
+    /// Clears the app's own defaults so the next launch re-runs onboarding.
+    /// After this, `onboardingCompleted` reads false.
+    static func resetDefaultsToOnboarding(_ defaults: UserDefaults, domainName: String) {
+        defaults.removePersistentDomain(forName: domainName)
+        // `UserDefaults.standard` also surfaces the app's keys via the global
+        // domain; remove any that linger so onboarding truly re-runs.
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("attache.") {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    private static func runDitto(_ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = arguments
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(
+                data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw NSError(
+                domain: "AttacheDataArchive", code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Archiving failed (ditto exited \(process.terminationStatus)). \(message)"])
+        }
+    }
+
+    // MARK: Instance entry points (bound to the live profile + UI)
+
+    private var liveSupportDirectory: URL {
+        AttacheAppSupport.supportDirectory()
+    }
+
+    /// Presents an NSSavePanel and writes a backup archive. Status is reported
+    /// inline via `dataManagementStatus`.
+    func backUpData() {
+        let panel = NSSavePanel()
+        panel.title = "Back Up Attaché Data"
+        panel.nameFieldStringValue = Self.suggestedBackupFileName()
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let includePremiumVoice = false
+        do {
+            let exportedDefaults = Self.exportedArchiveDefaults(
+                from: defaults, domainName: Self.preferenceDomainName)
+            let manifest = try Self.packDataArchive(
+                supportDirectory: liveSupportDirectory,
+                exportedDefaults: exportedDefaults,
+                destination: destination,
+                includePremiumVoice: includePremiumVoice,
+                appVersion: AttacheAppSupport.appVersion)
+            dataManagementStatus = "Backed up \(manifest.contents.count) items to \(destination.lastPathComponent)."
+        } catch {
+            dataManagementStatus = "Back up failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Presents an NSOpenPanel, confirms the replacement, restores, then
+    /// relaunches so all in-memory state reloads from the restored profile.
+    func restoreDataFromBackup() {
+        let panel = NSOpenPanel()
+        panel.title = "Restore from Backup"
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+
+        let confirm = NSAlert()
+        confirm.messageText = "Restore from this backup?"
+        confirm.informativeText = "Your personalities, history, settings, and watched "
+            + "sessions will be replaced with the backup's. This cannot be undone."
+        confirm.alertStyle = .warning
+        confirm.addButton(withTitle: "Restore")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        do {
+            let (_, root) = try Self.extractDataArchive(source)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try Self.restoreDataArchive(from: source, intoSupportDirectory: liveSupportDirectory)
+            Self.importArchiveDefaults(
+                fromArchiveRoot: root, into: defaults, domainName: Self.preferenceDomainName)
+            dataManagementStatus = "Restore complete. Relaunching…"
+            relaunchApp()
+        } catch {
+            dataManagementStatus = "Restore failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Presents the three-way reset confirmation ("Back Up First…", "Reset",
+    /// "Cancel") with an opt-in to also remove the downloaded premium voice,
+    /// then clears state and relaunches into onboarding.
+    func resetData() {
+        let confirm = NSAlert()
+        confirm.messageText = "Reset Attaché?"
+        confirm.informativeText = "This removes your personalities, history, settings, "
+            + "and watched sessions, then restarts Attaché as if newly installed."
+        confirm.alertStyle = .critical
+        confirm.addButton(withTitle: "Back Up First…")
+        confirm.addButton(withTitle: "Reset")
+        confirm.addButton(withTitle: "Cancel")
+
+        let removeVoice = NSButton(checkboxWithTitle: "Also remove the downloaded voice", target: nil, action: nil)
+        removeVoice.state = .off
+        confirm.accessoryView = removeVoice
+
+        let response = confirm.runModal()
+        switch response {
+        case .alertFirstButtonReturn:   // Back Up First…
+            backUpData()
+        case .alertSecondButtonReturn:  // Reset
+            performReset(alsoRemovePremiumVoice: removeVoice.state == .on)
+        default:
+            return
+        }
+    }
+
+    private func performReset(alsoRemovePremiumVoice: Bool) {
+        do {
+            try Self.resetSupportDirectory(
+                liveSupportDirectory, alsoRemovePremiumVoice: alsoRemovePremiumVoice)
+            Self.resetDefaultsToOnboarding(defaults, domainName: Self.preferenceDomainName)
+            dataManagementStatus = "Reset complete. Relaunching…"
+            relaunchApp()
+        } catch {
+            dataManagementStatus = "Reset failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Relaunches into a fresh process and terminates this one, the cleanest
+    /// full-state reload (mirrors the onboarding voice relaunch path).
+    private func relaunchApp() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(
+            at: Bundle.main.bundleURL, configuration: configuration
+        ) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
         }
     }
 }

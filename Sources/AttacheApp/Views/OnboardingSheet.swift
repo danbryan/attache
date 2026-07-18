@@ -22,21 +22,33 @@ enum OnboardingStep: Int, CaseIterable {
         case .sources: return "Connect your agents"
         case .voice: return "Pick a voice"
         case .integrations: return "Connect a model"
-        case .finish: return "Pick a character"
+        case .finish: return "Pick your Attaché"
         }
     }
 }
 
 /// Filesystem probes for known agent session stores. Counts are capped; the
 /// point is "found something" plus a rough magnitude, not an exact census.
+/// Each probe uses the SAME store convention its live scanner uses, so the
+/// onboarding count agrees with what Attaché will actually watch: Codex/Claude
+/// count `.jsonl` transcripts, Grok Build counts session directories, and
+/// opencode counts rows in its shared SQLite database. Claude Code honors
+/// `CLAUDE_CONFIG_DIR` through `ClaudePaths` exactly as the watcher does.
 enum OnboardingSourceProbe {
     static func codexSessionCount(limit: Int = 200) -> Int {
         count(root: CodexPaths.sessionsDirectory(), suffix: ".jsonl", limit: limit)
     }
 
     static func claudeCodeSessionCount(limit: Int = 200) -> Int {
-        count(root: FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects"), suffix: ".jsonl", limit: limit)
+        count(root: ClaudePaths.projectsDirectory(), suffix: ".jsonl", limit: limit)
+    }
+
+    static func grokBuildSessionCount(limit: Int = 200, grokHome: URL? = nil) -> Int {
+        min(GrokBuildSessionScanner(grokHome: grokHome).enumerateFiles().count, limit)
+    }
+
+    static func opencodeSessionCount(limit: Int = 200, opencodeDataHome: URL? = nil) -> Int {
+        min(OpencodeSessionScanner(opencodeDataHome: opencodeDataHome).enumerateFiles().count, limit)
     }
 
     private static func count(root: URL, suffix: String, limit: Int) -> Int {
@@ -54,12 +66,56 @@ enum OnboardingSourceProbe {
     }
 }
 
+/// One onboarding "Connect your agents" row as pure data. Kept free of SwiftUI
+/// and FileManager so the four-source detail/found/count logic (INF-386) is
+/// unit-testable against fabricated probe results.
+struct OnboardingSourceRowInfo: Identifiable, Equatable {
+    /// Stable per-source key the view uses to wire the enable toggle.
+    let id: String
+    let name: String
+    let detail: String
+    let found: Bool
+    let count: Int
+}
+
+enum OnboardingSourceRows {
+    /// All four watchable sources, in a fixed order, from raw probe counts.
+    /// A positive count renders a location hint with the same "200+" cap the
+    /// original two rows used; a zero count renders an install pointer.
+    static func make(
+        codexCount: Int,
+        claudeCount: Int,
+        grokBuildCount: Int,
+        opencodeCount: Int
+    ) -> [OnboardingSourceRowInfo] {
+        [
+            row(id: "codex", name: "Codex CLI", count: codexCount,
+                location: "~/.codex", install: "github.com/openai/codex"),
+            row(id: "claude", name: "Claude Code", count: claudeCount,
+                location: "~/.claude", install: "claude.com/claude-code"),
+            row(id: "grok", name: "Grok Build", count: grokBuildCount,
+                location: "~/.grok", install: "grok.com"),
+            row(id: "opencode", name: "opencode", count: opencodeCount,
+                location: "~/.local/share/opencode", install: "opencode.ai"),
+        ]
+    }
+
+    private static func row(id: String, name: String, count: Int, location: String, install: String) -> OnboardingSourceRowInfo {
+        let detail = count > 0
+            ? "\(count)\(count >= 200 ? "+" : "") sessions in \(location)"
+            : "Not found (install: \(install))"
+        return OnboardingSourceRowInfo(id: id, name: name, detail: detail, found: count > 0, count: count)
+    }
+}
+
 struct OnboardingSheet: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var contextUI = AttacheContextUIState.shared
     @State private var step: OnboardingStep = .welcome
     @State private var codexCount = 0
     @State private var claudeCount = 0
+    @State private var grokBuildCount = 0
+    @State private var opencodeCount = 0
     @State private var probed = false
     @State private var demoSent = false
     @State private var confirmSkip = false
@@ -145,9 +201,18 @@ struct OnboardingSheet: View {
         }
     }
 
+    private var sourceRows: [OnboardingSourceRowInfo] {
+        OnboardingSourceRows.make(
+            codexCount: codexCount,
+            claudeCount: claudeCount,
+            grokBuildCount: grokBuildCount,
+            opencodeCount: opencodeCount
+        )
+    }
+
     private var sourcesStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if codexCount > 0 || claudeCount > 0 {
+            if sourceRows.contains(where: { $0.found }) {
                 Text("Found agent sessions on this Mac. Enable the sources you want Attaché to follow.")
                     .typoBody()
                     .fixedSize(horizontal: false, vertical: true)
@@ -156,21 +221,30 @@ struct OnboardingSheet: View {
                     .typoBody()
                     .fixedSize(horizontal: false, vertical: true)
             }
-            sourceRow(
-                name: "Codex CLI",
-                detail: codexCount > 0 ? "\(codexCount)\(codexCount >= 200 ? "+" : "") sessions in ~/.codex" : "Not found (install: github.com/openai/codex)",
-                found: codexCount > 0,
-                isOn: Binding(get: { model.codexSourceEnabled },
-                              set: { model.setCodexSourceEnabled($0) })
-            )
-            sourceRow(
-                name: "Claude Code",
-                detail: claudeCount > 0 ? "\(claudeCount)\(claudeCount >= 200 ? "+" : "") sessions in ~/.claude" : "Not found (install: claude.com/claude-code)",
-                found: claudeCount > 0,
-                isOn: Binding(get: { model.claudeCodeSourceEnabled },
-                              set: { model.setClaudeCodeSourceEnabled($0) })
-            )
+            ForEach(sourceRows) { info in
+                sourceRow(
+                    name: info.name,
+                    detail: info.detail,
+                    found: info.found,
+                    isOn: sourceBinding(for: info.id)
+                )
+            }
             Spacer()
+        }
+    }
+
+    private func sourceBinding(for id: String) -> Binding<Bool> {
+        switch id {
+        case "codex":
+            return Binding(get: { model.codexSourceEnabled }, set: { model.setCodexSourceEnabled($0) })
+        case "claude":
+            return Binding(get: { model.claudeCodeSourceEnabled }, set: { model.setClaudeCodeSourceEnabled($0) })
+        case "grok":
+            return Binding(get: { model.grokBuildSourceEnabled }, set: { model.setGrokBuildSourceEnabled($0) })
+        case "opencode":
+            return Binding(get: { model.opencodeSourceEnabled }, set: { model.setOpencodeSourceEnabled($0) })
+        default:
+            return .constant(false)
         }
     }
 
@@ -404,12 +478,6 @@ struct OnboardingSheet: View {
                     accessibilityName: "xAI API key",
                     text: $model.xaiAPIKey
                 )
-            case .groq:
-                RevealableAPIKeyField(
-                    placeholder: "Groq API key",
-                    accessibilityName: "Groq API key",
-                    text: $model.groqAPIKey
-                )
             case .custom:
                 TextField("OpenAI-compatible /v1 endpoint", text: $model.customBaseURL).textFieldStyle(.roundedBorder)
                 RevealableAPIKeyField(
@@ -478,7 +546,6 @@ struct OnboardingSheet: View {
         case .ollama: return "Local · no key"
         case .codexCLI, .claudeCLI: return "Uses your CLI login"
         case .xai: return "Grok models"
-        case .groq: return "Fast cloud inference"
         case .custom: return "Any compatible endpoint"
         }
     }
@@ -486,7 +553,6 @@ struct OnboardingSheet: View {
     private func testOnboardingProvider(_ provider: AttachePresentationProvider) {
         switch provider {
         case .xai: model.saveXAIIntegration()
-        case .groq: model.saveGroqIntegration()
         case .custom: model.saveCustomIntegration()
         case .ollama, .codexCLI, .claudeCLI: break
         }
@@ -507,7 +573,6 @@ struct OnboardingSheet: View {
         switch provider {
         case .xai: guide = .xai
         case .ollama: guide = .ollama
-        case .groq: guide = .groq
         case .custom: guide = .openAICompatible
         case .codexCLI: guide = .codexCLI
         case .claudeCLI: guide = .claudeCode
@@ -523,7 +588,7 @@ struct OnboardingSheet: View {
 
     private var finishStep: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Choose who meets you in Attaché. Your voice and current model stay attached to this character. You can fine-tune both or build more later.")
+            Text("Choose who meets you in Attaché. Your voice and current model stay attached to this personality. You can fine-tune both or build more later.")
                 .typoCaption()
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -541,7 +606,7 @@ struct OnboardingSheet: View {
                     Text(custom.characterAvatarEmoji)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(custom.name).typoBody(.semibold)
-                        Text("Your custom character is selected.").typoCaption().foregroundStyle(.secondary)
+                        Text("Your custom Attaché is selected.").typoCaption().foregroundStyle(.secondary)
                     }
                     Spacer()
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(accent)
@@ -554,7 +619,7 @@ struct OnboardingSheet: View {
                 Button {
                     NotificationCenter.default.post(name: .attacheOpenPersonalityStudio, object: PersonalityStudioRequest.create)
                 } label: {
-                    Label("Create custom character", systemImage: "sparkles")
+                    Label("Create your own Attaché", systemImage: "sparkles")
                 }
                 Button {
                     importOnboardingCharacter()
@@ -562,7 +627,7 @@ struct OnboardingSheet: View {
                     Label("Import", systemImage: "square.and.arrow.down")
                 }
                 Link(
-                    "Character artwork guide",
+                    "Artwork guide",
                     destination: AttacheDocumentationLinks.characterArtwork
                 )
                 .typoCaption(.medium)
@@ -784,6 +849,8 @@ struct OnboardingSheet: View {
         probed = true
         codexCount = OnboardingSourceProbe.codexSessionCount()
         claudeCount = OnboardingSourceProbe.claudeCodeSessionCount()
+        grokBuildCount = OnboardingSourceProbe.grokBuildSessionCount()
+        opencodeCount = OnboardingSourceProbe.opencodeSessionCount()
         if let resume = model.takeOnboardingResumeStep(),
            let resumeStep = OnboardingStep(rawValue: resume) {
             step = resumeStep

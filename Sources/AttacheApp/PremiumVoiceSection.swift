@@ -191,7 +191,10 @@ enum OnboardingPremiumVoiceRow {
 /// crashing when the asset cannot be found.
 enum PremiumVoicePreviewClip {
     static let resourceName = "azelma-preview"
-    static let resourceExtension = "m4a"
+    // A raw 24 kHz PCM wav rendered by the real on-device engine, not a lossy
+    // AAC transcode: the earlier ~34 kbps .m4a sounded robotic and warbly next
+    // to the system voices it is meant to A/B against (INF-387).
+    static let resourceExtension = "wav"
 
     /// Anchors `Bundle(for:)` to the AttacheApp module: in the packaged app this
     /// resolves to the main bundle, and under `swift test` to the xctest bundle

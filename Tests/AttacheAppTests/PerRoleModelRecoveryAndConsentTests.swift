@@ -61,12 +61,12 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
         let model = try AppModel(store: CardStore.inMemory())
         XCTAssertEqual(model.presentationProvider, .ollama)
 
-        model.selectConversationRecoveryProvider(.groq)
+        model.selectConversationRecoveryProvider(.xai)
 
-        XCTAssertEqual(model.presentationProvider, .groq, "in-memory state should reflect the switch for the recovery menu and confirmation text")
+        XCTAssertEqual(model.presentationProvider, .xai, "in-memory state should reflect the switch for the recovery menu and confirmation text")
         XCTAssertEqual(
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.conversation, .provider)),
-            AttachePresentationProvider.groq.rawValue,
+            AttachePresentationProvider.xai.rawValue,
             "the switch must persist to the conversation role's key"
         )
         XCTAssertEqual(
@@ -87,7 +87,7 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
             XCTAssertEqual(settings.provider, .ollama, "\(role) must not be affected by a conversation recovery switch")
         }
         let conversationSettings = AttachePresentationSettings.load(role: .conversation, defaults: defaults, environment: [:], resolveSecrets: false)
-        XCTAssertEqual(conversationSettings.provider, .groq, "conversation should pick up the recovered provider on the next call")
+        XCTAssertEqual(conversationSettings.provider, .xai, "conversation should pick up the recovered provider on the next call")
     }
 
     func testConversationRecoveryModelSwitchAlsoWritesConversationRoleKey() throws {
@@ -96,7 +96,7 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
         let snapshot = DefaultsSnapshot(keys: preferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
 
-        defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         defaults.set("original-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
@@ -129,7 +129,7 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
             "the legacy true flag should migrate onto the provider configured at migration time"
         )
         XCTAssertFalse(
-            model.cloudConsentAcknowledged(for: .groq),
+            model.cloudConsentAcknowledged(for: .custom),
             "migration must not blanket-consent every cloud provider"
         )
         XCTAssertTrue(defaults.bool(forKey: AttachePreferenceKey.cloudConsentPresentationMigrationDone))
@@ -168,10 +168,10 @@ final class PerRoleModelRecoveryAndConsentTests: XCTestCase {
         // since migration already ran once, the stale legacy `true` flag
         // must not silently re-grant consent for the new provider.
         defaults.set([String](), forKey: AttachePreferenceKey.cloudConsentPresentationProviders)
-        defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set(AttachePresentationProvider.custom.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
 
         let secondLaunch = try AppModel(store: CardStore.inMemory())
-        XCTAssertFalse(secondLaunch.cloudConsentAcknowledged(for: .groq), "migration must not re-run on a later launch")
+        XCTAssertFalse(secondLaunch.cloudConsentAcknowledged(for: .custom), "migration must not re-run on a later launch")
         XCTAssertFalse(secondLaunch.cloudConsentAcknowledged(for: .xai), "the explicit revocation above must stick")
     }
 

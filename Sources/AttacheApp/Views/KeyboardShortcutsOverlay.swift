@@ -17,7 +17,7 @@ struct KeyboardShortcutsOverlay: View {
         KeyboardShortcutItem(keys: ["⌘", "K"], title: "Find session"),
         KeyboardShortcutItem(keys: ["⌘", "I"], title: "Inbox"),
         KeyboardShortcutItem(keys: ["⌘", "Y"], title: "History"),
-        KeyboardShortcutItem(keys: ["⇧", "⌘", "P"], title: "Switch character"),
+        KeyboardShortcutItem(keys: ["⇧", "⌘", "P"], title: "Switch Attaché"),
         KeyboardShortcutItem(keys: ["⌘", "/"], title: "Keyboard shortcuts"),
         KeyboardShortcutItem(keys: ["⌘", ","], title: "Settings"),
         KeyboardShortcutItem(keys: ["⌘", "["], title: "Previous personality"),

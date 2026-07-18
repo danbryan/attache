@@ -438,7 +438,7 @@ struct AttacheRootView: View {
         )) { approval in
             MCPApprovalSheet(
                 approval: approval,
-                personalityName: model.activePersonality?.name ?? "This character",
+                personalityName: model.activePersonality?.name ?? "This Attaché",
                 onDecision: { model.resolvePendingMCPApproval($0) }
             )
         }

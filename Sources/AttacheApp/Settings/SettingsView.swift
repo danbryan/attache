@@ -95,13 +95,13 @@ struct SettingsPaneView: View {
                 .frame(width: 210)
             }
             CustomThemeEditor(model: model)
-            Text("Characters choose their own presence, voice, model, and playback pace under Personalities.")
+            Text("Each Attaché chooses its own presence, voice, model, and playback pace under Personalities.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             settingRow("Mini window") {
                 Toggle("", isOn: $model.miniAttacheEnabled).labelsHidden()
                     .accessibilityLabel("Mini window")
-                Text("A small always-on-top window with the active character or Echo bars.")
+                Text("A small always-on-top window with the active Attaché or Echo bars.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if model.miniAttacheEnabled {

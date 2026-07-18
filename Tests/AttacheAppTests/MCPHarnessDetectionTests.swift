@@ -58,6 +58,26 @@ final class MCPHarnessDetectionTests: XCTestCase {
         XCTAssertEqual(detected.map(\.name), ["beta"])
     }
 
+    func testAlreadyConfiguredFilteringAppliesBeforeGrouping() async throws {
+        // "alpha" is already configured with identical wiring in two harnesses;
+        // grouping the published (already-filtered) detection must not surface it
+        // in the shared list or any per-harness group. "beta" (codex-only) does.
+        let url = try writeConfig(["mcpServers": ["alpha": ["command": "a"]]])
+        defer { try? FileManager.default.removeItem(at: url) }
+        let registry = await makeRegistry(configURL: url)
+        let candidates = [stdio("alpha", harness: .codex, command: "a"),
+                          stdio("alpha", harness: .claudeCode, command: "a"),
+                          stdio("beta", harness: .codex, command: "b")]
+        registry.detectHarnessServers = { candidates }
+        await MainActor.run { registry.refreshDetection() }
+        let detected = await waitForDetection(registry)
+
+        let grouping = MCPHarnessImport.group(detected)
+        XCTAssertTrue(grouping.shared.isEmpty, "configured alpha must be filtered before it can dedup")
+        let names = grouping.harnessGroups.flatMap { $0.servers.map(\.name) }
+        XCTAssertEqual(names, ["beta"])
+    }
+
     func testImportDetectedWritesAndReloads() async throws {
         let url = try writeConfig(["mcpServers": [:]])
         defer { try? FileManager.default.removeItem(at: url) }

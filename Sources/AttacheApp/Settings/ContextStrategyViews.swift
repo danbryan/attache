@@ -87,7 +87,7 @@ struct ContextStrategyEditor: View {
                     Text(choice.title).tag(choice)
                 }
             }
-            .accessibilityLabel(allowsInheritance ? "Character context strategy" : "Default context strategy")
+            .accessibilityLabel(allowsInheritance ? "Attaché context strategy" : "Default context strategy")
 
             Text(AttacheContextStrategyDescription.explanation(effectiveStrategy.kind))
                 .typoCaption()
@@ -402,7 +402,7 @@ struct ContextSettingsPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Context").typoTitle()
-            Text("Choose how Attaché balances evidence, speed, and the limits of your active character's model.")
+            Text("Choose how Attaché balances evidence, speed, and the limits of your active personality's model.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -420,7 +420,7 @@ struct ContextSettingsPane: View {
             .padding(14)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
 
-            Label("A character can inherit this default or choose its own strategy in the character editor.", systemImage: "person.crop.circle.badge.checkmark")
+            Label("Any Attaché can inherit this default or choose its own strategy in the Attaché editor.", systemImage: "person.crop.circle.badge.checkmark")
                 .typoCaption()
                 .foregroundStyle(.secondary)
         }

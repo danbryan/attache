@@ -46,7 +46,15 @@ struct PersonalityModelRef: Codable, Equatable {
             fallbackProviders = []
             return
         }
-        guard let decodedProvider = AttachePresentationProvider(rawValue: rawProvider) else {
+        let decodedProvider: AttachePresentationProvider
+        if let known = AttachePresentationProvider(rawValue: rawProvider) {
+            decodedProvider = known
+        } else if ["groq", "groq_llm", "groq-llm"].contains(rawProvider) {
+            // The Groq presentation provider was retired (INF-388). It was a
+            // hosted OpenAI-compatible endpoint, so a personality stored with
+            // it falls back to Custom rather than making the file unreadable.
+            decodedProvider = .custom
+        } else {
             throw DecodingError.dataCorruptedError(
                 forKey: .provider,
                 in: container,
@@ -211,7 +219,7 @@ struct Personality: Identifiable, Codable, Equatable {
         if let decodedContextStrategy, !Self.contextStrategyIsValid(decodedContextStrategy) {
             contextStrategy = nil
             contextStrategyMigrationNotice = decodedMigrationNotice
-                ?? "This character had an incomplete Custom context profile. Attaché restored the app default so unsafe limits are never applied silently."
+                ?? "This Attaché had an incomplete Custom context profile. Attaché restored the app default so unsafe limits are never applied silently."
         } else {
             contextStrategy = decodedContextStrategy
             contextStrategyMigrationNotice = decodedMigrationNotice
@@ -433,6 +441,10 @@ final class PersonalityStore {
     private let defaults: UserDefaults
     private let listKey = "attache.personalities"
     private let activeKey = "attache.activePersonalityID"
+    /// Persisted ids of built-in personalities the user deleted. A tombstoned
+    /// built-in is never re-seeded by `load()`; deleting one records the id and
+    /// undo (or Restore defaults) removes it. Lives in the same defaults suite.
+    private let deletedBuiltInsKey = "attache.deletedBuiltInPersonalityIDs"
     /// Supplies the voice list `fillingExplicitConfiguration` validates
     /// system voice references against. Defaults to the shared voice
     /// catalog's already-loaded snapshot (never a fresh enumeration, see
@@ -453,8 +465,9 @@ final class PersonalityStore {
             let before = existing.count
             existing.removeAll { Personality.retiredBuiltInIDs.contains($0.id) }
             let known = Set(existing.map(\.id))
+            let tombstoned = deletedBuiltInIDs()
             let missing = Personality.builtIns
-                .filter { !known.contains($0.id) }
+                .filter { !known.contains($0.id) && !tombstoned.contains($0.id) }
                 .map(fillingExplicitConfiguration)
             if !missing.isEmpty {
                 let lastBuiltIn = existing.lastIndex(where: \.isBuiltIn).map { $0 + 1 } ?? existing.count
@@ -506,8 +519,11 @@ final class PersonalityStore {
             return (existing, activeID)
         }
 
-        var seeded = Personality.builtIns.map(fillingExplicitConfiguration)
-        var activeID = Personality.defaultActiveID
+        let tombstoned = deletedBuiltInIDs()
+        var seeded = Personality.builtIns
+            .filter { !tombstoned.contains($0.id) }
+            .map(fillingExplicitConfiguration)
+        var activeID = seeded.first?.id ?? Personality.defaultActiveID
         if let migrated = migratedPersonality() {
             seeded.append(migrated)
             activeID = migrated.id
@@ -535,6 +551,57 @@ final class PersonalityStore {
             defaults.set(data, forKey: listKey)
         }
         defaults.set(activeID, forKey: activeKey)
+    }
+
+    /// The ids of built-in personalities the user has deleted. `load()` will not
+    /// re-seed any id in this set.
+    func deletedBuiltInIDs() -> Set<String> {
+        Set((defaults.array(forKey: deletedBuiltInsKey) as? [String]) ?? [])
+    }
+
+    /// Whether any built-in is currently tombstoned. Drives the "Restore default
+    /// personalities" affordance, which is hidden while this is false.
+    var hasDeletedBuiltIns: Bool { !deletedBuiltInIDs().isEmpty }
+
+    private func writeDeletedBuiltInIDs(_ ids: Set<String>) {
+        if ids.isEmpty {
+            defaults.removeObject(forKey: deletedBuiltInsKey)
+        } else {
+            defaults.set(ids.sorted(), forKey: deletedBuiltInsKey)
+        }
+    }
+
+    /// Record that a built-in was deleted so it is not re-seeded on the next
+    /// load. A no-op for ids that are not built-ins.
+    func recordDeletedBuiltIn(_ id: String) {
+        guard Personality.builtIns.contains(where: { $0.id == id }) else { return }
+        var ids = deletedBuiltInIDs()
+        ids.insert(id)
+        writeDeletedBuiltInIDs(ids)
+    }
+
+    /// Undo a single built-in deletion by clearing its tombstone.
+    func clearDeletedBuiltIn(_ id: String) {
+        var ids = deletedBuiltInIDs()
+        guard ids.remove(id) != nil else { return }
+        writeDeletedBuiltInIDs(ids)
+    }
+
+    /// Clear every built-in tombstone and re-add any missing built-ins in
+    /// canonical form. The re-add mirrors `load()`'s merge (fresh explicit
+    /// configuration, built-ins ahead of customs) so a restored set matches a
+    /// never-deleted one. Returns the merged list; the caller persists it.
+    func restoringDefaultBuiltIns(into existing: [Personality]) -> [Personality] {
+        writeDeletedBuiltInIDs([])
+        let known = Set(existing.map(\.id))
+        let missing = Personality.builtIns
+            .filter { !known.contains($0.id) }
+            .map(fillingExplicitConfiguration)
+        guard !missing.isEmpty else { return existing }
+        var result = existing
+        let insertAt = result.lastIndex(where: \.isBuiltIn).map { $0 + 1 } ?? 0
+        result.insert(contentsOf: missing, at: insertAt)
+        return result
     }
 
     private func decodeList() -> [Personality]? {

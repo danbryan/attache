@@ -99,7 +99,7 @@ struct MCPToolPickerPalette: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Grant tools").typoSection()
-                    Text("Choose which MCP tools this character may call during a live call.")
+                    Text("Choose which MCP tools this Attaché may call during a live call.")
                         .typoCaption(.medium)
                         .foregroundStyle(.secondary)
                 }

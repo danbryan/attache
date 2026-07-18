@@ -65,7 +65,7 @@ struct PersonalitiesPane: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Personalities").typoTitle()
-                    Text("Build the character you want to spend time with.")
+                    Text("Build the Attaché you want to spend time with.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -76,7 +76,7 @@ struct PersonalitiesPane: View {
                 Button {
                     openStudio(.create)
                 } label: {
-                    Label("Create character", systemImage: "sparkles")
+                    Label("New Attaché", systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -139,7 +139,15 @@ struct PersonalitiesPane: View {
     private var wardrobe: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Your characters").typoSection()
+                Text("Your personalities").typoSection()
+                if model.hasDeletedBuiltInPersonalities {
+                    Button("Restore default personalities") {
+                        model.restoreDefaultPersonalities()
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("Restore Default Personalities")
+                    .help("Bring back the built-in personalities you deleted.")
+                }
                 Spacer()
                 Text("Switching changes personality, voice, presence, and preferred model together.")
                     .typoCaption()
@@ -216,7 +224,7 @@ struct PersonalitiesPane: View {
         .accessibilityLabel("\(personality.name), \(active ? "active" : "available") personality")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { model.switchPersonalityFromUI(personality.id) }
-        .accessibilityAction(named: Text(personality.isBuiltIn ? "Customize character" : "Edit character")) {
+        .accessibilityAction(named: Text(personality.isBuiltIn ? "Customize Attaché" : "Edit Attaché")) {
             openStudio(personality.isBuiltIn ? .customize(personality) : .edit(personality))
         }
     }
@@ -230,10 +238,13 @@ struct PersonalitiesPane: View {
         }
         Button("Duplicate") { model.duplicatePersonality(id: personality.id) }
         Button("Export") { exportPersonality(personality) }
-        if !personality.isBuiltIn {
-            Divider()
-            Button("Delete", role: .destructive) { pendingDeletePersonality = personality }
-        }
+        Divider()
+        // Built-ins are deletable too (INF-390); deleting one tombstones it so it
+        // is not re-seeded, and "Restore default personalities" brings it back.
+        // The last remaining personality can never be deleted.
+        Button("Delete", role: .destructive) { pendingDeletePersonality = personality }
+            .disabled(model.personalities.count <= 1)
+            .help(model.personalities.count <= 1 ? "Keep at least one personality" : "")
     }
 
     private func exportPersonality(_ personality: Personality) {
@@ -463,7 +474,7 @@ struct PersonalityStudioSheet: View {
                 .animation(.spring(response: 0.42, dampingFraction: 0.8), value: draft.character)
 
             VStack(spacing: 5) {
-                Text(draft.name.isEmpty ? "Your character" : draft.name)
+                Text(draft.name.isEmpty ? "Your Attaché" : draft.name)
                     .typoDisplay(size: 25, .semibold)
                     .multilineTextAlignment(.center)
                 Text("\(draft.presenceSummary) · \(draft.voiceSummary(in: model.speechVoiceOptions))")
@@ -488,7 +499,7 @@ struct PersonalityStudioSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity)
             } else {
-                Text("Preview is the only time a character greets you automatically.")
+                Text("Preview is the only time your Attaché greets you automatically.")
                     .typoCaption()
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -508,16 +519,16 @@ struct PersonalityStudioSheet: View {
     private var studioHeader: some View {
         HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(request.mode == .edit ? "Edit character" : "Create a character").typoTitle()
-                Text("Every character owns its personality, voice, and model.")
+                Text(request.mode == .edit ? "Edit your Attaché" : "Create your Attaché").typoTitle()
+                Text("Every Attaché owns its personality, voice, and model.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            TextField("Character name", text: $draft.name)
+            TextField("Name", text: $draft.name)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 300)
-                .accessibilityLabel("Character name")
+                .accessibilityLabel("Attaché name")
         }
     }
 
@@ -552,7 +563,7 @@ struct PersonalityStudioSheet: View {
                     .accessibilityLabel("Choose \(choice.title) presence")
                 }
             }
-            Text("Echo is the voice-bars presence with no character. Imported personalities can reuse any compatible appearance.")
+            Text("Echo is the voice-bars presence with no figure. Imported personalities can reuse any compatible appearance.")
                 .typoCaption()
                 .foregroundStyle(.secondary)
         }
@@ -728,7 +739,7 @@ struct PersonalityStudioSheet: View {
                     ForEach(voiceEngineOptions) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .accessibilityLabel("Character voice engine")
+                .accessibilityLabel("Attaché voice engine")
 
                 voicePicker(for: voice.provider)
 
@@ -758,13 +769,13 @@ struct PersonalityStudioSheet: View {
                         in: 0.8...1.6,
                         step: 0.05
                     )
-                    .accessibilityLabel("Character playback speed")
+                    .accessibilityLabel("Attaché playback speed")
                     Text(String(format: "%.2fx", draft.playbackSpeed ?? 1.0))
                         .typoCaption(.medium, monoDigit: true)
                         .frame(width: 42, alignment: .trailing)
                         .foregroundStyle(.secondary)
                 }
-                Text("This pace follows the character for live speech and voicemail replay.")
+                Text("This pace follows your Attaché for live speech and voicemail replay.")
                     .typoCaption()
                     .foregroundStyle(.secondary)
             }
@@ -874,7 +885,7 @@ struct PersonalityStudioSheet: View {
                 }
                 ForEach(options) { option in Text(option.title).tag(option.id) }
             }
-            .accessibilityLabel("Cloud character voice")
+            .accessibilityLabel("Cloud Attaché voice")
             Button(action: reload) { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless)
                 .help("Reload voices")
@@ -896,7 +907,7 @@ struct PersonalityStudioSheet: View {
                         Label($0.title, systemImage: modelProviderIcon($0)).tag($0)
                     }
                 }
-                .accessibilityLabel("Character model provider")
+                .accessibilityLabel("Attaché model provider")
 
                 HStack {
                     if modelOptions.isEmpty {
@@ -943,7 +954,7 @@ struct PersonalityStudioSheet: View {
                                 Text(reasoningLabel(option, provider: modelRef.provider, options: reasoningOptions)).tag(option)
                             }
                         }
-                        .accessibilityLabel("Character reasoning effort")
+                        .accessibilityLabel("Attaché reasoning effort")
                         Text("Lower effort answers faster. Higher effort spends more time working through the response.")
                             .typoCaption()
                             .foregroundStyle(.secondary)
@@ -956,7 +967,7 @@ struct PersonalityStudioSheet: View {
                 if !model.connectedTextProviders.contains(modelRef.provider) {
                     Label(
                         modelRef.provider.supportsSafePersonalityInference
-                            ? "\(modelRef.provider.title) is not configured yet. This selection stays attached to the character, and safe fallback applies until Integrations is ready."
+                            ? "\(modelRef.provider.title) is not configured yet. This selection stays attached to this Attaché, and safe fallback applies until Integrations is ready."
                             : "Codex subscription inference is disabled because Codex CLI cannot yet guarantee that native file-reading tools are off. Choose another provider before saving.",
                         systemImage: "exclamationmark.triangle.fill"
                     )
@@ -1028,7 +1039,7 @@ struct PersonalityStudioSheet: View {
                 .padding(9)
                 .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9))
 
-                Text("The preferred model and ordered fallbacks travel with this character. Attaché announces a live-call fallback once, then returns to the preferred model on the next call.")
+                Text("The preferred model and ordered fallbacks travel with this Attaché. It announces a live-call fallback once, then returns to the preferred model on the next call.")
                     .typoCaption()
                     .foregroundStyle(.secondary)
             }
@@ -1056,7 +1067,7 @@ struct PersonalityStudioSheet: View {
                 },
                 onRefreshCapabilities: loadDraftModels
             )
-            Text("This character can inherit the app default or carry its own context policy. Model facts are detected separately and are never overwritten by Custom limits.")
+            Text("This Attaché can inherit the app default or carry its own context policy. Model facts are detected separately and are never overwritten by Custom limits.")
                 .typoCaption()
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1070,7 +1081,7 @@ struct PersonalityStudioSheet: View {
                 .accessibilityIdentifier("MCP Tools Summary")
             Button("Edit Tools…") { toolsPickerPresented = true }
                 .accessibilityIdentifier("Edit Tools…")
-            Text("MCP tools this character may call during a live call. Add servers under Settings → MCP Servers; read-only tools can be always-allowed, effectful tools always ask first.")
+            Text("MCP tools this Attaché may call during a live call. Add servers under Settings → MCP Servers; read-only tools can be always-allowed, effectful tools always ask first.")
                 .typoCaption()
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1082,7 +1093,7 @@ struct PersonalityStudioSheet: View {
             Spacer()
             Button("Cancel") { closeStudio() }
                 .keyboardShortcut(.cancelAction)
-            Button(request.mode == .edit ? "Save character" : "Create character") {
+            Button(request.mode == .edit ? "Save changes" : "Create Attaché") {
                 _ = model.savePersonality(draft, replacingID: request.replacingID)
                 // The active personality's granted servers may have changed; warm
                 // their connections so schemas are cached for the next turn.
@@ -1365,7 +1376,6 @@ struct PersonalityStudioSheet: View {
         switch provider {
         case .xai: return "x.circle.fill"
         case .ollama: return "desktopcomputer"
-        case .groq: return "bolt.fill"
         case .custom: return "point.3.connected.trianglepath.dotted"
         case .claudeCLI: return "terminal.fill"
         case .codexCLI: return "chevron.left.forwardslash.chevron.right"

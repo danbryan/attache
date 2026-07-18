@@ -414,7 +414,7 @@ extension AttacheRootView {
                     }
                 }
                 Divider()
-                Button("Edit character model…") { openCharacterSettings() }
+                Button("Edit Attaché model…") { openCharacterSettings() }
             } label: {
                 Label("Switch model", systemImage: "arrow.triangle.2.circlepath")
                     .typoCaption(.semibold)

@@ -427,6 +427,29 @@ final class PersonalityTests: XCTestCase {
         XCTAssertEqual(decoded.modelRef?.reasoningEffort, AttachePresentationProvider.ollama.defaultReasoningEffort)
     }
 
+    /// The Groq presentation provider was retired (INF-388). A personality
+    /// stored with `"provider":"groq"` must still decode without crashing; it
+    /// falls back to the Custom OpenAI-compatible provider rather than making
+    /// the whole file unreadable or resetting to a different cloud provider.
+    func testRetiredGroqPersonalityDecodesToCustomWithoutCrashing() throws {
+        let data = Data(#"{"id":"legacy","name":"Legacy","prompt":"Speak plainly.","isBuiltIn":false,"modelRef":{"provider":"groq","model":"llama-3.3-70b-versatile","reasoningEffort":"none"}}"#.utf8)
+
+        let decoded = try JSONDecoder().decode(Personality.self, from: data)
+
+        XCTAssertEqual(decoded.modelRef?.provider, .custom)
+    }
+
+    /// A bare stored provider raw value of "groq" decodes to the fallback, and
+    /// the retired case is absent from every provider enumeration a user can
+    /// pick from.
+    func testRetiredGroqRawValueDecodesToFallbackAndIsNotEnumerated() throws {
+        let decoded = try JSONDecoder().decode(AttachePresentationProvider.self, from: Data("\"groq\"".utf8))
+        XCTAssertEqual(decoded, .custom)
+
+        XCTAssertFalse(AttachePresentationProvider.allCases.contains { $0.rawValue == "groq" })
+        XCTAssertFalse(AttachePresentationProvider.personalityInferenceCases.contains { $0.rawValue == "groq" })
+    }
+
     // MARK: - T9: onboarding bundles voice + character
 
     func testOnboardingIsTheFiveStepCharacterWorkflow() {
@@ -437,9 +460,21 @@ final class PersonalityTests: XCTestCase {
                 "Connect your agents",
                 "Pick a voice",
                 "Connect a model",
-                "Pick a character"
+                "Pick your Attaché"
             ]
         )
+    }
+
+    // INF-389: "character" is retired from user-facing text; the noun is Attaché.
+    // Onboarding step titles are a stable, testable user-facing surface, so guard
+    // them against the word regressing back in.
+    func testOnboardingStepTitlesAvoidTheWordCharacter() {
+        for title in OnboardingStep.allCases.map(\.title) {
+            XCTAssertFalse(
+                title.lowercased().contains("character"),
+                "onboarding step title \"\(title)\" must not surface the retired word 'character'"
+            )
+        }
     }
 
     func testOnboardingWelcomePersonalitiesAreCurrentBuiltIns() {
@@ -496,5 +531,113 @@ final class PersonalityTests: XCTestCase {
         let loaded = store.load().personalities.first { $0.id == "custom.mine" }
         XCTAssertEqual(loaded?.mcpToolGrants, ["mcp__notes__search": .alwaysAllow])
         suite.removePersistentDomain(forName: suiteName)
+    }
+
+    // MARK: - INF-390: deletable built-ins with tombstones and Restore defaults
+
+    func testTombstonedBuiltInIsNotReSeededOnLoad() {
+        let (suite, store) = makeSuite("personality-tombstone-load-test")
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
+        defer { suite.removePersistentDomain(forName: "personality-tombstone-load-test") }
+
+        // A list where Echo has been deleted, plus the recorded tombstone.
+        let remaining = Personality.builtIns.filter { $0.id != "builtin.echo" }
+        store.save(remaining, activeID: "builtin.bigPicture")
+        store.recordDeletedBuiltIn("builtin.echo")
+
+        let loaded = store.load().personalities
+        XCTAssertFalse(loaded.contains { $0.id == "builtin.echo" })
+        XCTAssertTrue(store.hasDeletedBuiltIns)
+        XCTAssertEqual(store.deletedBuiltInIDs(), ["builtin.echo"])
+    }
+
+    func testTombstonePersistsAcrossFreshStoreInstance() {
+        let suiteName = "personality-tombstone-persist-test"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        let store = PersonalityStore(defaults: suite)
+        store.save(Personality.builtIns.filter { $0.id != "builtin.cowboy" }, activeID: "builtin.bigPicture")
+        store.recordDeletedBuiltIn("builtin.cowboy")
+
+        // A brand-new store instance reading the same suite still honors it.
+        let reloaded = PersonalityStore(defaults: suite).load().personalities
+        XCTAssertFalse(reloaded.contains { $0.id == "builtin.cowboy" })
+    }
+
+    func testClearDeletedBuiltInReSeedsOnNextLoad() {
+        let (suite, store) = makeSuite("personality-tombstone-undo-test")
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
+        defer { suite.removePersistentDomain(forName: "personality-tombstone-undo-test") }
+
+        store.save(Personality.builtIns.filter { $0.id != "builtin.echo" }, activeID: "builtin.bigPicture")
+        store.recordDeletedBuiltIn("builtin.echo")
+        XCTAssertFalse(store.load().personalities.contains { $0.id == "builtin.echo" })
+
+        store.clearDeletedBuiltIn("builtin.echo")
+        XCTAssertFalse(store.hasDeletedBuiltIns)
+        XCTAssertTrue(store.load().personalities.contains { $0.id == "builtin.echo" })
+    }
+
+    func testRestoringDefaultBuiltInsClearsTombstonesAndReAddsCanonically() {
+        let (suite, store) = makeSuite("personality-restore-defaults-test")
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
+        defer { suite.removePersistentDomain(forName: "personality-restore-defaults-test") }
+
+        store.recordDeletedBuiltIn("builtin.cowboy")
+        store.recordDeletedBuiltIn("builtin.echo")
+        XCTAssertEqual(store.deletedBuiltInIDs(), ["builtin.cowboy", "builtin.echo"])
+
+        let custom = Personality(id: "custom.mine", name: "Mine", prompt: "Be brief.")
+        let existing = [Personality.builtIns[0], custom]
+        let restored = store.restoringDefaultBuiltIns(into: existing)
+
+        XCTAssertFalse(store.hasDeletedBuiltIns)
+        // Every built-in is present in canonical order, ahead of the custom.
+        XCTAssertEqual(
+            restored.filter(\.isBuiltIn).map(\.id),
+            ["builtin.bigPicture", "builtin.cowboy", "builtin.echo"]
+        )
+        XCTAssertEqual(restored.last?.id, custom.id)
+        // Re-added built-ins carry full explicit configuration.
+        let echo = restored.first { $0.id == "builtin.echo" }
+        XCTAssertNotNil(echo?.voiceRef)
+        XCTAssertNotNil(echo?.modelRef)
+    }
+
+    func testRestoringDefaultBuiltInsIntoUntouchedListIsANoOp() {
+        let (suite, store) = makeSuite("personality-restore-noop-test")
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
+        defer { suite.removePersistentDomain(forName: "personality-restore-noop-test") }
+
+        let existing = store.load().personalities
+        let restored = store.restoringDefaultBuiltIns(into: existing)
+        XCTAssertEqual(restored.map(\.id), existing.map(\.id))
+    }
+
+    func testLoadResolvesActiveWhenStoredActiveWasTombstonedBuiltIn() {
+        let (suite, store) = makeSuite("personality-tombstone-active-test")
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
+        defer { suite.removePersistentDomain(forName: "personality-tombstone-active-test") }
+
+        // Echo was the active personality, then deleted (list saved without it,
+        // active id still points at it, tombstone recorded).
+        store.save(Personality.builtIns.filter { $0.id != "builtin.echo" }, activeID: "builtin.echo")
+        store.recordDeletedBuiltIn("builtin.echo")
+
+        let loaded = store.load()
+        XCTAssertFalse(loaded.personalities.contains { $0.id == "builtin.echo" })
+        XCTAssertTrue(loaded.personalities.contains { $0.id == loaded.activeID })
+    }
+
+    func testRecordDeletedBuiltInIgnoresNonBuiltInIDs() {
+        let (suite, store) = makeSuite("personality-tombstone-guard-test")
+        defer { suite.removePersistentDomain(forName: "personality-tombstone-guard-test") }
+
+        store.recordDeletedBuiltIn("custom.mine")
+        XCTAssertFalse(store.hasDeletedBuiltIns)
+        XCTAssertTrue(store.deletedBuiltInIDs().isEmpty)
     }
 }

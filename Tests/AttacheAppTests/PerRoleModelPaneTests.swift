@@ -46,13 +46,13 @@ final class PerRoleModelPaneTests: XCTestCase {
         let model = try AppModel(store: CardStore.inMemory())
         XCTAssertNil(model.roleModelProvider[.recap], "recap should start on \"Use main model\"")
 
-        model.selectRoleProvider(.groq, for: .recap)
+        model.selectRoleProvider(.xai, for: .recap)
 
-        XCTAssertEqual(model.roleModelProvider[.recap], .groq)
-        XCTAssertEqual(model.roleModelID[.recap], AttachePresentationProvider.groq.defaultModel)
+        XCTAssertEqual(model.roleModelProvider[.recap], .xai)
+        XCTAssertEqual(model.roleModelID[.recap], AttachePresentationProvider.xai.defaultModel)
         XCTAssertEqual(
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, .provider)),
-            AttachePresentationProvider.groq.rawValue
+            AttachePresentationProvider.xai.rawValue
         )
         // Every other role, and the global keys, must be untouched.
         for role: ModelRole in [.conversation, .presentation, .tagging] {
@@ -62,7 +62,7 @@ final class PerRoleModelPaneTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: AttachePreferenceKey.presentationLLMModel), "global-model")
 
         let recapSettings = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
-        XCTAssertEqual(recapSettings.provider, .groq)
+        XCTAssertEqual(recapSettings.provider, .xai)
     }
 
     func testRoleOverridePersistsAcrossRelaunch() throws {
@@ -72,11 +72,11 @@ final class PerRoleModelPaneTests: XCTestCase {
         defer { snapshot.restore() }
 
         let first = try AppModel(store: CardStore.inMemory())
-        first.selectRoleProvider(.groq, for: .recap)
+        first.selectRoleProvider(.xai, for: .recap)
         first.selectRoleModelID("relaunch-model", for: .recap)
 
         let second = try AppModel(store: CardStore.inMemory())
-        XCTAssertEqual(second.roleModelProvider[.recap], .groq, "the override must be loaded back on the next launch")
+        XCTAssertEqual(second.roleModelProvider[.recap], .xai, "the override must be loaded back on the next launch")
         XCTAssertEqual(second.roleModelID[.recap], "relaunch-model")
     }
 
@@ -90,9 +90,9 @@ final class PerRoleModelPaneTests: XCTestCase {
         defaults.set("global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
-        model.selectRoleProvider(.groq, for: .recap)
+        model.selectRoleProvider(.xai, for: .recap)
         model.selectRoleModelID("recap-only-model", for: .recap)
-        XCTAssertEqual(model.roleModelProvider[.recap], .groq)
+        XCTAssertEqual(model.roleModelProvider[.recap], .xai)
 
         // Change the global/main model *after* setting the override, so a
         // leftover per-role key would be immediately visible as a mismatch

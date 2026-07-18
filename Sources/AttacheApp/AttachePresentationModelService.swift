@@ -95,7 +95,7 @@ enum AttachePresentationModelService {
             options = try await retrying(attempts: 2) { try await fetchXAIModels(baseURL: baseURL, apiKey: apiKey) }
         case .ollama:
             options = try await retrying(attempts: 2) { try await fetchOllamaModels(baseURL: baseURL) }
-        case .groq, .custom:
+        case .custom:
             options = try await retrying(attempts: 2) {
                 try await fetchOpenAICompatibleModels(baseURL: baseURL, apiKey: apiKey, provider: provider)
             }
@@ -609,7 +609,7 @@ enum AttachePresentationModelService {
         switch provider {
         case .xai:
             return documentedXAICapability(for: modelID)?.reasoningLevels ?? []
-        case .groq, .custom:
+        case .custom:
             // Hosted model names never imply capability. The selected model's
             // live catalog metadata is the only authority.
             return []
@@ -654,14 +654,6 @@ enum AttachePresentationModelService {
             return [
                 AttachePresentationServiceTierOption(id: "default", title: "Default", detail: "Use xAI's default processing tier"),
                 AttachePresentationServiceTierOption(id: "priority", title: "Priority", detail: "Request priority processing")
-            ]
-        case .groq:
-            return [
-                AttachePresentationServiceTierOption(id: "default", title: "Default", detail: "Use Groq's default tier"),
-                AttachePresentationServiceTierOption(id: "auto", title: "Auto", detail: "Let Groq choose the best available tier"),
-                AttachePresentationServiceTierOption(id: "on_demand", title: "On demand", detail: "Standard Groq processing"),
-                AttachePresentationServiceTierOption(id: "flex", title: "Flex", detail: "Best-effort high-throughput processing"),
-                AttachePresentationServiceTierOption(id: "performance", title: "Performance", detail: "Enterprise low-latency tier")
             ]
         case .codexCLI:
             return []

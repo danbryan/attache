@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import XCTest
 import AttacheCore
 @testable import AttacheApp
@@ -54,9 +55,10 @@ final class OnboardingPremiumVoiceRowTests: XCTestCase {
         guard let url = PremiumVoicePreviewClip.url() else {
             return XCTFail("bundled Azelma preview clip must resolve for the onboarding preview")
         }
-        // A pre-rendered container, not a synthesized .wav from the neural runtime.
-        XCTAssertEqual(url.pathExtension, "m4a")
-        XCTAssertEqual(url.lastPathComponent, "azelma-preview.m4a")
+        // A pre-rendered raw clip that already exists on disk, not a synthesized
+        // temp file from the neural runtime.
+        XCTAssertEqual(url.pathExtension, "wav")
+        XCTAssertEqual(url.lastPathComponent, "azelma-preview.wav")
 
         let playback = SpeechPlaybackController()
         playback.previewClip(at: url, text: "instant sample")
@@ -65,6 +67,59 @@ final class OnboardingPremiumVoiceRowTests: XCTestCase {
             "preview routes through the instant bundled-clip path"
         )
         playback.stop()
+    }
+
+    /// The bundled clip must be full-quality audio, not a robotic low-bitrate
+    /// transcode (INF-387a): a real 24 kHz render carries audible energy and
+    /// runs a few seconds. Reads the shipped resource directly and asserts
+    /// nonzero RMS over a 2-6s duration.
+    func testBundledPreviewClipIsFullQualityAudio() throws {
+        let source = ensureBundledPreviewClip()
+        let file = try AVAudioFile(forReading: source)
+        let sampleRate = file.processingFormat.sampleRate
+        let frames = Int(file.length)
+        let duration = Double(frames) / sampleRate
+        XCTAssertGreaterThan(duration, 2.0, "clip should be a few seconds of speech")
+        XCTAssertLessThan(duration, 6.0, "clip should be a short preview phrase")
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(frames)) else {
+            return XCTFail("could not allocate a decode buffer for the bundled clip")
+        }
+        try file.read(into: buffer)
+        guard let channel = buffer.floatChannelData?[0] else {
+            return XCTFail("bundled clip decoded with no audio samples")
+        }
+        let count = Int(buffer.frameLength)
+        var sumSquares = 0.0
+        for i in 0..<count { sumSquares += Double(channel[i]) * Double(channel[i]) }
+        let rms = (count > 0) ? (sumSquares / Double(count)).squareRoot() : 0
+        XCTAssertGreaterThan(rms, 0.01, "a real render carries audible energy, not near-silence")
+    }
+
+    /// Root cause of the INF-387b replay bug: `previewClip` stored the bundled
+    /// asset as `generatedAudioURL` with `generatedAudioIsCached == false`, so
+    /// the post-playback (and stop) `cleanupGeneratedAudio()` deleted the
+    /// shipped resource. The second Preview then found no file. The bundled
+    /// clip must survive playback teardown so every click replays.
+    func testPreviewClipDoesNotDeleteTheBundledResource() {
+        let fm = FileManager.default
+        let clip = fm.temporaryDirectory.appendingPathComponent("protected-preview-\(UUID().uuidString).wav")
+        try? Data("not really audio, just a stand-in resource".utf8).write(to: clip)
+        defer { try? fm.removeItem(at: clip) }
+
+        let playback = SpeechPlaybackController()
+        playback.previewClip(at: clip, text: "first click")
+        playback.stop()
+        XCTAssertTrue(
+            fm.fileExists(atPath: clip.path),
+            "stopping/finishing a bundled-clip preview must not delete the shipped asset"
+        )
+
+        // A second click still resolves the same on-disk clip.
+        playback.previewClip(at: clip, text: "second click")
+        XCTAssertEqual(playback.currentText, "second click", "the preview replays on a second click")
+        playback.stop()
+        XCTAssertTrue(fm.fileExists(atPath: clip.path), "the asset still survives after replay")
     }
 
     func testAppModelPreviewRoutesThroughInstantClip() throws {
@@ -169,7 +224,7 @@ final class OnboardingPremiumVoiceRowTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// `swift test` intermittently omits the processed `.m4a` from the built
+    /// `swift test` intermittently omits the processed clip from the built
     /// AttacheApp resource bundle (a SwiftPM resource-copy quirk; `swift build`
     /// and the release packaging both include it). Copy the source clip into the
     /// bundle that sits beside the test binary, which is exactly where the app's
@@ -181,11 +236,11 @@ final class OnboardingPremiumVoiceRowTests: XCTestCase {
             .deletingLastPathComponent()               // AttacheAppTests
             .deletingLastPathComponent()               // Tests
             .deletingLastPathComponent()               // repo root
-            .appendingPathComponent("Sources/AttacheApp/Resources/azelma-preview.m4a")
+            .appendingPathComponent("Sources/AttacheApp/Resources/azelma-preview.wav")
         let builtBundle = Bundle(for: AppModel.self).bundleURL
             .deletingLastPathComponent()
             .appendingPathComponent("Attache_AttacheApp.bundle", isDirectory: true)
-        let dest = builtBundle.appendingPathComponent("azelma-preview.m4a")
+        let dest = builtBundle.appendingPathComponent("azelma-preview.wav")
         let fm = FileManager.default
         if !fm.fileExists(atPath: dest.path), fm.fileExists(atPath: source.path) {
             try? fm.createDirectory(at: builtBundle, withIntermediateDirectories: true)

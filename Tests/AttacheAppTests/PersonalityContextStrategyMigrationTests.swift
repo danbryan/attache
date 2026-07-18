@@ -126,7 +126,7 @@ final class PersonalityContextStrategyMigrationTests: XCTestCase {
                     provider: .ollama,
                     model: "qwen3",
                     reasoningEffort: "high",
-                    fallbackProviders: [.groq]
+                    fallbackProviders: [.xai]
                 ),
                 playbackSpeed: 1.2,
                 accentColorHex: "#FFAA00",

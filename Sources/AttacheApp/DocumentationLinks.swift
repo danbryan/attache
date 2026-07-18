@@ -4,7 +4,6 @@ enum AttacheDocumentationLinks {
     enum ModelIntegrationGuide: String, CaseIterable {
         case ollama
         case xai = "xai--grok"
-        case groq
         case openAICompatible = "openai-compatible"
         case codexCLI = "codex-cli"
         case claudeCode = "claude-code"

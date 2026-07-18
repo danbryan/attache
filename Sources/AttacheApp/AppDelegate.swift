@@ -190,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let paletteItem = NSMenuItem(title: NSLocalizedString("Find Session…", comment: ""), action: #selector(openPalette), keyEquivalent: "k")
         paletteItem.target = self
         appMenu.addItem(paletteItem)
-        let characterItem = NSMenuItem(title: NSLocalizedString("Switch Character…", comment: ""), action: #selector(openCharacterSwitcher), keyEquivalent: "p")
+        let characterItem = NSMenuItem(title: NSLocalizedString("Switch Attaché…", comment: ""), action: #selector(openCharacterSwitcher), keyEquivalent: "p")
         characterItem.keyEquivalentModifierMask = [.command, .shift]
         characterItem.target = self
         appMenu.addItem(characterItem)
@@ -437,7 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: NSLocalizedString("Open Attaché", comment: ""), action: #selector(openAttache), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Open Inbox", comment: ""), action: #selector(openInbox), keyEquivalent: "i"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Find Session…", comment: ""), action: #selector(openPalette), keyEquivalent: "k"))
-        let characterItem = NSMenuItem(title: NSLocalizedString("Switch Character…", comment: ""), action: #selector(openCharacterSwitcher), keyEquivalent: "p")
+        let characterItem = NSMenuItem(title: NSLocalizedString("Switch Attaché…", comment: ""), action: #selector(openCharacterSwitcher), keyEquivalent: "p")
         characterItem.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(characterItem)
         menu.addItem(NSMenuItem(title: NSLocalizedString("Previous Personality", comment: ""), action: #selector(previousPersonality), keyEquivalent: "["))

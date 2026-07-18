@@ -174,7 +174,7 @@ private struct PremiumVoiceRemovalRow: View {
                 }
                 .accessibilityIdentifier("Premium Voice Remove")
             }
-            Text("Removing frees the download from this Mac. Characters using Azelma fall back to a system voice until you download it again.")
+            Text("Removing frees the download from this Mac. Any Attaché using Azelma falls back to a system voice until you download it again.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

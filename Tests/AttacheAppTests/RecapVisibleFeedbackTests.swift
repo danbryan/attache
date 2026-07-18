@@ -162,7 +162,7 @@ final class RecapVisibleFeedbackTests: XCTestCase {
             // Force the not-configured branch: an API-key provider with no key
             // is not `hasProviderConfiguration`, so recap falls back to the
             // deterministic digest.
-            UserDefaults.standard.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+            UserDefaults.standard.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
             UserDefaults.standard.set("", forKey: AttachePreferenceKey.presentationLLMModel)
             let model = try AppModel(store: CardStore.inMemory())
             let cards = (0..<3).map(card)

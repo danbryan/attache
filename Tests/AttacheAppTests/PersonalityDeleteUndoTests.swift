@@ -12,6 +12,7 @@ import XCTest
 final class PersonalityDeleteUndoTests: XCTestCase {
     private static let touchedKeys = [
         "attache.personalities", "attache.activePersonalityID",
+        "attache.deletedBuiltInPersonalityIDs",
         "attache.speechProvider", "attache.speechVoiceIdentifier",
         "attache.elevenLabsVoiceID", "attache.elevenLabsVoiceName",
         "attache.petCharacter", "attache.visualMode", "attache.personalityVoicePetMigrated",
@@ -152,19 +153,68 @@ final class PersonalityDeleteUndoTests: XCTestCase {
         }
     }
 
-    func testBuiltInPersonalityCannotBeDeleted() throws {
+    // INF-390: built-ins are now deletable, tombstoned, and restorable.
+    func testDeletingBuiltInTombstonesItAndOffersUndo() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())
-            let builtIn = model.personalities.first { $0.isBuiltIn }
+            let builtIn = try XCTUnwrap(model.personalities.first { $0.id == "builtin.echo" })
             let originalCount = model.personalities.count
-            guard let builtIn else {
-                XCTFail("Expected at least one built-in personality by default")
-                return
-            }
 
             model.deletePersonality(id: builtIn.id)
 
-            XCTAssertEqual(model.personalities.count, originalCount)
+            XCTAssertEqual(model.personalities.count, originalCount - 1)
+            XCTAssertFalse(model.personalities.contains { $0.id == builtIn.id })
+            XCTAssertTrue(model.hasDeletedBuiltInPersonalities)
+            let snapshot = try XCTUnwrap(model.recentlyDeletedPersonality)
+            XCTAssertEqual(snapshot.personality.id, builtIn.id)
+        }
+    }
+
+    func testUndoRestoresDeletedBuiltInAndClearsTombstone() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let builtIn = try XCTUnwrap(model.personalities.first { $0.id == "builtin.echo" })
+            let fixedNow = Date()
+            model.personalityUndoClock = { fixedNow }
+
+            model.deletePersonality(id: builtIn.id)
+            XCTAssertTrue(model.hasDeletedBuiltInPersonalities)
+
+            model.undoDeletePersonality()
+
+            XCTAssertTrue(model.personalities.contains { $0.id == builtIn.id })
+            XCTAssertFalse(model.hasDeletedBuiltInPersonalities)
+        }
+    }
+
+    func testRestoreDefaultPersonalitiesReAddsDeletedBuiltIn() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            let builtIn = try XCTUnwrap(model.personalities.first { $0.id == "builtin.echo" })
+            let custom = Personality(id: "custom.mine", name: "Mine", prompt: "p", character: .robot)
+            model.personalities.append(custom)
+
+            model.deletePersonality(id: builtIn.id)
+            XCTAssertFalse(model.personalities.contains { $0.id == builtIn.id })
+
+            model.restoreDefaultPersonalities()
+
+            XCTAssertTrue(model.personalities.contains { $0.id == builtIn.id })
+            XCTAssertTrue(model.personalities.contains { $0.id == custom.id })
+            XCTAssertFalse(model.hasDeletedBuiltInPersonalities)
+        }
+    }
+
+    func testLastRemainingPersonalityCannotBeDeleted() throws {
+        try restoringDefaults {
+            let only = Personality(id: "custom.only", name: "Only", prompt: "p", character: .robot)
+            let model = try AppModel(store: CardStore.inMemory())
+            model.personalities = [only]
+            model.activePersonalityID = only.id
+
+            model.deletePersonality(id: only.id)
+
+            XCTAssertEqual(model.personalities.map(\.id), [only.id])
             XCTAssertNil(model.recentlyDeletedPersonality)
         }
     }

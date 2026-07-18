@@ -352,16 +352,24 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
 - **Built-in themes are exactly four:** macOS (default AND first in the list),
   High Contrast, Paper, Cyberpunk. Brass / classic / ember / ocean / slate-mono /
   violet-dusk were removed. Users can still author custom themes.
-- **The built-in characters are exactly Attaché, Colt, and Echo.** Attaché uses
+- **The built-in personalities are exactly Attaché, Colt, and Echo.** Attaché uses
   the domain-agnostic big-picture temperament and the robot presence. Colt uses
   the weathered cowboy temperament and cowboy presence. Echo is voice-only and
   keeps the original visual bars in a compact character-sized presence;
   double-click expands the visualizer. All three default to the Attaché Premium
   voice (Azelma, INF-379), falling back to the system voice until the weights
-  are installed. No other built-in personality or character is shown. The
-  user-facing term is "characters", never "wardrobe" (2026-07-18): the
-  personality grid is "Your characters" and the studio's sprite section is
-  "Presence".
+  are installed. No other built-in personality is shown.
+- **The user-facing noun is "Attaché" / "your Attaché" (2026-07-18, INF-389).**
+  A single unit in the picker is an Attaché ("New Attaché", "Create your Attaché",
+  "Save changes"); "personality" / "personalities" stays acceptable vocabulary
+  and is the generic noun where a count is needed (the grid is "Your
+  personalities"). Both "character" and "wardrobe" are retired from user-VISIBLE
+  text (labels, titles, menu items, tooltips, confirmations, AX labels heard via
+  VoiceOver). Internal identifiers may keep their names: the `AttacheCharacter`
+  type, the `character`/`visualMode` properties, the `attache.openCharacterSwitcher`
+  notification, the "Character Studio" AX identifier, `--render-character-poses`,
+  `ATTACHE_CHARACTER_RARE_IDLE_SECONDS`, and personality prompts (which may tell
+  the model to "stay in character") are all unchanged.
 - **A personality is one unit: brain, voice, presence, and model**
   (2026-07-14, INF-293..302, "Personality Manager"). `Personality` owns a
   `voiceRef` (engine + voice), a visual presence, and an explicit `modelRef`

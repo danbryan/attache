@@ -4,7 +4,6 @@ import Foundation
 enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, Codable {
     case xai
     case ollama
-    case groq
     case custom
     case claudeCLI = "claude_cli"
     case codexCLI = "codex_cli"
@@ -15,7 +14,6 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         switch self {
         case .xai: return "xAI / Grok"
         case .ollama: return "Ollama"
-        case .groq: return "Groq"
         case .custom: return "Custom"
         case .claudeCLI: return "Claude subscription"
         case .codexCLI: return "Codex subscription"
@@ -26,7 +24,6 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         switch self {
         case .xai: return "xAI Grok"
         case .ollama: return "Ollama Local"
-        case .groq: return "Groq Fast Inference"
         case .custom: return "Custom OpenAI Compatible"
         case .claudeCLI: return "Claude (your Claude Code login)"
         case .codexCLI: return "Codex (your ChatGPT login)"
@@ -62,7 +59,6 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         switch self {
         case .xai: return "https://api.x.ai/v1"
         case .ollama: return "http://127.0.0.1:11434/v1"
-        case .groq: return "https://api.groq.com/openai/v1"
         case .custom: return "https://api.openai.com/v1"
         case .claudeCLI, .codexCLI: return ""
         }
@@ -72,7 +68,6 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         switch self {
         case .xai: return "grok-4.3"
         case .ollama: return "qwen3:7b"
-        case .groq: return "llama-3.3-70b-versatile"
         case .custom: return "gpt-4o-mini"
         case .claudeCLI, .codexCLI: return "default"   // "default" = use the tool's own configured model
         }
@@ -82,14 +77,14 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         switch self {
         case .xai, .custom, .codexCLI, .claudeCLI:
             return "default"
-        case .ollama, .groq:
+        case .ollama:
             return "none"
         }
     }
 
     var supportsServiceTier: Bool {
         switch self {
-        case .xai, .groq, .custom, .codexCLI:
+        case .xai, .custom, .codexCLI:
             return true
         case .ollama, .claudeCLI:
             return false
@@ -111,14 +106,14 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         switch self {
         case .ollama, .claudeCLI, .codexCLI:
             return false
-        case .xai, .groq, .custom:
+        case .xai, .custom:
             return true
         }
     }
 
     var supportsReasoningEffort: Bool {
         switch self {
-        case .xai, .ollama, .groq, .custom, .codexCLI, .claudeCLI:
+        case .xai, .ollama, .custom, .codexCLI, .claudeCLI:
             return true
         }
     }
@@ -142,9 +137,12 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
             return .ollama
         case "lmstudio", "lm_studio", "lm-studio", "lmstudio_llm", "lmstudio-llm":
             return .ollama
-        case "groq", "groq_llm", "groq-llm":
-            return .groq
-        case "custom", "openai_compatible", "openai-compatible", "openai_compatible_llm":
+        case "custom", "openai_compatible", "openai-compatible", "openai_compatible_llm",
+             // Groq was a hosted OpenAI-compatible provider; it was retired
+             // (INF-388). Any stray "groq" identifier resolves to Custom, the
+             // generic OpenAI-compatible option, never crashing or resetting to
+             // a different cloud provider.
+             "groq", "groq_llm", "groq-llm":
             return .custom
         case "claude", "claude_cli", "claude-cli", "claude_code", "anthropic_subscription":
             return .claudeCLI
@@ -157,9 +155,6 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         let lowercasedBaseURL = (baseURLText ?? "").lowercased()
         if lowercasedBaseURL.contains("api.x.ai") {
             return .xai
-        }
-        if lowercasedBaseURL.contains("groq.com") {
-            return .groq
         }
         if lowercasedBaseURL.contains("11434") || lowercasedBaseURL.contains("ollama") {
             return .ollama
@@ -183,14 +178,19 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
             || base.contains("localhost:1234")
     }
 
-    /// Personality exports and defaults written before LM Studio was retired
-    /// still decode safely. They migrate to Ollama instead of making the entire
-    /// personality file unreadable.
+    /// Personality exports and defaults written before LM Studio or Groq were
+    /// retired still decode safely. LM Studio maps to Ollama; Groq (a hosted
+    /// OpenAI-compatible provider, INF-388) maps to Custom. A stray retired
+    /// value never makes the whole personality/settings file unreadable.
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let raw = try container.decode(String.self)
         if ["lmStudio", "lmstudio", "lm_studio", "lm-studio"].contains(raw) {
             self = .ollama
+            return
+        }
+        if ["groq", "groq_llm", "groq-llm"].contains(raw) {
+            self = .custom
             return
         }
         guard let value = Self(rawValue: raw) else {

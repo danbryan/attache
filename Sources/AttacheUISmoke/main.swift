@@ -533,7 +533,7 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
             case "charswitcher":
                 app.activate()
                 app.key(Key.p, command: true, shift: true)
-                _ = try waitForElement("character switcher", in: try mainWindow(), containing: "Character switcher")
+                _ = try waitForElement("character switcher", in: try mainWindow(), containing: "Attaché switcher")
 
             case "settings":
                 app.activate()
@@ -947,13 +947,13 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                     app.activate()
                     app.key(Key.p, command: true, shift: true)
                     let search = try waitForElement("character search", in: try mainWindow(),
-                                                    role: kAXTextFieldRole as String, containing: "Search characters")
+                                                    role: kAXTextFieldRole as String, containing: "Search personalities")
                     _ = search.setFocused()
                     if !search.setValue("Echo") { app.type("Echo") }
                     _ = try waitForElement("filtered Echo character", in: try mainWindow(), containing: "Echo")
                     app.key(Key.returnKey)
                     try waitForElementGone("character switcher after Echo selection", in: try mainWindow(),
-                                           containing: "Character switcher", timeout: 5)
+                                           containing: "Attaché switcher", timeout: 5)
                 }
                 // The pre-call chevron (not yet on a call) offers "Start
                 // Private Call" directly; pressing Cmd+L first would start a
@@ -2319,7 +2319,7 @@ if enabled("f10") {
             exactly: "Continue"
         )
         guard next.press() else { throw SmokeError(message: "AXPress failed on \(next.summary)") }
-        _ = try waitForElement("character onboarding step", in: try mainWindow(), containing: "Pick a character")
+        _ = try waitForElement("character onboarding step", in: try mainWindow(), containing: "Pick your Attaché")
         _ = try waitForElement("first-run memory choice", in: try mainWindow(), containing: "First-run memory choice")
         let off = try waitForElement(
             "Off memory choice",
@@ -2342,7 +2342,7 @@ if enabled("f10") {
         guard finish.isEnabled, finish.press() else {
             throw SmokeError(message: "Finish should enable after the explicit memory choice: \(finish.summary)")
         }
-        try waitForElementGone("onboarding sheet", in: try mainWindow(), containing: "Pick a character")
+        try waitForElementGone("onboarding sheet", in: try mainWindow(), containing: "Pick your Attaché")
         _ = try waitForElement("voicemail dock button", in: try mainWindow(),
                                role: kAXButtonRole as String, containing: "Open inbox")
     }
@@ -2351,7 +2351,7 @@ if enabled("f10") {
         app.activate()
         app.key(Key.comma, command: true)
         try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
-        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        try selectSettingsSection("Personalities", paneMarker: "New Attaché")
         _ = try waitForElement("active Attaché character", in: try settingsWindow(), containing: "Attaché", timeout: 8)
         _ = try waitForElement("default local model id", in: try settingsWindow(), containing: "qwen3:7b", timeout: 8)
     }
@@ -2663,7 +2663,7 @@ if enabled("f5") {
     // Settings-pane engine radio no longer exists by design; this step had
     // been failing against it since the v0.5.0 voice pane cleanup.
     run.step("f5-settings", "voice engine switches to On-device") {
-        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        try selectSettingsSection("Personalities", paneMarker: "New Attaché")
         let edit = try waitForElement("active character edit button", in: try settingsWindow()) { element in
             element.role == kAXButtonRole as String
                 && (element.matches("Edit") || element.matches("Customize"))
@@ -2687,7 +2687,7 @@ if enabled("f5") {
         }
         let save = try waitForElement("studio save button", in: try personalityStudioWindow()) { element in
             element.role == kAXButtonRole as String
-                && (element.matches("Save character") || element.matches("Create character"))
+                && (element.matches("Save changes") || element.matches("Create Attaché"))
         }
         guard save.press() else { throw SmokeError(message: "AXPress failed on \(save.summary)") }
         try waitUntil("character studio closes after engine save", timeout: 10) {
@@ -2725,7 +2725,7 @@ if enabled("f5") {
         try waitUntil("persisted theme to read \(chosenTheme)", timeout: 5) {
             popup.stringValue.contains(chosenTheme)
         }
-        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        try selectSettingsSection("Personalities", paneMarker: "New Attaché")
         let editAfterRelaunch = try waitForElement(
             "active character edit button after relaunch", in: try settingsWindow()
         ) { element in
@@ -2777,7 +2777,7 @@ if enabled("f5") {
             }
         }
         if !originalEngine.isEmpty, originalEngine != "On-device" {
-            try selectSettingsSection("Personalities", paneMarker: "Create character")
+            try selectSettingsSection("Personalities", paneMarker: "New Attaché")
             let edit = try waitForElement(
                 "active character edit button for engine restore", in: try settingsWindow()
             ) { element in
@@ -2798,7 +2798,7 @@ if enabled("f5") {
                 "studio save button for engine restore", in: try personalityStudioWindow()
             ) { element in
                 element.role == kAXButtonRole as String
-                    && (element.matches("Save character") || element.matches("Create character"))
+                    && (element.matches("Save changes") || element.matches("Create Attaché"))
             }
             guard save.press() else { throw SmokeError(message: "AXPress failed on \(save.summary)") }
             try waitUntil("character studio closes after engine restore", timeout: 10) {
@@ -3258,8 +3258,8 @@ if enabled("personality") {
         app.activate()
         app.key(Key.comma, command: true)
         try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
-        try selectSettingsSection("Personalities", paneMarker: "Create character")
-        _ = try waitForElement("active personality characters grid", in: try settingsWindow(), containing: "Your characters")
+        try selectSettingsSection("Personalities", paneMarker: "New Attaché")
+        _ = try waitForElement("active personality characters grid", in: try settingsWindow(), containing: "Your personalities")
     }
 
     run.step("personality-studio", "the creator exposes explicit presence, personality, voice, and model choices") {
@@ -3267,20 +3267,20 @@ if enabled("personality") {
             "Create character button",
             in: try settingsWindow(),
             role: kAXButtonRole as String,
-            exactly: "Create character"
+            exactly: "New Attaché"
         )
         guard create.press() else { throw SmokeError(message: "AXPress failed on \(create.summary)") }
         try waitUntil("character studio window", timeout: 10) { (try? personalityStudioWindow()) != nil }
         let studio = try personalityStudioWindow()
-        _ = try waitForElement("creator title", in: studio, containing: "Create a character")
-        _ = try waitForElement("explicit configuration promise", in: studio, containing: "Every character owns its personality, voice, and model")
+        _ = try waitForElement("creator title", in: studio, containing: "Create your Attaché")
+        _ = try waitForElement("explicit configuration promise", in: studio, containing: "Every Attaché owns its personality, voice, and model")
         _ = try waitForElement("wardrobe choice", in: studio, containing: "Choose Echo presence")
         _ = try waitForElement("personality prompt", in: studio, containing: "Personality instructions")
         _ = try waitForElement("personality starting point", in: studio, containing: "Starting point")
         _ = try waitForElement("new personality affordance", in: studio, containing: "Write a new personality")
-        _ = try waitForElement("voice choice", in: studio, containing: "Character voice engine")
-        _ = try waitForElement("model choice", in: studio, containing: "Character model provider")
-        _ = try waitForElement("context strategy choice", in: studio, containing: "Character context strategy")
+        _ = try waitForElement("voice choice", in: studio, containing: "Attaché voice engine")
+        _ = try waitForElement("model choice", in: studio, containing: "Attaché model provider")
+        _ = try waitForElement("context strategy choice", in: studio, containing: "Attaché context strategy")
         _ = try waitForElement("sprite help", in: studio, containing: "Learn about custom sprites")
         try waitForElementGone("legacy follow app voice", in: studio, containing: "Follow the app voice", timeout: 1)
         try waitForElementGone("legacy follow app model", in: studio, containing: "Follow the app's main model", timeout: 1)
@@ -3307,7 +3307,7 @@ if enabled("personality") {
             "character name",
             in: try personalityStudioWindow(),
             role: kAXTextFieldRole as String,
-            containing: "Character name"
+            containing: "Attaché name"
         )
         _ = name.setFocused()
         if !name.setValue("Smoke Character") { app.type("Smoke Character") }
@@ -3324,7 +3324,7 @@ if enabled("personality") {
         let contextStrategy = try waitForElement(
             "character context strategy",
             in: try personalityStudioWindow(),
-            containing: "Character context strategy"
+            containing: "Attaché context strategy"
         )
         try selectPopup(contextStrategy, item: "Efficient")
 
@@ -3332,7 +3332,7 @@ if enabled("personality") {
             "creator save button",
             in: try personalityStudioWindow(),
             role: kAXButtonRole as String,
-            exactly: "Create character"
+            exactly: "Create Attaché"
         )
         guard save.press() else { throw SmokeError(message: "AXPress failed on \(save.summary)") }
         try waitUntil("character studio closes after save", timeout: 10) { (try? personalityStudioWindow()) == nil }
@@ -3345,7 +3345,7 @@ if enabled("personality") {
             "Create character button",
             in: try settingsWindow(),
             role: kAXButtonRole as String,
-            exactly: "Create character"
+            exactly: "New Attaché"
         )
         guard create.press() else { throw SmokeError(message: "AXPress failed on \(create.summary)") }
         try waitUntil("character studio window for voice picker check", timeout: 10) { (try? personalityStudioWindow()) != nil }
@@ -3419,12 +3419,12 @@ if enabled("personality") {
 
     run.step("character-switcher", "the character switcher stays open and supports keyboard navigation") {
         app.key(Key.p, command: true, shift: true)
-        _ = try waitForElement("character switcher", in: try mainWindow(), containing: "Character switcher")
+        _ = try waitForElement("character switcher", in: try mainWindow(), containing: "Attaché switcher")
         _ = try waitForElement(
             "character search",
             in: try mainWindow(),
             role: kAXTextFieldRole as String,
-            containing: "Search characters"
+            containing: "Search personalities"
         )
 
         // The old native popover disappeared with the dock's roughly
@@ -3438,13 +3438,13 @@ if enabled("personality") {
             guard let window = try? mainWindow() else { return false }
             return window.firstDescendant(
                 role: kAXTextFieldRole as String,
-                containing: "Search characters"
+                containing: "Search personalities"
             ) != nil
         }
 
         app.key(Key.upArrow)
         app.key(Key.returnKey)
-        try waitForElementGone("character switcher after arrow selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
+        try waitForElementGone("character switcher after arrow selection", in: try mainWindow(), containing: "Attaché switcher", timeout: 5)
     }
 
     run.step("character-switcher", "the palette opens the personality manager directly") {
@@ -3457,7 +3457,7 @@ if enabled("personality") {
         )
         guard edit.press() else { throw SmokeError(message: "AXPress failed on \(edit.summary)") }
         try waitUntil("settings window from character palette", timeout: 10) { (try? settingsWindow()) != nil }
-        _ = try waitForElement("personality manager from palette", in: try settingsWindow(), containing: "Your characters")
+        _ = try waitForElement("personality manager from palette", in: try settingsWindow(), containing: "Your personalities")
         app.key(Key.escape)
         try waitUntil("settings window closes after palette navigation", timeout: 10) { (try? settingsWindow()) == nil }
     }
@@ -3468,16 +3468,16 @@ if enabled("personality") {
             "character search",
             in: try mainWindow(),
             role: kAXTextFieldRole as String,
-            containing: "Search characters"
+            containing: "Search personalities"
         )
         _ = search.setFocused()
         if !search.setValue("Smoke Character") { app.type("Smoke Character") }
-        _ = try waitForElement("filtered custom character", in: try mainWindow(), containing: "Character Smoke Character")
+        _ = try waitForElement("filtered custom character", in: try mainWindow(), containing: "Attaché Smoke Character")
         _ = try waitForElement("character presence metadata", in: try mainWindow(), containing: "Echo voice bars")
         _ = try waitForElement("character model metadata", in: try mainWindow(), containing: "Ollama")
         app.key(Key.returnKey)
-        try waitForElementGone("character switcher after named selection", in: try mainWindow(), containing: "Character switcher", timeout: 5)
-        _ = try waitForElement("active character in dock", in: try mainWindow(), containing: "Active character Smoke Character")
+        try waitForElementGone("character switcher after named selection", in: try mainWindow(), containing: "Attaché switcher", timeout: 5)
+        _ = try waitForElement("active character in dock", in: try mainWindow(), containing: "Active Attaché Smoke Character")
     }
 
     // INF-351: wardrobe cards used to stack a double-tap (edit) gesture over
@@ -3489,7 +3489,7 @@ if enabled("personality") {
     run.step("personality-studio", "a single click on a non-active wardrobe card switches to it immediately") {
         app.key(Key.comma, command: true)
         try waitUntil("settings window reopens", timeout: 10) { (try? settingsWindow()) != nil }
-        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        try selectSettingsSection("Personalities", paneMarker: "New Attaché")
         // The character-switcher steps above left "Smoke Character" active,
         // so the built-in "Attaché" card is available, not active.
         let card = try waitForElement(
@@ -3530,7 +3530,7 @@ if enabled("dock-menus") {
         }
         try pressContextMenuItem(menu, item: "Personalities")
         try waitUntil("settings window opens to Personalities", timeout: 10) { (try? settingsWindow()) != nil }
-        _ = try waitForElement("Personalities pane content", in: try settingsWindow(), containing: "Create character")
+        _ = try waitForElement("Personalities pane content", in: try settingsWindow(), containing: "New Attaché")
         app.key(Key.escape)
         try waitUntil("settings window closes", timeout: 10) { (try? settingsWindow()) == nil }
     }
@@ -3599,19 +3599,19 @@ if enabled("dock-menus") {
 
     run.step("dock-menus", "Personality control's right-click menu adds Previous/Next Personality and cycles the active character") {
         let personalityButton = try waitForElement("personality dock button", in: try mainWindow(),
-                                                    role: kAXButtonRole as String, containing: "Switch character")
-        let before = try waitForElement("active character value", in: try mainWindow(), containing: "Active character")
+                                                    role: kAXButtonRole as String, containing: "Switch Attaché")
+        let before = try waitForElement("active character value", in: try mainWindow(), containing: "Active Attaché")
         let beforeText = before.title.isEmpty ? before.axDescription : before.title
         let menu = try openContextMenu(personalityButton)
         let titles = contextMenuItemTitles(menu)
-        for expected in ["Switch character", "Edit personalities", "Previous Personality", "Next Personality"] {
+        for expected in ["Switch Attaché", "Edit personalities", "Previous Personality", "Next Personality"] {
             guard titles.contains(where: { $0.contains(expected) }) else {
                 throw SmokeError(message: "Personality context menu missing \"\(expected)\"; saw \(titles)")
             }
         }
         try pressContextMenuItem(menu, item: "Next Personality")
         try waitUntil("active character changes after Next Personality", timeout: 5) {
-            guard let element = (try? mainWindow())?.firstDescendant(containing: "Active character") else { return false }
+            guard let element = (try? mainWindow())?.firstDescendant(containing: "Active Attaché") else { return false }
             let text = element.title.isEmpty ? element.axDescription : element.title
             return text != beforeText
         }
@@ -3619,7 +3619,7 @@ if enabled("dock-menus") {
 
     run.step("dock-menus", "Personality control's Option-held menu adds Export Personality…") {
         let personalityButton = try waitForElement("personality dock button", in: try mainWindow(),
-                                                    role: kAXButtonRole as String, containing: "Switch character")
+                                                    role: kAXButtonRole as String, containing: "Switch Attaché")
         app.setOptionHeld(true)
         defer { app.setOptionHeld(false) }
         try waitUntil("Export Personality becomes live", timeout: 5) {

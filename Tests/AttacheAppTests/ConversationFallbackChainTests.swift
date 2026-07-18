@@ -37,20 +37,20 @@ final class ConversationFallbackChainTests: XCTestCase {
 
     func testNextCandidateSkipsUnconfiguredProviders() {
         let candidate = ConversationFallbackChain.nextCandidate(
-            chain: [.ollama, .groq],
+            chain: [.ollama, .custom],
             failedProvider: .xai,
             isConfigured: { $0 != .ollama },  // ollama pretends to be unconfigured
             isConsented: { _ in true }
         )
-        XCTAssertEqual(candidate, .groq)
+        XCTAssertEqual(candidate, .custom)
     }
 
     func testNextCandidateSkipsUnconsentedProviders() {
         let candidate = ConversationFallbackChain.nextCandidate(
-            chain: [.groq, .ollama],
+            chain: [.custom, .ollama],
             failedProvider: .xai,
             isConfigured: { _ in true },
-            isConsented: { $0 != .groq }  // groq is configured but not consented
+            isConsented: { $0 != .custom }  // custom is configured but not consented
         )
         XCTAssertEqual(candidate, .ollama)
     }
@@ -60,17 +60,17 @@ final class ConversationFallbackChainTests: XCTestCase {
         // reordered without removing it); the walk must never select it back
         // since that's what just failed.
         let candidate = ConversationFallbackChain.nextCandidate(
-            chain: [.xai, .groq],
+            chain: [.xai, .custom],
             failedProvider: .xai,
             isConfigured: { _ in true },
             isConsented: { _ in true }
         )
-        XCTAssertEqual(candidate, .groq)
+        XCTAssertEqual(candidate, .custom)
     }
 
     func testNextCandidateReturnsNilWhenChainIsExhausted() {
         let candidate = ConversationFallbackChain.nextCandidate(
-            chain: [.groq, .custom],
+            chain: [.xai, .custom],
             failedProvider: .xai,
             isConfigured: { _ in false },
             isConsented: { _ in true }
@@ -90,12 +90,12 @@ final class ConversationFallbackChainTests: XCTestCase {
 
     func testNextCandidatePicksFirstEligibleEntryInOrder() {
         let candidate = ConversationFallbackChain.nextCandidate(
-            chain: [.groq, .ollama, .codexCLI],
+            chain: [.custom, .ollama, .codexCLI],
             failedProvider: .xai,
             isConfigured: { _ in true },
             isConsented: { _ in true }
         )
-        XCTAssertEqual(candidate, .groq, "the first configured+consented entry wins, not just any eligible one")
+        XCTAssertEqual(candidate, .custom, "the first configured+consented entry wins, not just any eligible one")
     }
 
     // MARK: - announcement: format and dash-safety
@@ -145,7 +145,7 @@ final class ConversationFallbackChainTests: XCTestCase {
         let result = state.advance(
             enabled: true,
             category: .usageOrRateLimit,
-            chain: [.ollama, .groq],
+            chain: [.ollama, .custom],
             failedProvider: .xai,
             isConfigured: { _ in true },
             isConsented: { _ in true }
@@ -190,7 +190,7 @@ final class ConversationFallbackChainTests: XCTestCase {
         let result = state.advance(
             enabled: true,
             category: .usageOrRateLimit,
-            chain: [.ollama, .groq],
+            chain: [.ollama, .custom],
             failedProvider: .xai,
             isConfigured: { _ in false },
             isConsented: { _ in true }
@@ -204,7 +204,7 @@ final class ConversationFallbackChainTests: XCTestCase {
         let first = state.advance(
             enabled: true,
             category: .usageOrRateLimit,
-            chain: [.ollama, .groq],
+            chain: [.ollama, .custom],
             failedProvider: .xai,
             isConfigured: { _ in true },
             isConsented: { _ in true }
@@ -213,12 +213,12 @@ final class ConversationFallbackChainTests: XCTestCase {
 
         // The fallback provider itself now fails too, with a category that
         // would otherwise trigger a second hop. Sticky: must not advance to
-        // .groq, must return nil so the caller falls through to manual
+        // .custom, must return nil so the caller falls through to manual
         // recovery instead of silently hopping again.
         let second = state.advance(
             enabled: true,
             category: .usageOrRateLimit,
-            chain: [.ollama, .groq],
+            chain: [.ollama, .custom],
             failedProvider: .ollama,
             isConfigured: { _ in true },
             isConsented: { _ in true }
@@ -294,12 +294,12 @@ final class ConversationFallbackChainSettingsTests: XCTestCase {
         model.selectPresentationProvider(.codexCLI)
         model.conversationFallbackChainEnabled = true
         model.addConversationFallbackChainProvider(.ollama)
-        model.addConversationFallbackChainProvider(.groq)
+        model.addConversationFallbackChainProvider(.xai)
         model.captureCurrentModelIntoActivePersonality()
 
         let relaunched = try AppModel(store: CardStore.inMemory())
         XCTAssertTrue(relaunched.conversationFallbackChainEnabled)
-        XCTAssertEqual(relaunched.conversationFallbackChain, [.ollama, .groq])
+        XCTAssertEqual(relaunched.conversationFallbackChain, [.ollama, .xai])
     }
 
     func testAddRemoveAndReorderChainProviders() throws {
@@ -310,16 +310,16 @@ final class ConversationFallbackChainSettingsTests: XCTestCase {
 
         let model = try AppModel(store: CardStore.inMemory())
         model.addConversationFallbackChainProvider(.ollama)
-        model.addConversationFallbackChainProvider(.groq)
+        model.addConversationFallbackChainProvider(.xai)
         model.addConversationFallbackChainProvider(.ollama)  // duplicate, ignored
-        XCTAssertEqual(model.conversationFallbackChain, [.ollama, .groq])
+        XCTAssertEqual(model.conversationFallbackChain, [.ollama, .xai])
 
         model.addConversationFallbackChainProvider(.custom)
         model.moveConversationFallbackChainProvider(at: 2, up: true)
-        XCTAssertEqual(model.conversationFallbackChain, [.ollama, .custom, .groq])
+        XCTAssertEqual(model.conversationFallbackChain, [.ollama, .custom, .xai])
 
         model.removeConversationFallbackChainProvider(.custom)
-        XCTAssertEqual(model.conversationFallbackChain, [.ollama, .groq])
+        XCTAssertEqual(model.conversationFallbackChain, [.ollama, .xai])
     }
 }
 

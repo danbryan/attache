@@ -70,14 +70,14 @@ struct CharacterSwitcherPalette: View {
         .onChange(of: model.personalities) { _ in normalizeSelection() }
         .onExitCommand { isVisible = false }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Character switcher")
+        .accessibilityLabel("Attaché switcher")
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Switch character").typoSection()
+                    Text("Switch Attaché").typoSection()
                     Text("Choose the personality, voice, presence, and model together.")
                         .typoCaption(.medium)
                         .foregroundStyle(.secondary)
@@ -90,12 +90,12 @@ struct CharacterSwitcherPalette: View {
             HStack(spacing: 9) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search characters", text: $query)
+                TextField("Search personalities", text: $query)
                     .textFieldStyle(.plain)
                     .typoBody(.medium)
                     .focused($fieldFocused)
                     .onSubmit(selectCurrent)
-                    .accessibilityLabel("Search characters")
+                    .accessibilityLabel("Search personalities")
                 if !query.isEmpty {
                     Button {
                         query = ""
@@ -105,7 +105,7 @@ struct CharacterSwitcherPalette: View {
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Clear character search")
+                    .accessibilityLabel("Clear search")
                 }
             }
             .padding(.horizontal, 11)
@@ -124,7 +124,7 @@ struct CharacterSwitcherPalette: View {
                         VStack(spacing: 8) {
                             Image(systemName: "person.crop.circle.badge.questionmark")
                                 .typoIcon(size: 22, .medium)
-                            Text("No matching characters")
+                            Text("No matches")
                                 .typoBody(.semibold)
                             Text("Try a name, voice, presence, provider, or model.")
                                 .typoCaption()
@@ -217,7 +217,7 @@ struct CharacterSwitcherPalette: View {
         .onHover { hovering in
             if hovering { selectedID = personality.id }
         }
-        .accessibilityLabel("Character \(personality.name)\(active ? ", active" : "")")
+        .accessibilityLabel("Attaché \(personality.name)\(active ? ", active" : "")")
         .accessibilityValue("\(personality.presenceSummary), \(model.personalityVoiceName(personality)), \(personality.modelSummary)")
     }
 

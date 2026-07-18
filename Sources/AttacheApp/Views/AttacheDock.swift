@@ -155,12 +155,12 @@ extension AttacheRootView {
             }
         }
         .buttonStyle(.plain)
-        .help("Character: \(model.activePersonality?.name ?? "none"). Search with ⇧⌘P or cycle with ⌘[ / ⌘].")
-        .accessibilityLabel("Switch character")
-        .accessibilityValue("Active character \(model.activePersonality?.name ?? "none")")
+        .help("Attaché: \(model.activePersonality?.name ?? "none"). Search with ⇧⌘P or cycle with ⌘[ / ⌘].")
+        .accessibilityLabel("Switch Attaché")
+        .accessibilityValue("Active Attaché \(model.activePersonality?.name ?? "none")")
         .onHover { setDockHover(.personality, $0) }
         .contextMenu {
-            Button("Switch character…") {
+            Button("Switch Attaché…") {
                 NotificationCenter.default.post(name: .attacheOpenCharacterSwitcher, object: nil)
             }
             Button("Edit personalities…") {

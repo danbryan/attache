@@ -20,7 +20,6 @@ struct IntegrationsPane: View {
         Provider(id: "xai", name: "xAI / Grok", powers: "Model + Voice", hasKey: true, hasEndpoint: false, guide: .xai),
         Provider(id: "elevenlabs", name: "ElevenLabs", powers: "Voice", hasKey: true, hasEndpoint: false, guide: .elevenLabs),
         Provider(id: "openai", name: "OpenAI", powers: "Voice", hasKey: true, hasEndpoint: false, guide: .openAIVoice),
-        Provider(id: "groq", name: "Groq", powers: "Model", hasKey: true, hasEndpoint: false, guide: .groq),
         Provider(id: "ollama", name: "Ollama", powers: "Model · local", hasKey: false, hasEndpoint: true, guide: .ollama),
         Provider(id: "custom", name: "OpenAI-compatible", powers: "Model", hasKey: true, hasEndpoint: true, guide: .openAICompatible),
         Provider(id: "claude", name: "Claude Code", powers: "Model · subscription", hasKey: false, hasEndpoint: false, guide: .claudeCode),
@@ -34,7 +33,7 @@ struct IntegrationsPane: View {
                 .typoLabel()
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Connect a provider to use it in a character's Model or Voice. Each row includes a short setup guide and a real readiness check.")
+            Text("Connect a provider to use it in an Attaché's Model or Voice. Each row includes a short setup guide and a real readiness check.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             localSources
@@ -78,7 +77,11 @@ struct IntegrationsPane: View {
                 set: { model.setOpencodeSourceEnabled($0) }
             ))
             Toggle("Precise Claude Code status", isOn: $model.installClaudeHooks)
-            Text("Adds Attaché's Notification and Stop hooks so character reactions update immediately. Turning it off removes only Attaché's hooks.")
+            Text("Adds Attaché's Notification and Stop hooks so Attaché reactions update immediately. Turning it off removes only Attaché's hooks.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Claude Code exposes hooks that report tool-by-tool status; other agents are followed through their session files, which is close but less immediate.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -196,7 +199,6 @@ struct IntegrationsPane: View {
         case "xai": model.saveXAIIntegration()
         case "elevenlabs": model.saveElevenLabsKeyAndLoadVoices()
         case "openai": model.saveOpenAIVoiceIntegration()
-        case "groq": model.saveGroqIntegration()
         case "custom": model.saveCustomIntegration()
         default: break
         }
@@ -208,7 +210,6 @@ struct IntegrationsPane: View {
         case "xai": return $model.xaiAPIKey
         case "elevenlabs": return $model.elevenLabsAPIKey
         case "openai": return $model.openaiVoiceAPIKey
-        case "groq": return $model.groqAPIKey
         case "custom": return $model.customAPIKey
         default: return .constant("")
         }

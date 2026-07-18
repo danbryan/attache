@@ -29,16 +29,51 @@ struct AboutPane: View {
                     NotificationCenter.default.post(name: .attacheShowOnboarding, object: nil)
                 }
                 .accessibilityLabel("Run welcome again")
-                Text("Review integrations, voice, and character setup from the beginning.")
+                Text("Review integrations, voice, and personality setup from the beginning.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Divider().padding(.vertical, 2)
+            dataSection
             Divider().padding(.vertical, 2)
             voicesCreditsSection
             Divider().padding(.vertical, 2)
             responsivenessSection
         }
         .onAppear { refreshStallEvents() }
+    }
+
+    /// Back up, restore, and reset the local Attaché profile (INF-391). Backups
+    /// exclude the per-launch event token, the regenerable audio cache, and (by
+    /// default) the downloadable premium voice; sensitive defaults keys are
+    /// stripped from the exported settings.
+    private var dataSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Data").typoSection()
+            HStack(spacing: 12) {
+                Button("Back Up Attaché Data…") { model.backUpData() }
+                    .accessibilityIdentifier("Data Back Up")
+                    .accessibilityLabel("Back Up Attaché Data")
+                Button("Restore from Backup…") { model.restoreDataFromBackup() }
+                    .accessibilityIdentifier("Data Restore")
+                    .accessibilityLabel("Restore from Backup")
+                Button("Reset Attaché…", role: .destructive) { model.resetData() }
+                    .accessibilityIdentifier("Data Reset")
+                    .accessibilityLabel("Reset Attaché")
+            }
+            Text("Back up your personalities, history, settings, and watched sessions to a single file, or restore from one. Resetting restarts Attaché as if newly installed. Backups never include API keys.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let status = model.dataManagementStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("Data Management Status")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Data")
     }
 
     /// Voice and speech acknowledgements (INF-384). The engine lines are fixed

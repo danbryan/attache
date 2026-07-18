@@ -303,11 +303,11 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         defaults.set("original-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
-        model.selectRecapRecoveryProvider(.groq)
+        model.selectRecapRecoveryProvider(.xai)
 
         XCTAssertEqual(
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, .provider)),
-            AttachePresentationProvider.groq.rawValue,
+            AttachePresentationProvider.xai.rawValue,
             "the recap recovery switch must persist to the recap role's own key"
         )
         XCTAssertEqual(
@@ -316,7 +316,7 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
             "the global provider key must be untouched by a recap-only recovery switch"
         )
         let recapSettings = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
-        XCTAssertEqual(recapSettings.provider, .groq, "recap should pick up the recovered provider on the next call")
+        XCTAssertEqual(recapSettings.provider, .xai, "recap should pick up the recovered provider on the next call")
         let conversationSettings = AttachePresentationSettings.load(role: .conversation, defaults: defaults, environment: [:], resolveSecrets: false)
         XCTAssertEqual(conversationSettings.provider, .ollama, "conversation must not be affected by a recap-only recovery switch")
     }
@@ -332,11 +332,11 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         defaults.set("original-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())
-        model.selectFollowUpRecoveryProvider(.groq)
+        model.selectFollowUpRecoveryProvider(.xai)
 
         XCTAssertEqual(
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(.conversation, .provider)),
-            AttachePresentationProvider.groq.rawValue,
+            AttachePresentationProvider.xai.rawValue,
             "the follow-up recovery switch must persist to the conversation role's own key"
         )
         XCTAssertEqual(
@@ -355,7 +355,7 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         let snapshot = DefaultsKeySnapshot(keys: roleKeyPreferenceKeys, defaults: defaults)
         defer { snapshot.restore() }
 
-        defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         defaults.set("original-global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
         let model = try AppModel(store: CardStore.inMemory())

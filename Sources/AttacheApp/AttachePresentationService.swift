@@ -1203,7 +1203,7 @@ final class AttachePresentationService {
             switch provider {
             case .xai, .ollama, .custom:
                 return "none"
-            case .groq, .claudeCLI, .codexCLI:
+            case .claudeCLI, .codexCLI:
                 return nil
             }
         }

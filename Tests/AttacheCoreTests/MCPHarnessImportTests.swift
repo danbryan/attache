@@ -194,4 +194,109 @@ final class MCPHarnessImportTests: XCTestCase {
             XCTFail("bare remote should need auth")
         }
     }
+
+    // MARK: Grok Build fixture
+
+    func testParseGrokConfigWithMCPServersProducesGrokGroup() {
+        // Grok Build reuses the Codex TOML shape; a config WITH an mcp_servers
+        // table must yield entries tagged as the Grok Build harness.
+        let toml = """
+        [mcp_servers.linear]
+        command = "npx"
+        args = ["-y", "linear-mcp"]
+        """
+        let detected = MCPHarnessImport.parseCodexConfig(
+            toml, originPath: "/home/.grok/config.toml", harness: .grokBuild
+        )
+        XCTAssertEqual(detected.map(\.name), ["linear"])
+        XCTAssertEqual(detected.first?.harness, .grokBuild)
+
+        let grouping = MCPHarnessImport.group(detected)
+        XCTAssertTrue(grouping.shared.isEmpty)
+        XCTAssertEqual(grouping.harnessGroups.map(\.harness), [.grokBuild])
+        XCTAssertEqual(grouping.harnessGroups.first?.servers.map(\.name), ["linear"])
+    }
+
+    // MARK: grouping
+
+    private func stdio(_ name: String, harness: MCPHarness, command: String, args: [String] = []) -> MCPDetectedServer {
+        MCPDetectedServer(
+            harness: harness, originPath: "/x",
+            config: MCPServerConfig(name: name, transport: .stdio, command: command, args: args),
+            importability: .importable
+        )
+    }
+
+    private func remote(_ name: String, harness: MCPHarness, url: String) -> MCPDetectedServer {
+        MCPDetectedServer(
+            harness: harness, originPath: "/x",
+            config: MCPServerConfig(name: name, transport: .streamableHTTP, url: URL(string: url)),
+            importability: MCPHarnessImport.classify(
+                MCPServerConfig(name: name, transport: .streamableHTTP, url: URL(string: url))
+            )
+        )
+    }
+
+    func testGroupIdenticalInFourHarnessesCollapsesToOneRowWithFourOrigins() {
+        let detected = [
+            stdio("obsidian", harness: .claudeCode, command: "mcp-obsidian", args: ["--vault", "/v"]),
+            stdio("obsidian", harness: .codex, command: "mcp-obsidian", args: ["--vault", "/v"]),
+            stdio("obsidian", harness: .opencode, command: "mcp-obsidian", args: ["--vault", "/v"]),
+            stdio("obsidian", harness: .grokBuild, command: "mcp-obsidian", args: ["--vault", "/v"]),
+        ]
+        let grouping = MCPHarnessImport.group(detected)
+
+        XCTAssertEqual(grouping.shared.count, 1)
+        let row = grouping.shared.first
+        XCTAssertEqual(row?.canonical.name, "obsidian")
+        XCTAssertEqual(row?.origins, [.claudeCode, .codex, .opencode, .grokBuild])
+        XCTAssertEqual(row?.isImportable, true)
+        // Every harness group's rows are lifted into the shared row, so no
+        // per-harness group remains.
+        XCTAssertTrue(grouping.harnessGroups.isEmpty)
+    }
+
+    func testGroupSameNameDifferentURLStaysSeparate() {
+        let detected = [
+            remote("gateway", harness: .claudeCode, url: "https://a.example/mcp"),
+            remote("gateway", harness: .codex, url: "https://b.example/mcp"),
+        ]
+        let grouping = MCPHarnessImport.group(detected)
+
+        XCTAssertTrue(grouping.shared.isEmpty, "different url is not an exact transport identity match")
+        XCTAssertEqual(grouping.harnessGroups.map(\.harness), [.claudeCode, .codex])
+        XCTAssertEqual(grouping.harnessGroups.map { $0.servers.count }, [1, 1])
+    }
+
+    func testGroupImportAllSkipsSharedEntries() {
+        // "obsidian" is shared across two harnesses; each harness also has a
+        // unique server. The per-harness groups must exclude the shared entry so
+        // Import All on a group cannot double-import it.
+        let detected = [
+            stdio("obsidian", harness: .claudeCode, command: "mcp-obsidian"),
+            stdio("only-claude", harness: .claudeCode, command: "c"),
+            stdio("obsidian", harness: .codex, command: "mcp-obsidian"),
+            stdio("only-codex", harness: .codex, command: "d"),
+        ]
+        let grouping = MCPHarnessImport.group(detected)
+
+        XCTAssertEqual(grouping.shared.map(\.canonical.name), ["obsidian"])
+        let claude = grouping.harnessGroups.first { $0.harness == .claudeCode }
+        let codex = grouping.harnessGroups.first { $0.harness == .codex }
+        XCTAssertEqual(claude?.servers.map(\.name), ["only-claude"])
+        XCTAssertEqual(codex?.servers.map(\.name), ["only-codex"])
+    }
+
+    func testGroupSameHarnessTwiceIsNotShared() {
+        // Same identity appearing twice within ONE harness (e.g. Claude global
+        // plus a project .mcp.json) is not a cross-harness duplicate.
+        let detected = [
+            stdio("dup", harness: .claudeCode, command: "x"),
+            stdio("dup", harness: .claudeCode, command: "x"),
+        ]
+        let grouping = MCPHarnessImport.group(detected)
+        XCTAssertTrue(grouping.shared.isEmpty)
+        XCTAssertEqual(grouping.harnessGroups.map(\.harness), [.claudeCode])
+        XCTAssertEqual(grouping.harnessGroups.first?.servers.count, 2)
+    }
 }

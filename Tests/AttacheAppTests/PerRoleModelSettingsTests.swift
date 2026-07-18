@@ -46,7 +46,7 @@ final class PerRoleModelSettingsTests: XCTestCase {
         let (defaults, suiteName) = makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         defaults.set("global-model-x", forKey: AttachePreferenceKey.presentationLLMModel)
         defaults.set("high", forKey: AttachePreferenceKey.presentationReasoningEffort)
         defaults.set("priority", forKey: AttachePreferenceKey.presentationServiceTier)
@@ -57,12 +57,12 @@ final class PerRoleModelSettingsTests: XCTestCase {
         }
 
         for settings in results {
-            XCTAssertEqual(settings.provider, .groq)
+            XCTAssertEqual(settings.provider, .xai)
             XCTAssertEqual(settings.model, "global-model-x")
             XCTAssertEqual(settings.reasoningEffort, "high")
             XCTAssertEqual(settings.serviceTier, "priority")
             XCTAssertEqual(settings.apiKey, "global-api-key")
-            XCTAssertEqual(settings.baseURL.absoluteString, AttachePresentationProvider.groq.defaultBaseURL)
+            XCTAssertEqual(settings.baseURL.absoluteString, AttachePresentationProvider.xai.defaultBaseURL)
         }
         for settings in results.dropFirst() {
             XCTAssertEqual(settings, results[0], "every role must resolve identically when no role key is set")
@@ -92,7 +92,7 @@ final class PerRoleModelSettingsTests: XCTestCase {
         let (defaults, suiteName) = makeIsolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
+        defaults.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         defaults.set("global-model", forKey: AttachePreferenceKey.presentationLLMModel)
         defaults.set("global-api-key", forKey: AttachePreferenceKey.presentationLLMAPIKey)
 
@@ -101,13 +101,13 @@ final class PerRoleModelSettingsTests: XCTestCase {
 
         let recap = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
         XCTAssertEqual(recap.model, "recap-only-model", "the role-specific model key should win")
-        XCTAssertEqual(recap.provider, .groq, "provider should still fall back to the global key")
+        XCTAssertEqual(recap.provider, .xai, "provider should still fall back to the global key")
         XCTAssertEqual(recap.apiKey, "global-api-key", "api key should still fall back to the global key")
 
         for role in ModelRole.allCases where role != .recap {
             let settings = AttachePresentationSettings.load(role: role, defaults: defaults, environment: [:], resolveSecrets: false)
             XCTAssertEqual(settings.model, "global-model", "\(role) must not see recap's model override")
-            XCTAssertEqual(settings.provider, .groq)
+            XCTAssertEqual(settings.provider, .xai)
             XCTAssertEqual(settings.apiKey, "global-api-key")
         }
     }
@@ -121,11 +121,11 @@ final class PerRoleModelSettingsTests: XCTestCase {
         defaults.set(AttachePresentationProvider.ollama.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         defaults.set("global-model", forKey: AttachePreferenceKey.presentationLLMModel)
 
-        defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, .provider))
+        defaults.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, .provider))
         defaults.set("recap-model", forKey: AttachePreferenceKey.presentationLLMRoleKey(.recap, .model))
 
         let recap = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
-        XCTAssertEqual(recap.provider, .groq)
+        XCTAssertEqual(recap.provider, .xai)
         XCTAssertEqual(recap.model, "recap-model")
 
         for role: ModelRole in [.conversation, .presentation, .tagging] {
@@ -139,7 +139,7 @@ final class PerRoleModelSettingsTests: XCTestCase {
         defaults.set("conversation-model", forKey: AttachePreferenceKey.presentationLLMRoleKey(.conversation, .model))
 
         let recapAfter = AttachePresentationSettings.load(role: .recap, defaults: defaults, environment: [:], resolveSecrets: false)
-        XCTAssertEqual(recapAfter.provider, .groq, "recap's override must survive conversation being overridden too")
+        XCTAssertEqual(recapAfter.provider, .xai, "recap's override must survive conversation being overridden too")
         XCTAssertEqual(recapAfter.model, "recap-model")
     }
 
@@ -154,7 +154,7 @@ final class PerRoleModelSettingsTests: XCTestCase {
         defaults.set(AttachePresentationProvider.ollama.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         defaults.set("global-model", forKey: AttachePreferenceKey.presentationLLMModel)
         for role in ModelRole.allCases {
-            defaults.set(AttachePresentationProvider.groq.rawValue, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .provider))
+            defaults.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .provider))
             defaults.set("role-model-\(role.rawValue)", forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model))
         }
 

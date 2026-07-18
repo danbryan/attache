@@ -135,6 +135,15 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     // survive playback so the next replay can reuse it instead of re-synthesizing.
     private var generatedAudioIsCached = false
 
+    // When true, the current audio file is a shipped resource (the bundled
+    // preview clip), not a throwaway temp file, so post-playback cleanup must
+    // never delete it. Without this, `previewClip` stored the bundled Azelma
+    // clip as `generatedAudioURL` with `generatedAudioIsCached == false`, and
+    // the first playback's `cleanupGeneratedAudio()` removed the asset from the
+    // app bundle. Every later Preview (same step, or after paging away and
+    // back) then found no file and silently no-opped (INF-387b).
+    private var generatedAudioIsProtectedResource = false
+
     /// Persistent home for synthesized recap audio, so replaying a card reuses the
     /// clip instead of re-running the voice (no credits, no network wait).
     private lazy var audioCacheDirectory: URL? = {
@@ -458,6 +467,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         self.generationID = generationID
         generatedAudioURL = fileURL
         generatedAudioIsCached = false
+        generatedAudioIsProtectedResource = true
         currentCardID = nil
         currentText = text
         let duration = CaptionAlignmentBuilder.estimatedDurationMs(for: text)
@@ -870,11 +880,12 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     }
 
     private func cleanupGeneratedAudio() {
-        if let generatedAudioURL, !generatedAudioIsCached {
+        if let generatedAudioURL, !generatedAudioIsCached, !generatedAudioIsProtectedResource {
             try? FileManager.default.removeItem(at: generatedAudioURL)
         }
         generatedAudioURL = nil
         generatedAudioIsCached = false
+        generatedAudioIsProtectedResource = false
     }
 
     private func finishAudioCachePreparation(success: Bool, cacheURL: URL, temporaryURL: URL, cachePath: String) {

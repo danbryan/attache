@@ -101,7 +101,7 @@ final class AttachePresentationServiceTests: XCTestCase {
     }
 
     func testExplicitNoneStaysOmittedForProvidersWithoutThatContract() {
-        XCTAssertNil(AttachePresentationService.reasoningEffortPayloadValue("none", provider: .groq))
+        XCTAssertNil(AttachePresentationService.reasoningEffortPayloadValue("none", provider: .codexCLI))
     }
 
     private func testCard(externalSessionID: String) -> VoicemailCard {

@@ -12,11 +12,14 @@ struct MCPServersPane: View {
     @ObservedObject var registry: MCPServerRegistry
     @State private var addSheetPresented = false
     @State private var writeError: String?
+    /// Per-harness collapsed state for the detected section, remembered for the
+    /// life of the pane (session), mirroring SessionSwitcher's group headers.
+    @State private var collapsedHarnesses: Set<MCPHarness> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("MCP Servers").typoTitle()
-            Text("Connect MCP servers so a character can look up information during a live call. Servers are shared; each character grants individual tools under Personalities.")
+            Text("Connect MCP servers so your Attaché can look up information during a live call. Servers are shared; each Attaché grants individual tools under Personalities.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -52,20 +55,16 @@ struct MCPServersPane: View {
 
     // MARK: Detected servers
 
-    /// Detected candidates grouped by harness, preserving the registry's
-    /// harness-then-name ordering.
-    private var detectedGroups: [(harness: MCPHarness, servers: [MCPDetectedServer])] {
-        var order: [MCPHarness] = []
-        var byHarness: [MCPHarness: [MCPDetectedServer]] = [:]
-        for server in registry.detectedServers {
-            if byHarness[server.harness] == nil { order.append(server.harness) }
-            byHarness[server.harness, default: []].append(server)
-        }
-        return order.map { ($0, byHarness[$0] ?? []) }
+    /// The deduped + per-harness structure the section renders. Cross-harness
+    /// duplicates are lifted into `shared`; the registry has already filtered out
+    /// anything matching a configured server.
+    private var detectedGrouping: MCPDetectedGrouping {
+        MCPHarnessImport.group(registry.detectedServers)
     }
 
     @ViewBuilder private var detectedSection: some View {
         if !registry.detectedServers.isEmpty {
+            let grouping = detectedGrouping
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("Detected in your other tools").typoSection()
@@ -79,29 +78,112 @@ struct MCPServersPane: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                ForEach(detectedGroups, id: \.harness) { group in
-                    detectedGroupView(group.harness, servers: group.servers)
+                if !grouping.shared.isEmpty {
+                    sharedGroupView(grouping.shared)
+                }
+                ForEach(grouping.harnessGroups) { group in
+                    detectedHarnessGroupView(group)
                 }
             }
             .padding(.top, 6)
         }
     }
 
-    private func detectedGroupView(_ harness: MCPHarness, servers: [MCPDetectedServer]) -> some View {
-        let importable = servers.filter { $0.importability.isImportable }
-        return VStack(alignment: .leading, spacing: 6) {
+    /// Cross-harness duplicates: one row per identity, with origin badges and a
+    /// single Import for the canonical entry. Rendered above the per-harness
+    /// groups so a server offered by several tools appears exactly once.
+    private func sharedGroupView(_ shared: [MCPDedupedDetectedServer]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(harness.displayName).typoBody(.medium)
+                Text("In multiple tools").typoBody(.medium)
                 Spacer()
+            }
+            ForEach(shared) { deduped in
+                dedupedRow(deduped)
+            }
+        }
+    }
+
+    private func detectedHarnessGroupView(_ group: MCPDetectedHarnessGroup) -> some View {
+        let harness = group.harness
+        let collapsed = collapsedHarnesses.contains(harness)
+        let importable = group.servers.filter { $0.importability.isImportable }
+        let count = group.servers.count
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.14)) {
+                        if collapsed { collapsedHarnesses.remove(harness) }
+                        else { collapsedHarnesses.insert(harness) }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.right")
+                            .typoIcon(size: 8, .bold)
+                            .rotationEffect(.degrees(collapsed ? 0 : 90))
+                        Text(collapsed
+                             ? "\(harness.displayName) · \(count) server\(count == 1 ? "" : "s")"
+                             : harness.displayName)
+                            .typoBody(.medium)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("MCP Harness Toggle \(harness.displayName)")
                 if !importable.isEmpty {
                     Button("Import All") { importDetected(importable) }
                         .accessibilityIdentifier("MCP Import All \(harness.displayName)")
                 }
             }
-            ForEach(servers) { server in
-                detectedRow(server)
+            if !collapsed {
+                ForEach(group.servers) { server in
+                    detectedRow(server)
+                }
             }
         }
+    }
+
+    private func dedupedRow(_ deduped: MCPDedupedDetectedServer) -> some View {
+        let server = deduped.canonical
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(server.name).typoBody(.medium)
+                    Text(server.transportSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        ForEach(deduped.origins, id: \.self) { origin in
+                            originBadge(origin.displayName)
+                        }
+                    }
+                }
+                Spacer()
+                Button("Import") { importDetected([server]) }
+                    .disabled(!deduped.isImportable)
+                    .accessibilityIdentifier("MCP Detected Import \(server.name)")
+            }
+            if let reason = server.importability.reason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func originBadge(_ label: String) -> some View {
+        Text(label)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.primary.opacity(0.08), in: Capsule())
     }
 
     private func detectedRow(_ server: MCPDetectedServer) -> some View {

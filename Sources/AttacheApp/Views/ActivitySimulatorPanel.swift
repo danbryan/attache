@@ -62,8 +62,8 @@ struct ActivitySimulatorPanel: View {
                     .accessibilityLabel("Activity simulator source")
 
                     Text(overriding
-                         ? "The controls below are driving the character preview."
-                         : "The character is following real app activity.")
+                         ? "The controls below are driving the Attaché preview."
+                         : "Your Attaché is following real app activity.")
                         .typoCaption(.medium)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -92,7 +92,7 @@ struct ActivitySimulatorPanel: View {
                                 }
                                 .accessibilityLabel("Simulated tool kind")
 
-                                Text("Tool gestures preview how the character reacts to editing, reading, shell commands, and web tools.")
+                                Text("Tool gestures preview how your Attaché reacts to editing, reading, shell commands, and web tools.")
                                     .typoCaption(.medium)
                                     .foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
