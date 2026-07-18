@@ -7,14 +7,16 @@
 #      xctest is running (a concurrent suite contends on shared fixtures and
 #      can deadlock both). Kill the stale one or pass KILL_STALE=1.
 #   2. Wall clock cap: the whole run (build + tests) is killed after
-#      ATTACHE_TEST_TIMEOUT seconds (default 600; a warm run is ~60s, a cold
-#      build a few minutes). If the cap fires, INVESTIGATE the hang; raising
-#      the cap without understanding it just reintroduces the waste.
+#      ATTACHE_TEST_TIMEOUT seconds (default 900; a warm run is ~60s, and a
+#      cold rebuild after AppModel-chain edits measured ~9 minutes on
+#      2026-07-18, which is why the default is 900 and not lower). If the cap
+#      fires, INVESTIGATE the hang; raising the cap without understanding it
+#      just reintroduces the waste.
 #
 # Usage: scripts/test.sh [swift test args...]
 set -u
 
-TIMEOUT="${ATTACHE_TEST_TIMEOUT:-600}"
+TIMEOUT="${ATTACHE_TEST_TIMEOUT:-900}"
 
 stale=$(pgrep -f "AttachePackageTests.xctest" || true)
 if [[ -n "$stale" ]]; then

@@ -69,12 +69,14 @@ final class PersonalityTests: XCTestCase {
         XCTAssertEqual(byID["builtin.bigPicture"]?.visualMode, .character)
         XCTAssertEqual(byID["builtin.cowboy"]?.character, .cowboy)
         XCTAssertEqual(byID["builtin.cowboy"]?.visualMode, .character)
-        XCTAssertEqual(byID["builtin.cowboy"]?.voiceRef?.provider, .system)
-        XCTAssertEqual(byID["builtin.cowboy"]?.voiceRef?.systemVoiceIdentifier, Personality.cowboyPreferredVoiceID)
+        // All three built-ins default to the Attaché Premium voice (2026-07-18);
+        // playback falls back to the system voice until weights install.
+        XCTAssertEqual(byID["builtin.cowboy"]?.voiceRef?.provider, .attachePremium)
         XCTAssertNil(byID["builtin.echo"]?.character)
         XCTAssertEqual(byID["builtin.echo"]?.visualMode, .bars)
         XCTAssertEqual(byID["builtin.echo"]?.characterAvatarEmoji, "🎙️")
-        XCTAssertEqual(byID["builtin.bigPicture"]?.voiceRef, .systemVoice(Personality.defaultPreferredVoiceID))
+        XCTAssertEqual(byID["builtin.echo"]?.voiceRef?.provider, .attachePremium)
+        XCTAssertEqual(byID["builtin.bigPicture"]?.voiceRef?.provider, .attachePremium)
     }
 
     func testOldPersonalityJSONWithoutVoiceOrCharacterStillDecodes() throws {
@@ -330,7 +332,8 @@ final class PersonalityTests: XCTestCase {
         XCTAssertEqual(imported.prompt, cowboy.prompt)
         XCTAssertEqual(imported.character, .cowboy)
         XCTAssertEqual(imported.visualMode, .character)
-        XCTAssertEqual(imported.voiceRef?.systemVoiceIdentifier, Personality.cowboyPreferredVoiceID)
+        // Built-ins carry the Attaché Premium voice; the ref survives export/import.
+        XCTAssertEqual(imported.voiceRef?.provider, .attachePremium)
     }
 
     func testShippingImportFixtureCoversTheCompleteCurrentSchema() throws {

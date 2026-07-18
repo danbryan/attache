@@ -139,7 +139,7 @@ struct PersonalitiesPane: View {
     private var wardrobe: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Your wardrobe").typoSection()
+                Text("Your characters").typoSection()
                 Spacer()
                 Text("Switching changes personality, voice, presence, and preferred model together.")
                     .typoCaption()
@@ -522,7 +522,7 @@ struct PersonalityStudioSheet: View {
     }
 
     private var presenceSection: some View {
-        studioSection(title: "Wardrobe", trailing: AnyView(spriteHelpLink)) {
+        studioSection(title: "Presence", trailing: AnyView(spriteHelpLink)) {
             HStack(spacing: 10) {
                 ForEach(WardrobeChoice.allCases) { choice in
                     Button {

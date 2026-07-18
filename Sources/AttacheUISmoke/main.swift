@@ -3259,7 +3259,7 @@ if enabled("personality") {
         app.key(Key.comma, command: true)
         try waitUntil("settings window", timeout: 10) { (try? settingsWindow()) != nil }
         try selectSettingsSection("Personalities", paneMarker: "Create character")
-        _ = try waitForElement("active personality wardrobe", in: try settingsWindow(), containing: "Your wardrobe")
+        _ = try waitForElement("active personality characters grid", in: try settingsWindow(), containing: "Your characters")
     }
 
     run.step("personality-studio", "the creator exposes explicit presence, personality, voice, and model choices") {
@@ -3457,7 +3457,7 @@ if enabled("personality") {
         )
         guard edit.press() else { throw SmokeError(message: "AXPress failed on \(edit.summary)") }
         try waitUntil("settings window from character palette", timeout: 10) { (try? settingsWindow()) != nil }
-        _ = try waitForElement("personality manager from palette", in: try settingsWindow(), containing: "Your wardrobe")
+        _ = try waitForElement("personality manager from palette", in: try settingsWindow(), containing: "Your characters")
         app.key(Key.escape)
         try waitUntil("settings window closes after palette navigation", timeout: 10) { (try? settingsWindow()) == nil }
     }

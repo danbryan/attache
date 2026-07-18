@@ -145,12 +145,18 @@ final class AttacheVoiceCatalogSnapshotTests: XCTestCase {
         defer { suite.removePersistentDomain(forName: suiteName) }
 
         // Load happens before the catalog has published anything (empty list).
+        // Built-ins now carry the Attaché Premium voice (no system identifier
+        // to backfill); the generic-fallback backfill applies to SYSTEM-voice
+        // personalities, so drive it through a custom one.
         let emptyStore = PersonalityStore(defaults: suite, voiceOptionsProvider: { [] })
-        let firstLoad = emptyStore.load()
-        XCTAssertEqual(
-            firstLoad.personalities.first?.voiceRef?.systemVoiceIdentifier,
-            Personality.defaultPreferredVoiceID
-        )
+        var firstLoad = emptyStore.load()
+        XCTAssertEqual(firstLoad.personalities.first?.voiceRef?.provider, .attachePremium)
+
+        var custom = firstLoad.personalities[0]
+        custom.id = "custom.backfill"
+        custom.isBuiltIn = false
+        custom.voiceRef = .systemVoice(Personality.defaultPreferredVoiceID)
+        firstLoad.personalities.append(custom)
 
         // The background scan now publishes real voices. A store view backed
         // by the now-populated list reconciles the same personalities.
@@ -158,9 +164,13 @@ final class AttacheVoiceCatalogSnapshotTests: XCTestCase {
         let reconciled = populatedStore.reconcilingVoiceReferences(firstLoad.personalities)
 
         XCTAssertEqual(
-            reconciled.first?.voiceRef?.systemVoiceIdentifier,
+            reconciled.last?.voiceRef?.systemVoiceIdentifier,
             sampleVoices[0].id,
             "once real voices are known, a personality stuck on the generic fallback should pick one up"
+        )
+        XCTAssertEqual(
+            reconciled.first?.voiceRef?.provider, .attachePremium,
+            "reconciliation must leave premium-voice personalities untouched"
         )
     }
 

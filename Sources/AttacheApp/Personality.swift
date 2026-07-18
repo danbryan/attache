@@ -281,10 +281,9 @@ extension Personality {
         model: AttachePresentationProvider.ollama.defaultModel
     )
 
-    /// The Cowboy's preferred on-device voice: a low, weathered classic that
-    /// reads like a trail boss. If it is not installed, voice resolution
-    /// (`PersonalityVoiceRef.resolved(availableSystemVoiceIDs:)`) drops it and
-    /// falls back to the app default rather than failing.
+    /// Retained for migrating personalities that stored the old cowboy voice;
+    /// built-ins now default to the Attaché Premium voice (2026-07-18, INF-379
+    /// follow-up), falling back to the system voice until weights install.
     static let cowboyPreferredVoiceID = "com.apple.speech.synthesis.voice.Fred"
     static let defaultPreferredVoiceID = "com.apple.speech.synthesis.voice.Alex"
 
@@ -307,7 +306,7 @@ extension Personality {
     // Attaché the robot, Colt the cowboy, or Echo's character-free voice bars. Each
     // reads for any profession, never just developers.
     static let builtIns: [Personality] = [
-        Personality(id: "builtin.bigPicture", name: "Attaché", isBuiltIn: true, character: .robot, visualMode: .character, prompt: """
+        Personality(id: "builtin.bigPicture", name: "Attaché", isBuiltIn: true, character: .robot, visualMode: .character, voiceRef: PersonalityVoiceRef(provider: .attachePremium), prompt: """
         You're Attaché, constitutionally incapable of losing the plot. You don't \
         care how the work got done, the false starts, the back-and-forth, and the \
         redos are none of your concern; you care where things stand and where they're \
@@ -318,7 +317,7 @@ extension Personality {
         Never narrate the intermediate steps, and if the only honest headline is a \
         problem, say it plainly and stop.
         """),
-        Personality(id: "builtin.cowboy", name: "Colt", isBuiltIn: true, character: .cowboy, visualMode: .character, voiceRef: .systemVoice(Personality.cowboyPreferredVoiceID), prompt: """
+        Personality(id: "builtin.cowboy", name: "Colt", isBuiltIn: true, character: .cowboy, visualMode: .character, voiceRef: PersonalityVoiceRef(provider: .attachePremium), prompt: """
         You're Colt, an old trail boss with a level voice and a lot of miles \
         behind you, and these agents are your herd. You talk plain and easy with a \
         little dust on your words: reckon, y'all, ain't, "hold your horses", "riding \
@@ -347,7 +346,7 @@ extension Personality {
             routine updates to one or two crisp sentences and let silence do the rest.
             """,
             isBuiltIn: true,
-            voiceRef: .systemVoice(Self.defaultPreferredVoiceID),
+            voiceRef: PersonalityVoiceRef(provider: .attachePremium),
             character: nil,
             visualMode: .bars,
             modelRef: Self.builtInModel,
@@ -394,7 +393,7 @@ extension Personality {
             guard let identifier = ref.systemVoiceIdentifier else { return "Voice not set" }
             return systemOptions.first(where: { $0.id == identifier })?.title ?? identifier
         case .attachePremium:
-            return "Attaché Premium"
+            return "Azelma (Premium)"
         case .elevenLabs:
             return "ElevenLabs" + (ref.elevenLabsVoiceName.map { ": \($0)" } ?? " voice")
         case .xai:

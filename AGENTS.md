@@ -352,12 +352,16 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
 - **Built-in themes are exactly four:** macOS (default AND first in the list),
   High Contrast, Paper, Cyberpunk. Brass / classic / ember / ocean / slate-mono /
   violet-dusk were removed. Users can still author custom themes.
-- **The built-in wardrobe is exactly Attaché, Colt, and Echo.** Attaché uses the
-  domain-agnostic big-picture temperament and the robot presence. Colt uses the
-  weathered cowboy temperament, cowboy presence, and on-device voice. Echo is
-  voice-only and keeps the original visual bars in a compact character-sized
-  presence; double-click expands the visualizer. No other built-in personality
-  or character is shown.
+- **The built-in characters are exactly Attaché, Colt, and Echo.** Attaché uses
+  the domain-agnostic big-picture temperament and the robot presence. Colt uses
+  the weathered cowboy temperament and cowboy presence. Echo is voice-only and
+  keeps the original visual bars in a compact character-sized presence;
+  double-click expands the visualizer. All three default to the Attaché Premium
+  voice (Azelma, INF-379), falling back to the system voice until the weights
+  are installed. No other built-in personality or character is shown. The
+  user-facing term is "characters", never "wardrobe" (2026-07-18): the
+  personality grid is "Your characters" and the studio's sprite section is
+  "Presence".
 - **A personality is one unit: brain, voice, presence, and model**
   (2026-07-14, INF-293..302, "Personality Manager"). `Personality` owns a
   `voiceRef` (engine + voice), a visual presence, and an explicit `modelRef`
@@ -436,7 +440,7 @@ Test-time discipline (2026-07-17, after a suite deadlocked silently for ~50
 minutes against a stale concurrent xctest):
 
 - Run the suite through `scripts/test.sh`, which enforces a wall-clock cap
-  (`ATTACHE_TEST_TIMEOUT`, default 600s; a warm run is ~60s) and refuses to
+  (`ATTACHE_TEST_TIMEOUT`, default 900s; a warm run is ~60s) and refuses to
   start while another AttachePackageTests run is active. Suites are
   single-flight per machine. If the cap fires, investigate the hang; do not
   just raise the cap.
