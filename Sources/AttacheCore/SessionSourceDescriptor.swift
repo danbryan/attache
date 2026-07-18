@@ -16,12 +16,15 @@ import Foundation
 public struct SessionSourceDescriptor {
     public let sourceKind: SourceKind
     /// Nil for a source with no line/text transcript shape `TranscriptParser`
-    /// can parse (opencode, INF-362: SQLite rows, not JSONL lines). Reading
-    /// this as nil is exactly `TwoWayCoordinator.transcriptFormat(for:)`'s
-    /// "no delivery adapter, fail closed" signal, the same outcome Grok
-    /// Build reaches via having no `InstructionDeliveryAdapter` registered;
-    /// opencode reaches it one layer earlier because there is no format to
-    /// even attempt correlation or readiness classification against.
+    /// can parse (opencode, INF-362: SQLite rows, not JSONL lines). For the
+    /// file sources this drives the byte-offset readiness/correlation path in
+    /// `TwoWayCoordinator`. opencode keeps it nil because there is no JSONL
+    /// shape to classify, but its two-way delivery is NOT closed off (INF-395):
+    /// `TwoWayCoordinator` dispatches opencode readiness and reply correlation
+    /// through the SQLite path (`OpencodeDeliveryReadiness` /
+    /// `OpencodeReplyCorrelation` over `OpencodeReadOnlyDatabase` rows) and
+    /// registers an `OpencodeResumeDeliveryAdapter`. So nil here means "route
+    /// this source through the SQLite two-way seam," not "fail closed."
     public let transcriptFormat: TranscriptFormat?
     public let watchedDirectories: () -> [URL]
     /// Whether a file found under one of `watchedDirectories` belongs to this
@@ -106,11 +109,12 @@ public final class SessionSourceRegistry {
                 adapterTag: "claude-session-file",
                 makeScanner: { ClaudeCodeSessionScanner() }
             ),
-            // Grok Build (INF-361): watching/indexing/narration only. No
-            // `InstructionDeliveryAdapter` is registered for `grok_build` in
-            // `TwoWayCoordinator`, so two-way delivery fails closed with "No
-            // delivery adapter for grok_build" (InstructionReplyEngine's
-            // existing fail-safe) rather than a silent send.
+            // Grok Build: watching/indexing/narration (INF-361) plus two-way
+            // delivery (INF-394). Its `.grokBuild` transcript format drives
+            // readiness classification and positional reply correlation, and
+            // `TwoWayCoordinator` registers an `AgentResumeDeliveryAdapter`
+            // (`grok --resume <id> --output-format json -p`) for `grok_build`,
+            // so Tell Agent delivers end to end like Codex and Claude Code.
             SessionSourceDescriptor(
                 sourceKind: .grokBuild,
                 transcriptFormat: .grokBuild,
@@ -120,14 +124,16 @@ public final class SessionSourceRegistry {
                 adapterTag: "grok-build-session-file",
                 makeScanner: { GrokBuildSessionScanner() }
             ),
-            // opencode (INF-362): watching/indexing/narration only. Sessions
-            // live as rows in one shared SQLite database, not one file per
-            // session, so `transcriptFormat` is nil here (see the field's
-            // doc comment) rather than a JSONL-oriented case: there is no
-            // line/text shape for `TranscriptParser` to parse, which is
-            // exactly the signal `TwoWayCoordinator.transcriptFormat(for:)`
-            // needs to fail Tell Agent closed instead of attempting
-            // correlation or readiness classification against SQL rows.
+            // opencode: watching/indexing/narration (INF-362) plus two-way
+            // delivery (INF-395). Sessions live as rows in one shared SQLite
+            // database, not one file per session, so `transcriptFormat` is nil
+            // here (see the field's doc comment) rather than a JSONL-oriented
+            // case: there is no line/text shape for `TranscriptParser` to
+            // parse. Rather than fail Tell Agent closed, `TwoWayCoordinator`
+            // routes opencode readiness/correlation through the SQLite path
+            // and registers an `OpencodeResumeDeliveryAdapter`
+            // (`opencode run --session <id> --format json`), so Tell Agent
+            // delivers end to end like the file sources.
             SessionSourceDescriptor(
                 sourceKind: .opencode,
                 transcriptFormat: nil,

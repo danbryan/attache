@@ -30,9 +30,15 @@ Environment:
   ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1 also runs the real Claude Code f21
   round-trip smoke (the claude -p --resume delivery branch, opt-in and
   separate from the Codex extras above).
+  ATTACHE_RELEASE_READINESS_WITH_GROK=1 also runs the real Grok Build f23
+  round-trip smoke (the grok --resume delivery branch, opt-in and separate
+  from the Codex/Claude extras above).
+  ATTACHE_RELEASE_READINESS_WITH_OPENCODE=1 also runs the real opencode f24
+  round-trip smoke (the opencode run --session SQLite delivery branch, opt-in
+  and separate from the Codex/Claude/Grok extras above).
   ATTACHE_RELEASE_READINESS_WITH_PREMIUM_VOICE=1 also runs the real Attaché
   Premium voice synthesis gate (scripts/premium-voice-smoke.sh, opt-in and
-  separate from the Codex/Claude extras above).
+  separate from the Codex/Claude/Grok/opencode extras above).
 EOF
 }
 
@@ -94,6 +100,16 @@ fi
 if [[ "${ATTACHE_RELEASE_READINESS_WITH_CLAUDE:-0}" == "1" ]]; then
   echo "==> Extra: real Claude Code direct two-way"
   scripts/claude-two-way-smoke.sh
+fi
+
+if [[ "${ATTACHE_RELEASE_READINESS_WITH_GROK:-0}" == "1" ]]; then
+  echo "==> Extra: real Grok Build direct two-way"
+  scripts/grok-two-way-smoke.sh
+fi
+
+if [[ "${ATTACHE_RELEASE_READINESS_WITH_OPENCODE:-0}" == "1" ]]; then
+  echo "==> Extra: real opencode direct two-way"
+  scripts/opencode-two-way-smoke.sh
 fi
 
 if [[ "${ATTACHE_RELEASE_READINESS_WITH_PREMIUM_VOICE:-0}" == "1" ]]; then

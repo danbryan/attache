@@ -100,7 +100,7 @@ public enum OpencodeTranscriptAdapter {
     /// One opencode `message` row plus its ordered `part` rows, already
     /// decoded from JSON. Exposed so tests can build fixtures without a real
     /// database.
-    public struct MessageRow {
+    public struct MessageRow: Sendable, Equatable {
         public let id: String
         public let role: String?
         /// Present on assistant messages once a turn completes (`"stop"`
@@ -119,7 +119,7 @@ public enum OpencodeTranscriptAdapter {
         }
     }
 
-    public struct PartRow {
+    public struct PartRow: Sendable, Equatable {
         public let type: String?
         public let text: String?
 
@@ -127,6 +127,15 @@ public enum OpencodeTranscriptAdapter {
             self.type = type
             self.text = text
         }
+    }
+
+    /// The concatenated narratable (`text`-type) prose of one message's parts,
+    /// the same shape `records(from:cwd:)` narrates and the two-way SQLite
+    /// reply correlation returns for a completed assistant turn. Internal so
+    /// `OpencodeReplyCorrelation` reuses the exact part-composition rules
+    /// instead of re-deriving them.
+    static func narratableText(of message: MessageRow) -> String {
+        concatenatedText(message.parts)
     }
 
     /// Converts ordered message rows into narration records: a real user

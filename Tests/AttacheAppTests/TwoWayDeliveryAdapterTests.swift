@@ -19,6 +19,37 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         XCTAssertEqual(args, ["exec", "resume", "--skip-git-repo-check", "--json", "sid-2", "commit it"])
     }
 
+    func testGrokResumeArguments() {
+        let args = AgentResumeDeliveryAdapter.resumeArguments(vendor: .grok, sessionID: "sid-3", instruction: "run it")
+        // Top-level grok flags (INF-394); `grok agent --resume` is rejected by the CLI.
+        XCTAssertEqual(args, ["--resume", "sid-3", "--output-format", "json", "-p", "run it"])
+        XCTAssertFalse(args.contains("agent"))
+        XCTAssertEqual(AgentResumeDeliveryAdapter.Vendor.grok.executableName, "grok")
+        XCTAssertEqual(AgentResumeDeliveryAdapter.Vendor.grok.sourceKind, SourceKind.grokBuild.rawValue)
+    }
+
+    func testGrokCapabilityUnavailableWhenCLIMissing() {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .grok,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x/chat_history.jsonl") },
+            locateExecutable: { _ in nil }
+        )
+        let cap = adapter.capability(forSessionID: "s")
+        XCTAssertFalse(cap.canDeliver)
+        XCTAssertEqual(cap.reason, "Two-way unavailable: the grok CLI was not found on PATH.")
+    }
+
+    func testGrokCapabilityRequiresIdleWhenAvailable() {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .grok,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x/chat_history.jsonl") },
+            locateExecutable: { _ in "/Users/tester/.grok/bin/grok" }
+        )
+        let cap = adapter.capability(forSessionID: "s")
+        XCTAssertTrue(cap.canDeliver)
+        XCTAssertTrue(cap.requiresIdle)
+    }
+
     func testMergedPathIncludesHomebrewNodeForFinderLaunchedApp() {
         let path = CLILanguageModel.mergedPATH(existing: "/usr/bin:/bin", home: "/Users/tester")
         let parts = path.split(separator: ":").map(String.init)
@@ -176,6 +207,53 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         XCTAssertEqual(receipt.replyTurnID, "019f4d3d-aca0-74d3-a693-e2089d62ca7d")
     }
 
+    func testDeliverSuccessWithEvidenceGrokResultObject() async {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .grok,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x/chat_history.jsonl") },
+            locateExecutable: { _ in "/Users/tester/.grok/bin/grok" },
+            spawn: { _, _, _, _ in
+                ProcessRunResult(
+                    exitCode: 0,
+                    stdout: Self.grokSuccessJSON(result: "PONG_GROK", sessionID: "a1b2c3d4-0000-0000-0000-000000000001"),
+                    stderr: "",
+                    timedOut: false
+                )
+            }
+        )
+        let instruction = Instruction(id: "i-grok-ok", sessionID: "s1", sourceKind: "grok_build", text: "reply pong", createdAt: now)
+        let result = await adapter.deliver(instruction)
+        guard case .success(let receipt) = result else {
+            return XCTFail("expected success, got \(result)")
+        }
+        XCTAssertEqual(receipt.replyText, "PONG_GROK")
+        XCTAssertEqual(receipt.replyTurnID, "a1b2c3d4-0000-0000-0000-000000000001")
+    }
+
+    func testDeliverGrokFailsWhenExitZeroWithoutEvidence() async {
+        let adapter = AgentResumeDeliveryAdapter(
+            vendor: .grok,
+            locateSessionFile: { _ in URL(fileURLWithPath: "/tmp/x/chat_history.jsonl") },
+            locateExecutable: { _ in "/Users/tester/.grok/bin/grok" },
+            spawn: { _, _, _, _ in ProcessRunResult(exitCode: 0, stdout: "", stderr: "", timedOut: false) }
+        )
+        let instruction = Instruction(id: "i-grok-noop", sessionID: "s1", sourceKind: "grok_build", text: "go", createdAt: now)
+        if case .success = await adapter.deliver(instruction) {
+            XCTFail("exit 0 with empty stdout must not count as a delivered Grok turn")
+        }
+    }
+
+    func testGrokEvidenceParsesStreamingFallback() {
+        // streaming-json / JSONL: a trailing result line still proves the turn.
+        let stream = [
+            #"{"type":"assistant","content":""}"#,
+            #"{"type":"result","subtype":"success","is_error":false,"result":"STREAM_PONG","session_id":"sid-stream"}"#
+        ].joined(separator: "\n")
+        let evidence = AgentResumeDeliveryAdapter.evidence(forVendor: .grok, stdout: stream)
+        XCTAssertEqual(evidence?.replyText, "STREAM_PONG")
+        XCTAssertEqual(evidence?.turnID, "sid-stream")
+    }
+
     func testDeliverFailsWhenExitZeroWithoutEvidenceClaude() async {
         // A stale/wrong session id or a rejected turn can exit 0 with empty or
         // unparseable stdout; exit code alone must never be treated as delivered.
@@ -311,6 +389,19 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
     }
 
     private nonisolated static func claudeSuccessJSON(result: String, sessionID: String = "692006d2-abf1-4780-99b2-eb0ce808ba05") -> String {
+        let payload: [String: Any] = [
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": result,
+            "session_id": sessionID
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: payload)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private nonisolated static func grokSuccessJSON(result: String, sessionID: String = "a1b2c3d4-0000-0000-0000-000000000001") -> String {
+        // Grok's `--output-format json` mirrors Claude Code's headless result object (INF-394).
         let payload: [String: Any] = [
             "type": "result",
             "subtype": "success",
@@ -608,5 +699,293 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         case .failure(let error):
             XCTFail("expected the hang to resolve into a normal success once the fake CLI woke up, got \(error)")
         }
+    }
+
+    // MARK: - INF-395: opencode two-way delivery adapter
+
+    private typealias OMessageRow = OpencodeTranscriptAdapter.MessageRow
+
+    // nonisolated so they can be referenced from the adapters' @Sendable closures.
+    private nonisolated static func opencodeSnapshot(directory: String?, messages: [OMessageRow]) -> OpencodeSessionSnapshot {
+        OpencodeSessionSnapshot(directory: directory, messages: messages)
+    }
+
+    private nonisolated static func opencodeReadyMessages() -> [OMessageRow] {
+        [
+            OMessageRow(id: "m1", role: "user", finish: nil, timeCreated: 1000, parts: [.init(type: "text", text: "reply pong")]),
+            OMessageRow(id: "m2", role: "assistant", finish: "stop", timeCreated: 2000, parts: [.init(type: "text", text: "done")])
+        ]
+    }
+
+    func testOpencodeResumeArguments() {
+        // opencode run --session <id> --format json "<text>". Never -m/--model
+        // (session/config decide) and never opencode's -p (that is --password).
+        let args = OpencodeResumeDeliveryAdapter.resumeArguments(sessionID: "ses_1", instruction: "reply pong")
+        XCTAssertEqual(args, ["run", "--session", "ses_1", "--format", "json", "reply pong"])
+        XCTAssertFalse(args.contains("-m"))
+        XCTAssertFalse(args.contains("--model"))
+        XCTAssertFalse(args.contains("-p"))
+    }
+
+    func testOpencodeCapabilityUnavailableWhenCLIMissing() {
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in Self.opencodeSnapshot(directory: "/tmp/p", messages: Self.opencodeReadyMessages()) },
+            locateExecutable: { _ in nil }
+        )
+        let cap = adapter.capability(forSessionID: "ses_1")
+        XCTAssertFalse(cap.canDeliver)
+        XCTAssertEqual(cap.reason, "Two-way unavailable: the opencode CLI was not found on PATH.")
+    }
+
+    func testOpencodeCapabilityUnavailableWhenSessionMissing() {
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in nil },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" }
+        )
+        let cap = adapter.capability(forSessionID: "ses_gone")
+        XCTAssertFalse(cap.canDeliver)
+        XCTAssertEqual(cap.reason, "Two-way unavailable: no opencode session for this session yet.")
+    }
+
+    func testOpencodeCapabilityRequiresIdleWhenAvailable() {
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in Self.opencodeSnapshot(directory: "/tmp/p", messages: Self.opencodeReadyMessages()) },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" }
+        )
+        let cap = adapter.capability(forSessionID: "ses_1")
+        XCTAssertTrue(cap.canDeliver)
+        XCTAssertTrue(cap.requiresIdle)
+    }
+
+    /// Process exits on its own before the DB poll finds a reply: today's
+    /// stdout-evidence path still applies (the DB has no completed turn after
+    /// the checkpoint here, so the exit wins the race).
+    func testOpencodeDeliverySucceedsWithCheckpointAndEvidence() async {
+        let stdout = [
+            #"{"type":"message.updated","properties":{"info":{"id":"msg_a","role":"assistant","sessionID":"ses_1"}}}"#,
+            #"{"type":"message.part.updated","properties":{"part":{"type":"text","text":"PONG_OPENCODE"}}}"#
+        ].joined(separator: "\n")
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in Self.opencodeSnapshot(directory: "/tmp/p", messages: Self.opencodeReadyMessages()) },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            startProcess: { _, _, _ in ExitingOpencodeProcess(ProcessRunResult(exitCode: 0, stdout: stdout, stderr: "", timedOut: false)) }
+        )
+        let instruction = Instruction(id: "i-oc", sessionID: "ses_1", sourceKind: "opencode", text: "reply pong", createdAt: now)
+        guard case .success(let receipt) = await adapter.deliver(instruction) else {
+            return XCTFail("expected success")
+        }
+        XCTAssertEqual(receipt.mechanism, "opencode-run")
+        // Checkpoint = the pre-delivery latest message time (ms), not a byte offset.
+        XCTAssertEqual(receipt.transcriptCheckpoint, 2000)
+        XCTAssertEqual(receipt.replyText, "PONG_OPENCODE")
+    }
+
+    /// New completion path (INF-395): `opencode run` lingers (never exits) after
+    /// writing the reply, so delivery must complete off the DATABASE and then
+    /// terminate the lingering child - not wait for process exit (which is what
+    /// timed out at 300s in the live gate).
+    func testOpencodeDeliverySucceedsWhenReplyLandsWhileProcessLingers() async {
+        // Snapshot flips mid-delivery: the pre-delivery state (checkpoint) has
+        // only the user turn; a later poll returns the completed assistant reply.
+        let initial = Self.opencodeSnapshot(directory: "/tmp/p", messages: [
+            OMessageRow(id: "u1", role: "user", finish: nil, timeCreated: 1000, parts: [.init(type: "text", text: "reply pong")])
+        ])
+        let withReply = Self.opencodeSnapshot(directory: "/tmp/p", messages: [
+            OMessageRow(id: "u1", role: "user", finish: nil, timeCreated: 1000, parts: [.init(type: "text", text: "reply pong")]),
+            OMessageRow(id: "a1", role: "assistant", finish: "stop", timeCreated: 2000, parts: [.init(type: "text", text: "PONG_DB")])
+        ])
+        let resolver = FlippingSnapshotResolver(initial: initial, withReply: withReply, flipAfterCalls: 1)
+        let process = LingeringOpencodeProcess()
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in resolver.next() },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            processTimeout: 5,
+            replyPollInterval: 0.02,
+            startProcess: { _, _, _ in process }
+        )
+        let instruction = Instruction(id: "i-oc-linger", sessionID: "ses_1", sourceKind: "opencode", text: "reply pong", createdAt: now)
+        guard case .success(let receipt) = await adapter.deliver(instruction) else {
+            return XCTFail("expected success from the DB reply while the process lingered")
+        }
+        XCTAssertEqual(receipt.replyText, "PONG_DB", "the authoritative DB turn is the evidence")
+        XCTAssertEqual(receipt.transcriptCheckpoint, 1000)
+        XCTAssertTrue(process.terminateRequested, "the lingering child must be terminated once the reply lands")
+    }
+
+    func testOpencodeDeliverySpawnsInSessionWorkingDirectory() async {
+        let recorder = WorkingDirectoryRecorder()
+        let stdout = #"{"type":"message.part.updated","properties":{"part":{"type":"text","text":"ok"},"info":{"role":"assistant"}}}"#
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in Self.opencodeSnapshot(directory: "/tmp/from-db", messages: Self.opencodeReadyMessages()) },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            startProcess: { _, _, workingDirectory in
+                recorder.record(workingDirectory)
+                return ExitingOpencodeProcess(ProcessRunResult(exitCode: 0, stdout: stdout, stderr: "", timedOut: false))
+            }
+        )
+        // The frozen instruction working directory wins over the DB directory.
+        let instruction = Instruction(
+            id: "i-oc-cwd", sessionID: "ses_1", sourceKind: "opencode", text: "go", createdAt: now,
+            workingDirectory: "/Users/tester/proj"
+        )
+        _ = await adapter.deliver(instruction)
+        XCTAssertEqual(recorder.captured, "/Users/tester/proj")
+    }
+
+    func testOpencodeDeliveryFailsWhenSessionGone() async {
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in nil },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            startProcess: { _, _, _ in
+                XCTFail("a missing session must fail before any process is started")
+                return ExitingOpencodeProcess(ProcessRunResult(exitCode: 0, stdout: "", stderr: "", timedOut: false))
+            }
+        )
+        let instruction = Instruction(id: "i-oc-gone", sessionID: "ses_gone", sourceKind: "opencode", text: "go", createdAt: now)
+        guard case .failure(.sessionGone) = await adapter.deliver(instruction) else {
+            return XCTFail("expected sessionGone")
+        }
+    }
+
+    func testOpencodeDeliveryFailsWhenExitZeroWithoutEvidence() async {
+        // Process exits 0 with no assistant text and the DB has no reply: fail closed.
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in Self.opencodeSnapshot(directory: "/tmp/p", messages: Self.opencodeReadyMessages()) },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            startProcess: { _, _, _ in ExitingOpencodeProcess(ProcessRunResult(exitCode: 0, stdout: #"{"type":"session.idle"}"#, stderr: "", timedOut: false)) }
+        )
+        let instruction = Instruction(id: "i-oc-noev", sessionID: "ses_1", sourceKind: "opencode", text: "go", createdAt: now)
+        guard case .failure(.deliveryFailed(let detail)) = await adapter.deliver(instruction) else {
+            return XCTFail("expected deliveryFailed")
+        }
+        XCTAssertEqual(detail, "exited 0 but no assistant turn in output")
+    }
+
+    func testOpencodeEvidenceIgnoresUserEchoWithoutAssistantMarker() {
+        // A stream that only echoes the user turn (no assistant role marker
+        // anywhere) is not evidence of a completed reply.
+        let stdout = #"{"type":"message.part.updated","properties":{"part":{"type":"text","text":"the user instruction"},"info":{"role":"user"}}}"#
+        XCTAssertNil(OpencodeResumeDeliveryAdapter.evidence(fromStdout: stdout))
+    }
+
+    /// Regression (INF-395 gate): the spawned CLI must get a nulled stdin.
+    /// `/bin/cat` with no arguments reads stdin until EOF, so with an
+    /// inherited never-EOF descriptor it hangs to the timeout (exactly how
+    /// `opencode run` stalled for 300s in the live f24 gate), while a nulled
+    /// stdin returns immediately with exit 0.
+    func testDefaultSpawnNullsChildStdinSoStdinReadersExitImmediately() async {
+        let result = await AgentResumeDeliveryAdapter.defaultSpawn(
+            "/bin/cat", [], timeout: 10
+        )
+        XCTAssertFalse(result.timedOut, "cat must see EOF instantly from a nulled stdin, never hang to the timeout")
+        XCTAssertEqual(result.exitCode, 0)
+    }
+
+    /// Neither a DB reply nor a process exit within the window: fail as timed
+    /// out, and still terminate the lingering child so it never orphans.
+    func testOpencodeDeliveryFailsOnTimeout() async {
+        let process = LingeringOpencodeProcess()
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in Self.opencodeSnapshot(directory: "/tmp/p", messages: Self.opencodeReadyMessages()) },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            processTimeout: 0.3,
+            replyPollInterval: 0.05,
+            startProcess: { _, _, _ in process }
+        )
+        let instruction = Instruction(id: "i-oc-timeout", sessionID: "ses_1", sourceKind: "opencode", text: "go", createdAt: now)
+        guard case .failure(.deliveryFailed(let detail)) = await adapter.deliver(instruction) else {
+            return XCTFail("expected deliveryFailed")
+        }
+        XCTAssertTrue(detail.lowercased().contains("timed out"), "expected a timeout message, got: \(detail)")
+        XCTAssertTrue(process.terminateRequested, "a timed-out delivery must still terminate the lingering child")
+    }
+}
+
+// MARK: - INF-395 opencode process test doubles (shared across two-way tests)
+
+import AttacheCore
+
+/// A fake `OpencodeRunningProcess` that exits immediately with a fixed result
+/// (the "process exits on its own first" branch).
+final class ExitingOpencodeProcess: OpencodeRunningProcess, @unchecked Sendable {
+    private let result: ProcessRunResult
+    init(_ result: ProcessRunResult) { self.result = result }
+    func waitForExit() async -> ProcessRunResult { result }
+    func terminate() {}
+}
+
+/// A fake `OpencodeRunningProcess` that NEVER exits on its own, mirroring the
+/// real lingering `opencode run`: `waitForExit()` only resolves once
+/// `terminate()` is called, and records that termination was requested.
+final class LingeringOpencodeProcess: OpencodeRunningProcess, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<ProcessRunResult, Never>?
+    private var finished = false
+    private var terminated = false
+
+    var terminateRequested: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return terminated
+    }
+
+    func waitForExit() async -> ProcessRunResult {
+        await withCheckedContinuation { cont in
+            lock.lock()
+            if finished {
+                lock.unlock()
+                cont.resume(returning: ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: false))
+                return
+            }
+            continuation = cont
+            lock.unlock()
+        }
+    }
+
+    func terminate() {
+        lock.lock()
+        terminated = true
+        finished = true
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: ProcessRunResult(exitCode: -1, stdout: "", stderr: "", timedOut: false))
+    }
+}
+
+/// Returns `initial` for the first `flipAfterCalls` loads (so the delivery
+/// checkpoint is captured from the pre-reply state), then `withReply`, so a
+/// poll observes the completed turn appearing mid-delivery.
+final class FlippingSnapshotResolver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    private let initial: OpencodeSessionSnapshot
+    private let withReply: OpencodeSessionSnapshot
+    private let flipAfterCalls: Int
+
+    init(initial: OpencodeSessionSnapshot, withReply: OpencodeSessionSnapshot, flipAfterCalls: Int) {
+        self.initial = initial
+        self.withReply = withReply
+        self.flipAfterCalls = flipAfterCalls
+    }
+
+    func next() -> OpencodeSessionSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        calls += 1
+        return calls > flipAfterCalls ? withReply : initial
+    }
+}
+
+/// Thread-safe capture of the working directory a `startProcess` was invoked
+/// with (the closure is `@Sendable` and may run off the test's actor).
+final class WorkingDirectoryRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String??
+    func record(_ workingDirectory: String?) {
+        lock.lock(); defer { lock.unlock() }
+        value = workingDirectory
+    }
+    var captured: String?? {
+        lock.lock(); defer { lock.unlock() }
+        return value
     }
 }

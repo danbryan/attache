@@ -157,6 +157,31 @@ swift test
   using. `scripts/claude-two-way-smoke.sh` (the f21 gate) sets it to a
   disposable directory holding only an extracted `claudeAiOauth` credential,
   never the real `~/.claude`.
+- `scripts/grok-two-way-smoke.sh` (the f23 gate, INF-394) is the Grok Build
+  two-way round trip: `grok --resume <id> --output-format json -p` (top-level
+  flags; `grok agent --resume` is rejected by the CLI). Unlike `CODEX_HOME` /
+  `CLAUDE_CONFIG_DIR`, the real `grok` CLI has no home override, so the gate
+  creates its ONE throwaway session in the real `~/.grok` but under a UNIQUE
+  temp working directory, so its `~/.grok/sessions/<encoded-project>/` dir is
+  unambiguous to find and to clean up; it never resumes or deletes a
+  pre-existing session. Opt-in: inert unless
+  `ATTACHE_RELEASE_READINESS_WITH_GROK=1`. `GROK_HOME` is honored by
+  `GrokPaths` (and by `AttacheSessionReader.sessionFileURL`, whose Grok branch
+  matches `chat_history.jsonl` by the session-id directory name) for the
+  scanner/watcher/two-way lookup, but not by the real `grok` binary.
+- `scripts/opencode-two-way-smoke.sh` (the f24 gate, INF-395) is the opencode
+  two-way round trip: `opencode run --session <id> --format json` over the
+  shared SQLite database (sessions are `message`/`part` rows, not a per-session
+  JSONL file, so readiness and positional reply correlation run over rows via
+  the SQLite two-way seam, `OpencodeDeliveryReadiness` / `OpencodeReplyCorrelation`
+  / `OpencodeResumeDeliveryAdapter`). Never pass `-m/--model` (session/config
+  decide) nor `-p` (that is opencode's `--password`, not print mode). UNLIKE
+  Grok, the real `opencode` CLI honors `XDG_DATA_HOME` (verified: `opencode
+  debug paths`), so the gate points it at a UNIQUE temp data home for BOTH the
+  CLI and the app (and the app's own spawned `opencode run`), copying only the
+  real `auth.json` in so the model call authenticates. It therefore NEVER
+  reads, writes, or mutates the real `~/.local/share/opencode/opencode.db`.
+  Opt-in: inert unless `ATTACHE_RELEASE_READINESS_WITH_OPENCODE=1`.
 - `ATTACHE_FAKE_PREMIUM_VOICE=1` makes the `.attachePremium` synthesize path
   write a deterministic ~1.5s tone WAV (nonzero energy, correct header via the
   E1 wav writer) instead of dlopen'ing the runtime, loading the model, or
@@ -470,9 +495,13 @@ Before claiming a change works, verify:
   when the candidate also needs the real Codex f7/f8 round trips in the same
   run, and `ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1` when it also needs the
   real Claude Code f21 round trip (`scripts/claude-two-way-smoke.sh`,
-  INF-257/E2), and `ATTACHE_RELEASE_READINESS_WITH_PREMIUM_VOICE=1` when it also
+  INF-257/E2), `ATTACHE_RELEASE_READINESS_WITH_GROK=1` when it also needs the
+  real Grok Build f23 round trip (`scripts/grok-two-way-smoke.sh`, INF-394),
+  `ATTACHE_RELEASE_READINESS_WITH_OPENCODE=1` when it also needs the real
+  opencode f24 round trip (`scripts/opencode-two-way-smoke.sh`, INF-395),
+  and `ATTACHE_RELEASE_READINESS_WITH_PREMIUM_VOICE=1` when it also
   needs the real Attaché Premium voice synthesis gate
-  (`scripts/premium-voice-smoke.sh`, INF-385/E5); all three are opt-in and
+  (`scripts/premium-voice-smoke.sh`, INF-385/E5); all five are opt-in and
   independent of each other.
 
 The UI smoke harness (INF-156) is the standard UI verification step. It builds

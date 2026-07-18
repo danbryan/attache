@@ -524,6 +524,13 @@ public enum AttacheSessionReader {
             claudeHome.appendingPathComponent("projects", isDirectory: true)
         ]
         var best: (url: URL, modified: Date)?
+        func consider(_ url: URL) {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? Date(timeIntervalSince1970: 0)
+            if best == nil || modified > best!.modified {
+                best = (url, modified)
+            }
+        }
         for directory in directories {
             guard let enumerator = fileManager.enumerator(
                 at: directory,
@@ -537,11 +544,35 @@ public enum AttacheSessionReader {
                       url.lastPathComponent.contains(id) else {
                     continue
                 }
-                let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-                    ?? Date(timeIntervalSince1970: 0)
-                if best == nil || modified > best!.modified {
-                    best = (url, modified)
+                consider(url)
+            }
+        }
+        // Grok Build (INF-394) keys sessions differently from Codex/Claude:
+        // `$GROK_HOME/sessions/<encoded-project>/<session-id>/chat_history.jsonl`,
+        // where the session id is the directory name and the transcript is
+        // always `chat_history.jsonl`, not `<id>.jsonl`. Match the session-id
+        // directory (case-insensitively, mirroring the scanner) so two-way
+        // delivery can locate a Grok session file the same way it does the
+        // other sources. GROK_HOME is honored so a disposable home resolves.
+        let grokSessions = GrokPaths.sessionsDirectory()
+        if let projectDirs = try? fileManager.contentsOfDirectory(
+            at: grokSessions, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) {
+            let lowercasedID = id.lowercased()
+            for projectDir in projectDirs {
+                let sessionDir = projectDir.appendingPathComponent(id, isDirectory: true)
+                var candidate = sessionDir.appendingPathComponent("chat_history.jsonl")
+                if !fileManager.fileExists(atPath: candidate.path) {
+                    // Fall back to a case-insensitive directory-name match.
+                    guard let sessionDirs = try? fileManager.contentsOfDirectory(
+                        at: projectDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                    ), let match = sessionDirs.first(where: { $0.lastPathComponent.lowercased() == lowercasedID }) else {
+                        continue
+                    }
+                    candidate = match.appendingPathComponent("chat_history.jsonl")
+                    guard fileManager.fileExists(atPath: candidate.path) else { continue }
                 }
+                consider(candidate)
             }
         }
         return best?.url

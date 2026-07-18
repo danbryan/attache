@@ -64,6 +64,36 @@ final class GrokBuildSessionScannerTests: XCTestCase {
         XCTAssertEqual(record.sourceKind, .grokBuild)
     }
 
+    /// INF-394: two-way delivery locates a Grok session file through
+    /// `AttacheSessionReader.sessionFileURL`, which (unlike Codex/Claude, whose
+    /// files are `<id>.jsonl`) must find `chat_history.jsonl` under the session
+    /// directory whose name IS the session id, honoring GROK_HOME.
+    func testSessionFileURLResolvesGrokSessionByDirectoryName() throws {
+        let home = makeGrokHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let sessionsRoot = home.appendingPathComponent("sessions", isDirectory: true)
+        let sessionID = "abcdef01-0000-0000-0000-000000000009"
+        try writeSession(
+            sessionsRoot: sessionsRoot,
+            encodedProject: "%2FUsers%2Ftester%2Fproject",
+            sessionID: sessionID,
+            chatHistoryLines: [["type": "assistant", "content": "hi", "tool_calls": NSNull()]]
+        )
+        setenv("GROK_HOME", home.path, 1)
+        defer { unsetenv("GROK_HOME") }
+
+        let url = AttacheSessionReader.sessionFileURL(forSessionID: sessionID)
+        XCTAssertEqual(url?.lastPathComponent, "chat_history.jsonl")
+        XCTAssertEqual(url?.deletingLastPathComponent().lastPathComponent, sessionID)
+
+        // The resume id may arrive uppercased; the match is case-insensitive
+        // (and on a case-insensitive volume the returned URL simply carries the
+        // caller's casing, still resolving to the same session file).
+        let upper = AttacheSessionReader.sessionFileURL(forSessionID: sessionID.uppercased())
+        XCTAssertEqual(upper?.lastPathComponent, "chat_history.jsonl")
+        XCTAssertEqual(upper?.deletingLastPathComponent().lastPathComponent.lowercased(), sessionID)
+    }
+
     func testScannerPrefersPlanMdHeadingOverFirstUserPrompt() throws {
         let home = makeGrokHome()
         defer { try? FileManager.default.removeItem(at: home) }

@@ -25,10 +25,29 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
     enum Vendor {
         case claude
         case codex
+        case grok
 
-        var sourceKind: String { self == .claude ? SourceKind.claudeCode.rawValue : SourceKind.codex.rawValue }
-        var executableName: String { self == .claude ? "claude" : "codex" }
-        var displayName: String { self == .claude ? "Claude Code" : "Codex" }
+        var sourceKind: String {
+            switch self {
+            case .claude: return SourceKind.claudeCode.rawValue
+            case .codex: return SourceKind.codex.rawValue
+            case .grok: return SourceKind.grokBuild.rawValue
+            }
+        }
+        var executableName: String {
+            switch self {
+            case .claude: return "claude"
+            case .codex: return "codex"
+            case .grok: return "grok"
+            }
+        }
+        var displayName: String {
+            switch self {
+            case .claude: return "Claude Code"
+            case .codex: return "Codex"
+            case .grok: return "Grok Build"
+            }
+        }
     }
 
     /// Hard ceiling on a resume subprocess (INF-238). A resume that never exits
@@ -95,10 +114,12 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
         }
         let checkpoint = Self.fileSize(sessionFile)
         let arguments = Self.resumeArguments(vendor: vendor, sessionID: instruction.sessionID, instruction: instruction.text)
-        // Only Claude needs the session's original working directory set
-        // (INF-260); Codex's --skip-git-repo-check is already cwd-independent
-        // by design, so its spawn behavior is unchanged.
-        let workingDirectory = vendor == .claude ? instruction.workingDirectory : nil
+        // Claude and Grok Build both resolve a resumed session relative to the
+        // cwd it was created in (INF-260/INF-394): Claude by print-mode design,
+        // Grok because its on-disk session path is keyed by the percent-encoded
+        // project cwd. Codex's --skip-git-repo-check is already cwd-independent,
+        // so only it spawns without a working directory.
+        let workingDirectory = vendor == .codex ? nil : instruction.workingDirectory
         let result = await spawn(executable, arguments, processTimeout, workingDirectory)
 
         if result.timedOut {
@@ -138,6 +159,16 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
             // resume-by-id in that case. `--json` prints JSONL thread events;
             // an `item.completed` agent_message is the evidence a turn completed.
             return ["exec", "resume", "--skip-git-repo-check", "--json", sessionID, instruction]
+        case .grok:
+            // `grok --resume <id> --output-format json -p "<instruction>"`
+            // (verified against grok 0.1.219 on this Mac, INF-394): `--resume`,
+            // `-p/--single`, and `--output-format` are TOP-LEVEL grok flags, not
+            // `grok agent` subflags (`grok agent --resume` is rejected as an
+            // unexpected argument). Single-turn print mode acts with the user's
+            // own Grok Build permissions; `--output-format json` prints a
+            // headless result object, the only reliable evidence the turn ran
+            // (a silent no-op or a stale/wrong id exits without one).
+            return ["--resume", sessionID, "--output-format", "json", "-p", instruction]
         }
     }
 
@@ -148,6 +179,7 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
         switch vendor {
         case .claude: return claudeEvidence(fromStdout: stdout)
         case .codex: return codexEvidence(fromStdout: stdout)
+        case .grok: return grokEvidence(fromStdout: stdout)
         }
     }
 
@@ -200,12 +232,68 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
         return (text, turnID)
     }
 
-    private static func failureMessage(exitCode: Int32, stderr: String) -> String {
+    /// Grok Build contract (INF-394). Grok's `--output-format json` mirrors
+    /// Claude Code's headless result object (the grok CLI's own help
+    /// cross-references Claude Code flags throughout): the primary shape is a
+    /// single JSON object carrying a non-empty `result` string, with
+    /// `is_error` absent or false. A streaming/JSONL emission is tolerated as a
+    /// fallback (the last non-empty assistant line, or a trailing result
+    /// object), so a completed turn is still recognized. As with the other
+    /// vendors, exit 0 alone is not evidence: only real assistant text is.
+    private static func grokEvidence(fromStdout stdout: String) -> (replyText: String, turnID: String?)? {
+        let trimmed = stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Primary: the whole output is one JSON result object.
+        if let single = grokEvidence(fromObjectText: trimmed) { return single }
+
+        // Fallback: streaming-json / JSONL. Take the last line that carries a
+        // result object or a non-empty assistant message.
+        var turnID: String?
+        var replyText: String?
+        for line in trimmed.split(whereSeparator: \.isNewline) {
+            let lineText = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !lineText.isEmpty,
+                  let data = lineText.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            if let id = (object["session_id"] as? String) ?? (object["id"] as? String) { turnID = id }
+            if let found = grokAssistantText(fromObject: object) { replyText = found }
+        }
+        guard let text = replyText else { return nil }
+        return (text, turnID)
+    }
+
+    /// Interpret one decoded Grok JSON object as a completed turn's text, or nil.
+    private static func grokEvidence(fromObjectText text: String) -> (replyText: String, turnID: String?)? {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["is_error"] as? Bool != true,
+              let reply = grokAssistantText(fromObject: object) else { return nil }
+        return (reply, (object["session_id"] as? String) ?? (object["id"] as? String))
+    }
+
+    /// Non-empty assistant text from a Grok result/assistant object: the
+    /// Claude-style `result` field, or an assistant message's `content` string.
+    private static func grokAssistantText(fromObject object: [String: Any]) -> String? {
+        if let result = (object["result"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !result.isEmpty {
+            return result
+        }
+        if object["type"] as? String == "assistant",
+           let content = (object["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
+            return content
+        }
+        return nil
+    }
+
+    /// Not `private`: `OpencodeResumeDeliveryAdapter` reuses the same
+    /// exit-code / stderr-tail failure formatting so the two-way audit log
+    /// reads identically across every vendor.
+    static func failureMessage(exitCode: Int32, stderr: String) -> String {
         let tail = tailBytes(stderr, max: errorMessageTailBytes).trimmingCharacters(in: .whitespacesAndNewlines)
         return tail.isEmpty ? "exit \(exitCode)" : tail
     }
 
-    private static func tailBytes(_ text: String, max: Int) -> String {
+    static func tailBytes(_ text: String, max: Int) -> String {
         guard text.utf8.count > max else { return text }
         let tailData = Data(text.utf8).suffix(max)
         return String(decoding: tailData, as: UTF8.self)
@@ -235,6 +323,12 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
             let errPipe = Pipe()
             process.standardOutput = outPipe
             process.standardError = errPipe
+            // Null stdin explicitly: an inherited never-EOF descriptor makes
+            // `opencode run` block reading it until the delivery watchdog fires
+            // (proven empirically, INF-395: open stdin hangs, /dev/null returns
+            // in seconds). Every adapter passes the instruction via argv, so no
+            // vendor reads stdin on purpose.
+            process.standardInput = FileHandle.nullDevice
 
             let outBuffer = BoundedOutputBuffer(capacity: maxCapturedBytes)
             let errBuffer = BoundedOutputBuffer(capacity: maxCapturedBytes)
@@ -312,6 +406,251 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
     }
 }
 
+/// A started `opencode run` subprocess whose completion the adapter watches.
+/// opencode's event loop LINGERS after it has finished the turn and written the
+/// reply to the database (sampled parked in `kevent64` with the turn already
+/// logged "exiting loop", INF-395), so process exit is NOT the completion
+/// signal. The adapter drives completion off the DB instead and terminates this
+/// handle once the reply lands. Injected so tests substitute a fake that never
+/// exits on its own.
+protocol OpencodeRunningProcess: Sendable {
+    /// Resolves when the process exits on its own (or is terminated). For a
+    /// lingering `opencode run` this only returns after `terminate()`.
+    func waitForExit() async -> ProcessRunResult
+    /// SIGTERM the child, escalating to SIGKILL after a grace period.
+    func terminate()
+}
+
+/// Delivers a confirmed instruction into an opencode session (INF-395). Unlike
+/// Codex/Claude Code/Grok Build, opencode has no per-session JSONL transcript
+/// file: every session is rows in one shared SQLite database. So this is a
+/// sibling to `AgentResumeDeliveryAdapter` rather than another `Vendor` case -
+/// the resume shape genuinely differs (a DB-backed session lookup, a
+/// message-time delivery checkpoint instead of a file byte offset, cwd from the
+/// session row), AND its completion semantics differ: `opencode run` finishes
+/// the turn, writes the reply to the database, then LINGERS instead of exiting.
+/// So delivery does NOT wait for process exit; it polls the database for the
+/// first completed assistant turn after the pre-delivery checkpoint and, once
+/// that reply lands, terminates the lingering child and returns success with
+/// the DB turn as authoritative evidence (stdout evidence is best-effort, used
+/// only if the process happens to exit on its own first). Like the file
+/// adapter, this is NOT sandboxed: it inherits the user's own opencode
+/// permissions.
+///
+/// Command: `opencode run --session <id> --format json "<instruction>"`
+/// (verified flags, opencode 1.17.15). CRITICAL: never pass `-m/--model` (nor
+/// opencode's `-p`, which is `--password`, not print mode); the session/config
+/// decides the model.
+struct OpencodeResumeDeliveryAdapter: InstructionDeliveryAdapter {
+    static let executableName = "opencode"
+    static let displayName = "opencode"
+
+    /// Loads the session's DB snapshot (directory + ordered messages), or nil
+    /// if the session row does not exist. Injected so tests supply fixtures.
+    /// Also the completion source: polled after spawn for the reply turn.
+    let loadSnapshot: @Sendable (String) -> OpencodeSessionSnapshot?
+    let locateExecutable: @Sendable (String) -> String?
+    /// Ceiling on the whole delivery: if neither the DB reply nor a process
+    /// exit appears within this window, delivery fails as timed out.
+    let processTimeout: TimeInterval
+    /// How often the database is polled for the completed reply turn.
+    let replyPollInterval: TimeInterval
+    /// Starts (does not await) the `opencode run` subprocess and returns a
+    /// terminable handle. Injected so tests supply a fake that never exits.
+    let startProcess: @Sendable (_ executable: String, _ arguments: [String], _ workingDirectory: String?) -> OpencodeRunningProcess
+
+    var sourceKind: String { SourceKind.opencode.rawValue }
+
+    init(
+        loadSnapshot: @escaping @Sendable (String) -> OpencodeSessionSnapshot?,
+        locateExecutable: @escaping @Sendable (String) -> String? = { CLILanguageModel.locate($0) },
+        processTimeout: TimeInterval = AgentResumeDeliveryAdapter.defaultProcessTimeout,
+        replyPollInterval: TimeInterval = 2,
+        startProcess: (@Sendable (_ executable: String, _ arguments: [String], _ workingDirectory: String?) -> OpencodeRunningProcess)? = nil
+    ) {
+        self.loadSnapshot = loadSnapshot
+        self.locateExecutable = locateExecutable
+        self.processTimeout = processTimeout
+        self.replyPollInterval = replyPollInterval
+        self.startProcess = startProcess ?? { executable, arguments, workingDirectory in
+            OpencodeSpawnedProcess(executable: executable, arguments: arguments, workingDirectory: workingDirectory)
+        }
+    }
+
+    func capability(forSessionID sessionID: String) -> DeliveryCapability {
+        guard locateExecutable(Self.executableName) != nil else {
+            return .unavailable("Two-way unavailable: the opencode CLI was not found on PATH.")
+        }
+        guard loadSnapshot(sessionID) != nil else {
+            return .unavailable("Two-way unavailable: no opencode session for this session yet.")
+        }
+        // A headless `opencode run` is a second writer; wait for the session to be quiet.
+        return DeliveryCapability(canDeliver: true, requiresIdle: true)
+    }
+
+    /// The race outcome between the lingering process's own exit and the
+    /// database showing the completed reply.
+    private enum DeliveryOutcome {
+        case replyLanded(text: String)     // DB reply appeared (authoritative)
+        case processExited(ProcessRunResult)
+        case timedOut
+    }
+
+    func deliver(_ instruction: Instruction) async -> Result<DeliveryReceipt, InstructionDeliveryError> {
+        guard let executable = locateExecutable(Self.executableName) else {
+            return .failure(.notDeliverable("opencode CLI not found."))
+        }
+        guard let snapshot = loadSnapshot(instruction.sessionID) else {
+            return .failure(.sessionGone)
+        }
+        // Message-time cursor captured BEFORE the resume (not a file byte
+        // offset): the reply is the first completed assistant turn created
+        // after this. Frozen `workingDirectory` (the session's project dir,
+        // staged the same way Claude/Grok freeze it) is the cwd; the
+        // session/config decide the model, never a flag.
+        let checkpoint = OpencodeDeliveryReadiness.checkpoint(messages: snapshot.messages)
+        let workingDirectory = instruction.workingDirectory ?? snapshot.directory
+        let arguments = Self.resumeArguments(sessionID: instruction.sessionID, instruction: instruction.text)
+        let process = startProcess(executable, arguments, workingDirectory)
+
+        // opencode run writes the reply then lingers, so race the DB poll against
+        // the process's own exit, bounded by processTimeout. Whichever resolves
+        // first wins; a lingering child is always terminated so it never orphans.
+        let sessionID = instruction.sessionID
+        let checkpointCopy = checkpoint
+        let loadSnapshot = self.loadSnapshot
+        let pollInterval = replyPollInterval
+        let deadline = Date().addingTimeInterval(processTimeout)
+
+        let outcome: DeliveryOutcome = await withTaskGroup(of: DeliveryOutcome.self) { group in
+            group.addTask { .processExited(await process.waitForExit()) }
+            group.addTask {
+                func reply() -> String? {
+                    guard let messages = loadSnapshot(sessionID)?.messages else { return nil }
+                    return OpencodeReplyCorrelation.firstCompletedAssistantTurn(
+                        messages: messages, afterCheckpoint: checkpointCopy
+                    )?.text
+                }
+                while !Task.isCancelled {
+                    if let text = reply() { return .replyLanded(text: text) }
+                    let remaining = deadline.timeIntervalSinceNow
+                    guard remaining > 0 else { break }
+                    let nap = min(pollInterval, remaining)
+                    try? await Task.sleep(nanoseconds: UInt64(max(0, nap) * 1_000_000_000))
+                }
+                if let text = reply() { return .replyLanded(text: text) }
+                return .timedOut
+            }
+            let first = await group.next() ?? .timedOut
+            // Terminate the lingering child unless it already exited on its own;
+            // this also unblocks the exit-wait task so the group can drain.
+            if case .processExited = first {} else { process.terminate() }
+            group.cancelAll()
+            for await _ in group {}
+            return first
+        }
+
+        switch outcome {
+        case .replyLanded(let text):
+            // The database is authoritative for opencode. Return its completed
+            // turn as evidence regardless of what the (still-running) stdout held.
+            return .success(DeliveryReceipt(
+                mechanism: "opencode-run",
+                transcriptCheckpoint: checkpoint,
+                replyText: text,
+                replyTurnID: nil
+            ))
+        case .timedOut:
+            return .failure(.deliveryFailed("opencode did not respond within \(Int(processTimeout))s; delivery timed out."))
+        case .processExited(let result):
+            // The process exited on its own before the DB poll saw a reply:
+            // fall back to today's stdout-evidence path, unchanged.
+            if result.timedOut {
+                return .failure(.deliveryFailed("opencode did not respond within \(Int(processTimeout))s; delivery timed out."))
+            }
+            guard result.exitCode == 0 else {
+                return .failure(.deliveryFailed(AgentResumeDeliveryAdapter.failureMessage(exitCode: result.exitCode, stderr: result.stderr)))
+            }
+            guard let evidence = Self.evidence(fromStdout: result.stdout) else {
+                // Exit 0 alone is not proof of an accepted turn (a stale/wrong id
+                // or a rejected turn can no-op silently); require parsed evidence.
+                return .failure(.deliveryFailed("exited 0 but no assistant turn in output"))
+            }
+            return .success(DeliveryReceipt(
+                mechanism: "opencode-run",
+                transcriptCheckpoint: checkpoint,
+                replyText: evidence.replyText,
+                replyTurnID: evidence.turnID
+            ))
+        }
+    }
+
+    /// Argument vector for `opencode run`. Pure and testable. Never carries
+    /// `-m/--model` (the session/config choose the model) nor opencode's `-p`
+    /// (which is `--password`).
+    static func resumeArguments(sessionID: String, instruction: String) -> [String] {
+        ["run", "--session", sessionID, "--format", "json", instruction]
+    }
+
+    /// Parse `opencode run --format json` output for evidence of a completed
+    /// assistant turn.
+    ///
+    /// ASSUMPTION (INF-395, unverified until the f24 gate runs the real CLI):
+    /// `--format json` emits opencode's raw event bus as JSONL, in which the
+    /// assistant reply surfaces as text-type parts (`{"type":"text","text":...}`,
+    /// possibly nested under a `part`/`properties` envelope) alongside an event
+    /// whose object carries `role == "assistant"`. This parser is deliberately
+    /// shape-agnostic and defensive (like `grokEvidence`): it deep-scans every
+    /// JSON event for the longest text-type value and any session/message id,
+    /// and only accepts the result as evidence when it ALSO saw an
+    /// `assistant`-role marker somewhere in the stream (so a bare echo of the
+    /// user turn can't masquerade as a completed reply). Fails closed (`nil`)
+    /// when no such text is found. The authoritative reply text used for
+    /// narration/correlation comes from the SQLite rows, not this string, so a
+    /// partial or streamed capture here still can't corrupt the filed card.
+    static func evidence(fromStdout stdout: String) -> (replyText: String, turnID: String?)? {
+        var best = ""
+        var turnID: String?
+        var sawAssistant = false
+        for rawLine in stdout.split(whereSeparator: \.isNewline) {
+            let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty,
+                  let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+            scanForEvidence(object, best: &best, turnID: &turnID, sawAssistant: &sawAssistant)
+        }
+        let trimmed = best.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard sawAssistant, !trimmed.isEmpty else { return nil }
+        return (trimmed, turnID)
+    }
+
+    /// Recursively walk one decoded JSON event, keeping the longest text-type
+    /// value seen (the fully-streamed reply is the longest), the last
+    /// session/message identifier, and whether any assistant-role marker
+    /// appeared.
+    private static func scanForEvidence(
+        _ value: Any,
+        best: inout String,
+        turnID: inout String?,
+        sawAssistant: inout Bool
+    ) {
+        if let object = value as? [String: Any] {
+            if (object["role"] as? String) == "assistant" { sawAssistant = true }
+            if object["type"] as? String == "text",
+               let text = (object["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               text.count > best.count {
+                best = text
+            }
+            for key in ["sessionID", "session_id", "sessionId", "messageID", "message_id"] {
+                if let id = object[key] as? String, !id.isEmpty { turnID = id }
+            }
+            for nested in object.values { scanForEvidence(nested, best: &best, turnID: &turnID, sawAssistant: &sawAssistant) }
+        } else if let array = value as? [Any] {
+            for element in array { scanForEvidence(element, best: &best, turnID: &turnID, sawAssistant: &sawAssistant) }
+        }
+    }
+}
+
 /// Thread-safe tail buffer: keeps only the most recent `capacity` bytes so a
 /// runaway or looping resume process can't grow captured output unbounded.
 private final class BoundedOutputBuffer: @unchecked Sendable {
@@ -337,6 +676,113 @@ private final class BoundedOutputBuffer: @unchecked Sendable {
     }
 }
 
+/// The production `OpencodeRunningProcess` (INF-395). Starts `opencode run` with
+/// the same hardened setup `AgentResumeDeliveryAdapter.defaultSpawn` uses (env
+/// HOME/PATH, nulled stdin so it never blocks, bounded output capture, cwd), but
+/// - critically - imposes NO internal timeout watchdog. opencode lingers after
+/// finishing the turn, so the adapter, not this process, owns the deadline and
+/// calls `terminate()`. `waitForExit()` only resolves when the process actually
+/// exits (which, for a lingering child, means after `terminate()`); reading
+/// `terminationStatus` is safe there because Foundation invokes
+/// `terminationHandler` only after the process has exited.
+private final class OpencodeSpawnedProcess: OpencodeRunningProcess, @unchecked Sendable {
+    private let process = Process()
+    private let outBuffer = BoundedOutputBuffer(capacity: AgentResumeDeliveryAdapter.maxCapturedBytes)
+    private let errBuffer = BoundedOutputBuffer(capacity: AgentResumeDeliveryAdapter.maxCapturedBytes)
+    private let lock = NSLock()
+    private var result: ProcessRunResult?
+    private var waiter: CheckedContinuation<ProcessRunResult, Never>?
+    /// Grace before SIGTERM escalates to SIGKILL.
+    private static let killGracePeriod: TimeInterval = 5
+
+    init(executable: String, arguments: [String], workingDirectory: String?) {
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        if let workingDirectory, FileManager.default.fileExists(atPath: workingDirectory) {
+            process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory, isDirectory: true)
+        }
+        var env = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        env["HOME"] = home
+        env["PATH"] = CLILanguageModel.mergedPATH(existing: env["PATH"], home: home)
+        process.environment = env
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        // Same rationale as defaultSpawn: an inherited never-EOF stdin makes
+        // `opencode run` block; the instruction travels via argv.
+        process.standardInput = FileHandle.nullDevice
+
+        let outBuffer = self.outBuffer
+        let errBuffer = self.errBuffer
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            outBuffer.append(data)
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            errBuffer.append(data)
+        }
+        process.terminationHandler = { [weak self] proc in
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            self?.finish(exitCode: proc.terminationStatus)
+        }
+        do {
+            try process.run()
+        } catch {
+            errBuffer.append(Data(error.localizedDescription.utf8))
+            finish(exitCode: -1)
+        }
+    }
+
+    private func finish(exitCode: Int32) {
+        lock.lock()
+        if result != nil { lock.unlock(); return }
+        let resolved = ProcessRunResult(
+            exitCode: exitCode,
+            stdout: outBuffer.string(),
+            stderr: errBuffer.string(),
+            timedOut: false
+        )
+        result = resolved
+        let pending = waiter
+        waiter = nil
+        lock.unlock()
+        pending?.resume(returning: resolved)
+    }
+
+    func waitForExit() async -> ProcessRunResult {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let resolved = result {
+                lock.unlock()
+                continuation.resume(returning: resolved)
+                return
+            }
+            waiter = continuation
+            lock.unlock()
+        }
+    }
+
+    func terminate() {
+        lock.lock()
+        let alreadyDone = result != nil
+        lock.unlock()
+        guard !alreadyDone, process.isRunning else { return }
+        let pid = process.processIdentifier
+        process.terminate() // SIGTERM
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + Self.killGracePeriod) { [weak process] in
+            guard let process, process.isRunning else { return }
+            kill(pid, SIGKILL)
+        }
+    }
+}
+
 struct SessionFileObservation: Equatable {
     var size: Int64
     var modifiedAt: Date
@@ -345,6 +791,26 @@ struct SessionFileObservation: Equatable {
 
     func hasSameFileState(as other: SessionFileObservation) -> Bool {
         size == other.size && modifiedAt == other.modifiedAt
+    }
+}
+
+/// opencode's analog of `SessionFileObservation` (INF-395): there is no file
+/// size/mtime to compare, so session stability is judged by the latest
+/// message's time and the message count. Two consecutive observations with the
+/// same state, both older than the quiet window, mean the session is idle.
+struct OpencodeObservation: Equatable {
+    var latestTimeCreatedMillis: Int64
+    var messageCount: Int
+    var observedAt: Date
+
+    init(messages: [OpencodeTranscriptAdapter.MessageRow], observedAt: Date) {
+        self.latestTimeCreatedMillis = messages.last.map { Int64($0.timeCreated) } ?? 0
+        self.messageCount = messages.count
+        self.observedAt = observedAt
+    }
+
+    func hasSameState(as other: OpencodeObservation) -> Bool {
+        latestTimeCreatedMillis == other.latestTimeCreatedMillis && messageCount == other.messageCount
     }
 }
 
@@ -393,11 +859,10 @@ enum SessionDeliveryReadinessClassifier {
                     lastTurnActivity: &lastTurnActivity
                 )
             case .grokBuild:
-                // No delivery adapter is registered for grok_build (INF-361),
-                // so this arm is unreachable in production - readiness is
-                // never checked for a source with no adapter (see
-                // InstructionReplyEngine.deliverReadyInstructions). Kept real
-                // rather than a stub for exhaustiveness/completeness.
+                // Reached in production since INF-394: the grok_build source now
+                // has a registered AgentResumeDeliveryAdapter, so its delivery
+                // readiness (quiet session, no pending tool calls, a completed
+                // assistant turn) is classified here exactly like Codex/Claude.
                 scanGrokBuild(
                     object,
                     index: index,
@@ -571,9 +1036,10 @@ enum SessionReplyCorrelation {
             case .claude:
                 completed = claudeCompletedAssistantText(object, pendingTools: &pendingTools)
             case .grokBuild:
-                // Unreachable in production: no delivery adapter is registered
-                // for grok_build (INF-361), so no instruction is ever
-                // delivered/correlated for it. Kept real for exhaustiveness.
+                // Reached in production since INF-394: grok_build has a
+                // registered delivery adapter, so a delivered instruction's
+                // reply is correlated positionally from the chat_history.jsonl
+                // slice exactly like Codex/Claude.
                 completed = grokBuildCompletedAssistantText(object, pendingTools: &pendingTools)
             }
             if let completed { return completed }

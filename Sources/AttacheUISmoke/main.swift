@@ -36,7 +36,7 @@ func enabled(_ flow: String) -> Bool {
     // file, INF-354): AXShowMenu fails outright for `.contextMenu`-hosted
     // dock buttons, so every step in it currently fails deterministically.
     // Kept runnable via SMOKE_ONLY=dock-menus for whoever revisits this.
-    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22", "context", "dock-menus"].contains(key)
+    return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23", "f24", "context", "dock-menus"].contains(key)
 }
 
 let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
@@ -3147,6 +3147,229 @@ if enabled("f21") {
     }
 
     run.step("f21-claude-two-way", "Attaché files the Claude Code pong as a watched-session card") {
+        var resultingSummary = ""
+        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
+            let command = """
+            sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
+              "SELECT c.summary FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
+            """
+            guard let output = try? runShell(command) else { return false }
+            resultingSummary = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !resultingSummary.isEmpty
+        }
+        app.activate()
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(resultingSummary) { app.type(resultingSummary) }
+        _ = try waitForInboxCardRow(containing: resultingSummary, timeout: 30)
+        app.key(Key.escape)
+        try? waitForElementGone("inbox search field", in: try mainWindow(),
+                                role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+    }
+}
+
+
+// MARK: Flow 23: real Grok Build two-way round trip (INF-394). The Grok Build
+// analog of f7 (Codex) and f21 (Claude Code): a disposable Grok session created
+// by scripts/grok-two-way-smoke.sh is resumed through the app's Tell Agent
+// pipeline (`grok --resume <id> --output-format json -p`), and the pong reply is
+// filed as a watched-session card. Opt-in only (gated by SMOKE_ONLY=f23), so it
+// never runs without real Grok Build credentials and a spawned session.
+if enabled("f23") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_GROK_TWO_WAY_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_GROK_TWO_WAY_SESSION_ID"] ?? ""
+    let sessionFile = env["ATTACHE_GROK_TWO_WAY_SESSION_FILE"] ?? ""
+    let pongToken = env["ATTACHE_GROK_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_PONG_\(nonce)")
+    let instruction = env["ATTACHE_GROK_TWO_WAY_INSTRUCTION"] ?? "reply exactly \(pongToken) and do not use tools."
+    var focusedSession = false
+    var composerOpened = false
+    var instructionStaged = false
+    var enableConfirmed = false
+    var sendConfirmed = false
+
+    run.step("f23-grok-two-way", "environment identifies the disposable Grok Build session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_GROK_TWO_WAY_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_GROK_TWO_WAY_SESSION_ID is required") }
+        guard !sessionFile.isEmpty else { throw SmokeError(message: "ATTACHE_GROK_TWO_WAY_SESSION_FILE is required") }
+        guard !pongToken.isEmpty else { throw SmokeError(message: "ATTACHE_GROK_TWO_WAY_PONG_TOKEN is required") }
+        guard FileManager.default.fileExists(atPath: sessionFile) else {
+            throw SmokeError(message: "session file does not exist: \(sessionFile)")
+        }
+    }
+
+    run.step("f23-grok-two-way", "spawned Grok Build session appears in Command-K search") {
+        try focusSessionInCommandK(query: nonce, sessionID: sessionID)
+        focusedSession = true
+    }
+
+    run.step("f23-grok-two-way", "Tell Agent call composer opens for the focused session") {
+        guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
+        _ = try openAgentCallComposer()
+        composerOpened = true
+    }
+
+    run.step("f23-grok-two-way", "instruction is entered and staged for send-to-agent") {
+        guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
+        try enterAgentCallInstruction(instruction, mustContain: pongToken)
+        try pressAgentInstructionSend()
+        instructionStaged = true
+    }
+
+    run.step("f23-grok-two-way", "first-use send-to-agent enable sheet confirms") {
+        guard instructionStaged else { throw SmokeError(message: "skipped: instruction was not staged") }
+        let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                        timeout: 12)
+        guard enable.press() else {
+            throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+        }
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: pongToken, timeout: 12)
+        enableConfirmed = true
+    }
+
+    run.step("f23-grok-two-way", "per-instruction confirmation sends to Grok Build") {
+        guard enableConfirmed else { throw SmokeError(message: "skipped: send-to-agent was not enabled") }
+        let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                         role: kAXButtonRole as String, exactly: "Send to agent",
+                                         timeout: 12)
+        guard confirm.press() else {
+            throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+        }
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+        sendConfirmed = true
+    }
+
+    run.step("f23-grok-two-way", "Grok Build transcript records the resumed instruction and pong reply") {
+        guard sendConfirmed else { throw SmokeError(message: "skipped: instruction was not sent to Grok Build") }
+        try waitForFile(sessionFile, toContain: "resumed Grok Build instruction and pong reply", timeout: 240, interval: 2) { text in
+            text.contains("reply exactly \(pongToken)")
+                && occurrenceCount(of: pongToken, in: text) >= 2
+        }
+    }
+
+    run.step("f23-grok-two-way", "Attaché files the Grok Build pong as a watched-session card") {
+        var resultingSummary = ""
+        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
+            let command = """
+            sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
+              "SELECT c.summary FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
+            """
+            guard let output = try? runShell(command) else { return false }
+            resultingSummary = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !resultingSummary.isEmpty
+        }
+        app.activate()
+        app.key(Key.i, command: true)
+        let field = try waitForElement("inbox search field", in: try mainWindow(),
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 15)
+        _ = field.setFocused()
+        if !field.setValue(resultingSummary) { app.type(resultingSummary) }
+        _ = try waitForInboxCardRow(containing: resultingSummary, timeout: 30)
+        app.key(Key.escape)
+        try? waitForElementGone("inbox search field", in: try mainWindow(),
+                                role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+    }
+}
+
+// MARK: Flow 24: opencode two-way round trip (INF-395)
+// The opencode analog of f23 (Grok Build). opencode has no per-session
+// transcript file: its sessions are rows in one shared SQLite database, so the
+// wrapper (scripts/opencode-two-way-smoke.sh) points XDG_DATA_HOME at a
+// disposable data home for both the app and its spawned `opencode run`, and
+// this flow verifies delivery/readiness/correlation over that database instead
+// of a JSONL file.
+
+if enabled("f24") {
+    let env = ProcessInfo.processInfo.environment
+    let nonce = env["ATTACHE_OPENCODE_TWO_WAY_NONCE"] ?? ""
+    let sessionID = env["ATTACHE_OPENCODE_TWO_WAY_SESSION_ID"] ?? ""
+    let databasePath = env["ATTACHE_OPENCODE_TWO_WAY_DB"] ?? ""
+    let pongToken = env["ATTACHE_OPENCODE_TWO_WAY_PONG_TOKEN"] ?? (nonce.isEmpty ? "" : "ATTACHE_PONG_\(nonce)")
+    let instruction = env["ATTACHE_OPENCODE_TWO_WAY_INSTRUCTION"] ?? "reply exactly \(pongToken) and do not use tools."
+    var focusedSession = false
+    var composerOpened = false
+    var instructionStaged = false
+    var enableConfirmed = false
+    var sendConfirmed = false
+
+    run.step("f24-opencode-two-way", "environment identifies the disposable opencode session") {
+        guard !nonce.isEmpty else { throw SmokeError(message: "ATTACHE_OPENCODE_TWO_WAY_NONCE is required") }
+        guard !sessionID.isEmpty else { throw SmokeError(message: "ATTACHE_OPENCODE_TWO_WAY_SESSION_ID is required") }
+        guard !databasePath.isEmpty else { throw SmokeError(message: "ATTACHE_OPENCODE_TWO_WAY_DB is required") }
+        guard !pongToken.isEmpty else { throw SmokeError(message: "ATTACHE_OPENCODE_TWO_WAY_PONG_TOKEN is required") }
+        guard FileManager.default.fileExists(atPath: databasePath) else {
+            throw SmokeError(message: "opencode database does not exist: \(databasePath)")
+        }
+    }
+
+    run.step("f24-opencode-two-way", "spawned opencode session appears in Command-K search") {
+        try focusSessionInCommandK(query: nonce, sessionID: sessionID)
+        focusedSession = true
+    }
+
+    run.step("f24-opencode-two-way", "Tell Agent call composer opens for the focused session") {
+        guard focusedSession else { throw SmokeError(message: "skipped: session was not focused") }
+        _ = try openAgentCallComposer()
+        composerOpened = true
+    }
+
+    run.step("f24-opencode-two-way", "instruction is entered and staged for send-to-agent") {
+        guard composerOpened else { throw SmokeError(message: "skipped: composer did not open") }
+        try enterAgentCallInstruction(instruction, mustContain: pongToken)
+        try pressAgentInstructionSend()
+        instructionStaged = true
+    }
+
+    run.step("f24-opencode-two-way", "first-use send-to-agent enable sheet confirms") {
+        guard instructionStaged else { throw SmokeError(message: "skipped: instruction was not staged") }
+        let enable = try waitForElement("Enable send-to-agent button", in: try mainWindow(),
+                                        role: kAXButtonRole as String, exactly: "Enable send-to-agent",
+                                        timeout: 12)
+        guard enable.press() else {
+            throw SmokeError(message: "AXPress failed on Enable send-to-agent: \(enable.summary); actions: \(enable.actionNames)")
+        }
+        _ = try waitForElement("per-instruction confirmation sheet", in: try mainWindow(),
+                               containing: pongToken, timeout: 12)
+        enableConfirmed = true
+    }
+
+    run.step("f24-opencode-two-way", "per-instruction confirmation sends to opencode") {
+        guard enableConfirmed else { throw SmokeError(message: "skipped: send-to-agent was not enabled") }
+        let confirm = try waitForElement("Send to agent confirmation button", in: try mainWindow(),
+                                         role: kAXButtonRole as String, exactly: "Send to agent",
+                                         timeout: 12)
+        guard confirm.press() else {
+            throw SmokeError(message: "AXPress failed on Send to agent confirmation: \(confirm.summary); actions: \(confirm.actionNames)")
+        }
+        try waitForElementGone("confirmation sheet", in: try mainWindow(), containing: "Send this to", timeout: 8)
+        sendConfirmed = true
+    }
+
+    run.step("f24-opencode-two-way", "opencode database records the resumed instruction and pong reply") {
+        guard sendConfirmed else { throw SmokeError(message: "skipped: instruction was not sent to opencode") }
+        // A completed assistant turn (finish == stop) carrying the pong token
+        // must land in the isolated database's rows for this session. IMPORTANT:
+        // the whole SQL is passed to `sqlite3` inside a double-quoted bash
+        // argument (`sqlite3 "<db>" "<sql>"`), so the SQL itself must contain NO
+        // double quotes or the shell string terminates early and sqlite3 gets a
+        // mangled query (which `try?` then swallows as a 240s false-poll).
+        // `json_extract(...,'$.finish')` matches the assistant `finish` marker
+        // with only single quotes; a bare `$.` stays literal inside bash double
+        // quotes. String literals use single quotes for the same reason.
+        let query = "SELECT COUNT(*) FROM message m JOIN part p ON p.message_id=m.id WHERE m.session_id='\(sessionID)' AND json_extract(m.data,'$.finish')='stop' AND p.data LIKE '%\(pongToken)%';"
+        try waitUntil("opencode reply to land in the session database", timeout: 240, interval: 2) {
+            guard let output = try? runShell("sqlite3 \"\(databasePath)\" \"\(query)\"") else { return false }
+            return (Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) >= 1
+        }
+    }
+
+    run.step("f24-opencode-two-way", "Attaché files the opencode pong as a watched-session card") {
         var resultingSummary = ""
         try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
             let command = """

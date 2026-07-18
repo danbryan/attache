@@ -49,6 +49,27 @@ final class TwoWayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.log.first?.state, .delivered)
     }
 
+    /// INF-394: the default (production) adapter set registers a delivery
+    /// adapter for grok_build. Proof: a grok_build instruction whose session
+    /// file cannot be located fails with the Grok adapter's own capability
+    /// reason, NOT the engine's "No delivery adapter for grok_build." fail-safe
+    /// that a missing registration would produce.
+    func testDefaultAdaptersRegisterGrokBuild() async throws {
+        let store = try makeStore()
+        let coordinator = TwoWayCoordinator(
+            store: store,
+            locateSessionFile: { _ in nil },
+            quietWindow: 0
+        )
+        coordinator.setEnabled(true, sessionID: "g1")
+        let instruction = try coordinator.prepare(text: "reply pong", sessionID: "g1", sourceKind: "grok_build")
+        let changed = try await coordinator.confirmAndDeliver(id: instruction.id)
+        XCTAssertEqual(changed.first?.state, .failed)
+        let error = changed.first?.error ?? ""
+        XCTAssertFalse(error.contains("No delivery adapter"), "grok_build must have a registered adapter; got: \(error)")
+        XCTAssertTrue(error.contains("Grok Build") || error.contains("grok"), "expected the Grok adapter's own reason; got: \(error)")
+    }
+
     func testConfirmAndDeliverReturnsFailureForVisibleStatus() async throws {
         let store = try makeStore()
         let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
@@ -316,6 +337,94 @@ final class TwoWayCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.log.first(where: { $0.id == created.id })?.state, .failed)
         XCTAssertTrue(coordinator.log.first(where: { $0.id == created.id })?.error?.contains("restarted") == true)
         XCTAssertTrue(coordinator.startupRecoveryMessage?.contains("Review the frozen target and resend") == true)
+    }
+
+    // MARK: - INF-395: opencode routes through the SQLite two-way seam
+
+    private nonisolated static func opencodeMessages(lastRole: String) -> [OpencodeTranscriptAdapter.MessageRow] {
+        [
+            .init(id: "m1", role: "user", finish: nil, timeCreated: 1000, parts: [.init(type: "text", text: "reply pong")]),
+            lastRole == "assistant"
+                ? .init(id: "m2", role: "assistant", finish: "stop", timeCreated: 2000, parts: [.init(type: "text", text: "PONG")])
+                : .init(id: "m2", role: "user", finish: nil, timeCreated: 2000, parts: [.init(type: "text", text: "still typing")])
+        ]
+    }
+
+    /// An opencode instruction's readiness comes from the SQLite path
+    /// (`opencodeSnapshot` + `OpencodeDeliveryReadiness`), not the file
+    /// observation path, and it delivers through the opencode adapter. The
+    /// `locateSessionFile` closure returns nil (opencode has no session file),
+    /// which proves readiness did NOT depend on it.
+    func testOpencodeRoutesToSQLiteReadinessAndDelivers() async throws {
+        let store = try makeStore()
+        let stdout = #"{"type":"message.part.updated","properties":{"part":{"type":"text","text":"PONG"},"info":{"role":"assistant"}}}"#
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in OpencodeSessionSnapshot(directory: "/tmp/p", messages: Self.opencodeMessages(lastRole: "assistant")) },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            startProcess: { _, _, _ in ExitingOpencodeProcess(ProcessRunResult(exitCode: 0, stdout: stdout, stderr: "", timedOut: false)) }
+        )
+        let coordinator = TwoWayCoordinator(
+            store: store,
+            locateSessionFile: { _ in nil },
+            opencodeSnapshot: { _ in OpencodeSessionSnapshot(directory: "/tmp/p", messages: Self.opencodeMessages(lastRole: "assistant")) },
+            quietWindow: 0,
+            adapters: [adapter]
+        )
+        coordinator.setEnabled(true, sessionID: "oc1")
+        let instruction = try coordinator.prepare(text: "reply pong", sessionID: "oc1", sourceKind: "opencode")
+        try await coordinator.confirmAndDeliver(id: instruction.id)
+        XCTAssertEqual(coordinator.log.first?.state, .delivered)
+        XCTAssertEqual(coordinator.log.first?.deliveryMechanism, "opencode-run")
+    }
+
+    /// The same setup but the session's latest message is a user turn (agent
+    /// hasn't replied): the SQLite readiness holds the instruction confirmed
+    /// instead of delivering into a non-idle session.
+    func testOpencodeHeldWhenSessionNotIdle() async throws {
+        let store = try makeStore()
+        let adapter = OpencodeResumeDeliveryAdapter(
+            loadSnapshot: { _ in OpencodeSessionSnapshot(directory: "/tmp/p", messages: Self.opencodeMessages(lastRole: "user")) },
+            locateExecutable: { _ in "/opt/homebrew/bin/opencode" },
+            startProcess: { _, _, _ in
+                XCTFail("a non-idle session must be held at readiness, never delivered")
+                return ExitingOpencodeProcess(ProcessRunResult(exitCode: 0, stdout: "", stderr: "", timedOut: false))
+            }
+        )
+        let coordinator = TwoWayCoordinator(
+            store: store,
+            locateSessionFile: { _ in nil },
+            opencodeSnapshot: { _ in OpencodeSessionSnapshot(directory: "/tmp/p", messages: Self.opencodeMessages(lastRole: "user")) },
+            quietWindow: 0,
+            adapters: [adapter]
+        )
+        coordinator.setEnabled(true, sessionID: "oc2")
+        let instruction = try coordinator.prepare(text: "reply pong", sessionID: "oc2", sourceKind: "opencode")
+        let changed = try await coordinator.confirmAndDeliver(id: instruction.id)
+        XCTAssertTrue(changed.isEmpty, "a non-idle opencode session must not deliver")
+        XCTAssertEqual(coordinator.log.first?.state, .confirmed)
+    }
+
+    /// A codex delivery must never consult the opencode SQLite seam: the
+    /// injected `opencodeSnapshot` fails the test if called, proving source
+    /// dispatch keeps the JSONL path independent (INF-395).
+    func testCodexDeliveryNeverConsultsOpencodeSnapshot() async throws {
+        let store = try makeStore()
+        let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent("sess-\(UUID().uuidString).jsonl")
+        try writeReadyCodexSession(to: sessionFile)
+        let coordinator = TwoWayCoordinator(
+            store: store,
+            locateSessionFile: { _ in sessionFile },
+            opencodeSnapshot: { _ in
+                XCTFail("codex readiness must not read the opencode database")
+                return nil
+            },
+            quietWindow: 0,
+            adapters: [StubAdapter()]
+        )
+        coordinator.setEnabled(true, sessionID: "s1")
+        let instruction = try coordinator.prepare(text: "run the suite", sessionID: "s1", sourceKind: "codex")
+        try await coordinator.confirmAndDeliver(id: instruction.id)
+        XCTAssertEqual(coordinator.log.first?.state, .delivered)
     }
 
     private func writeReadyCodexSession(to url: URL) throws {

@@ -53,8 +53,9 @@ public enum SourceKind: String, Codable, Equatable, CaseIterable {
     /// Attaché attaches to, narrates, and answers questions about. Behavior gated on
     /// "is this a real agent session" should check membership here, not `== .codex`.
     /// Grok Build (INF-361) and opencode (INF-362) are included: their sessions are
-    /// watched, narrated, and attached the same way Codex/Claude Code are, even
-    /// though two-way delivery stays unavailable until a delivery adapter exists.
+    /// watched, narrated, and attached the same way Codex/Claude Code are, and both
+    /// now support two-way delivery too (Grok Build INF-394; opencode INF-395, over
+    /// the SQLite two-way seam).
     public static let liveAgentRawValues: Set<String> = [
         SourceKind.codex.rawValue, SourceKind.claudeCode.rawValue, SourceKind.grokBuild.rawValue,
         SourceKind.opencode.rawValue

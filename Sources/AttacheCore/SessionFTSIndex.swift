@@ -567,10 +567,47 @@ public final class SessionFTSIndex: @unchecked Sendable {
     /// Stream production chunks to the caller instead of retaining a whole
     /// session's normalized FTS corpus in memory. `nil` means the source could
     /// not be opened and the caller should use the bounded record digest.
+    /// A single content-free chunk carrying only a session's title/metadata, so
+    /// the session still surfaces by title/id even when there is nothing (or
+    /// nothing indexable) to search in its transcript.
+    private static func metadataOnlyChunk(record: SessionRecord) -> SessionFTSChunk {
+        SessionFTSChunk(
+            sessionID: record.id,
+            sourceKind: record.sourceKind.rawValue,
+            title: record.title,
+            workingDirectory: record.project,
+            chunkOrdinal: 0,
+            byteOffset: 0,
+            length: 0,
+            normalizedText: "",
+            timestamp: record.updatedAt,
+            indexingVersion: currentSchemaVersion
+        )
+    }
+
     private static func enumerateProductionChunks(
         record: SessionRecord,
         handle: (SessionFTSChunk) -> Void
     ) -> Int? {
+        // opencode is DB-backed (INF-395): `record.filePath` is the shared
+        // SQLite database, NOT a per-session JSONL transcript to stream. Streaming
+        // it as JSONL parses zero turns, and because a binary `.db` is not
+        // "readable plain text" the digest fallback below never fires, so opencode
+        // sessions used to index only a title-only chunk and their content (the
+        // `OpencodeTranscriptAdapter.searchDigest` in `record.content`) was
+        // silently unsearchable. Index that digest directly here instead, and
+        // keep a title-only chunk for a session whose digest is empty so it still
+        // surfaces by title. This also avoids reading a multi-MB binary DB as text.
+        if record.sourceKind == .opencode {
+            let digest = chunk(record: record)
+            guard !digest.isEmpty else {
+                handle(metadataOnlyChunk(record: record))
+                return 1
+            }
+            digest.forEach(handle)
+            return digest.count
+        }
+
         let sourceURL = URL(fileURLWithPath: record.filePath)
         var chunkCount = 0
         var parsedTurnCount = 0
@@ -623,18 +660,7 @@ public final class SessionFTSIndex: @unchecked Sendable {
             // Keep metadata/title discovery available even for an empty or
             // entirely privacy-filtered transcript without indexing its raw
             // content.
-            handle(SessionFTSChunk(
-                sessionID: record.id,
-                sourceKind: record.sourceKind.rawValue,
-                title: record.title,
-                workingDirectory: record.project,
-                chunkOrdinal: 0,
-                byteOffset: 0,
-                length: 0,
-                normalizedText: "",
-                timestamp: record.updatedAt,
-                indexingVersion: currentSchemaVersion
-            ))
+            handle(metadataOnlyChunk(record: record))
             chunkCount = 1
         }
         return chunkCount

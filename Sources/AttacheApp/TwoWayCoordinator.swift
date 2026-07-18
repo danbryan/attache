@@ -10,9 +10,19 @@ import AttacheCore
 final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
     private let engine: InstructionReplyEngine
     private let locateSessionFile: @Sendable (String) -> URL?
+    /// Loads an opencode session's DB snapshot (INF-395), or nil if the session
+    /// row does not exist. opencode has no per-session transcript file to tail,
+    /// so its delivery adapter, readiness, and reply correlation all route
+    /// through this SQLite seam instead of `locateSessionFile`. Defaults to the
+    /// real database resolved via `OpencodePaths` (honoring `XDG_DATA_HOME`).
+    private let opencodeSnapshot: @Sendable (String) -> OpencodeSessionSnapshot?
     private let quietWindow: TimeInterval
     private let eventPumpDebounceInterval: TimeInterval
     private var observations: [String: SessionFileObservation] = [:]
+    /// opencode's analog of `observations`: a per-session stability snapshot
+    /// (latest message time + count) used to enforce the same idle-quiet
+    /// window before delivering, since there is no file size/mtime to compare.
+    private var opencodeObservations: [String: OpencodeObservation] = [:]
     private var pendingEventPump: DispatchWorkItem?
 
     /// How long a burst of watcher `onEvent` signals is debounced before it
@@ -38,6 +48,7 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
     init(
         store: CardStore,
         locateSessionFile: @escaping @Sendable (String) -> URL?,
+        opencodeSnapshot: (@Sendable (String) -> OpencodeSessionSnapshot?)? = nil,
         quietWindow: TimeInterval = 6,
         expiryWindow: TimeInterval = InstructionReplyEngine.defaultExpiryWindow,
         eventPumpDebounceInterval: TimeInterval = TwoWayCoordinator.defaultEventPumpDebounceInterval,
@@ -45,11 +56,17 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
     ) {
         self.engine = InstructionReplyEngine(store: store, expiryWindow: expiryWindow)
         self.locateSessionFile = locateSessionFile
+        let opencodeSnapshotResolver = opencodeSnapshot ?? { sessionID in
+            OpencodeSessionSnapshot.load(sessionID: sessionID, databaseURL: OpencodePaths.databaseURL())
+        }
+        self.opencodeSnapshot = opencodeSnapshotResolver
         self.quietWindow = quietWindow
         self.eventPumpDebounceInterval = eventPumpDebounceInterval
         let resolved = adapters ?? [
             AgentResumeDeliveryAdapter(vendor: .claude, locateSessionFile: locateSessionFile),
-            AgentResumeDeliveryAdapter(vendor: .codex, locateSessionFile: locateSessionFile)
+            AgentResumeDeliveryAdapter(vendor: .codex, locateSessionFile: locateSessionFile),
+            AgentResumeDeliveryAdapter(vendor: .grok, locateSessionFile: locateSessionFile),
+            OpencodeResumeDeliveryAdapter(loadSnapshot: opencodeSnapshotResolver)
         ]
         resolved.forEach { engine.register($0) }
         // Durable enablement (INF-242/B5): restore persisted per-session
@@ -95,7 +112,7 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
             targetDisplayName: targetDisplayName,
             workingDirectory: workingDirectory
         )
-        primeObservation(sessionID: sessionID, now: now)
+        primeObservation(sessionID: sessionID, sourceKind: sourceKind, now: now)
         refreshLog()
         return instruction
     }
@@ -192,6 +209,15 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
             .sorted { $0.deliveredAt ?? .distantPast < $1.deliveredAt ?? .distantPast }
         guard !delivered.isEmpty else { return }  // no outstanding two-way reply expected for this session
 
+        // opencode (INF-395): no transcript file / byte offset. Route correlation
+        // through the SQLite positional path (a session is one source, so all
+        // its outstanding instructions share it). The JSONL path below is
+        // byte-identical for every other source.
+        if delivered.contains(where: { SourceKind(rawValue: $0.sourceKind) == .opencode }) {
+            linkOpencodeResponseCard(cardID: cardID, sessionID: sessionID, eventText: eventText, delivered: delivered)
+            return
+        }
+
         guard let transcriptEndOffset else {
             AttacheLog.twoWay.warning("Correlation skipped for card \(cardID, privacy: .public) in session \(sessionID, privacy: .public): event carried no transcript end offset.")
             return
@@ -238,6 +264,9 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
     }
 
     private func instructionIsReady(_ instruction: Instruction, now: Date) -> Bool {
+        if SourceKind(rawValue: instruction.sourceKind) == .opencode {
+            return opencodeInstructionIsReady(instruction, now: now)
+        }
         guard let current = observation(sessionID: instruction.sessionID, now: now),
               let format = transcriptFormat(for: instruction.sourceKind) else { return false }
         let previous = observations[instruction.sessionID]
@@ -254,10 +283,84 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
         )
     }
 
-    private func primeObservation(sessionID: String, now: Date) {
-        if let snapshot = observation(sessionID: sessionID, now: now) {
+    private func primeObservation(sessionID: String, sourceKind: String, now: Date) {
+        // Source-aware so a file source never opens the opencode database and
+        // opencode never scans the file transcript trees.
+        if SourceKind(rawValue: sourceKind) == .opencode {
+            if let messages = opencodeSnapshot(sessionID)?.messages {
+                opencodeObservations[sessionID] = OpencodeObservation(messages: messages, observedAt: now)
+            }
+        } else if let snapshot = observation(sessionID: sessionID, now: now) {
             observations[sessionID] = snapshot
         }
+    }
+
+    /// opencode readiness (INF-395): the SQLite analog of the file path above.
+    /// It enforces the same two-observation idle-quiet window (the latest
+    /// message must be unchanged across `quietWindow` and older than it) and
+    /// then defers the "completed assistant turn, no pending tool parts" call
+    /// to the pure `OpencodeDeliveryReadiness`.
+    private func opencodeInstructionIsReady(_ instruction: Instruction, now: Date) -> Bool {
+        guard let snapshot = opencodeSnapshot(instruction.sessionID) else { return false }
+        let current = OpencodeObservation(messages: snapshot.messages, observedAt: now)
+        let previous = opencodeObservations[instruction.sessionID]
+        if previous?.hasSameState(as: current) != true {
+            opencodeObservations[instruction.sessionID] = current
+            return false
+        }
+        guard let previous, now.timeIntervalSince(previous.observedAt) >= quietWindow else { return false }
+        if current.latestTimeCreatedMillis > 0 {
+            let latestSeconds = Double(current.latestTimeCreatedMillis) / 1000
+            guard now.timeIntervalSince1970 - latestSeconds >= quietWindow else { return false }
+        }
+        return OpencodeDeliveryReadiness.isReady(messages: snapshot.messages)
+    }
+
+    /// SQLite positional correlation for opencode (INF-395), the analog of the
+    /// file path's transcript-slice scan. The first completed assistant turn
+    /// after each outstanding instruction's delivery checkpoint is its reply;
+    /// the adapter's captured `deliveryReplyText` is the same fallback the file
+    /// path uses when the DB read hasn't caught up yet.
+    private func linkOpencodeResponseCard(cardID: String, sessionID: String, eventText: String, delivered: [Instruction]) {
+        let snapshot = opencodeSnapshot(sessionID)
+        if snapshot == nil {
+            AttacheLog.twoWay.warning("Correlation for card \(cardID, privacy: .public) in opencode session \(sessionID, privacy: .public): no session snapshot; using delivery evidence if present.")
+        }
+        for target in delivered {
+            guard let checkpoint = target.deliveryCheckpoint else { continue }
+            let positionalReply = snapshot.flatMap {
+                OpencodeReplyCorrelation.firstCompletedAssistantTurn(messages: $0.messages, afterCheckpoint: checkpoint)?.text
+            }
+            var reply = positionalReply
+            var confirmedBy = "sqlite-position"
+            if reply == nil, let evidence = target.deliveryReplyText {
+                reply = evidence
+                confirmedBy = "delivery-evidence"
+            }
+            guard let reply else { continue }
+            let textConfirmed = SessionReplyCorrelation.textConfirms(eventText: eventText, replyText: reply)
+            engine.linkResponse(instructionID: target.id, cardID: cardID)
+            AttacheLog.twoWay.info("""
+                Linked card \(cardID, privacy: .public) to opencode instruction \(target.id, privacy: .public) via \
+                \(confirmedBy, privacy: .public) (checkpoint \(checkpoint)); exact-text confirms: \(textConfirmed).
+                """)
+            refreshLog()
+            return
+        }
+        AttacheLog.twoWay.warning("Correlation miss for card \(cardID, privacy: .public) in opencode session \(sessionID, privacy: .public): no outstanding delivered instruction shows a completed reply yet.")
+    }
+
+    /// The authoritative reply text for a delivered opencode instruction: the
+    /// first completed assistant turn after its checkpoint, read from the DB.
+    /// `AppModel` narrates this (opencode has no live watcher to surface the
+    /// reply as a card), then correlation links that card back here.
+    func opencodeReplyText(forInstruction instruction: Instruction) -> String? {
+        guard SourceKind(rawValue: instruction.sourceKind) == .opencode,
+              let checkpoint = instruction.deliveryCheckpoint,
+              let snapshot = opencodeSnapshot(instruction.sessionID) else { return nil }
+        return OpencodeReplyCorrelation.firstCompletedAssistantTurn(
+            messages: snapshot.messages, afterCheckpoint: checkpoint
+        )?.text
     }
 
     private func observation(sessionID: String, now: Date) -> SessionFileObservation? {

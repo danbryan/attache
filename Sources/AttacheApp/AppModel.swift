@@ -4949,7 +4949,7 @@ final class AppModel: ObservableObject {
         sourceUtterance: String?
     ) -> String {
         guard let target else {
-            let message = "Focus an active Codex or Claude Code session before sending to an agent."
+            let message = "Focus an active agent session before sending to an agent."
             intakeStatus = message
             liveFollowUpStatus = message
             return message
@@ -5017,7 +5017,7 @@ final class AppModel: ObservableObject {
         origin: InstructionOrigin,
         sourceUtterance: String?
     ) {
-        guard let target else { intakeStatus = "Focus a Codex or Claude Code session before sending."; return }
+        guard let target else { intakeStatus = "Focus an agent session before sending."; return }
         guard !text.isEmpty else { intakeStatus = "Type or dictate an instruction first."; return }
         let pending = PendingAgentSend(
             text: text,
@@ -5145,6 +5145,7 @@ final class AppModel: ObservableObject {
             intakeStatus = message
             liveFollowUpStatus = message
             if conversationActive { conversationStatus = message }
+            narrateOpencodeReplyIfNeeded(instruction)
         case .failed:
             // Mirrors CallPhase.derive's failed-send formatting (the message is
             // shown verbatim, no generic prefix) so on-call and off-call read
@@ -5162,6 +5163,36 @@ final class AppModel: ObservableObject {
         default:
             break
         }
+    }
+
+    /// Surface a delivered opencode reply as a card (INF-395). opencode has no
+    /// live file watcher (its sessions are SQLite rows, not a tailable
+    /// `.jsonl`), so unlike Codex/Claude/Grok nothing else narrates the reply.
+    /// The authoritative text is the DB's first completed assistant turn after
+    /// the delivery checkpoint; feeding it through `receive` files a card and
+    /// runs the same `linkResponseCard` correlation the file sources use. Only
+    /// opencode reaches this, so file sources never double-narrate.
+    private func narrateOpencodeReplyIfNeeded(_ instruction: Instruction) {
+        guard SourceKind(rawValue: instruction.sourceKind) == .opencode else { return }
+        let sessionID = instruction.sessionID
+        let replyText = twoWay.opencodeReplyText(forInstruction: instruction)
+            ?? instruction.deliveryReplyText
+        guard let replyText, !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let title = instruction.targetDisplayName
+            ?? sessionRecords.first(where: { $0.id == sessionID })?.title
+            ?? SourceKind.opencode.displayName
+        var event = NormalizedEvent(
+            source: SourceKind.opencode.rawValue,
+            eventType: "assistant.completed",
+            externalSessionID: sessionID,
+            projectPath: instruction.workingDirectory,
+            title: title,
+            text: replyText
+        )
+        event.metadata["adapter"] = "opencode-session-db"
+        event.metadata["source_time"] = PipelineOrdering.isoString(from: Date())
+        event.metadata["companion_summary"] = EventNormalizer.summary(for: event)
+        receive(event)
     }
 
     func discardStagedInstruction() {
