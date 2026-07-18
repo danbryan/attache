@@ -56,6 +56,8 @@ struct VoicePane: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            PremiumVoiceRemovalRow(weights: model.premiumVoiceWeights)
+
             Divider().padding(.vertical, 4)
             Text("Conversation").typoBody(.semibold)
             settingRow("Voice input") {
@@ -149,6 +151,43 @@ struct VoicePane: View {
         }
     }
 
+}
+
+/// A downloaded on-device premium voice occupies real disk space, so the app
+/// offers an explicit reclaim. Visible only when the Attaché Premium (Azelma)
+/// weights are installed; removing them falls personalities back to the system
+/// voice through the existing `resolvedForPlayback` path.
+private struct PremiumVoiceRemovalRow: View {
+    @ObservedObject var weights: PremiumVoiceWeightsManager
+
+    var body: some View {
+        if case .installed(let version) = weights.state {
+            Divider().padding(.vertical, 4)
+            Text("On-device premium voice").typoBody(.semibold)
+            settingRow("Attaché Premium (Azelma)") {
+                Text("\(version) · \(sizeText)")
+                    .typoCaption(.medium)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Remove downloaded voice", role: .destructive) {
+                    weights.remove()
+                }
+                .accessibilityIdentifier("Premium Voice Remove")
+            }
+            Text("Removing frees the download from this Mac. Characters using Azelma fall back to a system voice until you download it again.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var sizeText: String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowedUnits = [.useMB]
+        formatter.includesActualByteCount = false
+        return formatter.string(fromByteCount: weights.release.unpackedSizeBytes)
+    }
 }
 
 private struct MicrophoneLevelMeter: View {

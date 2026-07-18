@@ -157,6 +157,19 @@ swift test
   using. `scripts/claude-two-way-smoke.sh` (the f21 gate) sets it to a
   disposable directory holding only an extracted `claudeAiOauth` credential,
   never the real `~/.claude`.
+- `ATTACHE_FAKE_PREMIUM_VOICE=1` makes the `.attachePremium` synthesize path
+  write a deterministic ~1.5s tone WAV (nonzero energy, correct header via the
+  E1 wav writer) instead of dlopen'ing the runtime, loading the model, or
+  reading weights, and makes `AttachePremiumVoiceAvailability.isReady()` report
+  ready, so UI flows can drive premium-voice playback with no runtime or weights
+  present. Inert unless `ATTACHE_UI_TEST=1` is ALSO set, so it can never fake
+  audio for a real user; the gate is the pure `PremiumVoiceFakeGate.isActive`
+  with the same non-bypass proof as `expiryWindow(fromEnvironment:)` (INF-385/E5;
+  see `PremiumVoiceFakeGateTests`).
+- `ATTACHE_PREMIUM_VOICE_TEST_WEIGHTS=<dir>` points the real premium-voice
+  integration test and `scripts/premium-voice-smoke.sh` at a weights directory
+  holding `models/` and `voices/` (defaulting to the E1 integration test's
+  convention). Absent it, the guarded test skips cleanly.
 - `scripts/mock-mcp-server.py` is a dependency-free stdio MCP server (a
   read-only `echo` tool and an effectful `write_note` tool) for exercising the
   MCP client, registry, and permission surfaces locally without a real server;
@@ -226,9 +239,13 @@ Full pipeline for a release (replace `X.Y.Z`):
    Commit (clean tree, GPG-signed) and `git push origin main`.
 2. Build + sign + notarize the app:
    ```bash
-   VERSION=X.Y.Z NOTARIZE_APP=1 NOTARY_PROFILE=bryanlabs-notary scripts/package-app.sh
+   scripts/build-premium-voice-runtime.sh   # once per machine/update; stages the voice dylibs
+   VERSION=X.Y.Z NOTARIZE_APP=1 NOTARY_PROFILE=bryanlabs-notary EMBED_PREMIUM_VOICE=1 scripts/package-app.sh
    ```
    Produces `dist/Attache.app` (stapled), `dist/Attache.zip`, `dist/SHA256SUMS`.
+   `EMBED_PREMIUM_VOICE=1` is REQUIRED for release builds (INF-379): it embeds
+   and signs the Attaché Premium voice dylibs; without it the shipped app has
+   no premium voice and Azelma falls back to the system voice.
 3. Wrap + notarize the DMG (prints its sha256, needed for the cask):
    ```bash
    NOTARY_PROFILE=bryanlabs-notary SRC_APP=dist/Attache.app scripts/make-dmg.sh
@@ -441,7 +458,10 @@ Before claiming a change works, verify:
   when the candidate also needs the real Codex f7/f8 round trips in the same
   run, and `ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1` when it also needs the
   real Claude Code f21 round trip (`scripts/claude-two-way-smoke.sh`,
-  INF-257/E2); both are opt-in and independent of each other.
+  INF-257/E2), and `ATTACHE_RELEASE_READINESS_WITH_PREMIUM_VOICE=1` when it also
+  needs the real Attaché Premium voice synthesis gate
+  (`scripts/premium-voice-smoke.sh`, INF-385/E5); all three are opt-in and
+  independent of each other.
 
 The UI smoke harness (INF-156) is the standard UI verification step. It builds
 and packages an unsigned app, switches to a fresh-user profile (backing up real

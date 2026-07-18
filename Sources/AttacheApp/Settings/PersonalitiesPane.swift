@@ -716,8 +716,13 @@ struct PersonalityStudioSheet: View {
     private var voiceSection: some View {
         studioSection(title: "Voice") {
             if let voice = draft.voiceRef {
+                // Attaché Premium (Azelma) is not its own engine segment: it is a
+                // voice within On-device, chosen in the voice list. So the
+                // segmented control shows On-device selected when the personality
+                // uses attachePremium, and only switches away when the user picks
+                // a different engine.
                 Picker("Engine", selection: Binding(
-                    get: { voice.provider },
+                    get: { voice.provider == .attachePremium ? .system : voice.provider },
                     set: { requestVoiceProvider($0) }
                 )) {
                     ForEach(voiceEngineOptions) { Text($0.title).tag($0) }
@@ -768,7 +773,7 @@ struct PersonalityStudioSheet: View {
 
     @ViewBuilder private func voicePicker(for provider: AttacheSpeechProvider) -> some View {
         switch provider {
-        case .system, .xai, .openai:
+        case .system, .attachePremium, .xai, .openai:
             voicePickerLauncher
         case .elevenLabs:
             remoteVoicePicker(
@@ -845,7 +850,7 @@ struct PersonalityStudioSheet: View {
             case .openai:
                 ref.openaiVoiceID = entry.voiceID
                 ref.openaiVoiceName = entry.name
-            case .elevenLabs:
+            case .attachePremium, .elevenLabs:
                 break
             }
         }
@@ -1112,7 +1117,9 @@ struct PersonalityStudioSheet: View {
     }
 
     private var voiceEngineOptions: [AttacheSpeechProvider] {
-        AttacheSpeechProvider.allCases
+        // Attaché Premium is surfaced inside the On-device voice list, not as its
+        // own engine segment.
+        AttacheSpeechProvider.allCases.filter { $0 != .attachePremium }
     }
 
     private var modelProviderOptions: [AttachePresentationProvider] {
@@ -1179,7 +1186,7 @@ struct PersonalityStudioSheet: View {
         case .elevenLabs: if model.elevenLabsVoiceOptions.isEmpty { model.loadElevenLabsVoices() }
         case .xai: if model.xaiVoiceOptions.isEmpty { model.loadXAIVoices() }
         case .openai: if model.openaiVoiceOptions.isEmpty { model.loadOpenAIVoices() }
-        case .system, .none: break
+        case .system, .attachePremium, .none: break
         }
     }
 
@@ -1333,6 +1340,9 @@ struct PersonalityStudioSheet: View {
         switch voice.provider {
         case .system:
             return voice.systemVoiceIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        case .attachePremium:
+            // Single built-in voice; always complete once the engine is chosen.
+            return true
         case .elevenLabs:
             return voice.elevenLabsVoiceID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         case .xai:

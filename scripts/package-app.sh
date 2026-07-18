@@ -23,6 +23,12 @@ SIGN_APP="${SIGN_APP:-1}"
 CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
 CODE_SIGN_CERTIFICATE_TYPE="${CODE_SIGN_CERTIFICATE_TYPE:-Developer ID Application}"
 CODE_SIGN_TIMESTAMP="${CODE_SIGN_TIMESTAMP:-1}"
+# Embed the Attaché Premium voice native runtime (libpocket_tts.dylib + ORT).
+# Default off so plain `SIGN_APP=0 scripts/package-app.sh` works on a machine
+# that never built the runtime; release builds set EMBED_PREMIUM_VOICE=1, which
+# fails clearly if the staged dylibs are missing.
+EMBED_PREMIUM_VOICE="${EMBED_PREMIUM_VOICE:-0}"
+PREMIUM_VOICE_STAGE="$ROOT/.build/premium-voice"
 NOTARIZE_APP="${NOTARIZE_APP:-0}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 NOTARY_KEYCHAIN="${NOTARY_KEYCHAIN:-}"
@@ -81,7 +87,40 @@ if [[ -d ".build/$CONFIGURATION/Attache_AttacheApp.bundle" ]]; then
         cp -R "$lproj" "$RESOURCES_DIR/"
       done
 fi
+# Embed the Attaché Premium voice runtime dylibs into Frameworks, mirroring how
+# Sparkle is handled. Guarded: when requested but not built, fail with a clear
+# pointer to the build script rather than shipping a half-app.
+PREMIUM_VOICE_LIB="$PREMIUM_VOICE_STAGE/libpocket_tts.dylib"
+PREMIUM_VOICE_ORT="$(ls "$PREMIUM_VOICE_STAGE"/libonnxruntime.*.dylib 2>/dev/null | head -1 || true)"
+if [[ "$EMBED_PREMIUM_VOICE" == "1" ]]; then
+  if [[ ! -f "$PREMIUM_VOICE_LIB" || -z "$PREMIUM_VOICE_ORT" ]]; then
+    echo "error: EMBED_PREMIUM_VOICE=1 but the runtime is not built." >&2
+    echo "       Expected $PREMIUM_VOICE_LIB and libonnxruntime.*.dylib in $PREMIUM_VOICE_STAGE." >&2
+    echo "       Build it first: scripts/build-premium-voice-runtime.sh" >&2
+    exit 1
+  fi
+  mkdir -p "$CONTENTS_DIR/Frameworks"
+  cp "$PREMIUM_VOICE_LIB" "$CONTENTS_DIR/Frameworks/"
+  cp "$PREMIUM_VOICE_ORT" "$CONTENTS_DIR/Frameworks/"
+  # The runtime loads its sibling ORT dylib via @rpath; @loader_path resolves it
+  # from the same Frameworks dir. Idempotent if already present.
+  install_name_tool -add_rpath "@loader_path" \
+    "$CONTENTS_DIR/Frameworks/$(basename "$PREMIUM_VOICE_LIB")" 2>/dev/null || true
+  echo "Embedded Attaché Premium voice runtime ($(basename "$PREMIUM_VOICE_ORT"))."
+fi
+
 swift scripts/generate-app-icon.swift "$RESOURCES_DIR/$ICON_NAME.icns"
+
+# Bundle the third-party license acknowledgements so the About pane can load
+# them via Bundle.main (never Bundle.module). Fail clearly if it was not
+# generated: scripts/generate-third-party-licenses.sh produces it.
+THIRD_PARTY_LICENSES="$ROOT/THIRD-PARTY-LICENSES"
+if [[ ! -f "$THIRD_PARTY_LICENSES" ]]; then
+  echo "error: THIRD-PARTY-LICENSES missing at $THIRD_PARTY_LICENSES." >&2
+  echo "       Generate it first: scripts/generate-third-party-licenses.sh" >&2
+  exit 1
+fi
+cp "$THIRD_PARTY_LICENSES" "$RESOURCES_DIR/THIRD-PARTY-LICENSES"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -169,6 +208,16 @@ ENTITLEMENTS
     codesign --force --options runtime "${ts_flag[@]}" --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Autoupdate"
     codesign --force --options runtime "${ts_flag[@]}" --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Updater.app"
     codesign --force --options runtime "${ts_flag[@]}" --sign "$CODE_SIGN_IDENTITY" "$SPARKLE_FW"
+  fi
+
+  # Sign the embedded premium-voice dylibs with the hardened runtime before the
+  # app signature seals over Frameworks (same inside-out order as Sparkle).
+  if [[ "$EMBED_PREMIUM_VOICE" == "1" ]]; then
+    ts_flag=(); [[ "$CODE_SIGN_TIMESTAMP" == "1" ]] && ts_flag=(--timestamp)
+    for dylib in "$CONTENTS_DIR/Frameworks/libpocket_tts.dylib" "$CONTENTS_DIR/Frameworks"/libonnxruntime.*.dylib; do
+      [[ -f "$dylib" ]] || continue
+      codesign --force --options runtime "${ts_flag[@]}" --sign "$CODE_SIGN_IDENTITY" "$dylib"
+    done
   fi
 
   codesign "${sign_args[@]}" "$APP_DIR"

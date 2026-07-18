@@ -1,0 +1,12 @@
+{
+  "entries" : [
+    {
+      "attributionText" : "Derived from the VCTK Corpus (speaker p303), CSTR, University of Edinburgh, licensed under CC BY 4.0. Voice embedding by Kyutai. Modified for use as an on-device synthesis voice.",
+      "displayName" : "Azelma",
+      "id" : "azelma",
+      "license" : "ccBy4",
+      "licenseURL" : "https:\/\/creativecommons.org\/licenses\/by\/4.0\/",
+      "sourceDescription" : "Derived from the VCTK Corpus (speaker p303), CSTR, University of Edinburgh."
+    }
+  ]
+}

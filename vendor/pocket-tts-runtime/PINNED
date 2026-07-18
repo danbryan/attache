@@ -1,0 +1,43 @@
+# Attaché Premium voice runtime - pinned provenance
+#
+# The user-facing engine name is "Attaché Premium". The upstream project names
+# below appear only in build/provenance metadata, never in app UI.
+#
+# All source in this directory is vendored (copied) at the exact revisions below
+# so a release build never silently tracks a moving upstream. No binaries are
+# committed to git: scripts/build-premium-voice-runtime.sh downloads ONNX Runtime
+# by checksum and builds the dylibs into .build/premium-voice/.
+
+runtime.repo            = https://github.com/VolgaGerm/PocketTTS.cpp
+runtime.commit          = e801e7d6c2692121a39e80ae525cb5265174a495
+runtime.license         = MIT (see ./LICENSE)
+runtime.files           = pocket_tts.cpp, CMakeLists.txt, export_onnx.py, b6369a24.yaml
+runtime.local_patches   = patches/macos-shared-lib.patch (applied in this copy of CMakeLists.txt)
+
+# Build-time C++ dependencies fetched by CMake FetchContent (not vendored to git):
+onnxruntime.version     = 1.23.2
+onnxruntime.archive     = onnxruntime-osx-universal2-1.23.2.tgz
+onnxruntime.url         = https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-osx-universal2-1.23.2.tgz
+onnxruntime.sha256      = 49ae8e3a66ccb18d98ad3fe7f5906b6d7887df8a5edd40f49eb2b14e20885809
+onnxruntime.license     = MIT
+sentencepiece.tag       = v0.2.1
+sentencepiece.license   = Apache-2.0
+dr_libs.tag             = master
+dr_libs.license         = public domain / MIT-0
+
+# Model weights (exported to ONNX from these upstream weights; shipped as the
+# separate "premium-voice" release tarball, NOT in git and NOT in this runtime dir):
+weights.source_repo     = Verylicious/pocket-tts-ungated
+weights.config          = b6369a24 (reconstructed; ./b6369a24.yaml)
+weights.file            = tts_b6369a24.safetensors
+weights.license         = CC-BY-4.0
+export.pocket_tts       = kyutai-labs/pocket-tts git main (mimi.py schema must match b6369a24)
+voice.azelma            = kyutai/tts-voices vctk/p303_023_enhanced.wav (CC-BY-4.0)
+
+# Built dylib facts (verify after building; drive the app-embed rpath fix):
+#   libpocket_tts.dylib  id=@rpath/libpocket_tts.dylib
+#                        loads @rpath/libonnxruntime.1.23.2.dylib
+#                        LC_RPATH from upstream CMake is `$ORIGIN` (a Linux-ism);
+#                        the build + embed steps rewrite it to @loader_path so
+#                        macOS dyld resolves the sibling ORT dylib.
+#   libonnxruntime.1.23.2.dylib  universal2 (x86_64 + arm64)

@@ -1124,6 +1124,22 @@ final class AppModel: ObservableObject {
     }
 
     let playback = SpeechPlaybackController()
+    /// The Attaché Premium (Azelma) on-device voice weights download state. Owns
+    /// consent-gated download, progress, install, and removal; the studio voice
+    /// list and Voice & Captions pane observe it. AppModel is always constructed
+    /// on the main thread (AppDelegate, SwiftUI previews), so the MainActor-bound
+    /// manager is initialized under `assumeIsolated`.
+    let premiumVoiceWeights: PremiumVoiceWeightsManager = MainActor.assumeIsolated {
+        PremiumVoiceWeightsManager()
+    }
+    /// Persistent Attaché Premium (Azelma) selection controller for the
+    /// onboarding voice step (E3). Owned by the model rather than the transient
+    /// step view, so a download started on the voice step still completes the
+    /// deferred voiceRef switch after the user pages ahead in onboarding. Lazily
+    /// built (it references `premiumVoiceWeights`) under the main actor since the
+    /// controller is MainActor-bound and only touched from view code.
+    private(set) lazy var onboardingPremiumVoiceController: PremiumVoiceSelectionController =
+        MainActor.assumeIsolated { PremiumVoiceSelectionController(weights: premiumVoiceWeights) }
     let micTranscript = MicTranscriptController()
     private let livePlaybackQueue = LivePlaybackQueue()
     /// Newest source time actually spoken per session, so a much-older event that
@@ -1987,6 +2003,8 @@ final class AppModel: ObservableObject {
             } else {
                 return "On-device system default"
             }
+        case .attachePremium:
+            return "Attaché Premium"
         case .elevenLabs:
             return elevenLabsVoiceName.isEmpty ? "ElevenLabs voice not selected" : "ElevenLabs \(elevenLabsVoiceName)"
         case .xai:
@@ -6652,6 +6670,8 @@ final class AppModel: ObservableObject {
                 return option.title
             }
             return "System default"
+        case .attachePremium:
+            return "Attaché Premium"
         case .elevenLabs:
             return voice.elevenLabsVoiceName ?? voice.elevenLabsVoiceID ?? "Voice not set"
         case .xai:
@@ -7034,6 +7054,15 @@ final class AppModel: ObservableObject {
         playback.preview(sampleText, configuration: speechConfiguration(for: ref))
     }
 
+    /// Plays the bundled Attaché Premium (Azelma) sample instantly: no download,
+    /// no neural runtime load, no network. Explicit Preview action only.
+    func previewPremiumVoiceSample(
+        sampleText: String = "Hi, I'm Azelma, your Attaché Premium voice, running entirely on this Mac."
+    ) {
+        guard let url = PremiumVoicePreviewClip.url() else { return }
+        playback.previewClip(at: url, text: sampleText)
+    }
+
     private func personalityPreviewSettings(for personality: Personality) -> AttachePresentationSettings? {
         guard let ref = personality.modelRef,
               connectedTextProviders.contains(ref.provider),
@@ -7111,6 +7140,8 @@ final class AppModel: ObservableObject {
         case .system:
             speechProvider = .system
             speechVoiceIdentifier = ref.systemVoiceIdentifier
+        case .attachePremium:
+            speechProvider = .attachePremium
         case .elevenLabs:
             guard hasSpeechAPIKey(for: .elevenLabs) else { return fallBackToSystemVoice(missing: "ElevenLabs") }
             if let value = ref.elevenLabsVoiceID { elevenLabsVoiceID = value }
@@ -7168,7 +7199,7 @@ final class AppModel: ObservableObject {
 
     private func hasSpeechAPIKey(for provider: AttacheSpeechProvider) -> Bool {
         switch provider {
-        case .system: return true
+        case .system, .attachePremium: return true
         case .elevenLabs: return !elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .xai: return !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .openai: return !openaiVoiceAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -7929,7 +7960,7 @@ final class AppModel: ObservableObject {
 
     func focusIntegration(for provider: AttacheSpeechProvider) {
         switch provider {
-        case .system:
+        case .system, .attachePremium:
             integrationFocusProviderID = nil
         case .elevenLabs:
             integrationFocusProviderID = "elevenlabs"

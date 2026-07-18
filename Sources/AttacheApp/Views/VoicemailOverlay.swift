@@ -722,7 +722,7 @@ extension AttacheRootView {
                 model.selectXAIVoice(voice)
             case .openai:
                 model.selectOpenAIVoice(voice)
-            case .system:
+            case .system, .attachePremium:
                 break
             }
         } label: {

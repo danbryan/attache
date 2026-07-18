@@ -8,6 +8,8 @@ import SwiftUI
 struct AboutPane: View {
     @ObservedObject var model: AppModel
     @State private var stallEvents: [StallEvent] = []
+    @State private var licensesText: String?
+    @State private var showLicenses = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -32,9 +34,93 @@ struct AboutPane: View {
                     .foregroundStyle(.secondary)
             }
             Divider().padding(.vertical, 2)
+            voicesCreditsSection
+            Divider().padding(.vertical, 2)
             responsivenessSection
         }
         .onAppear { refreshStallEvents() }
+    }
+
+    /// Voice and speech acknowledgements (INF-384). The engine lines are fixed
+    /// facts; the Azelma line is generated from the Core license manifest so it
+    /// stays in lockstep with the bundled THIRD-PARTY-LICENSES.
+    private var voicesCreditsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Voices & speech").typoSection()
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(PremiumVoiceCredits.engineCredit)
+                        .font(.caption)
+                    Text(PremiumVoiceCredits.engineSubcredit)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let azelma = PremiumVoiceLicenseManifest.shipped.entry(id: "azelma") {
+                    Text(azelmaCredit(azelma))
+                        .font(.caption)
+                        .tint(.accentColor)
+                }
+                Text(PremiumVoiceCredits.updatesCredit)
+                    .font(.caption)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("About Voices Credits")
+            .accessibilityIdentifier("About Voices Credits")
+
+            Button(showLicenses ? "Hide Third-Party Licenses" : "Third-Party Licenses") {
+                if licensesText == nil {
+                    licensesText = Self.loadThirdPartyLicenses()
+                }
+                showLicenses.toggle()
+            }
+            .accessibilityIdentifier("About Third Party Licenses")
+            .accessibilityLabel("Third-Party Licenses")
+
+            if showLicenses {
+                ScrollView {
+                    Text(licensesText ?? "Third-party license text is unavailable in this build.")
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
+                .padding(8)
+                .background(Color.secondary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// SwiftUI Text with the license name rendered as a tappable link, derived
+    /// from the Core formatter's Markdown. Falls back to plain text if the
+    /// Markdown does not parse.
+    private func azelmaCredit(_ entry: PremiumVoiceLicenseManifest.Entry) -> AttributedString {
+        let markdown = PremiumVoiceCredits.voiceCreditMarkdown(entry)
+        if let attributed = try? AttributedString(
+            markdown: markdown,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return attributed
+        }
+        return AttributedString(PremiumVoiceCredits.voiceCreditPlain(entry))
+    }
+
+    /// Load the bundled THIRD-PARTY-LICENSES via Bundle.main (never
+    /// Bundle.module, per AGENTS.md gotcha). Returns nil if it is absent so the
+    /// UI shows a graceful fallback rather than crashing.
+    private static func loadThirdPartyLicenses() -> String? {
+        if let url = Bundle.main.url(forResource: "THIRD-PARTY-LICENSES", withExtension: nil),
+           let text = try? String(contentsOf: url, encoding: .utf8) {
+            return text
+        }
+        for base in [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap({ $0 }) {
+            let url = base.appendingPathComponent("THIRD-PARTY-LICENSES")
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                return text
+            }
+        }
+        return nil
     }
 
     /// Main-thread stall counts by duration bucket and by context (INF-349).

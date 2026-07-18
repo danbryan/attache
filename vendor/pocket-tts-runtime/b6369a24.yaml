@@ -1,0 +1,55 @@
+flow_lm:
+  dtype: float32
+  flow:
+    depth: 6
+    dim: 512
+  insert_bos_before_voice: false
+  lookup_table:
+    dim: 1024
+    n_bins: 4000
+    tokenizer: sentencepiece
+    tokenizer_path: /private/tmp/claude-501/-Users-danb-code-github-com-danbryan-attache/b4fb4128-9707-4522-a640-76ef90ca9a82/scratchpad/e0-spike/PocketTTS.cpp/models/tokenizer.model
+  transformer:
+    d_model: 1024
+    hidden_scale: 4
+    max_period: 10000
+    num_heads: 16
+    num_layers: 6
+mimi:
+  channels: 1
+  dtype: float32
+  frame_rate: 12.5
+  inner_dim: 512
+  outer_dim: 512
+  quantizer:
+    dimension: 32
+    output_dimension: 512
+  sample_rate: 24000
+  seanet:
+    channels: 1
+    compress: 2
+    dilation_base: 2
+    dimension: 512
+    kernel_size: 7
+    last_kernel_size: 3
+    n_filters: 64
+    n_residual_layers: 1
+    pad_mode: constant
+    ratios:
+    - 6
+    - 5
+    - 4
+    residual_kernel_size: 3
+  transformer:
+    context: 250
+    d_model: 512
+    dim_feedforward: 2048
+    input_dimension: 512
+    layer_scale: 0.01
+    max_period: 10000
+    num_heads: 8
+    num_layers: 2
+    output_dimensions:
+    - 512
+weights_path: /private/tmp/claude-501/-Users-danb-code-github-com-danbryan-attache/b4fb4128-9707-4522-a640-76ef90ca9a82/scratchpad/e0-spike/PocketTTS.cpp/models/.cache/tts_b6369a24.safetensors
+weights_path_without_voice_cloning: /private/tmp/claude-501/-Users-danb-code-github-com-danbryan-attache/b4fb4128-9707-4522-a640-76ef90ca9a82/scratchpad/e0-spike/PocketTTS.cpp/models/.cache/tts_b6369a24.safetensors

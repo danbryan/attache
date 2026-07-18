@@ -45,6 +45,7 @@ struct VoicePickerView: View {
     private var selectedVoiceID: String? {
         switch currentEngine {
         case .system: return currentSystemVoiceID
+        case .attachePremium: return AttacheSpeechProvider.attachePremiumVoiceID
         case .xai: return currentXAIVoiceID
         case .openai: return currentOpenAIVoiceID
         case .elevenLabs: return nil
@@ -149,6 +150,7 @@ struct VoicePickerView: View {
     private func engineChipTitle(_ engine: AttacheSpeechProvider) -> String {
         switch engine {
         case .system: return "System"
+        case .attachePremium: return "Attaché Premium"
         case .xai: return "Grok"
         case .openai: return "OpenAI"
         case .elevenLabs: return "ElevenLabs"
@@ -219,11 +221,49 @@ struct VoicePickerView: View {
         return availableLanguages.first { $0.code == code }?.name ?? VoicePickerFilter.languageName(for: code)
     }
 
+    /// The Attaché Premium (Azelma) row leads the On-device voice list. It shows
+    /// whenever the System engine filter is active and the search (if any)
+    /// matches the premium voice, independent of the macOS voice list below.
+    private var showsPremiumSection: Bool {
+        guard filterState.engines.contains(.system) else { return false }
+        let query = filterState.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+        let searchable = "azelma attaché premium attache premium on-device"
+        return query
+            .split(whereSeparator: \.isWhitespace)
+            .allSatisfy { searchable.localizedCaseInsensitiveContains($0) }
+    }
+
+    private var premiumIsSelected: Bool {
+        currentEngine == .attachePremium
+    }
+
+    private var premiumEntry: VoicePickerEntry {
+        VoicePickerEntry(
+            id: "premium:\(AttacheSpeechProvider.attachePremiumVoiceID)",
+            voiceID: AttacheSpeechProvider.attachePremiumVoiceID,
+            name: PremiumVoiceSectionDescriptor.voice,
+            engine: .attachePremium,
+            languageCode: "",
+            languageName: VoicePickerFilter.languageName(for: ""),
+            quality: nil
+        )
+    }
+
     private var list: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
+                if showsPremiumSection {
+                    PremiumVoiceSectionRow(
+                        model: model,
+                        isSelected: premiumIsSelected,
+                        onComplete: {
+                            onSelect(premiumEntry)
+                        }
+                    )
+                }
                 if result.recommended.isEmpty, result.groups.allSatisfy({ $0.entries.isEmpty }) {
-                    emptyState
+                    if !showsPremiumSection { emptyState }
                 } else {
                     if !result.recommended.isEmpty {
                         sectionHeader("Recommended")
@@ -335,6 +375,8 @@ struct VoicePickerView: View {
             return PersonalityVoiceRef(provider: .xai, xaiVoiceID: entry.voiceID, xaiVoiceName: entry.name)
         case .openai:
             return PersonalityVoiceRef(provider: .openai, openaiVoiceID: entry.voiceID, openaiVoiceName: entry.name)
+        case .attachePremium:
+            return PersonalityVoiceRef(provider: .attachePremium)
         case .elevenLabs:
             return PersonalityVoiceRef(provider: .elevenLabs)
         }

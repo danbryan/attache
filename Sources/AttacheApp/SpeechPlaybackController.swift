@@ -444,6 +444,33 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         startPreview(text, configuration: configuration)
     }
 
+    /// Plays a pre-rendered clip that already exists on disk (a bundled sample),
+    /// with no synthesis, no model load, and no network. Used for the Attaché
+    /// Premium row's instant preview: the download and the heavy neural runtime
+    /// are never touched just to hear the voice. This is an explicit Preview
+    /// action, so off-call audio starting here is allowed.
+    func previewClip(at fileURL: URL, text: String) {
+        stop()
+        isBusy = true
+        activeIsPreview = true
+
+        let generationID = UUID()
+        self.generationID = generationID
+        generatedAudioURL = fileURL
+        generatedAudioIsCached = false
+        currentCardID = nil
+        currentText = text
+        let duration = CaptionAlignmentBuilder.estimatedDurationMs(for: text)
+        currentAlignment = CaptionAlignmentBuilder.fallback(text: text, durationMs: duration)
+        durationMs = duration
+        currentTimeMs = 0
+        activeWordIndex = nil
+        envelope = 0
+        renderState.reset()
+
+        beginPreviewPlayback(text: text, audioURL: fileURL)
+    }
+
     private func startPreview(_ text: String, configuration: AttacheSpeechConfiguration?) {
         stop()
         if let configuration {
@@ -759,7 +786,11 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     }
 
     private func audioFileExtension(for configuration: AttacheSpeechConfiguration) -> String {
-        configuration.provider == .system ? "aiff" : "mp3"
+        switch configuration.provider {
+        case .system: return "aiff"
+        case .attachePremium: return "wav"
+        default: return "mp3"
+        }
     }
 
     private func finishWithoutPlayback() {
@@ -969,6 +1000,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         switch config.provider {
         case .system:
             raw = "system|\(voiceIdentifier ?? config.systemVoiceIdentifier ?? "default")"
+        case .attachePremium:
+            raw = "attache-premium|\(AttacheSpeechProvider.attachePremiumVoiceID)"
         case .elevenLabs:
             raw = "eleven|\(config.elevenLabsVoiceID)|\(config.elevenLabsModelID)|\(config.elevenLabsOutputFormat)"
         case .xai:

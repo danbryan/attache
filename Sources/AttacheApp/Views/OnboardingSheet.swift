@@ -197,6 +197,13 @@ struct OnboardingSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Pick the voice for spoken recaps. Preview plays a short line.")
                 .typoBody()
+            OnboardingPremiumVoiceRowView(
+                model: model,
+                controller: model.onboardingPremiumVoiceController,
+                weights: model.premiumVoiceWeights,
+                isSelected: model.speechProvider == .attachePremium,
+                onComplete: { pickPremiumVoice() }
+            )
             if model.isScanningVoices && recommendedVoices.isEmpty {
                 Text("Scanning voices…")
                     .typoCaption().foregroundStyle(.secondary)
@@ -280,6 +287,16 @@ struct OnboardingSheet: View {
         model.speechProvider = .system
         model.speechVoiceIdentifier = option.id
         // The voice belongs to the active personality, not an orphan global.
+        model.captureCurrentVoiceIntoActivePersonality()
+    }
+
+    // Picking Azelma switches the active personality's voice to the on-device
+    // Attaché Premium engine through the same provider-then-capture path the
+    // system rows use (E2 persists the voiceRef the same way). Only invoked once
+    // the weights are actually installed, so the system default stays selected
+    // through consent, download, cancel, or failure.
+    private func pickPremiumVoice() {
+        model.speechProvider = .attachePremium
         model.captureCurrentVoiceIntoActivePersonality()
     }
 

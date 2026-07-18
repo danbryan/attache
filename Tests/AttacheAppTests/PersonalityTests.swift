@@ -125,6 +125,26 @@ final class PersonalityTests: XCTestCase {
         XCTAssertEqual(decoded.playbackSpeed, 1.25)
     }
 
+    func testPersonalityRoundTripsAttachePremiumVoice() throws {
+        let original = Personality(
+            id: "custom.premium", name: "Azelma User", prompt: "Speak on-device.",
+            voiceRef: PersonalityVoiceRef(provider: .attachePremium),
+            character: .robot,
+            visualMode: .character,
+            modelRef: PersonalityModelRef(provider: .claudeCLI, model: "claude-opus"),
+            playbackSpeed: 1.0
+        )
+        let decoded = try JSONDecoder().decode(Personality.self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.voiceRef?.provider, .attachePremium)
+
+        // And through the export/import path that assigns a fresh id.
+        let exported = try PersonalityStore.exportData(original)
+        let imported = try PersonalityStore.importPersonality(from: exported, newID: { "custom.premium.new" })
+        XCTAssertEqual(imported.voiceRef?.provider, .attachePremium)
+        XCTAssertEqual(imported.id, "custom.premium.new")
+    }
+
     func testLegacyPetKeysImportAsCurrentCharacterPresence() throws {
         let json = Data("""
         {

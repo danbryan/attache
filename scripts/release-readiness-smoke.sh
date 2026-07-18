@@ -30,6 +30,9 @@ Environment:
   ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1 also runs the real Claude Code f21
   round-trip smoke (the claude -p --resume delivery branch, opt-in and
   separate from the Codex extras above).
+  ATTACHE_RELEASE_READINESS_WITH_PREMIUM_VOICE=1 also runs the real Attaché
+  Premium voice synthesis gate (scripts/premium-voice-smoke.sh, opt-in and
+  separate from the Codex/Claude extras above).
 EOF
 }
 
@@ -91,6 +94,11 @@ fi
 if [[ "${ATTACHE_RELEASE_READINESS_WITH_CLAUDE:-0}" == "1" ]]; then
   echo "==> Extra: real Claude Code direct two-way"
   scripts/claude-two-way-smoke.sh
+fi
+
+if [[ "${ATTACHE_RELEASE_READINESS_WITH_PREMIUM_VOICE:-0}" == "1" ]]; then
+  echo "==> Extra: real Attaché Premium voice synthesis"
+  scripts/premium-voice-smoke.sh
 fi
 
 echo "==> Release-readiness smoke gates passed"

@@ -393,6 +393,8 @@ extension Personality {
         case .system:
             guard let identifier = ref.systemVoiceIdentifier else { return "Voice not set" }
             return systemOptions.first(where: { $0.id == identifier })?.title ?? identifier
+        case .attachePremium:
+            return "Attaché Premium"
         case .elevenLabs:
             return "ElevenLabs" + (ref.elevenLabsVoiceName.map { ": \($0)" } ?? " voice")
         case .xai:

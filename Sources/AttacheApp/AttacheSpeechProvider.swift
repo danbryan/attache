@@ -3,19 +3,25 @@ import AttacheCore
 
 enum AttacheSpeechProvider: String, CaseIterable, Identifiable, Codable {
     case system
+    case attachePremium
     case elevenLabs
     case xai
     case openai
 
     var id: String { rawValue }
 
+    /// The single built-in Attaché Premium voice identifier.
+    static let attachePremiumVoiceID = "azelma"
+
     /// On-device synthesis stays on the Mac; every other engine streams the recap
-    /// text to a cloud voice API.
-    var sendsToCloud: Bool { self != .system }
+    /// text to a cloud voice API. Attaché Premium is a bundled neural voice that
+    /// runs entirely on-device, so it never sends text off the Mac.
+    var sendsToCloud: Bool { self != .system && self != .attachePremium }
 
     var title: String {
         switch self {
         case .system: return "On-device"
+        case .attachePremium: return "Attaché Premium"
         case .elevenLabs: return "ElevenLabs"
         case .xai: return "xAI"
         case .openai: return "OpenAI"
@@ -25,6 +31,7 @@ enum AttacheSpeechProvider: String, CaseIterable, Identifiable, Codable {
     var menuTitle: String {
         switch self {
         case .system: return "On-device Voices"
+        case .attachePremium: return "Attaché Premium Voice"
         case .elevenLabs: return "ElevenLabs Voices"
         case .xai: return "xAI Voices"
         case .openai: return "OpenAI Voices"
@@ -91,6 +98,11 @@ struct AttacheSpeechConfiguration: Equatable {
         switch provider {
         case .system:
             return nil
+        case .attachePremium:
+            // On-device, no credentials. Unavailable only when the runtime or
+            // weights are missing; that falls back to the system voice via the
+            // same visible-status path the cloud engines use.
+            return AttachePremiumVoiceAvailability.unavailableReason()
         case .elevenLabs:
             if elevenLabsAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 return "ElevenLabs API key is not configured."
@@ -296,6 +308,15 @@ enum AttacheRemoteVoiceService {
         switch configuration.provider {
         case .system:
             throw VoiceProviderError.unsupportedProvider
+        case .attachePremium:
+            // On-device neural synthesis. Same file contract as the cloud
+            // engines; throws a typed PremiumVoiceRuntimeError the playback path
+            // surfaces and falls back from.
+            try AttachePremiumVoiceSynthesizer.synthesize(
+                text: text,
+                configuration: configuration,
+                outputURL: outputURL
+            )
         case .elevenLabs:
             try await synthesizeElevenLabs(text: text, configuration: configuration, outputURL: outputURL)
         case .xai:

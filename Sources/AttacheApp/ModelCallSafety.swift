@@ -189,7 +189,7 @@ struct VoiceConsentScope: Equatable, Hashable, Sendable {
 
     static func endpoint(for provider: AttacheSpeechProvider, xaiBaseURL: String?) -> String {
         switch provider {
-        case .system:
+        case .system, .attachePremium:
             return "<on-device>"
         case .elevenLabs:
             return "https://api.elevenlabs.io"
