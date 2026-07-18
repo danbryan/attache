@@ -30,4 +30,16 @@ public enum GrokPaths {
         home(environment: environment, fileManager: fileManager)
             .appendingPathComponent("sessions", isDirectory: true)
     }
+
+    /// Candidate config files to probe for an MCP configuration. Grok Build is
+    /// TOML-based (`~/.grok/config.toml`); the installed version on this Mac
+    /// (INF-361) carries no `[mcp_servers]` table, so probing it simply returns
+    /// nothing. Adding a real path later is one entry in this list.
+    public static func configTOMLURLs(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        [home(environment: environment, fileManager: fileManager)
+            .appendingPathComponent("config.toml")]
+    }
 }

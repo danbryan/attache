@@ -216,6 +216,17 @@ struct AttacheRootView: View {
                 onFleetSwitch: {
                     NotificationCenter.default.post(name: .attacheOpenPalette, object: nil)
                 },
+                moteMenuModel: { id in
+                    guard let target = model.attachedTargets[id] else { return nil }
+                    return MoteContextMenuModel(
+                        title: target.displayTitle,
+                        source: target.sourceKind.displayName,
+                        isFocused: id == model.attachedCodexSessionID,
+                        canUnfocus: true
+                    )
+                },
+                onMoteStopWatching: { model.detachCodexSession($0) },
+                onMoteUnfocus: { _ in model.unfocusCodexSession() },
                 characterFocusAngle: model.characterFocusAngle,
                 onCharacterFocusAngleChanged: { model.characterFocusAngle = $0 },
                 character: model.character,
@@ -333,6 +344,15 @@ struct AttacheRootView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
 
+            if model.settingsOverlayVisible {
+                Color.black.opacity(0.34)
+                    .ignoresSafeArea()
+                    .onTapGesture { model.hideSettingsOverlay() }
+                SettingsOverlay(model: model)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+
             if model.activitySimulatorEnabled {
                 ActivitySimulatorPanel(model: model) {
                     withAnimation(.easeInOut(duration: 0.16)) {
@@ -360,6 +380,7 @@ struct AttacheRootView: View {
         .animation(.easeInOut(duration: 0.18), value: inboxVisible)
         .animation(.easeInOut(duration: 0.18), value: personalitySwitcherVisible)
         .animation(.easeInOut(duration: 0.18), value: shortcutsVisible)
+        .animation(.easeInOut(duration: 0.18), value: model.settingsOverlayVisible)
         .animation(.easeInOut(duration: 0.18), value: model.activitySimulatorEnabled)
         .background(
             KeyboardShortcutMonitor(
@@ -440,6 +461,17 @@ struct AttacheRootView: View {
         )) {
             SessionSummarySheet(model: model)
         }
+        // Character Studio rides as a sheet OVER the Settings overlay, inside the
+        // main window (INF-377). Its Cancel button carries `.cancelAction`, so
+        // Escape closes the studio first and returns to the overlay beneath.
+        .sheet(item: $model.characterStudioRequest) { request in
+            PersonalityStudioSheet(
+                model: model,
+                request: request,
+                onClose: { model.closeCharacterStudio() }
+            )
+            .accessibilityIdentifier("Character Studio")
+        }
         .sheet(item: $pendingRecoveryProviderSwitch) { pending in
             CloudConsentSheet(
                 providerName: pending.provider.title,
@@ -477,6 +509,17 @@ struct AttacheRootView: View {
         .onChange(of: model.activePersonalityID) { _ in echoExpanded = false }
         .onChange(of: personalitySwitcherVisible) { isVisible in
             if !isVisible { scheduleIdleFade() }
+        }
+        // Opening Settings takes over the surface: dismiss the sibling palettes so
+        // there is a single top surface. It never touches an active live call.
+        .onChange(of: model.settingsOverlayVisible) { open in
+            if open {
+                paletteVisible = false
+                inboxVisible = false
+                historyVisible = false
+                personalitySwitcherVisible = false
+                shortcutsVisible = false
+            }
         }
         .onChange(of: model.visualMode) { mode in
             if mode != .bars { echoExpanded = false }
@@ -595,6 +638,14 @@ struct AttacheRootView: View {
     private func handleEscapeKey() -> Bool {
         if model.activitySimulatorEnabled {
             withAnimation(.easeInOut(duration: 0.16)) { model.hideActivitySimulator() }
+            return true
+        }
+        // The Character Studio sheet and in-pane pickers are separate key
+        // surfaces that swallow their own Escape (Cancel `.cancelAction`,
+        // `.onExitCommand`), so by the time Escape reaches the root here the
+        // overlay itself is the innermost surface left to close.
+        if model.settingsOverlayVisible {
+            withAnimation(.easeInOut(duration: 0.16)) { model.hideSettingsOverlay() }
             return true
         }
         if shortcutsVisible {

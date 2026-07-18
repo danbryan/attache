@@ -1148,6 +1148,11 @@ struct AttacheCharacterView: View {
     /// click a badge to open the session switcher.
     var onFleetFocus: ((String) -> Void)?
     var onFleetSwitch: (() -> Void)?
+    /// The session id of the fleet mote under the cursor changed (INF-375),
+    /// nil when none is. The parent keys a per-mote right-click context menu
+    /// off this. Purely additive: it rides the existing hover hit-test and
+    /// never alters click, drag, or hover behavior of the motes.
+    var onHoveredMoteChange: ((String?) -> Void)?
     /// The focused mote's persisted ring angle and its writeback when the
     /// user finishes dragging it (INF-280).
     var focusAngle: Double = AttacheCharacterChoreography.defaultFocusAngle
@@ -1174,6 +1179,7 @@ struct AttacheCharacterView: View {
     @State private var windowVisible = true
     @State private var hoverGaze: CGSize?
     @State private var hoveredMote: (title: String, at: CGPoint)?
+    @State private var hoveredMoteSessionID: String?
     @State private var draggedMote: (id: String, isFocused: Bool)?
 
     private static let headroom: CGFloat = 28
@@ -1218,11 +1224,13 @@ struct AttacheCharacterView: View {
                             height: (location.y / max(1, proxy.size.height) - 0.5) * 6
                         )
                     }
-                    hoveredMote = fleetMote(at: location, in: proxy.size)
-                        .map { ($0.title, moteViewPosition($0, in: proxy.size)) }
+                    let hit = fleetMote(at: location, in: proxy.size)
+                    hoveredMote = hit.map { ($0.title, moteViewPosition($0, in: proxy.size)) }
+                    updateHoveredMoteSession(hit?.sessionID)
                 case .ended:
                     hoverGaze = nil
                     hoveredMote = nil
+                    updateHoveredMoteSession(nil)
                 }
             }
             .gesture(SpatialTapGesture().onEnded { value in
@@ -1277,6 +1285,27 @@ struct AttacheCharacterView: View {
                         .allowsHitTesting(false)
                 }
             }
+            .overlay {
+                // Accessibility only (INF-375): the fleet motes are Canvas-drawn
+                // and carry no AX of their own, so mirror each mote's session
+                // title into the accessibility tree here. This layer never
+                // hit-tests, so pointer click, drag, and hover on the motes are
+                // untouched. Positions track the last computed mote frame.
+                Group {
+                    ForEach(motor.lastFleetMotes.indices, id: \.self) { index in
+                        let mote = motor.lastFleetMotes[index]
+                        if mote.sessionID != nil, !mote.title.isEmpty {
+                            Color.clear
+                                .frame(width: 12, height: 12)
+                                .position(moteViewPosition(mote, in: proxy.size))
+                                .accessibilityElement()
+                                .accessibilityLabel(mote.title)
+                                .accessibilityHint("Watched session. Right-click for actions.")
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+            }
         }
         .padding(36)
         .frame(
@@ -1287,6 +1316,12 @@ struct AttacheCharacterView: View {
             if windowVisible != visible { windowVisible = visible }
         })
         .allowsHitTesting(delights.hoverReacts || !activity.fleet.isEmpty)
+    }
+
+    private func updateHoveredMoteSession(_ id: String?) {
+        guard id != hoveredMoteSessionID else { return }
+        hoveredMoteSessionID = id
+        onHoveredMoteChange?(id)
     }
 
     private func moteViewPosition(_ mote: AttacheFleetMote, in size: CGSize) -> CGPoint {

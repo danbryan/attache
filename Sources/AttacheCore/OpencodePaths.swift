@@ -62,4 +62,37 @@ public enum OpencodePaths {
     ) -> URL {
         URL(fileURLWithPath: databaseURL(environment: environment, fileManager: fileManager).path + "-shm")
     }
+
+    /// opencode's user config directory: `$XDG_CONFIG_HOME/opencode`, defaulting
+    /// to `~/.config/opencode`. This is the CONFIG home, distinct from the DATA
+    /// home above that holds the session database.
+    public static func configDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let raw = environment["XDG_CONFIG_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            let expanded = (raw as NSString).expandingTildeInPath
+            return URL(fileURLWithPath: expanded, isDirectory: true)
+                .appendingPathComponent("opencode", isDirectory: true)
+                .standardizedFileURL
+        }
+        return fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("opencode", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    /// Candidate MCP config files, in probe order: `opencode.json` then the
+    /// older `config.json`.
+    public static func configFileURLs(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let directory = configDirectory(environment: environment, fileManager: fileManager)
+        return [
+            directory.appendingPathComponent("opencode.json"),
+            directory.appendingPathComponent("config.json"),
+        ]
+    }
 }

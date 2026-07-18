@@ -30,4 +30,21 @@ public enum ClaudePaths {
         home(environment: environment, fileManager: fileManager)
             .appendingPathComponent("projects", isDirectory: true)
     }
+
+    /// The global Claude Code config that holds the top-level `mcpServers`
+    /// object. When `CLAUDE_CONFIG_DIR` is set the CLI keeps `.claude.json`
+    /// inside that directory; otherwise it lives at `~/.claude.json` (a sibling
+    /// of the `~/.claude` directory, not inside it).
+    public static func globalConfigJSONURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let raw = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            return home(environment: environment, fileManager: fileManager)
+                .appendingPathComponent(".claude.json")
+        }
+        return fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude.json")
+    }
 }

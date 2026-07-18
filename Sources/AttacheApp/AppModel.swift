@@ -264,12 +264,18 @@ final class AppModel: ObservableObject {
     // frontmost-pane context string it stamps on any stall it observes, and
     // the diagnostics surface (AboutPane) reads `mainThreadWatchdog.report()`.
 
-    /// True while the Settings window is on screen; set by
-    /// `SettingsWindowController.show()`/`windowWillClose`.
-    @Published var settingsWindowVisible: Bool = false
-    /// The sidebar section currently showing in Settings; kept in sync from
-    /// `SettingsView.onChange(of:)`.
+    /// True while the in-window Settings overlay is on screen (INF-377). Drives
+    /// the responsiveness context label and, more importantly, the live-playback
+    /// do-not-disturb input: while Settings is up the user cannot see captions,
+    /// so new arrivals route to voicemail even during a live call.
+    @Published var settingsOverlayVisible: Bool = false
+    /// The sidebar section currently showing in Settings; kept in sync from the
+    /// overlay's selection and by section deep-links.
     @Published var activeSettingsSection: SettingsSection = .appearance
+    /// A pending Character Studio request (create/edit/customize). Non-nil
+    /// presents the studio as a sheet over the Settings overlay (INF-377),
+    /// inside the single main window rather than a separate window.
+    @Published var characterStudioRequest: PersonalityStudioRequest?
 
     /// Background main-thread stall detector. `lazy` so its context-provider
     /// closure can capture `self` after the rest of the model has finished
@@ -286,10 +292,48 @@ final class AppModel: ObservableObject {
         if isLiveCallActive {
             return "call.live"
         }
-        if settingsWindowVisible {
+        if settingsOverlayVisible {
             return "settings.\(activeSettingsSection.rawValue)"
         }
         return "idle"
+    }
+
+    // MARK: - Settings overlay (INF-377)
+
+    /// Open the in-window Settings overlay, optionally jumping to a section.
+    /// Opening never disturbs an active live call: it only raises the surface
+    /// and (via `settingsOverlayVisible`) diverts new arrivals to voicemail.
+    func showSettingsOverlay(section: SettingsSection? = nil) {
+        if let section { activeSettingsSection = section }
+        settingsOverlayVisible = true
+    }
+
+    /// Command-comma toggles the overlay: open when closed, close when open.
+    /// Closing routes through `hideSettingsOverlay` so a Character Studio sheet
+    /// never lingers over a hidden overlay.
+    func toggleSettingsOverlay() {
+        if settingsOverlayVisible {
+            hideSettingsOverlay()
+        } else {
+            showSettingsOverlay()
+        }
+    }
+
+    /// Close the overlay (and any Character Studio riding above it). Subsequent
+    /// live arrivals resume normal live routing automatically.
+    func hideSettingsOverlay() {
+        characterStudioRequest = nil
+        settingsOverlayVisible = false
+    }
+
+    /// Present the Character Studio sheet over the overlay.
+    func openCharacterStudio(_ request: PersonalityStudioRequest) {
+        characterStudioRequest = request
+    }
+
+    /// Dismiss the Character Studio sheet, returning to the overlay.
+    func closeCharacterStudio() {
+        characterStudioRequest = nil
     }
 
     // MARK: - Recap / follow-up recovery (INF-254)
@@ -309,6 +353,12 @@ final class AppModel: ObservableObject {
     /// of spending model calls immediately. `nil` below both thresholds.
     @Published private(set) var recapCostPreview: RecapCostPreviewUIState?
     private var pendingRecapExecution: PendingRecapExecution?
+    /// Whether a recap is actively preparing or writing (INF-378). Drives the
+    /// inbox surface's progress chip so clicking Recap enters a visible
+    /// preparing state immediately, even before a card is delivered or a
+    /// selection exists. `false` while a cost preview waits on the user's
+    /// Start/Not now decision, since the banner is the visible feedback then.
+    @Published private(set) var recapInProgress = false
     @Published private(set) var followUpRecovery: ConversationRecovery?
     @Published private(set) var liveFollowUpRecovery: ConversationRecovery?
     /// Incremented whenever background topic tagging (`.tagging` role) fails.
@@ -1550,6 +1600,30 @@ final class AppModel: ObservableObject {
             guard let self else { return .deny }
             return await self.requestMCPApprovalInteractively(descriptor: descriptor, arguments: arguments)
         }
+        // Detect MCP servers configured in other installed harnesses (INF-376).
+        // The prober reads only harness config files; Claude Code's
+        // project-scoped .mcp.json files come from the distinct working
+        // directories of indexed Claude Code sessions.
+        mcpRegistry.detectHarnessServers = { [weak self] in
+            let prober = MCPHarnessProber(
+                claudeProjectPaths: { self?.claudeSessionProjectPaths() ?? [] }
+            )
+            return prober.detectAll()
+        }
+    }
+
+    /// Distinct working directories of indexed Claude Code sessions, used to
+    /// locate project-scoped `.mcp.json` files for harness import (INF-376).
+    private func claudeSessionProjectPaths() -> [String] {
+        var seen = Set<String>()
+        var paths: [String] = []
+        for record in sessionIndexer.allRecords where record.sourceKind == .claudeCode {
+            guard let project = record.project,
+                  !project.isEmpty,
+                  seen.insert(project).inserted else { continue }
+            paths.append(project)
+        }
+        return paths
     }
 
     deinit {
@@ -2447,16 +2521,24 @@ final class AppModel: ObservableObject {
                 return
             }
             if shouldPlayLive(event) {
-                reloadCards(select: card.id)
                 // The card stays unread until it has actually been spoken; the
                 // queue decides whether to play now or hold it. Heard state is set
                 // in finishPlayback on success, never before synthesis.
                 livePlaybackQueue.reconcile(isBusy: playback.isBusy)
+                // Newest-wins coalescing (the queue holds at most one pending):
+                // a still-waiting earlier live update is about to be superseded
+                // and will never play. Mark it heard so it never lingers as
+                // unread voicemail during the call (INF-374). It stays in History.
+                let displacedPending = livePlaybackQueue.pending
+                if let displacedPending, displacedPending != card.id {
+                    try? store.markHeard(cardID: displacedPending)
+                }
+                reloadCards(select: card.id)
                 if let toPlay = livePlaybackQueue.enqueue(card.id, isBusy: playback.isBusy) {
                     playCardLive(cardID: toPlay)
                     intakeStatus = "Playing attached \(card.sourceDisplayName) update live."
                 } else {
-                    intakeStatus = "Queued attached \(card.sourceDisplayName) update until current playback finishes."
+                    intakeStatus = "Queued attached \(card.sourceDisplayName) update to play next."
                 }
             } else {
                 if selectedCardID == nil {
@@ -2789,6 +2871,7 @@ final class AppModel: ObservableObject {
         recapRetryCards = []
         recapCostPreview = nil
         pendingRecapExecution = nil
+        recapInProgress = false
 
         let summarized = cards
         guard !summarized.isEmpty else {
@@ -2796,9 +2879,24 @@ final class AppModel: ObservableObject {
             return
         }
 
+        // INF-378: every recap feedback surface (the cost-preview banner, the
+        // preparing/writing progress chip, and any failure or recovery banner)
+        // lives in the voicemail inbox panel. The recap is launched from the
+        // ⌘I inbox palette and the dock, neither of which presents that panel,
+        // so a deferred (cost-preview) or failing recap used to leave the user
+        // with no visible feedback at all. Route to the voicemail surface first
+        // (the same channel `InboxOverlay.followUpSelection` uses) and enter a
+        // visible preparing state immediately, so every recap has a visible
+        // home before any decision, model call, or early return.
+        NotificationCenter.default.post(name: .attacheOpenVoicemailSurface, object: nil)
+        recapInProgress = true
+        intakeStatus = "Preparing your recap…"
+
         guard presentationService.isPresentationConfigured(for: .recap) else {
             // Deterministic fallback: speak the template digest, ephemeral, and
             // leave the inbox untouched exactly as before.
+            recapInProgress = false
+            intakeStatus = "Recap needs a presentation model; played the quick digest instead."
             playback.preview(inboxDigestText(for: summarized))
             return
         }
@@ -2818,6 +2916,9 @@ final class AppModel: ObservableObject {
         // whole-session-review pre-flight notice. Below both thresholds this
         // is a no-op and behavior is identical to before staging existed.
         guard !decision.needsCostPreview else {
+            // The banner itself is the visible feedback while we wait on the
+            // user's Start/Not now decision, so leave the preparing chip off.
+            recapInProgress = false
             pendingRecapExecution = PendingRecapExecution(cards: summarized, plan: decision.plan, personality: personality)
             recapCostPreview = RecapCostPreviewUIState(
                 id: UUID().uuidString,
@@ -2862,9 +2963,13 @@ final class AppModel: ObservableObject {
     /// inbox for a later recap attempt.
     private func executeRecapPlan(cards: [VoicemailCard], plan: RecapStagePlan, personality: Personality?) {
         guard !plan.stages.isEmpty else {
+            recapInProgress = false
+            intakeStatus = "Recap unavailable; played the quick digest instead."
             playback.preview(inboxDigestText(for: cards))
             return
         }
+
+        recapInProgress = true
 
         let profilePrompt = resolvedProfilePrompt(for: personality)
         let spokenLanguageName = AttachePresentationService.spokenLanguageName(defaults: defaults)
@@ -2957,6 +3062,7 @@ final class AppModel: ObservableObject {
 
             guard !stageSummaries.isEmpty else {
                 await MainActor.run {
+                    self.recapInProgress = false
                     self.playback.preview(self.inboxDigestText(for: cards))
                     self.intakeStatus = "Recap unavailable; played the quick digest instead."
                     if let error = lastError {
@@ -3045,6 +3151,7 @@ final class AppModel: ObservableObject {
                 : finalText
 
             await MainActor.run {
+                self.recapInProgress = false
                 self.deliverRecap(
                     reportedText,
                     summarizing: coveredCards,
@@ -7611,6 +7718,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Drop focus while keeping the session watched (INF-375, the mote menu's
+    /// Unfocus). Unlike `attachCodexSession(nil)`, the target stays pinned in
+    /// the fleet; only the focus and the session-context runtime's frozen
+    /// grant are cleared, through the same synchronization every other focus
+    /// change uses.
+    func unfocusCodexSession() {
+        guard attachedCodexSessionID != nil else { return }
+        attachedCodexSessionID = nil
+        synchronizeSessionContextFocus()
+        liveFollowUpText = ""
+        resetLiveFollowUpAnswerStatus()
+        updateCodexWatcher()
+        intakeStatus = "Watching without a focused session."
+    }
+
     // MARK: - Session search
 
     /// Keep the app's one FTS/search authority aligned with the scanner's
@@ -9173,10 +9295,14 @@ final class AppModel: ObservableObject {
         // Catch-me-up advances first: it is an explicit user action walking
         // the backlog (INF-169), distinct from the gated live queue below.
         if advanceCatchUpQueueIfNeeded() { return }
-        // Only auto-advance the live queue while on a call and not in voicemail
-        // mode; a manual replay off-call must never chain into the backlog (INF-163).
+        // Auto-advance the live queue whenever we are on a call. The intake
+        // decision (`livePlaybackRouting`) already put these updates on the live
+        // path, so the drain must match it: gating this on `!voicemailMode`
+        // (which defaults on and a call never clears) stranded queued updates as
+        // unread voicemail mid-call (INF-374). `onCall` alone still keeps an
+        // off-call manual replay from chaining into the backlog (INF-163).
         let next = livePlaybackQueue.finished()
-        if onCall, !voicemailMode, let next {
+        if onCall, let next {
             playCardLive(cardID: next)
         }
     }
@@ -9693,17 +9819,31 @@ final class AppModel: ObservableObject {
         selectedStartProgress = min(1, max(0, selectedStartProgress + delta))
     }
 
+    /// Where an incoming update goes the instant it arrives, decided by the pure
+    /// `LivePlaybackRouter` (INF-374) so the intake branch and the drain branch
+    /// can never disagree. `.playNow`/`.queueNext` both stay on the live path;
+    /// only `.voicemail` files an unread inbox card.
+    ///
+    /// The call target is the session the user explicitly focused and dialed;
+    /// the router intentionally does NOT gate on the target's UI category
+    /// (active/archived/automation), which is stale display metadata frozen at
+    /// call start and previously diverted a live call's own updates to voicemail
+    /// with nothing playing.
+    func livePlaybackRouting(for event: NormalizedEvent) -> LivePlaybackRouting {
+        let callTargetID = conversationTargetSnapshot?.target.id
+        let sessionIsCallTarget = callTargetID != nil
+            && event.externalSessionID == callTargetID
+        return LivePlaybackRouter.route(
+            liveCallActive: onCall,
+            eventIsFromLiveAgent: SourceKind.liveAgentRawValues.contains(event.source),
+            sessionIsCallTarget: sessionIsCallTarget,
+            audioPlaying: playback.isBusy,
+            settingsOverlayOpen: settingsOverlayVisible
+        )
+    }
+
     private func shouldPlayLive(_ event: NormalizedEvent) -> Bool {
-        // On a call = the conversation is open. Then the focused session's updates
-        // speak live; off a call, everything (including focused) collects as voicemail.
-        guard onCall,
-              SourceKind.liveAgentRawValues.contains(event.source),
-              let callTarget = conversationTargetSnapshot?.target,
-              callTarget.category == .activeSession,
-              event.externalSessionID == callTarget.id else {
-            return false
-        }
-        return true
+        livePlaybackRouting(for: event) != .voicemail
     }
 
     /// Whether you're on a call with the focused session (live two-way). This is the

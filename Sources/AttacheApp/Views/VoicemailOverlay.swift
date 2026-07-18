@@ -84,6 +84,9 @@ extension AttacheRootView {
             if let preview = model.recapCostPreview {
                 recapCostPreviewBanner(preview)
                 Divider().overlay(Color.primary.opacity(0.12))
+            } else if model.recapInProgress {
+                recapProgressChip
+                Divider().overlay(Color.primary.opacity(0.12))
             }
 
             if visibleCards.isEmpty {
@@ -846,6 +849,31 @@ extension AttacheRootView {
         .padding(.vertical, 10)
         .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.red.opacity(0.18)))
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+    }
+
+    /// The recap preparing/writing progress chip (INF-378): shown the instant
+    /// a recap is launched, so clicking Recap enters a visible progress state
+    /// immediately even before a card exists to select. Cleared when the recap
+    /// delivers, fails to a digest, or defers to the cost-preview banner.
+    @ViewBuilder
+    var recapProgressChip: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(model.intakeStatus.isEmpty ? "Preparing your recap…" : model.intakeStatus)
+                .typoCaption()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Recap in progress: \(model.intakeStatus.isEmpty ? "Preparing your recap" : model.intakeStatus)")
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.12)))
         .padding(.horizontal, 14)
         .padding(.top, 4)
     }

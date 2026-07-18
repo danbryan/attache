@@ -54,6 +54,39 @@ through the existing egress accounting: they are context sent to the
 personality's model, and the same disclosure rules apply. MCP support must
 never weaken the context privacy decisions of record.
 
+## Importing from other harnesses (INF-376)
+
+Attaché can detect MCP servers already configured in the other agent tools on
+the machine and offer to import them, so a user does not re-type a server they
+already run elsewhere.
+
+- **Detection is read-only.** The pure parsers in `MCPHarnessImport` (Core) take
+  file CONTENT and never write any harness file; a thin App-side
+  `MCPHarnessProber` reads the real paths and hands the content in. Sources:
+  - Claude Code: `~/.claude.json` (top-level `mcpServers`) plus each indexed
+    Claude Code session's project `.mcp.json`.
+  - Codex: `~/.codex/config.toml` `[mcp_servers.<name>]` tables, read by a
+    minimal TOML subset reader (`MinimalTOML`); remote headers come from a
+    `[...http_headers]` (or `headers`) subtable.
+  - opencode: `~/.config/opencode/opencode.json` (`mcp` object; `type` "local"
+    with a `command` array, or "remote" with `url`/`headers`).
+  - Grok Build: probed as TOML like Codex; the installed version carries no MCP
+    config, so detection returns nothing for it until a real path is added.
+- **Credential policy.** Static credentials (env vars, `headers`) are copied
+  verbatim into `mcp.json`. A remote server with no stored auth header is treated
+  as OAuth-ish and flagged `needsAuth` rather than imported, since its live
+  credentials are not in the config file; an aggregator gateway (like metaMCP)
+  is the recommended way to carry authorized services. Command-based (stdio)
+  servers are always importable.
+- **Merge policy.** `MCPConfigEditor.importServers` merges detected servers into
+  `mcp.json`: a name plus identical wiring already present is skipped, a name
+  clash with different wiring gets a `-2`, `-3`, … suffix, and unrelated
+  entries and top-level keys survive. Detected candidates that already match a
+  configured server by connection identity are filtered out of the list.
+- **Per-server Test.** Every configured server row has a Test button
+  (`registry.testServer(name:)`) that forces a fresh connect + `tools/list` now,
+  even after a prior failure, and shows "Connected, N tools" or the error inline.
+
 ## Surfaces
 
 Three UI surfaces (INF-373 phase 2) sit over the phase-1 registry and policy:

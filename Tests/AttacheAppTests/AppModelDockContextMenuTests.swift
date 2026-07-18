@@ -34,9 +34,9 @@ final class AppModelDockContextMenuTests: XCTestCase {
     // MARK: - openSettings(pane:)
 
     /// `AttacheNavigation.openSettings(pane:)` is the direct navigation API
-    /// the Settings context menu's items call. It must post both the window
+    /// the Settings context menu's items call. It must post both the overlay
     /// reveal notification synchronously and the pane-selection notification
-    /// (asynchronously, once the window has had a chance to appear) with the
+    /// (asynchronously, once the overlay has had a chance to appear) with the
     /// exact `SettingsSection` chosen.
     func testOpenSettingsPanePostsWindowRevealAndSectionNotifications() {
         let revealExpectation = expectation(description: "reveal")

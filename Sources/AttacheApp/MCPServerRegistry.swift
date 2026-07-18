@@ -31,6 +31,17 @@ final class MCPServerRegistry: ObservableObject, @unchecked Sendable {
     @Published private(set) var configuredServers: [MCPServerConfig] = []
     @Published private(set) var statuses: [String: MCPServerStatus] = [:]
     @Published private(set) var validationErrors: [String: String] = [:]
+    /// Servers found in other installed harnesses that are not already
+    /// configured here (filtered by connection identity). Populated by
+    /// `refreshDetection()`.
+    @Published private(set) var detectedServers: [MCPDetectedServer] = []
+    /// True while a detection pass is running, so the pane can show progress.
+    @Published private(set) var isDetecting = false
+
+    /// Reads the installed harnesses' configs off the main actor. Injected so
+    /// tests can supply candidates without touching the filesystem; the app sets
+    /// it to a real `MCPHarnessProber`.
+    var detectHarnessServers: () -> [MCPDetectedServer] = { [] }
 
     private let configURL: URL
     private let watchesFile: Bool
@@ -164,6 +175,55 @@ final class MCPServerRegistry: ObservableObject, @unchecked Sendable {
         }
     }
 
+    // MARK: Harness detection and import
+
+    /// Run a detection pass off the main actor, then publish the candidates that
+    /// are not already configured here (compared by connection identity, so a
+    /// server that was imported under a suffixed name still drops out).
+    func refreshDetection() {
+        guard !isDetecting else { return }
+        isDetecting = true
+        let detect = detectHarnessServers
+        Task { @MainActor [weak self] in
+            let candidates = await Task.detached { detect() }.value
+            self?.publishDetected(candidates)
+        }
+    }
+
+    @MainActor
+    private func publishDetected(_ candidates: [MCPDetectedServer]) {
+        let configured = configuredServers.filter(\.isValid)
+        let filtered = candidates.filter { candidate in
+            !configured.contains { Self.sameConnection($0, candidate.config) }
+        }
+        detectedServers = filtered.sorted {
+            if $0.harness.displayName != $1.harness.displayName {
+                return $0.harness.displayName < $1.harness.displayName
+            }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        isDetecting = false
+    }
+
+    private static func sameConnection(_ lhs: MCPServerConfig, _ rhs: MCPServerConfig) -> Bool {
+        lhs.transport == rhs.transport
+            && lhs.command == rhs.command
+            && lhs.args == rhs.args
+            && lhs.env == rhs.env
+            && lhs.url == rhs.url
+            && lhs.headers == rhs.headers
+    }
+
+    /// Merge the given detected servers into `mcp.json` and reload. Returns the
+    /// map of detected name -> imported name so the caller can report results.
+    @discardableResult
+    func importDetected(_ detected: [MCPDetectedServer]) throws -> [String: String] {
+        let (data, imported) = MCPConfigEditor.importServers(detected, into: currentConfigData())
+        try writeConfigData(data)
+        refreshDetection()
+        return imported
+    }
+
     // MARK: Tool discovery and dispatch
 
     /// Every cached tool across connected servers, deterministically ordered.
@@ -199,6 +259,29 @@ final class MCPServerRegistry: ObservableObject, @unchecked Sendable {
         let task = await MainActor.run { self.beginConnectIfNeeded(serverName: serverName) }
         guard let task else { return }
         _ = try? await task.value
+    }
+
+    /// Force a fresh connect + `tools/list` for one server now, even if it was
+    /// already connected or previously failed. Drives the per-row Test button:
+    /// on success the status becomes `.connected(toolCount:)`, on failure
+    /// `.failed(reason)`, both bound live by the Settings pane.
+    func testServer(name: String) async {
+        await MainActor.run { self.resetForTest(serverName: name) }
+        await ensureConnected(serverName: name)
+    }
+
+    @MainActor
+    private func resetForTest(serverName: String) {
+        connectTasks[serverName]?.cancel()
+        connectTasks[serverName] = nil
+        toolCache[serverName] = nil
+        if let client = clients[serverName] {
+            clients[serverName] = nil
+            Task { await client.close() }
+        }
+        if servers[serverName] != nil {
+            statuses[serverName] = .connecting
+        }
     }
 
     func callTool(namespacedName: String, argumentsJSON: String) async throws -> String {

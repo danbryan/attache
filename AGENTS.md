@@ -58,8 +58,10 @@ one app process.
   `MCPToolDescriptor`, `MCPToolPermission`); the client, registry, and
   per-call coordinator are App (`MCPClient`, `MCPServerRegistry`,
   `MCPToolCall`). UI surfaces are the Settings "MCP Servers" pane, the
-  personality editor's Tools picker, and the ask-first approval sheet. See
-  `docs/mcp-tools.md`.
+  personality editor's Tools picker, and the ask-first approval sheet.
+  Harness import (INF-376) adds read-only detection of servers configured in
+  other tools (`MCPHarnessImport` + `MinimalTOML` in Core, `MCPHarnessProber`
+  in App) and a per-server Test button. See `docs/mcp-tools.md`.
 - `Sources/AttacheApp/Personality.swift`: a personality is one first-class unit
   that owns its brain (`prompt`), voice (`PersonalityVoiceRef`), visual presence
   (`visualMode` plus `AttacheCharacter`), and explicit preferred main model
@@ -413,6 +415,23 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
 
 ## Verification
 
+Test-time discipline (2026-07-17, after a suite deadlocked silently for ~50
+minutes against a stale concurrent xctest):
+
+- Run the suite through `scripts/test.sh`, which enforces a wall-clock cap
+  (`ATTACHE_TEST_TIMEOUT`, default 600s; a warm run is ~60s) and refuses to
+  start while another AttachePackageTests run is active. Suites are
+  single-flight per machine. If the cap fires, investigate the hang; do not
+  just raise the cap.
+- Every wait a test performs must be bounded and must FAIL on expiry, sized
+  at roughly 1.5-2x the operation's normal cost: `semaphore.wait(timeout:)`,
+  `XCTWaiter` timeouts, subprocess deadlines. Never an unbounded
+  `semaphore.wait()` or an await with no cancellation path. The `runAsync`
+  helper in HistoricSessionSummarizerTests is the reference.
+- A test that talks to a subprocess or socket owns its cleanup: kill the
+  child in `defer`/`tearDown` so a failure cannot strand a process that
+  wedges the next run.
+
 Before claiming a change works, verify:
 
 - `swift build && swift test` pass,
@@ -435,8 +454,9 @@ through the accessibility API via the `AttacheUISmoke` target:
 3. pause, seek, and resume work and captions stay visible,
 4. Command-K opens, search filters to a match, Escape closes, and reopening puts
    the cursor back in search with no focus fallback,
-5. theme, voice engine, and text size changes persist across a relaunch and are
-   restored to what the user had, and Escape closes Settings,
+5. Command-comma opens the in-window Settings overlay (there is no separate
+   Settings window); theme, voice engine, and text size changes persist across a
+   relaunch and are restored to what the user had, and Escape closes the overlay,
 6. the ⌘I inbox and ⌘Y history palettes open, filter as you type, and close on
    Escape.
 

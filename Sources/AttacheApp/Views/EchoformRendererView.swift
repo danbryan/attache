@@ -26,6 +26,13 @@ struct EchoformRendererView: View {
     /// Fleet interactivity (INF-275), character mode only.
     var onFleetFocus: ((String) -> Void)?
     var onFleetSwitch: (() -> Void)?
+    /// Per-mote right-click context menu (INF-375). `moteMenuModel` maps the
+    /// mote's session id to its menu description (title, source, focused
+    /// state); the actions run "Stop Watching" and "Unfocus". Left unset, the
+    /// character shows only its default personality context menu.
+    var moteMenuModel: ((String) -> MoteContextMenuModel?)?
+    var onMoteStopWatching: ((String) -> Void)?
+    var onMoteUnfocus: ((String) -> Void)?
     /// The focused mote's persisted ring angle (INF-280), character mode only.
     var characterFocusAngle: Double = AttacheCharacterChoreography.defaultFocusAngle
     var onCharacterFocusAngleChanged: ((Double) -> Void)?
@@ -52,6 +59,9 @@ struct EchoformRendererView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var breathing = false
     @State private var sonar = false
+    /// The session id of the fleet mote under the cursor (INF-375), tracked so
+    /// the context menu can present that mote's actions on right-click.
+    @State private var hoveredMoteSessionID: String?
 
     var body: some View {
         ZStack {
@@ -74,6 +84,7 @@ struct EchoformRendererView: View {
                     fleetNotificationsOnly: fleetNotificationsOnly,
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch,
+                    onHoveredMoteChange: { hoveredMoteSessionID = $0 },
                     focusAngle: characterFocusAngle,
                     onFocusAngleChanged: onCharacterFocusAngleChanged,
                     isPrivate: isPrivate,
@@ -81,12 +92,7 @@ struct EchoformRendererView: View {
                     overlayVisible: overlayVisible
                 )
                 .contextMenu {
-                    Button("Edit personalities…") {
-                        AttacheNavigation.openPersonalityManager()
-                    }
-                    Button("Preview expressions…") {
-                        AttacheNavigation.openActivitySimulator()
-                    }
+                    moteOrDefaultMenu
                 }
             } else if visualMode == .bars {
                 sharedEchoPresence
@@ -123,6 +129,7 @@ struct EchoformRendererView: View {
             fleetNotificationsOnly: fleetNotificationsOnly,
             onFleetFocus: onFleetFocus,
             onFleetSwitch: onFleetSwitch,
+            onHoveredMoteChange: { hoveredMoteSessionID = $0 },
             focusAngle: characterFocusAngle,
             onFocusAngleChanged: onCharacterFocusAngleChanged,
             isPrivate: isPrivate,
@@ -133,9 +140,29 @@ struct EchoformRendererView: View {
         .accessibilityLabel("Echo voice bars, \(activity.phase.accessibilityTitle)")
         .accessibilityHint(compactBars ? "Double-click to enter full screen" : "Double-click to exit full screen")
         .contextMenu {
-            Button(compactBars ? "Enter Full Screen" : "Exit Full Screen") {
-                onToggleBarsExpansion?()
+            if let menu = hoveredMoteMenu {
+                menu
+            } else {
+                Button(compactBars ? "Enter Full Screen" : "Exit Full Screen") {
+                    onToggleBarsExpansion?()
+                }
+                Button("Edit personalities…") {
+                    AttacheNavigation.openPersonalityManager()
+                }
+                Button("Preview expressions…") {
+                    AttacheNavigation.openActivitySimulator()
+                }
             }
+        }
+    }
+
+    /// The character's context menu: the hovered mote's actions when the
+    /// cursor is over a fleet mote (INF-375), otherwise the default
+    /// personality items.
+    @ViewBuilder private var moteOrDefaultMenu: some View {
+        if let menu = hoveredMoteMenu {
+            menu
+        } else {
             Button("Edit personalities…") {
                 AttacheNavigation.openPersonalityManager()
             }
@@ -143,6 +170,17 @@ struct EchoformRendererView: View {
                 AttacheNavigation.openActivitySimulator()
             }
         }
+    }
+
+    /// The per-mote menu content for the mote currently under the cursor, or
+    /// nil when none is (so the caller can fall back to its default items).
+    private var hoveredMoteMenu: MoteContextMenuContent? {
+        guard let id = hoveredMoteSessionID, let model = moteMenuModel?(id) else { return nil }
+        return MoteContextMenuContent(
+            model: model,
+            onStopWatching: { onMoteStopWatching?(id) },
+            onUnfocus: { onMoteUnfocus?(id) }
+        )
     }
 
     private var visualizerAccessibilityValue: String {

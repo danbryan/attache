@@ -26,8 +26,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var windowController: AttacheWindowController?
     private var miniWindowController: MiniAttacheWindowController?
-    private var settingsWindowController: SettingsWindowController?
-    private var personalityStudioWindowController: PersonalityStudioWindowController?
     private var cancellables: Set<AnyCancellable> = []
     // Sparkle keeps the app current without pestering: a quiet background check
     // and one prompt only when an update is actually available. Feed URL and the
@@ -65,11 +63,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.mainThreadWatchdog.start()
         windowController?.showAttache()
         NotificationCenter.default.addObserver(forName: .attacheOpenSettings, object: nil, queue: .main) { [weak self] _ in
-            self?.showSettings()
+            guard let self else { return }
+            self.windowController?.showAttache()
+            NSApp.activate(ignoringOtherApps: true)
+            self.model.showSettingsOverlay()
+        }
+        NotificationCenter.default.addObserver(forName: .attacheOpenSettingsSection, object: nil, queue: .main) { [weak self] note in
+            guard let raw = note.object as? String,
+                  let section = SettingsSection(rawValue: raw) else { return }
+            self?.model.activeSettingsSection = section
         }
         NotificationCenter.default.addObserver(forName: .attacheOpenPersonalityStudio, object: nil, queue: .main) { [weak self] note in
-            guard let request = note.object as? PersonalityStudioRequest else { return }
-            self?.showPersonalityStudio(request)
+            guard let self, let request = note.object as? PersonalityStudioRequest else { return }
+            self.windowController?.showAttache()
+            NSApp.activate(ignoringOtherApps: true)
+            self.model.openCharacterStudio(request)
         }
         NotificationCenter.default.addObserver(forName: .attacheShowOnboarding, object: nil, queue: .main) { [weak self] _ in
             self?.windowController?.showAttache()
@@ -162,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         aboutItem.target = self
         appMenu.addItem(aboutItem)
         appMenu.addItem(.separator())
-        let settingsItem = NSMenuItem(title: NSLocalizedString("Settings…", comment: ""), action: #selector(showSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: NSLocalizedString("Settings…", comment: ""), action: #selector(toggleSettings), keyEquivalent: ",")
         settingsItem.target = self
         appMenu.addItem(settingsItem)
         let updatesItem = NSMenuItem(
@@ -436,7 +444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: NSLocalizedString("Next Personality", comment: ""), action: #selector(nextPersonality), keyEquivalent: "]"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Keyboard Shortcuts", comment: ""), action: #selector(openShortcuts), keyEquivalent: "/"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Enable Notifications…", comment: ""), action: #selector(enableNotifications), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: NSLocalizedString("Settings…", comment: ""), action: #selector(showSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: NSLocalizedString("Settings…", comment: ""), action: #selector(toggleSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Add sample voicemail", comment: ""), action: #selector(simulateEvent), keyEquivalent: "n"))
         menu.addItem(NSMenuItem(title: NSLocalizedString("Mark All Heard", comment: ""), action: #selector(markAllHeard), keyEquivalent: "h"))
         menu.addItem(.separator())
@@ -507,20 +515,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.startOnboarding()
     }
 
-    @objc private func showSettings() {
-        AttacheLog.uiLatency.withIntervalSignpost("openSettings") {
-            if settingsWindowController == nil {
-                settingsWindowController = SettingsWindowController(model: model)
-            }
-            settingsWindowController?.show()
+    /// Command-comma toggles the in-window Settings overlay (INF-377): open when
+    /// closed, close when open. Bringing the main window forward first ensures
+    /// the overlay is visible when triggered from the menu bar or another app.
+    @objc private func toggleSettings() {
+        AttacheLog.uiLatency.withIntervalSignpost("toggleSettings") {
+            windowController?.showAttache()
+            NSApp.activate(ignoringOtherApps: true)
+            model.toggleSettingsOverlay()
         }
-    }
-
-    private func showPersonalityStudio(_ request: PersonalityStudioRequest) {
-        if personalityStudioWindowController == nil {
-            personalityStudioWindowController = PersonalityStudioWindowController(model: model)
-        }
-        personalityStudioWindowController?.show(request)
     }
 
     @objc private func simulateEvent() {

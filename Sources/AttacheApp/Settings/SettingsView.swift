@@ -41,54 +41,21 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// The dedicated Settings window content: a sidebar and the selected section's
-/// pane. Each pane surfaces its own "what's active" state where it isn't already
-/// obvious, rather than a redundant global status bar.
-struct SettingsView: View {
+/// The selected section's pane, reused by the in-window Settings overlay
+/// (INF-377). Each pane surfaces its own "what's active" state where it isn't
+/// already obvious, rather than a redundant global status bar. This is the
+/// single source of truth for pane content; the overlay wraps it with the
+/// sidebar and scrolling chrome.
+struct SettingsPaneView: View {
     @ObservedObject var model: AppModel
-    @State private var section: SettingsSection? = .appearance
+    let section: SettingsSection
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $section) {
-                ForEach(SettingsSection.allCases) { item in
-                    Label { Text(LocalizedStringKey(item.title)) } icon: { Image(systemName: item.symbol) }
-                        .accessibilityLabel(Text(LocalizedStringKey(item.title)))
-                        .tag(item)
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 184, ideal: 200, max: 240)
-        } detail: {
-            ScrollView {
-                pane
-                    .padding(22)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .frame(minWidth: 740, minHeight: 480)
-        .attacheTextScale(model.uiTextScale)
-        .onChange(of: model.integrationFocusProviderID) { providerID in
-            if providerID != nil {
-                section = .integrations
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .attacheOpenSettingsSection)) { note in
-            if let raw = note.object as? String, let target = SettingsSection(rawValue: raw) {
-                section = target
-            }
-        }
-        .onChange(of: section) { newValue in
-            AttacheLog.uiLatency.withIntervalSignpost("settingsPaneSwitch") {
-                model.activeSettingsSection = newValue ?? .appearance
-            }
-        }
-        .onAppear {
-            model.activeSettingsSection = section ?? .appearance
-        }
+        pane
     }
 
     @ViewBuilder private var pane: some View {
-        switch section ?? .appearance {
+        switch section {
         case .appearance: appearancePane
         case .voice: VoicePane(model: model)
         case .personalities: PersonalitiesPane(model: model)

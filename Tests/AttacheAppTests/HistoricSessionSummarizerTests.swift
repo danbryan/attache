@@ -398,7 +398,9 @@ final class HistoricSessionSummarizerTests: XCTestCase {
 
     // MARK: - Async helper (XCTest has no native async test wait on this toolchain path)
 
-    private func runAsync<T>(_ operation: @escaping () async throws -> T) throws -> T {
+    private func runAsync<T>(
+        timeout: TimeInterval = 30, _ operation: @escaping () async throws -> T
+    ) throws -> T {
         let semaphore = DispatchSemaphore(value: 0)
         var result: Result<T, Error>?
         Task {
@@ -409,7 +411,18 @@ final class HistoricSessionSummarizerTests: XCTestCase {
             }
             semaphore.signal()
         }
-        semaphore.wait()
+        // Bounded wait: a hung async path fails this test in seconds instead
+        // of wedging the whole suite until the harness watchdog fires.
+        guard semaphore.wait(timeout: .now() + timeout) == .success else {
+            throw RunAsyncTimeout(seconds: Int(timeout))
+        }
         return try result!.get()
+    }
+}
+
+private struct RunAsyncTimeout: Error, CustomStringConvertible {
+    let seconds: Int
+    var description: String {
+        "runAsync timed out after \(seconds)s; the operation is hung, investigate"
     }
 }

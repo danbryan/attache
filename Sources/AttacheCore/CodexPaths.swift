@@ -46,4 +46,13 @@ public enum CodexPaths {
         home(environment: environment, fileManager: fileManager)
             .appendingPathComponent("session_index.jsonl")
     }
+
+    /// The Codex config file that holds `[mcp_servers.<name>]` tables.
+    public static func configTOMLURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        home(environment: environment, fileManager: fileManager)
+            .appendingPathComponent("config.toml")
+    }
 }

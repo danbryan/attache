@@ -108,6 +108,83 @@ public enum MCPConfigEditor {
         return serialize(root)
     }
 
+    /// Merge servers detected in other harnesses into `configData`. Returns the
+    /// new `mcp.json` bytes plus a map of each detected server's name to the
+    /// name it was imported under.
+    ///
+    /// Collision policy: a server whose name AND connection details already
+    /// match an existing entry is skipped as already-present (it maps to that
+    /// existing name); a name clash with a different transport gets a `-2`,
+    /// `-3`, … suffix. Unrelated existing entries and top-level keys survive.
+    public static func importServers(
+        _ detected: [MCPDetectedServer],
+        into configData: Data
+    ) -> (data: Data, imported: [String: String]) {
+        var root = objectRoot(from: configData)
+        var servers = (root["mcpServers"] as? [String: Any]) ?? [:]
+
+        // Existing entries keyed by name, for identity and clash checks.
+        let existing = MCPConfigFile.parse(serialize(["mcpServers": servers]))
+        var existingByName: [String: MCPServerConfig] = [:]
+        for server in existing.servers { existingByName[server.name] = server }
+
+        var imported: [String: String] = [:]
+        for server in detected {
+            let name = server.config.name
+            if let match = existingByName[name], sameTransport(match, server.config) {
+                // Already present with identical wiring: nothing to write.
+                imported[name] = name
+                continue
+            }
+            let targetName = resolveName(name, taken: Set(servers.keys))
+            servers[targetName] = entryObject(for: server.config)
+            imported[server.config.name] = targetName
+        }
+        root["mcpServers"] = servers
+        return (serialize(root), imported)
+    }
+
+    /// Whether two configs describe the same connection (ignoring name,
+    /// enabled state, and validation).
+    private static func sameTransport(_ lhs: MCPServerConfig, _ rhs: MCPServerConfig) -> Bool {
+        lhs.transport == rhs.transport
+            && lhs.command == rhs.command
+            && lhs.args == rhs.args
+            && lhs.env == rhs.env
+            && lhs.url == rhs.url
+            && lhs.headers == rhs.headers
+    }
+
+    /// Find a free name: the base if unused, otherwise `base-2`, `base-3`, … .
+    private static func resolveName(_ base: String, taken: Set<String>) -> String {
+        guard taken.contains(base) else { return base }
+        var suffix = 2
+        while taken.contains("\(base)-\(suffix)") { suffix += 1 }
+        return "\(base)-\(suffix)"
+    }
+
+    /// Serialize a resolved config back into an `mcp.json` server object. Empty
+    /// collections are omitted, and `enabled` is written only when disabled so a
+    /// freshly imported server stays clean and diff-friendly.
+    private static func entryObject(for config: MCPServerConfig) -> [String: Any] {
+        var entry: [String: Any] = [:]
+        if config.transport.isStdio {
+            if let command = config.command { entry["command"] = command }
+            if !config.args.isEmpty { entry["args"] = config.args }
+            if !config.env.isEmpty { entry["env"] = config.env }
+        } else {
+            if let url = config.url { entry["url"] = url.absoluteString }
+            if !config.headers.isEmpty { entry["headers"] = config.headers }
+            // Preserve a non-default transport spelling so a re-parse resolves
+            // the same way (streamable-http is the default remote inference).
+            if config.transport != .streamableHTTP {
+                entry["type"] = config.transport.rawValue
+            }
+        }
+        if !config.isEnabled { entry["enabled"] = false }
+        return entry
+    }
+
     // MARK: Helpers
 
     private static func objectRoot(from data: Data) -> [String: Any] {

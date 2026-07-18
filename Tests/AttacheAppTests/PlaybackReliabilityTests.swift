@@ -35,6 +35,48 @@ final class PlaybackReliabilityTests: XCTestCase {
         )
     }
 
+    func testOnCallLiveQueueDrainIsNotReGatedOnVoicemailMode() throws {
+        // INF-374 symptom 1: the on-call live-queue drain must not require
+        // `!voicemailMode` (which defaults on and a call never clears), or
+        // queued updates strand as unread voicemail mid-call. Guarding the drain
+        // on `onCall` alone still blocks an off-call manual replay from chaining.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appModel = try String(contentsOf: root.appendingPathComponent(
+            "Sources/AttacheApp/AppModel.swift"
+        ))
+        XCTAssertFalse(
+            appModel.contains("if onCall, !voicemailMode, let next"),
+            "The on-call live-queue drain must not be re-gated on voicemailMode (INF-374)."
+        )
+        XCTAssertTrue(
+            appModel.contains("if onCall, let next {\n            playCardLive(cardID: next)"),
+            "The live queue must drain whenever on a call so queued updates play next (INF-374)."
+        )
+    }
+
+    func testDisplacedPendingLiveUpdateIsMarkedHeardNotLeftUnread() throws {
+        // INF-374 symptom 3: newest-wins coalescing drops an earlier pending
+        // live update; it must be marked heard, never left as unread voicemail.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appModel = try String(contentsOf: root.appendingPathComponent(
+            "Sources/AttacheApp/AppModel.swift"
+        ))
+        XCTAssertTrue(
+            appModel.contains("let displacedPending = livePlaybackQueue.pending"),
+            "The live path must capture a superseded pending update (INF-374)."
+        )
+        XCTAssertTrue(
+            appModel.contains("try? store.markHeard(cardID: displacedPending)"),
+            "A superseded pending live update must be marked heard, not left unread (INF-374)."
+        )
+    }
+
     func testSmokeMuteIsScopedToExplicitEnvironmentFlag() {
         XCTAssertTrue(SpeechPlaybackController.shouldMuteAudioOutput(environment: [
             "ATTACHE_UI_TEST_MUTE_AUDIO": "1"

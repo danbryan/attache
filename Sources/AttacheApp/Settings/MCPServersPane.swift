@@ -39,12 +39,105 @@ struct MCPServersPane: View {
                     }
                 }
             }
+
+            detectedSection
         }
+        .onAppear { registry.refreshDetection() }
         .sheet(isPresented: $addSheetPresented) {
             MCPAddServerSheet { name, snippet in
                 addServer(name: name, snippet: snippet)
             }
         }
+    }
+
+    // MARK: Detected servers
+
+    /// Detected candidates grouped by harness, preserving the registry's
+    /// harness-then-name ordering.
+    private var detectedGroups: [(harness: MCPHarness, servers: [MCPDetectedServer])] {
+        var order: [MCPHarness] = []
+        var byHarness: [MCPHarness: [MCPDetectedServer]] = [:]
+        for server in registry.detectedServers {
+            if byHarness[server.harness] == nil { order.append(server.harness) }
+            byHarness[server.harness, default: []].append(server)
+        }
+        return order.map { ($0, byHarness[$0] ?? []) }
+    }
+
+    @ViewBuilder private var detectedSection: some View {
+        if !registry.detectedServers.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Detected in your other tools").typoSection()
+                    Spacer()
+                    Button("Refresh") { registry.refreshDetection() }
+                        .accessibilityIdentifier("MCP Refresh Detected")
+                        .disabled(registry.isDetecting)
+                }
+                Text("Servers found in your other agent tools. Importing copies the server into Attaché's own mcp.json; nothing in the other tool is changed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ForEach(detectedGroups, id: \.harness) { group in
+                    detectedGroupView(group.harness, servers: group.servers)
+                }
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    private func detectedGroupView(_ harness: MCPHarness, servers: [MCPDetectedServer]) -> some View {
+        let importable = servers.filter { $0.importability.isImportable }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(harness.displayName).typoBody(.medium)
+                Spacer()
+                if !importable.isEmpty {
+                    Button("Import All") { importDetected(importable) }
+                        .accessibilityIdentifier("MCP Import All \(harness.displayName)")
+                }
+            }
+            ForEach(servers) { server in
+                detectedRow(server)
+            }
+        }
+    }
+
+    private func detectedRow(_ server: MCPDetectedServer) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(server.name).typoBody(.medium)
+                    Text(server.transportSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(server.originPath)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                Button("Import") { importDetected([server]) }
+                    .disabled(!server.importability.isImportable)
+                    .accessibilityIdentifier("MCP Detected Import \(server.name)")
+            }
+            if let reason = server.importability.reason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("An aggregator gateway like metaMCP is the recommended way to carry authorized services into Attaché.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
     }
 
     private var buttonsRow: some View {
@@ -90,6 +183,13 @@ struct MCPServersPane: View {
                         .lineLimit(2)
                 }
                 Spacer()
+                if server.isValid && server.isEnabled {
+                    Button("Test") {
+                        Task { await registry.testServer(name: server.name) }
+                    }
+                    .disabled(status == .connecting)
+                    .accessibilityIdentifier("MCP Test \(server.name)")
+                }
                 if server.isValid {
                     Toggle("", isOn: enabledBinding(server))
                         .labelsHidden()
@@ -172,6 +272,16 @@ struct MCPServersPane: View {
                 enabled, forServer: name, in: registry.currentConfigData()
             )
             try registry.writeConfigData(updated)
+            writeError = nil
+        } catch {
+            writeError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func importDetected(_ servers: [MCPDetectedServer]) {
+        guard !servers.isEmpty else { return }
+        do {
+            try registry.importDetected(servers)
             writeError = nil
         } catch {
             writeError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

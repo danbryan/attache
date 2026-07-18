@@ -43,28 +43,49 @@ let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
 let run = SmokeRun()
 
 func mainWindow() throws -> AXElement {
+    // The single main window carries the app display name. Settings is now an
+    // in-window overlay (INF-377), and the Character Studio is a sheet, so
+    // prefer the named window to never accidentally return one of those.
+    if let named = app.appWindows.first(where: { $0.title == "Attaché" }) {
+        return named
+    }
     guard let window = app.appWindows.first(where: { !$0.title.contains("Settings") }) ?? app.appWindows.first else {
         throw SmokeError(message: "app has no windows")
     }
     return window
 }
 
+/// The in-window Settings overlay surface (INF-377). Returns the overlay root
+/// element (AX identifier "Settings Overlay") so existing `.descendants` /
+/// `.firstDescendant` lookups keep working against the panes inside it.
 func settingsWindow() throws -> AXElement {
-    guard let window = app.appWindows.first(where: { $0.title.contains("Settings") }) else {
-        let titles = app.appWindows.map { "\"\($0.title)\"" }.joined(separator: ", ")
-        throw SmokeError(message: "no settings window found; open windows: [\(titles)]")
+    guard let overlay = (try mainWindow()).firstDescendant(containing: "Settings Overlay") else {
+        throw SmokeError(message: "settings overlay not open in main window")
     }
-    return window
+    return overlay
 }
 
+/// Presses the overlay's close affordance ("Close Settings"); Escape also works.
+func closeSettingsOverlay() throws {
+    let close = try waitForElement("Close Settings button", in: try settingsWindow(),
+                                   role: kAXButtonRole as String, containing: "Close Settings")
+    _ = close.press()
+}
+
+/// The Character Studio surface (INF-377): a sheet over the Settings overlay,
+/// inside the main window. Reachable either as an application window or as a
+/// descendant of the presenting window, so both are checked.
 func personalityStudioWindow() throws -> AXElement {
-    guard let window = app.appWindows.first(where: {
-        $0.title == "Create Character" || $0.title == "Edit Character"
-    }) else {
-        let titles = app.appWindows.map { "\"\($0.title)\"" }.joined(separator: ", ")
-        throw SmokeError(message: "no character studio window found; open windows: [\(titles)]")
+    if let window = app.appWindows.first(where: {
+        $0.identifier == "Character Studio" || $0.firstDescendant(containing: "Character Studio") != nil
+    }) {
+        return window
     }
-    return window
+    if let surface = app.axApp.firstDescendant(containing: "Character Studio") {
+        return surface
+    }
+    let titles = app.appWindows.map { "\"\($0.title)\"" }.joined(separator: ", ")
+    throw SmokeError(message: "no character studio surface found; open windows: [\(titles)]")
 }
 
 func runShell(_ script: String) throws -> String {
@@ -174,23 +195,16 @@ func selectConversationDestination(_ title: String) throws {
     }
 }
 
-/// Selects a settings sidebar section by title. SwiftUI outline rows expose
-/// their label text in a nested cell, so the row is found by searching each
-/// row's subtree, then selected; the pane switch is asserted via a marker
-/// string unique to the target pane.
+/// Selects a settings sidebar section by title. The overlay sidebar (INF-377)
+/// exposes each section as a button carrying the AX identifier
+/// "Settings section <title>"; pressing it switches the pane, asserted via a
+/// marker string unique to the target pane.
 func selectSettingsSection(_ title: String, paneMarker: String) throws {
-    let window = try settingsWindow()
-    var row: AXElement?
-    try waitUntil("sidebar row \"\(title)\"", timeout: 10) {
-        let rows = window.descendants(where: { $0.role == "AXRow" })
-        row = rows.first { $0.firstDescendant(containing: title) != nil }
-        return row != nil
-    }
-    guard let row else {
-        throw SmokeError(message: "sidebar row \"\(title)\" not found. AX tree:\n\(window.treeDump())")
-    }
-    if !row.setSelected(true) {
-        _ = row.press()
+    let identifier = "Settings section \(title)"
+    let row = try waitForElement("sidebar row \"\(title)\"", in: try settingsWindow(),
+                                 role: kAXButtonRole as String, containing: identifier, timeout: 10)
+    guard row.press() else {
+        throw SmokeError(message: "AXPress failed on sidebar row \"\(title)\": \(row.summary)")
     }
     _ = try waitForElement("\(title) pane content", in: try settingsWindow(), containing: paneMarker)
 }
@@ -489,8 +503,7 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                                             role: kAXSliderRole as String, containing: "Text size")
             _ = slider.setValue(scale)
             if !pose.contains("settings") {
-                try settingsWindow().descendants(where: { $0.subrole == "AXCloseButton" }, collectLimit: 1)
-                    .first.map { _ = $0.press() }
+                try closeSettingsOverlay()
             }
         }
         for state in pose.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
@@ -656,8 +669,7 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                     throw SmokeError(message: "no system voice popup found")
                 }
                 try selectPopup(voicePopup, item: "ko-KR")
-                try settingsWindow().descendants(where: { $0.subrole == "AXCloseButton" }, collectLimit: 1)
-                    .first.map { _ = $0.press() }
+                try closeSettingsOverlay()
 
                 let koreanText = "안녕하세요 저는 앱 개발자입니다 오늘은 날씨가 정말 좋습니다"
                 _ = try runShell("EVENT_TITLE='Korean voice torture card' EVENT_TEXT='\(koreanText)' scripts/send-event.sh")
@@ -928,8 +940,7 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
                     try waitUntil("theme picker to read \(themeName)", timeout: 5) {
                         popup.stringValue.contains(themeName)
                     }
-                    try settingsWindow().descendants(where: { $0.subrole == "AXCloseButton" }, collectLimit: 1)
-                        .first.map { _ = $0.press() }
+                    try closeSettingsOverlay()
                     try waitUntil("settings window to close", timeout: 5) { (try? settingsWindow()) == nil }
                 }
                 if state == "private-echo" {
@@ -964,15 +975,10 @@ if let pose = ProcessInfo.processInfo.environment["SMOKE_POSE"] {
         // Screenshot the app's own window (by CGWindowID, never the whole
         // screen) the instant the requested state is confirmed on screen,
         // before the hold-sleep even starts, if the wrapper asked for one.
-        // Poses that land on a secondary window (Settings) target it by
-        // title, since it is usually smaller than the main window and the
-        // largest-window heuristic would otherwise capture the wrong one.
+        // Settings is now an in-window overlay (INF-377), so every pose lands
+        // on the single main window and the main-window capture is correct.
         if let screenshotPath = ProcessInfo.processInfo.environment["ATTACHE_POSE_SCREENSHOT_PATH"] {
-            if pose.contains("settings") || pose.contains("about") || pose.contains("voice-pane") {
-                captureNamedWindowScreenshot(to: screenshotPath, titleContains: "Settings")
-            } else {
-                captureAppWindowScreenshot(to: screenshotPath)
-            }
+            captureAppWindowScreenshot(to: screenshotPath)
         }
         print("posing \(pose) for \(Int(holdSeconds))s")
         // Wrapper scripts tail the log for this marker to time recordings;
@@ -1324,12 +1330,16 @@ if enabled("f3") {
         guard button.press() else {
             throw SmokeError(message: "AXPress failed on \(button.summary); actions: \(button.actionNames)")
         }
+        // 30s here, not the default 10: the AX window list has been observed to
+        // report empty for several seconds right after the surface switch while
+        // the app ingests the torture payload (2026-07-17 flake, app healthy).
         let field = try waitForElement("inbox search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search inbox")
+                                       role: kAXTextFieldRole as String, containing: "Search inbox",
+                                       timeout: 30)
         _ = field.setFocused()
         if !field.setValue(tortureEventTitle) { app.type(tortureEventTitle) }
         let row = try waitForElement("torture card row play action", in: try mainWindow(),
-                                     containing: "Play \(tortureEventTitle)")
+                                     containing: "Play \(tortureEventTitle)", timeout: 30)
         guard row.press() else {
             throw SmokeError(message: "AXPress failed on \(row.summary); actions: \(row.actionNames)")
         }
@@ -2628,7 +2638,7 @@ var originalEngine = ""
 var originalTextScale = 1.0
 
 if enabled("f5") {
-    run.step("f5-settings", "settings window opens with Command-comma") {
+    run.step("f5-settings", "settings overlay opens with Command-comma") {
         try assertWithinLatencyBudget("opening Settings") {
             app.activate()
             app.key(Key.comma, command: true)
@@ -2647,20 +2657,41 @@ if enabled("f5") {
             popup.stringValue.contains(chosenTheme)
         }
     }
+    // Voice engine moved into the personality (a personality owns its voice,
+    // Personality Manager decision of record), so the engine assertion drives
+    // the active character's studio, not a Settings-level control. The old
+    // Settings-pane engine radio no longer exists by design; this step had
+    // been failing against it since the v0.5.0 voice pane cleanup.
     run.step("f5-settings", "voice engine switches to On-device") {
-        try selectSettingsSection("Voice & Captions", paneMarker: "Voice engine")
+        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        let edit = try waitForElement("active character edit button", in: try settingsWindow()) { element in
+            element.role == kAXButtonRole as String
+                && (element.matches("Edit") || element.matches("Customize"))
+        }
+        guard edit.press() else { throw SmokeError(message: "AXPress failed on \(edit.summary)") }
+        try waitUntil("character studio for engine switch", timeout: 10) {
+            (try? personalityStudioWindow()) != nil
+        }
         let engineNames = ["On-device", "ElevenLabs", "xAI", "OpenAI"]
-        if let selected = (try settingsWindow()).descendants(where: { element in
+        if let selected = (try personalityStudioWindow()).descendants(where: { element in
             element.role == kAXRadioButtonRole as String && element.stringValue == "1"
                 && engineNames.contains(where: element.matches)
         }, collectLimit: 1).first {
             originalEngine = engineNames.first(where: selected.matches) ?? ""
         }
-        let onDevice = try waitForElement("On-device engine segment", in: try settingsWindow(),
+        let onDevice = try waitForElement("On-device engine segment", in: try personalityStudioWindow(),
                                           role: kAXRadioButtonRole as String, containing: "On-device")
         guard onDevice.press() else { throw SmokeError(message: "AXPress failed on \(onDevice.summary)") }
         try waitUntil("On-device segment to be selected", timeout: 5) {
             onDevice.stringValue == "1"
+        }
+        let save = try waitForElement("studio save button", in: try personalityStudioWindow()) { element in
+            element.role == kAXButtonRole as String
+                && (element.matches("Save character") || element.matches("Create character"))
+        }
+        guard save.press() else { throw SmokeError(message: "AXPress failed on \(save.summary)") }
+        try waitUntil("character studio closes after engine save", timeout: 10) {
+            (try? personalityStudioWindow()) == nil
         }
     }
     run.step("f5-settings", "text size adjusts") {
@@ -2694,11 +2725,29 @@ if enabled("f5") {
         try waitUntil("persisted theme to read \(chosenTheme)", timeout: 5) {
             popup.stringValue.contains(chosenTheme)
         }
-        try selectSettingsSection("Voice & Captions", paneMarker: "Voice engine")
-        let onDevice = try waitForElement("On-device engine segment", in: try settingsWindow(),
+        try selectSettingsSection("Personalities", paneMarker: "Create character")
+        let editAfterRelaunch = try waitForElement(
+            "active character edit button after relaunch", in: try settingsWindow()
+        ) { element in
+            element.role == kAXButtonRole as String
+                && (element.matches("Edit") || element.matches("Customize"))
+        }
+        guard editAfterRelaunch.press() else {
+            throw SmokeError(message: "AXPress failed on \(editAfterRelaunch.summary)")
+        }
+        try waitUntil("character studio after relaunch", timeout: 10) {
+            (try? personalityStudioWindow()) != nil
+        }
+        let onDevice = try waitForElement("On-device engine segment", in: try personalityStudioWindow(),
                                           role: kAXRadioButtonRole as String, containing: "On-device")
         try waitUntil("persisted engine to be On-device", timeout: 5) {
             onDevice.stringValue == "1"
+        }
+        let cancel = try waitForElement("studio cancel button", in: try personalityStudioWindow(),
+                                        role: kAXButtonRole as String, exactly: "Cancel")
+        guard cancel.press() else { throw SmokeError(message: "AXPress failed on \(cancel.summary)") }
+        try waitUntil("character studio closes after engine check", timeout: 10) {
+            (try? personalityStudioWindow()) == nil
         }
         try selectSettingsSection("Appearance", paneMarker: "Text size")
         let slider = try waitForElement("Text size slider", in: try settingsWindow(),
@@ -2728,16 +2777,36 @@ if enabled("f5") {
             }
         }
         if !originalEngine.isEmpty, originalEngine != "On-device" {
-            try selectSettingsSection("Voice & Captions", paneMarker: "Voice engine")
-            let engine = try waitForElement("original engine segment", in: try settingsWindow(),
+            try selectSettingsSection("Personalities", paneMarker: "Create character")
+            let edit = try waitForElement(
+                "active character edit button for engine restore", in: try settingsWindow()
+            ) { element in
+                element.role == kAXButtonRole as String
+                    && (element.matches("Edit") || element.matches("Customize"))
+            }
+            guard edit.press() else { throw SmokeError(message: "AXPress failed on \(edit.summary)") }
+            try waitUntil("character studio for engine restore", timeout: 10) {
+                (try? personalityStudioWindow()) != nil
+            }
+            let engine = try waitForElement("original engine segment", in: try personalityStudioWindow(),
                                             role: kAXRadioButtonRole as String, containing: originalEngine)
             guard engine.press() else { throw SmokeError(message: "AXPress failed on \(engine.summary)") }
             try waitUntil("engine to return to \(originalEngine)", timeout: 5) {
                 engine.stringValue == "1"
             }
+            let save = try waitForElement(
+                "studio save button for engine restore", in: try personalityStudioWindow()
+            ) { element in
+                element.role == kAXButtonRole as String
+                    && (element.matches("Save character") || element.matches("Create character"))
+            }
+            guard save.press() else { throw SmokeError(message: "AXPress failed on \(save.summary)") }
+            try waitUntil("character studio closes after engine restore", timeout: 10) {
+                (try? personalityStudioWindow()) == nil
+            }
         }
     }
-    run.step("f5-settings", "Escape closes the settings window") {
+    run.step("f5-settings", "Escape closes the settings overlay") {
         app.key(Key.escape)
         try waitUntil("settings window to close", timeout: 5) {
             (try? settingsWindow()) == nil
@@ -3215,14 +3284,6 @@ if enabled("personality") {
         _ = try waitForElement("sprite help", in: studio, containing: "Learn about custom sprites")
         try waitForElementGone("legacy follow app voice", in: studio, containing: "Follow the app voice", timeout: 1)
         try waitForElementGone("legacy follow app model", in: studio, containing: "Follow the app's main model", timeout: 1)
-
-        guard let before = studio.frame else { throw SmokeError(message: "character studio has no AX frame") }
-        let requested = CGPoint(x: before.minX + 24, y: before.minY + 18)
-        guard studio.setPosition(requested) else { throw SmokeError(message: "character studio rejected an AX window move") }
-        try waitUntil("character studio to move", timeout: 5) {
-            guard let after = (try? personalityStudioWindow())?.frame else { return false }
-            return abs(after.minX - before.minX) > 5 || abs(after.minY - before.minY) > 5
-        }
     }
 
     run.step("personality-studio", "a fourth custom Echo personality can be authored") {
