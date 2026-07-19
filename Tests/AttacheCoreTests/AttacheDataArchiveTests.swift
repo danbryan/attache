@@ -80,6 +80,25 @@ final class AttacheDataArchiveTests: XCTestCase {
         XCTAssertFalse(withVoice.contains("AudioCache"))
     }
 
+    // MARK: Premium voice backup option
+
+    func testIncludePremiumVoiceOptionShownOnlyWhenInstalled() {
+        XCTAssertTrue(AttacheDataArchive.showsIncludePremiumVoiceOption(isPremiumVoiceInstalled: true))
+        XCTAssertFalse(AttacheDataArchive.showsIncludePremiumVoiceOption(isPremiumVoiceInstalled: false))
+    }
+
+    func testResolvedIncludePremiumVoiceRequiresInstalledAndOptIn() {
+        XCTAssertTrue(AttacheDataArchive.resolvedIncludePremiumVoice(
+            isPremiumVoiceInstalled: true, userRequestedInclusion: true))
+        XCTAssertFalse(AttacheDataArchive.resolvedIncludePremiumVoice(
+            isPremiumVoiceInstalled: true, userRequestedInclusion: false))
+        // A checked box can never smuggle in a voice that is not installed.
+        XCTAssertFalse(AttacheDataArchive.resolvedIncludePremiumVoice(
+            isPremiumVoiceInstalled: false, userRequestedInclusion: true))
+        XCTAssertFalse(AttacheDataArchive.resolvedIncludePremiumVoice(
+            isPremiumVoiceInstalled: false, userRequestedInclusion: false))
+    }
+
     // MARK: Sensitive defaults redaction
 
     func testSensitiveDefaultsKeysAreStripped() {

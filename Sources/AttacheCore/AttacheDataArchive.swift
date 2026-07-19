@@ -91,6 +91,23 @@ public enum AttacheDataArchive {
         return true
     }
 
+    /// Whether the "include downloaded voice" backup option should be offered.
+    /// There is nothing to include unless the premium voice is actually
+    /// installed, so the checkbox is hidden otherwise.
+    public static func showsIncludePremiumVoiceOption(isPremiumVoiceInstalled: Bool) -> Bool {
+        isPremiumVoiceInstalled
+    }
+
+    /// Resolves the effective `includePremiumVoice` flag for a backup. The voice
+    /// is packed only when it is installed AND the user opted in, so a checked
+    /// box can never smuggle in a non-existent entry when nothing is installed.
+    public static func resolvedIncludePremiumVoice(
+        isPremiumVoiceInstalled: Bool,
+        userRequestedInclusion: Bool
+    ) -> Bool {
+        isPremiumVoiceInstalled && userRequestedInclusion
+    }
+
     /// Filters and sorts top-level app-support entry names down to those that
     /// belong in an archive, applying the exclusion rules.
     public static func plannedContents(

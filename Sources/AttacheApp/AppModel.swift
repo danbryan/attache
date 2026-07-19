@@ -10466,8 +10466,30 @@ extension AppModel {
         panel.title = "Back Up Attaché Data"
         panel.nameFieldStringValue = Self.suggestedBackupFileName()
         panel.canCreateDirectories = true
+
+        // Offer to include the downloaded on-device voice only when it is
+        // actually installed; otherwise there is nothing to include. This runs
+        // on the main thread (a modal panel from a UI action), matching the
+        // manager's main-actor isolation.
+        let voiceInstalled = MainActor.assumeIsolated { premiumVoiceWeights.isInstalled }
+        var includeVoiceCheckbox: NSButton?
+        if AttacheDataArchive.showsIncludePremiumVoiceOption(isPremiumVoiceInstalled: voiceInstalled) {
+            let checkbox = NSButton(
+                checkboxWithTitle: "Include downloaded voice (adds ~200 MB)",
+                target: nil, action: nil)
+            checkbox.state = .off
+            checkbox.setAccessibilityIdentifier("Data Back Up Include Voice")
+            let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 32))
+            checkbox.frame = NSRect(x: 20, y: 6, width: 300, height: 20)
+            container.addSubview(checkbox)
+            panel.accessoryView = container
+            includeVoiceCheckbox = checkbox
+        }
+
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        let includePremiumVoice = false
+        let includePremiumVoice = AttacheDataArchive.resolvedIncludePremiumVoice(
+            isPremiumVoiceInstalled: voiceInstalled,
+            userRequestedInclusion: includeVoiceCheckbox?.state == .on)
         do {
             let exportedDefaults = Self.exportedArchiveDefaults(
                 from: defaults, domainName: Self.preferenceDomainName)
