@@ -38,6 +38,18 @@ final class RepositoryVocabularyGuardTests: XCTestCase {
         )
     }
 
+    /// The retired artwork term (any case, whole word). The custom-artwork format
+    /// and pose catalog are the current vocabulary; the retired term is banned
+    /// everywhere in user-facing text. Assembled by concatenation so this file
+    /// never contains the literal token and can never flag itself.
+    func testRetiredArtworkNounIsAbsent() throws {
+        try assertNoMatches(
+            pattern: "spr" + "ite",
+            flags: ["-i", "-w"],
+            label: "the retired artwork noun"
+        )
+    }
+
     /// Runs `git grep <flags> -l -e <pattern>` at the repo root and fails if any
     /// tracked file matches. Skips cleanly when git or a worktree is unavailable.
     private func assertNoMatches(pattern: String, flags: [String], label: String) throws {

@@ -5,6 +5,7 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
     case xai
     case ollama
     case custom
+    case openai
     case claudeCLI = "claude_cli"
     case codexCLI = "codex_cli"
 
@@ -15,6 +16,7 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         case .xai: return "xAI / Grok"
         case .ollama: return "Ollama"
         case .custom: return "Custom"
+        case .openai: return "OpenAI"
         case .claudeCLI: return "Claude subscription"
         case .codexCLI: return "Codex subscription"
         }
@@ -25,6 +27,7 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         case .xai: return "xAI Grok"
         case .ollama: return "Ollama Local"
         case .custom: return "Custom OpenAI Compatible"
+        case .openai: return "OpenAI"
         case .claudeCLI: return "Claude (your Claude Code login)"
         case .codexCLI: return "Codex (your ChatGPT login)"
         }
@@ -60,6 +63,7 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         case .xai: return "https://api.x.ai/v1"
         case .ollama: return "http://127.0.0.1:11434/v1"
         case .custom: return "https://api.openai.com/v1"
+        case .openai: return "https://api.openai.com/v1"
         case .claudeCLI, .codexCLI: return ""
         }
     }
@@ -69,13 +73,14 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         case .xai: return "grok-4.3"
         case .ollama: return "qwen3:7b"
         case .custom: return "gpt-4o-mini"
+        case .openai: return "gpt-4o-mini"
         case .claudeCLI, .codexCLI: return "default"   // "default" = use the tool's own configured model
         }
     }
 
     var defaultReasoningEffort: String {
         switch self {
-        case .xai, .custom, .codexCLI, .claudeCLI:
+        case .xai, .custom, .openai, .codexCLI, .claudeCLI:
             return "default"
         case .ollama:
             return "none"
@@ -84,7 +89,7 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
 
     var supportsServiceTier: Bool {
         switch self {
-        case .xai, .custom, .codexCLI:
+        case .xai, .custom, .openai, .codexCLI:
             return true
         case .ollama, .claudeCLI:
             return false
@@ -106,14 +111,14 @@ enum AttachePresentationProvider: String, CaseIterable, Hashable, Identifiable, 
         switch self {
         case .ollama, .claudeCLI, .codexCLI:
             return false
-        case .xai, .custom:
+        case .xai, .custom, .openai:
             return true
         }
     }
 
     var supportsReasoningEffort: Bool {
         switch self {
-        case .xai, .ollama, .custom, .codexCLI, .claudeCLI:
+        case .xai, .ollama, .custom, .openai, .codexCLI, .claudeCLI:
             return true
         }
     }

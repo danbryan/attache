@@ -58,7 +58,7 @@ struct CloudConsentSheet: View {
                 }
             }
 
-            Text("You're acknowledging this once for \(produces). You can switch back to a local provider at any time.")
+            Text("You only acknowledge this once. It covers \(produces) for every Attaché that uses \(providerName), until you switch that back to a local provider.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

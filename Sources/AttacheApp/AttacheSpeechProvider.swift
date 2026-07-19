@@ -301,7 +301,12 @@ enum AttacheRemoteVoiceService {
         return mergeRemoteVoices(builtIn + custom)
     }
 
-    static func synthesize(text: String, configuration: AttacheSpeechConfiguration, outputURL: URL) async throws {
+    static func synthesize(
+        text: String,
+        configuration: AttacheSpeechConfiguration,
+        outputURL: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) async throws {
         if configuration.provider.sendsToCloud, !configuration.hasRemoteEgressConsent {
             throw VoiceProviderError.cloudConsentRequired(configuration.provider.title)
         }
@@ -315,7 +320,8 @@ enum AttacheRemoteVoiceService {
             try AttachePremiumVoiceSynthesizer.synthesize(
                 text: text,
                 configuration: configuration,
-                outputURL: outputURL
+                outputURL: outputURL,
+                environment: environment
             )
         case .elevenLabs:
             try await synthesizeElevenLabs(text: text, configuration: configuration, outputURL: outputURL)

@@ -22,6 +22,6 @@ enum AttacheDocumentationLinks {
     static let characterArtwork =
         URL(string: "\(repositoryDocsBase)/design/attache-animation-spec.md")!
 
-    static let customSprite =
-        URL(string: "\(repositoryDocsBase)/design/attache-animation-spec.md#bring-your-own-sprite")!
+    static let customArtwork =
+        URL(string: "\(repositoryDocsBase)/design/attache-animation-spec.md#bring-your-own-artwork")!
 }

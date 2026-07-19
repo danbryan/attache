@@ -202,13 +202,17 @@ final class PremiumVoiceWeightsManager: ObservableObject {
     }
 
     /// The runtime paths for the installed release, or nil if not installed.
+    /// `installRoot` is injectable so tests can point resolution at an empty
+    /// directory and stay hermetic regardless of whether real weights happen to
+    /// be installed on the machine (INF-386 follow-up).
     nonisolated static func installedRuntimePaths(
         release: PremiumVoiceRelease = .pinned,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        installRoot: URL? = nil
     ) -> PremiumVoiceRuntimePaths? {
-        let dir = defaultInstallRoot(fileManager: fileManager)
-            .appendingPathComponent(release.version, isDirectory: true)
-        guard isInstalled(version: release.version, installRoot: defaultInstallRoot(fileManager: fileManager), fileManager: fileManager) else {
+        let root = installRoot ?? defaultInstallRoot(fileManager: fileManager)
+        let dir = root.appendingPathComponent(release.version, isDirectory: true)
+        guard isInstalled(version: release.version, installRoot: root, fileManager: fileManager) else {
             return nil
         }
         return PremiumVoiceRuntimePaths(

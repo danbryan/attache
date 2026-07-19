@@ -29,18 +29,22 @@ enum OnboardingStep: Int, CaseIterable {
 
 /// Filesystem probes for known agent session stores. Counts are capped; the
 /// point is "found something" plus a rough magnitude, not an exact census.
-/// Each probe uses the SAME store convention its live scanner uses, so the
-/// onboarding count agrees with what Attaché will actually watch: Codex/Claude
-/// count `.jsonl` transcripts, Grok Build counts session directories, and
-/// opencode counts rows in its shared SQLite database. Claude Code honors
-/// `CLAUDE_CONFIG_DIR` through `ClaudePaths` exactly as the watcher does.
+/// Every probe reuses its live scanner's `enumerateFiles()`, so the onboarding
+/// count agrees exactly with what Attaché will actually watch. That parity is
+/// the whole contract: a raw recursive `.jsonl` sweep diverges from the live
+/// scanners (it counts Claude Code subagent sidechain transcripts the scanner
+/// skips, and it misses Codex `archived_sessions` while counting non-session
+/// files), so the probes must go through the same scanners the indexer does.
+/// Each scanner resolves its own home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`,
+/// `GROK_HOME`, `XDG_DATA_HOME`) exactly as the watcher does; the optional
+/// home overrides exist for fixtures.
 enum OnboardingSourceProbe {
-    static func codexSessionCount(limit: Int = 200) -> Int {
-        count(root: CodexPaths.sessionsDirectory(), suffix: ".jsonl", limit: limit)
+    static func codexSessionCount(limit: Int = 200, codexHome: URL? = nil) -> Int {
+        min(CodexSessionScanner(codexHome: codexHome).enumerateFiles().count, limit)
     }
 
-    static func claudeCodeSessionCount(limit: Int = 200) -> Int {
-        count(root: ClaudePaths.projectsDirectory(), suffix: ".jsonl", limit: limit)
+    static func claudeCodeSessionCount(limit: Int = 200, claudeHome: URL? = nil) -> Int {
+        min(ClaudeCodeSessionScanner(claudeHome: claudeHome).enumerateFiles().count, limit)
     }
 
     static func grokBuildSessionCount(limit: Int = 200, grokHome: URL? = nil) -> Int {
@@ -49,20 +53,6 @@ enum OnboardingSourceProbe {
 
     static func opencodeSessionCount(limit: Int = 200, opencodeDataHome: URL? = nil) -> Int {
         min(OpencodeSessionScanner(opencodeDataHome: opencodeDataHome).enumerateFiles().count, limit)
-    }
-
-    private static func count(root: URL, suffix: String, limit: Int) -> Int {
-        guard let enumerator = FileManager.default.enumerator(
-            at: root, includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return 0 }
-        var found = 0
-        for case let url as URL in enumerator {
-            if url.lastPathComponent.hasSuffix(suffix) {
-                found += 1
-                if found >= limit { break }
-            }
-        }
-        return found
     }
 }
 
@@ -79,6 +69,15 @@ struct OnboardingSourceRowInfo: Identifiable, Equatable {
 }
 
 enum OnboardingSourceRows {
+    /// Whether the source probes should be re-run for a given step. Only the
+    /// "Connect your agents" step (`.sources`) shows live detection, so it is the
+    /// only step whose (re)appearance and idle timer warrant a fresh probe. Pure
+    /// so the refresh trigger is unit-testable without SwiftUI (INF-386 follow-up:
+    /// a session created while onboarding is open was staying "Not found").
+    static func refreshesProbes(on step: OnboardingStep) -> Bool {
+        step == .sources
+    }
+
     /// All four watchable sources, in a fixed order, from raw probe counts.
     /// A positive count renders a location hint with the same "200+" cap the
     /// original two rows used; a zero count renders an install pointer.
@@ -117,12 +116,15 @@ struct OnboardingSheet: View {
     @State private var grokBuildCount = 0
     @State private var opencodeCount = 0
     @State private var probed = false
-    @State private var demoSent = false
     @State private var confirmSkip = false
     @State private var setupProvider: AttachePresentationProvider = .ollama
     @State private var pendingCloudModel: AttachePresentationProvider?
 
     private var accent: Color { model.theme.signatureColor }
+
+    /// Modest idle refresh (10s) so the visible sources step keeps up with
+    /// sessions created while onboarding is open; only acts while `.sources`.
+    private let sourceProbeTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -138,6 +140,11 @@ struct OnboardingSheet: View {
         .onAppear {
             probeIfNeeded()
             model.checkAllIntegrations()
+        }
+        .onReceive(sourceProbeTimer) { _ in
+            if OnboardingSourceRows.refreshesProbes(on: step) {
+                refreshSourceProbes()
+            }
         }
         .onExitCommand { confirmSkip = true }
         .alert("Skip setup?", isPresented: $confirmSkip) {
@@ -419,7 +426,7 @@ struct OnboardingSheet: View {
                     .typoCaption(.semibold)
                     .foregroundStyle(.green)
             } else {
-                Label("Test an integration, then click Use before continuing.", systemImage: "info.circle")
+                Label("Set up an integration, then click its card to use it before continuing.", systemImage: "info.circle")
                     .typoCaption()
                     .foregroundStyle(.secondary)
             }
@@ -478,6 +485,12 @@ struct OnboardingSheet: View {
                     accessibilityName: "xAI API key",
                     text: $model.xaiAPIKey
                 )
+            case .openai:
+                RevealableAPIKeyField(
+                    placeholder: "OpenAI API key",
+                    accessibilityName: "OpenAI API key",
+                    text: $model.openaiVoiceAPIKey
+                )
             case .custom:
                 TextField("OpenAI-compatible /v1 endpoint", text: $model.customBaseURL).textFieldStyle(.roundedBorder)
                 RevealableAPIKeyField(
@@ -501,14 +514,20 @@ struct OnboardingSheet: View {
                     .foregroundStyle(healthColor(model.healthStatus(model.integrationID(for: setupProvider))))
                     .lineLimit(2)
                 Spacer()
+                // A single primary action: save and verify. Applying a connected
+                // provider is the card tap itself (a healthy card applies on
+                // click), so there is no separate redundant Use button.
                 Button(setupProvider.requiresAPIKey ? "Save & Test" : "Test") {
                     testOnboardingProvider(setupProvider)
                 }
-                if case .healthy = model.healthStatus(model.integrationID(for: setupProvider)) {
-                    Button("Use") { requestOnboardingProvider(setupProvider) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(accent)
-                }
+                .buttonStyle(.borderedProminent)
+                .tint(accent)
+            }
+            if case .healthy = model.healthStatus(model.integrationID(for: setupProvider)),
+               !(model.onboardingModelReady && model.presentationProvider == setupProvider) {
+                Text("Connected. Click the \(setupProvider.title) card above to use it.")
+                    .typoCaption()
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(12)
@@ -546,6 +565,7 @@ struct OnboardingSheet: View {
         case .ollama: return "Local · no key"
         case .codexCLI, .claudeCLI: return "Uses your CLI login"
         case .xai: return "Grok models"
+        case .openai: return "GPT models"
         case .custom: return "Any compatible endpoint"
         }
     }
@@ -553,6 +573,7 @@ struct OnboardingSheet: View {
     private func testOnboardingProvider(_ provider: AttachePresentationProvider) {
         switch provider {
         case .xai: model.saveXAIIntegration()
+        case .openai: model.saveOpenAIVoiceIntegration()
         case .custom: model.saveCustomIntegration()
         case .ollama, .codexCLI, .claudeCLI: break
         }
@@ -573,7 +594,7 @@ struct OnboardingSheet: View {
         switch provider {
         case .xai: guide = .xai
         case .ollama: guide = .ollama
-        case .custom: guide = .openAICompatible
+        case .custom, .openai: guide = .openAICompatible
         case .codexCLI: guide = .codexCLI
         case .claudeCLI: guide = .claudeCode
         }
@@ -617,10 +638,11 @@ struct OnboardingSheet: View {
 
             HStack(spacing: 10) {
                 Button {
-                    NotificationCenter.default.post(name: .attacheOpenPersonalityStudio, object: PersonalityStudioRequest.create)
+                    createOwnAttacheFromOnboarding()
                 } label: {
                     Label("Create your own Attaché", systemImage: "sparkles")
                 }
+                .accessibilityLabel("Create your own Attaché")
                 Button {
                     importOnboardingCharacter()
                 } label: {
@@ -635,25 +657,26 @@ struct OnboardingSheet: View {
 
             memoryChoice
 
-            Divider().padding(.vertical, 2)
-            HStack(spacing: 10) {
-                Button {
-                    model.onboardingProveTheLoop()
-                    demoSent = true
-                } label: {
-                    Label(demoSent ? "Demo sent, listen…" : "Send my first update",
-                          systemImage: demoSent ? "checkmark.circle.fill" : "paperplane.fill")
-                        .typoBody(.semibold)
-                }
-                .keyboardShortcut(demoSent ? nil : .defaultAction)
-                .accessibilityLabel("Send my first update")
-                if demoSent {
-                    Text("It's in your Inbox too; replay it anytime.")
-                        .typoCaption()
-                        .foregroundStyle(.tertiary)
-                }
-            }
             Spacer(minLength: 0)
+        }
+    }
+
+    /// Leave onboarding cleanly into the Character Studio. The studio is a sheet
+    /// presented over the main window (INF-377), and a sheet cannot open over the
+    /// onboarding sheet, so onboarding is finished first and the studio opens on
+    /// the next runloop tick.
+    private func createOwnAttacheFromOnboarding() {
+        model.captureCurrentVoiceIntoActivePersonality()
+        model.captureCurrentModelIntoActivePersonality()
+        if !contextUI.memoryChoiceWasExplicit {
+            contextUI.leaveMemoryOffForSkippedOnboarding()
+        }
+        model.completeOnboarding()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .attacheOpenPersonalityStudio,
+                object: PersonalityStudioRequest.create
+            )
         }
     }
 
@@ -708,7 +731,7 @@ struct OnboardingSheet: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text(personality.modelSummary)
+            Text(model.displayModelSummary(for: personality))
                 .typoCaption(.medium)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -759,7 +782,7 @@ struct OnboardingSheet: View {
                     model.captureCurrentModelIntoActivePersonality()
                     model.completeOnboarding()
                 }
-                    .keyboardShortcut(demoSent ? .defaultAction : nil)
+                    .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .tint(accent)
                     .accessibilityLabel("Finish welcome")
@@ -845,13 +868,22 @@ struct OnboardingSheet: View {
         AttacheVoiceCatalog.qualityTier(option)
     }
 
-    private func probeIfNeeded() {
-        guard !probed else { return }
-        probed = true
+    /// Re-run the source probes. Cheap (each reuses the live scanner's
+    /// `enumerateFiles()`), so it is safe to call on step (re)appearance, on
+    /// Back-navigation into the sources step, and on the idle timer while that
+    /// step is visible, so a session created while onboarding is open is picked
+    /// up without a relaunch.
+    private func refreshSourceProbes() {
         codexCount = OnboardingSourceProbe.codexSessionCount()
         claudeCount = OnboardingSourceProbe.claudeCodeSessionCount()
         grokBuildCount = OnboardingSourceProbe.grokBuildSessionCount()
         opencodeCount = OnboardingSourceProbe.opencodeSessionCount()
+    }
+
+    private func probeIfNeeded() {
+        guard !probed else { return }
+        probed = true
+        refreshSourceProbes()
         if let resume = model.takeOnboardingResumeStep(),
            let resumeStep = OnboardingStep(rawValue: resume) {
             step = resumeStep
@@ -866,6 +898,11 @@ struct OnboardingSheet: View {
 
     private func move(_ delta: Int) {
         let next = OnboardingStep(rawValue: step.rawValue + delta) ?? step
+        // Re-probe when entering the sources step from either direction so a
+        // session created while onboarding is open no longer shows "Not found".
+        if OnboardingSourceRows.refreshesProbes(on: next) {
+            refreshSourceProbes()
+        }
         withAnimation(.easeInOut(duration: 0.15)) { step = next }
     }
 }

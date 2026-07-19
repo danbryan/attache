@@ -8,7 +8,9 @@ final class PersonalityTests: XCTestCase {
         for personality in Personality.builtIns {
             XCTAssertGreaterThan(personality.prompt.count, 120, "\(personality.id) prompt is too thin")
             XCTAssertNotNil(personality.voiceRef)
-            XCTAssertNotNil(personality.modelRef)
+            // Built-ins ship only presence, prompt, and voice: the model is
+            // inherited from whatever the user connects, never a hardcoded default.
+            XCTAssertNil(personality.modelRef, "\(personality.id) must not presume a model")
             XCTAssertEqual(personality.playbackSpeed, 1.0)
         }
     }
@@ -261,7 +263,8 @@ final class PersonalityTests: XCTestCase {
         // voice/model like every personality in the user-facing store.
         let bigPicture = loaded.personalities.first { $0.id == "builtin.bigPicture" }
         XCTAssertNotNil(bigPicture?.voiceRef)
-        XCTAssertNotNil(bigPicture?.modelRef)
+        // The built-in keeps no model of its own; it inherits the connected model.
+        XCTAssertNil(bigPicture?.modelRef)
         XCTAssertEqual(bigPicture?.character, .robot)
         // A new owned copy carries the customization and is now active.
         XCTAssertEqual(loaded.activeID, "custom.migrated.builtin.bigPicture")
@@ -378,25 +381,34 @@ final class PersonalityTests: XCTestCase {
         )
     }
 
-    func testStoreFillsEveryPersonalityWithExplicitVoiceAndModel() {
+    func testBuiltInsInheritModelAndLegacyCustomsFillFromConfiguration() {
         let suiteName = "personality-explicit-configuration-test"
         let suite = UserDefaults(suiteName: suiteName)!
         suite.removePersistentDomain(forName: suiteName)
         defer { suite.removePersistentDomain(forName: suiteName) }
+        suite.set(true, forKey: "attache.personalityVoicePetMigrated")
         suite.set(AttacheSpeechProvider.system.rawValue, forKey: AttachePreferenceKey.speechProvider)
-        // Built-ins own their model rather than following these legacy global
-        // values. The globals still fill truly old custom personalities.
+        // The user has connected xAI. Built-ins carry no model of their own and
+        // inherit it live; only a legacy custom with no stored model is filled
+        // from this configuration.
         suite.set(AttachePresentationProvider.xai.rawValue, forKey: AttachePreferenceKey.presentationLLMProvider)
         suite.set("grok-4.5", forKey: AttachePreferenceKey.presentationLLMModel)
         suite.set("high", forKey: AttachePreferenceKey.presentationReasoningEffort)
 
-        let loaded = PersonalityStore(defaults: suite).load().personalities
+        let store = PersonalityStore(defaults: suite)
+        let legacyCustom = Personality(id: "custom.legacy", name: "Legacy", prompt: "Be brief.")
+        store.save(Personality.builtIns + [legacyCustom], activeID: legacyCustom.id)
+
+        let loaded = store.load().personalities
 
         XCTAssertFalse(loaded.isEmpty)
         XCTAssertTrue(loaded.allSatisfy { $0.voiceRef != nil })
-        XCTAssertTrue(loaded.allSatisfy { $0.modelRef != nil })
-        XCTAssertTrue(loaded.allSatisfy { $0.modelRef?.provider == .ollama })
-        XCTAssertTrue(loaded.allSatisfy { $0.modelRef?.model == AttachePresentationProvider.ollama.defaultModel })
+        // Built-ins never presume a model; they inherit whatever is connected.
+        XCTAssertTrue(loaded.filter(\.isBuiltIn).allSatisfy { $0.modelRef == nil })
+        // A legacy custom with no stored model is filled from the configuration.
+        let filled = loaded.first { $0.id == "custom.legacy" }
+        XCTAssertEqual(filled?.modelRef?.provider, .xai)
+        XCTAssertEqual(filled?.modelRef?.model, "grok-4.5")
     }
 
     func testLegacyLMStudioPersonalityImportsAsOllama() throws {
@@ -583,10 +595,11 @@ final class PersonalityTests: XCTestCase {
             ["builtin.bigPicture", "builtin.cowboy", "builtin.echo"]
         )
         XCTAssertEqual(restored.last?.id, custom.id)
-        // Re-added built-ins carry full explicit configuration.
+        // Re-added built-ins carry an explicit voice but no presumed model; the
+        // model is inherited from whatever the user connects.
         let echo = restored.first { $0.id == "builtin.echo" }
         XCTAssertNotNil(echo?.voiceRef)
-        XCTAssertNotNil(echo?.modelRef)
+        XCTAssertNil(echo?.modelRef)
     }
 
     func testRestoringDefaultBuiltInsIntoUntouchedListIsANoOp() {

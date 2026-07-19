@@ -59,17 +59,28 @@ final class AttachePremiumVoiceProviderTests: XCTestCase {
         XCTAssertEqual(resolved.provider, .attachePremium, "available premium voice must not fall back")
     }
 
-    func testSynthesizeThrowsTypedErrorWhenWeightsMissing() async {
-        // No weights installed in the test environment -> typed error surfaced by
-        // the shared remote-voice dispatch, never a silent success.
+    func testSynthesizeThrowsTypedErrorWhenWeightsMissing() async throws {
+        // Point weights resolution at an empty temp dir so the missing-weights
+        // path is exercised deterministically, whether or not this machine has
+        // real weights installed. The typed error must still surface through the
+        // shared remote-voice dispatch, never a silent success.
         AttachePremiumVoiceAvailability.probeOverride = { false }
+        let emptyWeights = FileManager.default.temporaryDirectory
+            .appendingPathComponent("empty-weights-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: emptyWeights, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: emptyWeights) }
         let config = premiumConfiguration()
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("premium-\(UUID().uuidString).wav")
         do {
-            try await AttacheRemoteVoiceService.synthesize(text: "hi", configuration: config, outputURL: out)
+            try await AttacheRemoteVoiceService.synthesize(
+                text: "hi",
+                configuration: config,
+                outputURL: out,
+                environment: [AttachePremiumVoiceSynthesizer.weightsInstallRootEnvOverride: emptyWeights.path]
+            )
             XCTFail("expected a typed premium-voice error")
         } catch let error as PremiumVoiceRuntimeError {
-            XCTAssertTrue(error == .weightsUnavailable || error == .runtimeUnavailable, "got \(error)")
+            XCTAssertEqual(error, .weightsUnavailable, "got \(error)")
         } catch {
             XCTFail("expected PremiumVoiceRuntimeError, got \(error)")
         }

@@ -3504,7 +3504,7 @@ if enabled("personality") {
         _ = try waitForElement("voice choice", in: studio, containing: "Attaché voice engine")
         _ = try waitForElement("model choice", in: studio, containing: "Attaché model provider")
         _ = try waitForElement("context strategy choice", in: studio, containing: "Attaché context strategy")
-        _ = try waitForElement("sprite help", in: studio, containing: "Learn about custom sprites")
+        _ = try waitForElement("artwork help", in: studio, containing: "Learn about custom artwork")
         try waitForElementGone("legacy follow app voice", in: studio, containing: "Follow the app voice", timeout: 1)
         try waitForElementGone("legacy follow app model", in: studio, containing: "Follow the app's main model", timeout: 1)
     }

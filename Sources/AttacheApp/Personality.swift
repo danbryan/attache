@@ -282,11 +282,6 @@ extension Personality {
 
     static let defaultActiveID = "builtin.bigPicture"
 
-    private static let builtInModel = PersonalityModelRef(
-        provider: .ollama,
-        model: AttachePresentationProvider.ollama.defaultModel
-    )
-
     /// Retained for migrating personalities that stored the old cowboy voice;
     /// built-ins now default to the Attaché Premium voice (2026-07-18, INF-379
     /// follow-up), falling back to the system voice until weights install.
@@ -355,7 +350,7 @@ extension Personality {
             voiceRef: PersonalityVoiceRef(provider: .attachePremium),
             character: nil,
             visualMode: .bars,
-            modelRef: Self.builtInModel,
+            modelRef: nil,
             playbackSpeed: 1.0
         )
     ]
@@ -374,7 +369,12 @@ extension Personality {
             voiceRef: voiceRef,
             character: character,
             visualMode: visualMode,
-            modelRef: Self.builtInModel,
+            // Built-ins ship only presence, prompt, and voice. The model is
+            // inherited from whatever the user actually connects; a nil modelRef
+            // is filled from their configuration for customs, and displayed live
+            // for built-ins (never a hardcoded assumption). See Decisions of
+            // Record and AppModel.displayModelSummary(for:).
+            modelRef: nil,
             playbackSpeed: 1.0
         )
     }
@@ -423,7 +423,7 @@ extension Personality {
     }
 
     var modelSummary: String {
-        guard let modelRef else { return "Model not set" }
+        guard let modelRef else { return "Uses your connected model" }
         let effort = (modelRef.reasoningEffort ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let suffix = ["", "default", "none"].contains(effort.lowercased())
@@ -631,7 +631,11 @@ final class PersonalityStore {
                 configured.voiceRef = voice
             }
         }
-        if configured.modelRef == nil {
+        // Built-ins deliberately carry no model: they inherit whatever the user
+        // connects, shown live by AppModel.displayModelSummary(for:). Only legacy
+        // custom personalities (which stored a concrete model before this change)
+        // get their missing model filled from the current configuration.
+        if configured.modelRef == nil, !configured.isBuiltIn {
             configured.modelRef = PersonalityModelRef.capture(from: defaults)
         }
         if configured.playbackSpeed == nil {

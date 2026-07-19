@@ -1201,7 +1201,7 @@ final class AttachePresentationService {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if trimmed == "none" {
             switch provider {
-            case .xai, .ollama, .custom:
+            case .xai, .ollama, .custom, .openai:
                 return "none"
             case .claudeCLI, .codexCLI:
                 return nil

@@ -2266,16 +2266,6 @@ final class AppModel: ObservableObject {
     /// Onboarding's final step: a demo event through the normal pipeline,
     /// then play the resulting card so the first spoken recap happens inside
     /// the welcome flow.
-    func onboardingProveTheLoop() {
-        simulateEvent()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self else { return }
-            if let card = self.cards.first(where: { $0.status == .unread }) ?? self.cards.first {
-                self.playInboxCard(card)
-            }
-        }
-    }
-
     func simulateEvent() {
         var event = EventNormalizer.simulatedEvent(projectPath: projectPath)
         if let attachedCodexSessionID {
@@ -6276,7 +6266,7 @@ final class AppModel: ObservableObject {
         switch provider {
         case .ollama: return ollamaBaseURL
         case .custom: return customBaseURL
-        case .xai: return provider.defaultBaseURL
+        case .xai, .openai: return provider.defaultBaseURL
         case .claudeCLI, .codexCLI: return ""
         }
     }
@@ -6286,6 +6276,7 @@ final class AppModel: ObservableObject {
             switch provider {
             case .xai: return !xaiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             case .custom: return !customAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .openai: return !effectiveOpenAIVoiceKey.isEmpty
             case .ollama: return true
             case .claudeCLI: return CLILanguageModel.isLikelyInstalled(.claude)
             case .codexCLI: return false
@@ -6427,6 +6418,9 @@ final class AppModel: ObservableObject {
         case .xai: return "xai"
         case .ollama: return "ollama"
         case .custom: return "custom"
+        // The OpenAI model provider shares one API key and one readiness check
+        // with the OpenAI voice integration; both resolve to the same account.
+        case .openai: return "openai"
         case .codexCLI: return "codex"
         case .claudeCLI: return "claude"
         }
@@ -6454,6 +6448,29 @@ final class AppModel: ObservableObject {
         } else {
             loadPresentationModels()
         }
+    }
+
+    /// Whether the user has a connected, healthy presentation model selected.
+    /// Drives the neutral inherit line for personalities that carry no model of
+    /// their own (every built-in).
+    var hasConnectedPresentationModel: Bool {
+        guard healthyModelProviders.contains(presentationProvider) else { return false }
+        if presentationProvider.isCLI { return true }
+        return !presentationModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The model label to show for a personality. An explicit `modelRef` shows
+    /// itself; a personality with no `modelRef` (every built-in) inherits the
+    /// app's currently connected model, or a neutral "Uses your connected model"
+    /// line when nothing is connected yet, never a hardcoded default. After
+    /// onboarding step 4 this reflects the model the user just connected
+    /// (INF-386 follow-up).
+    func displayModelSummary(for personality: Personality) -> String {
+        if personality.modelRef != nil { return personality.modelSummary }
+        guard hasConnectedPresentationModel else { return "Uses your connected model" }
+        let effort = presentationReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = ["", "default", "none"].contains(effort.lowercased()) ? "" : " · \(effort.capitalized)"
+        return "\(presentationProvider.title) · \(presentationModel)\(suffix)"
     }
 
     private func isSet(_ value: String) -> Bool {
@@ -6796,6 +6813,7 @@ final class AppModel: ObservableObject {
         case .xai: integrationFocusProviderID = "xai"
         case .ollama: integrationFocusProviderID = "ollama"
         case .custom: integrationFocusProviderID = "custom"
+        case .openai: integrationFocusProviderID = "openai"
         case .claudeCLI, .codexCLI: integrationFocusProviderID = nil
         }
     }

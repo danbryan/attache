@@ -95,7 +95,7 @@ enum AttachePresentationModelService {
             options = try await retrying(attempts: 2) { try await fetchXAIModels(baseURL: baseURL, apiKey: apiKey) }
         case .ollama:
             options = try await retrying(attempts: 2) { try await fetchOllamaModels(baseURL: baseURL) }
-        case .custom:
+        case .custom, .openai:
             options = try await retrying(attempts: 2) {
                 try await fetchOpenAICompatibleModels(baseURL: baseURL, apiKey: apiKey, provider: provider)
             }
@@ -609,7 +609,7 @@ enum AttachePresentationModelService {
         switch provider {
         case .xai:
             return documentedXAICapability(for: modelID)?.reasoningLevels ?? []
-        case .custom:
+        case .custom, .openai:
             // Hosted model names never imply capability. The selected model's
             // live catalog metadata is the only authority.
             return []
@@ -657,7 +657,7 @@ enum AttachePresentationModelService {
             ]
         case .codexCLI:
             return []
-        case .custom:
+        case .custom, .openai:
             let normalizedID = modelID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard normalizedID.hasPrefix("gpt-5") else { return [] }
             return [

@@ -25,10 +25,10 @@ final class DocumentationLinksTests: XCTestCase {
         let document = repositoryRoot.appendingPathComponent("design/attache-animation-spec.md")
         XCTAssertTrue(FileManager.default.fileExists(atPath: document.path))
         let markdown = try String(contentsOf: document)
-        XCTAssertTrue(markdown.contains("## Bring your own sprite"))
+        XCTAssertTrue(markdown.contains("## Bring your own artwork"))
         XCTAssertEqual(AttacheDocumentationLinks.characterArtwork.path,
                        "/danbryan/attache/blob/main/design/attache-animation-spec.md")
-        XCTAssertEqual(AttacheDocumentationLinks.customSprite.fragment, "bring-your-own-sprite")
+        XCTAssertEqual(AttacheDocumentationLinks.customArtwork.fragment, "bring-your-own-artwork")
     }
 
     private var repositoryRoot: URL {

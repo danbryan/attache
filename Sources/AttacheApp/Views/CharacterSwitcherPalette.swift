@@ -189,7 +189,7 @@ struct CharacterSwitcherPalette: View {
                         .typoCaption(.medium)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Text(personality.modelSummary)
+                    Text(model.displayModelSummary(for: personality))
                         .typoCaption()
                         .foregroundStyle(.secondary.opacity(0.82))
                         .lineLimit(1)
@@ -218,7 +218,7 @@ struct CharacterSwitcherPalette: View {
             if hovering { selectedID = personality.id }
         }
         .accessibilityLabel("Attaché \(personality.name)\(active ? ", active" : "")")
-        .accessibilityValue("\(personality.presenceSummary), \(model.personalityVoiceName(personality)), \(personality.modelSummary)")
+        .accessibilityValue("\(personality.presenceSummary), \(model.personalityVoiceName(personality)), \(model.displayModelSummary(for: personality))")
     }
 
     private var footer: some View {

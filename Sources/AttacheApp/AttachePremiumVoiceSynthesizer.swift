@@ -62,6 +62,13 @@ enum AttachePremiumVoiceSynthesizer {
     /// and energy math behave identically.
     static let sampleRate = 24_000
 
+    /// Test-only override pointing weights resolution at a specific install root
+    /// (typically an empty temp dir), so a test can prove the missing-weights
+    /// path fails closed regardless of whether the machine has real weights
+    /// installed. Ignored when unset (real resolution). Not a security boundary;
+    /// it only changes where installed weights are looked for.
+    static let weightsInstallRootEnvOverride = "ATTACHE_PREMIUM_VOICE_TEST_WEIGHTS"
+
     static func synthesize(
         text: String,
         configuration: AttacheSpeechConfiguration,
@@ -74,7 +81,8 @@ enum AttachePremiumVoiceSynthesizer {
             try wav.write(to: outputURL, options: .atomic)
             return
         }
-        guard let paths = PremiumVoiceWeightsManager.installedRuntimePaths() else {
+        let installRoot = environment[weightsInstallRootEnvOverride].map { URL(fileURLWithPath: $0) }
+        guard let paths = PremiumVoiceWeightsManager.installedRuntimePaths(installRoot: installRoot) else {
             throw PremiumVoiceRuntimeError.weightsUnavailable
         }
         try runtime.synthesize(text: text, paths: paths, outputURL: outputURL)

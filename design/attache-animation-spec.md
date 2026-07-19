@@ -1,4 +1,4 @@
-# Attaché character animation and sprite contract
+# Attaché character animation and pose contract
 
 Attaché is the robot head broadcasting under three voice arcs. The live app
 places that character inside a two-track fleet ring. Colt implements the same
@@ -64,7 +64,7 @@ runtime limits, not suggestions to use every extreme in ordinary motion.
 | `props` | array | temporary emoji or permission flag beside any character |
 
 The other `agentSignals` fields remain an internal transition channel for
-activity flavor. They are not part of the character silhouette or custom-sprite
+activity flavor. They are not part of the character silhouette or custom-artwork
 contract. Persistent agent and session state belongs to fleet motes.
 
 ## Activity mapping
@@ -145,7 +145,7 @@ Every character must express `eyeOpenness`, `gaze`, `dizzy`, `browWorry`,
 The outer rig supplies breathing, hop, squash, sway, crown, props, confetti,
 fleet interaction, and reduced-motion behavior.
 
-## Bring your own sprite
+## Bring your own artwork
 
 Custom artwork is a documented extension point, not a shipping import feature
 yet. A future package will be a directory named
@@ -153,7 +153,7 @@ yet. A future package will be a directory named
 
 ```text
 manifest.json
-sprites/
+frames/
   neutral.png
   blink.png
   speaking.png
@@ -168,7 +168,7 @@ Packages will live in `~/Library/Application Support/Attache/Characters/` once
 the loader ships.
 
 Suggested authoring prompt: "Use Attaché's custom character template to make a
-transparent 252 by 252 sprite set for [description]. Preserve every filename,
+transparent 252 by 252 artwork set for [description]. Preserve every filename,
 canvas size, safe area, and pose meaning exactly." Review the five frames as a
 set. The neutral silhouette must not jump, and every frame must leave the crown
 and fleet ring readable.

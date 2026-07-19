@@ -78,19 +78,28 @@ final class PremiumVoiceFakeGateTests: XCTestCase {
 
     // MARK: Real path untouched when the fake is inactive
 
-    func testRealPathUntouchedWhenFakeInactive() {
+    func testRealPathUntouchedWhenFakeInactive() throws {
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("no-fake-\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: out) }
+        // Point weights resolution at an empty temp dir so the real path fails
+        // closed even on a machine that has real weights installed.
+        let emptyWeights = FileManager.default.temporaryDirectory
+            .appendingPathComponent("empty-weights-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: emptyWeights, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: emptyWeights) }
 
-        // With the fake inactive and no weights installed in the test
-        // environment, synthesize must reach the real path and fail closed
-        // rather than silently writing a tone.
+        // With the fake inactive (only one of the two flags set) and weights
+        // resolved against an empty dir, synthesize must reach the real path and
+        // fail closed rather than silently writing a tone.
         XCTAssertThrowsError(try AttachePremiumVoiceSynthesizer.synthesize(
             text: "anything",
             configuration: .systemDefault,
             outputURL: out,
-            environment: ["ATTACHE_FAKE_PREMIUM_VOICE": "1"]
+            environment: [
+                "ATTACHE_FAKE_PREMIUM_VOICE": "1",
+                AttachePremiumVoiceSynthesizer.weightsInstallRootEnvOverride: emptyWeights.path
+            ]
         )) { error in
             XCTAssertEqual(error as? PremiumVoiceRuntimeError, .weightsUnavailable)
         }

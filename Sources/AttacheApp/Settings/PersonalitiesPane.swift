@@ -102,7 +102,7 @@ struct PersonalitiesPane: View {
                 HStack(spacing: 7) {
                     CharacterDetailChip(icon: "person.crop.circle", text: personality.presenceSummary)
                     CharacterDetailChip(icon: "speaker.wave.2", text: personality.voiceSummary(in: model.speechVoiceOptions))
-                    CharacterDetailChip(icon: "cpu", text: personality.modelSummary)
+                    CharacterDetailChip(icon: "cpu", text: model.displayModelSummary(for: personality))
                 }
 
                 Text(personality.prompt)
@@ -533,7 +533,7 @@ struct PersonalityStudioSheet: View {
     }
 
     private var presenceSection: some View {
-        studioSection(title: "Presence", trailing: AnyView(spriteHelpLink)) {
+        studioSection(title: "Presence", trailing: AnyView(artworkHelpLink)) {
             HStack(spacing: 10) {
                 ForEach(CharacterChoice.allCases) { choice in
                     Button {
@@ -713,15 +713,15 @@ struct PersonalityStudioSheet: View {
         personalityQuery = ""
     }
 
-    private var spriteHelpLink: some View {
+    private var artworkHelpLink: some View {
         Link(
-            destination: AttacheDocumentationLinks.customSprite
+            destination: AttacheDocumentationLinks.customArtwork
         ) {
-            Label("Sprite format", systemImage: "questionmark.circle")
+            Label("Artwork format", systemImage: "questionmark.circle")
                 .typoCaption(.medium)
         }
-        .help("Learn about the custom sprite format and planned import support")
-        .accessibilityLabel("Learn about custom sprites")
+        .help("Learn about the custom artwork format and planned import support")
+        .accessibilityLabel("Learn about custom artwork")
     }
 
     private var voiceSection: some View {
@@ -1377,6 +1377,7 @@ struct PersonalityStudioSheet: View {
         case .xai: return "x.circle.fill"
         case .ollama: return "desktopcomputer"
         case .custom: return "point.3.connected.trianglepath.dotted"
+        case .openai: return "sparkle"
         case .claudeCLI: return "terminal.fill"
         case .codexCLI: return "chevron.left.forwardslash.chevron.right"
         }
