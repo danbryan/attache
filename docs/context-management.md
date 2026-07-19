@@ -181,12 +181,14 @@ is no suggestion review queue. Two modes:
 
 - **Off** (default for fresh users who skip onboarding): no writes at all.
 - **On**: an explicit ask saves immediately after the local validator passes.
-  The ask is explicit-in-context: affirming Attaché's own offer to remember
-  counts, and the saved statement must appear, in the user's own words, in one
-  of the user's recent turns of the active conversation (negation preserved;
-  hang-up clears the window). A statement the user never said is rejected. A
-  quiet "Memory saved" chip in the call surface is the confirmation channel
-  and opens the Memory settings pane.
+  Affirming Attaché's own offer to remember counts as an ask. The saved text
+  is the model's plain, faithful restatement of what the user asked to
+  remember (referent resolution and correcting transcription garbles are
+  expected); there is no verbatim-transcript guard. The review surface is the
+  Memory pane, where every saved statement can be read, edited, or forgotten,
+  and the validator list below is the hard floor on what may ever be stored.
+  A quiet "Memory saved" chip in the call surface is the confirmation channel
+  and opens the Memory settings pane. One save per turn.
 
 A conversation capture always belongs to the Attaché the user told it to: the
 save is stamped with the active personality's scope deterministically, and the

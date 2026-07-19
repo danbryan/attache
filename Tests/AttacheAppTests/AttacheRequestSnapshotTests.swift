@@ -236,12 +236,12 @@ final class AttacheRequestSnapshotTests: XCTestCase {
     }
 
     /// Model-free end-to-end run of the live-call propose_memory dispatch: the
-    /// same handler the conversation executeTool closure routes the tool to,
-    /// with a valid seven-field payload. An explicit ask restated in the user's
-    /// own words saves immediately as a user-authored, local-only record.
+    /// same handler the conversation executeTool closure routes the tool to.
+    /// An explicit ask saves the trusted restatement immediately as a
+    /// user-confirmed record; the requested local-only egress is honored.
     /// Ledger storage lives in a temp directory because the card store is
     /// in-memory.
-    func testLiveCallExplicitAskSavesImmediatelyAsUserAuthoredLocalOnly() throws {
+    func testLiveCallExplicitAskSavesImmediatelyAsUserConfirmedLocalOnly() throws {
         let (model, defaults) = try makeModel()
         defer { defaults.restore() }
         let memoryState = AttacheContextUIState.shared
@@ -271,7 +271,8 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         XCTAssertTrue(reply.contains("saved on this Mac"), reply)
         let stored = memoryState.memoryRecords.first { $0.statement == statement }
         XCTAssertNotNil(stored)
-        XCTAssertEqual(stored?.sourceKind, .userAuthored)
+        XCTAssertEqual(stored?.sourceKind, .userConfirmed)
+        XCTAssertEqual(stored?.confidence, .authoritative)
         XCTAssertEqual(stored?.egress, .localOnly)
         // The payload's scope-like fields are ignored: a conversation capture
         // always binds to the active Attaché, never global.
@@ -325,10 +326,112 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         XCTAssertFalse(model.memorySavedChipVisible, "no chip may show for a declined fact")
     }
 
-    /// A rejected proposal saved nothing, so it refunds the once-per-turn
-    /// effect: the model is told to retry with the user's words, the retry can
-    /// save, and a completed save still blocks any second save in the turn.
-    func testRejectedMemoryAttemptAllowsRetryButOnlyOneSavePerTurn() throws {
+    /// Regression for Dan's Doberman session shape: the user's turns carried
+    /// only ASR garbles ("doerman", "dubermant") and the referent lived in an
+    /// earlier exchange, so a verbatim guard could never accept the fix. The
+    /// trusted referent-resolved restatement now saves on the first try.
+    func testDanDobermanReferentResolvedStatementSavesFirstTry() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.on, explicit: false)
+        model.bindMemoryContextUI(to: memoryState)
+
+        model.startConversation()
+        defer { model.endConversation() }
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+        let effectLedger = ConversationTurnEffectLedger()
+
+        let statement = "Bob is a Doberman."
+        let reply = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"Bob is a Doberman.","type":"userFact","sensitivity":"low","egress":"allowedRemote","requires_confirmation":false}"#,
+            sourceUtterance: "He's the doerman. Can you remember that from now on?",
+            personalityID: model.activePersonality?.id ?? "attache",
+            sourceLocator: "test:doberman",
+            effectLedger: effectLedger,
+            authorization: authorization
+        )
+
+        XCTAssertTrue(reply.contains("saved on this Mac"), reply)
+        let stored = memoryState.memoryRecords.first { $0.statement == statement }
+        XCTAssertNotNil(stored, "the referent-resolved restatement must save first try")
+        XCTAssertEqual(stored?.sourceKind, .userConfirmed)
+
+        if let stored { memoryState.forgetMemory(id: stored.id) }
+        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == statement })
+    }
+
+    /// The Alice/Orli shape: ASR dropped "are" mid-sentence and prefixed a
+    /// disfluency; the grammatical restatement saves on the first try.
+    func testAliceOrliGrammaticalRestatementSavesFirstTry() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.on, explicit: false)
+        model.bindMemoryContextUI(to: memoryState)
+
+        model.startConversation()
+        defer { model.endConversation() }
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+        let effectLedger = ConversationTurnEffectLedger()
+
+        let statement = "My other dogs are named Alice and Orli."
+        let reply = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"My other dogs are named Alice and Orli.","type":"userFact","sensitivity":"low","egress":"allowedRemote","requires_confirmation":false}"#,
+            sourceUtterance: "Yeah, can you re please remember that my other dogs named Alice and Orli",
+            personalityID: model.activePersonality?.id ?? "attache",
+            sourceLocator: "test:alice-orli",
+            effectLedger: effectLedger,
+            authorization: authorization
+        )
+
+        XCTAssertTrue(reply.contains("saved on this Mac"), reply)
+        XCTAssertTrue(memoryState.memoryRecords.contains { $0.statement == statement })
+
+        if let stored = memoryState.memoryRecords.first(where: { $0.statement == statement }) {
+            memoryState.forgetMemory(id: stored.id)
+        }
+        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == statement })
+    }
+
+    /// The validator remains the hard floor: a secret is refused with the
+    /// model told to briefly relay why, and nothing is stored.
+    func testValidatorStillRejectsSecretsWithBriefRelay() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.on, explicit: false)
+        model.bindMemoryContextUI(to: memoryState)
+
+        model.startConversation()
+        defer { model.endConversation() }
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+
+        let statement = "My wifi password is tulip-motorcade"
+        let reply = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"My wifi password is tulip-motorcade","type":"userFact","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#,
+            sourceUtterance: "Remember my wifi password is tulip-motorcade.",
+            personalityID: model.activePersonality?.id ?? "attache",
+            sourceLocator: "test:secret-decline",
+            effectLedger: ConversationTurnEffectLedger(),
+            authorization: authorization
+        )
+
+        XCTAssertTrue(reply.contains("declined"), reply)
+        XCTAssertTrue(reply.contains("tell the user"), reply)
+        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == statement })
+        XCTAssertFalse(model.memorySavedChipVisible)
+    }
+
+    /// One save per turn is still enforced: a completed save claims the
+    /// effect, and a second proposal in the same turn is refused unsaved.
+    func testOneSavePerTurnStillEnforced() throws {
         let (model, defaults) = try makeModel()
         defer { defaults.restore() }
         let memoryState = AttacheContextUIState.shared
@@ -342,89 +445,33 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
         let effectLedger = ConversationTurnEffectLedger()
         let personalityID = model.activePersonality?.id ?? "attache"
-        let utterance = "Yeah, can you re please remember that my other dogs named Alice and Orli"
 
-        // Attempt 1: a paraphrase the user never said is rejected with the
-        // retry instruction, not a deflection.
+        let savedStatement = "My favorite trail is the quartz ridge loop."
         let firstReply = model.applyMemoryProposalTool(
-            arguments: #"{"statement":"my dogs are wonderful loyal sidekicks","type":"userFact","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#,
-            sourceUtterance: utterance,
+            arguments: #"{"statement":"My favorite trail is the quartz ridge loop.","type":"preference","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#,
+            sourceUtterance: "Remember my favorite trail is the quartz ridge loop.",
             personalityID: personalityID,
-            sourceLocator: "test:retry-1",
+            sourceLocator: "test:one-save-1",
             effectLedger: effectLedger,
             authorization: authorization
         )
-        XCTAssertTrue(firstReply.contains("Retry propose_memory"), firstReply)
-        XCTAssertTrue(firstReply.contains("Do not ask the user to repeat themselves"), firstReply)
+        XCTAssertTrue(firstReply.contains("saved on this Mac"), firstReply)
 
-        // Attempt 2: the grammatical restatement of the user's ASR-mangled
-        // turn saves immediately.
-        let savedStatement = "my other dogs are named Alice and Orli"
         let secondReply = model.applyMemoryProposalTool(
-            arguments: #"{"statement":"my other dogs are named Alice and Orli","type":"userFact","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#,
-            sourceUtterance: utterance,
+            arguments: #"{"statement":"My name is Dan Vermilion Quartz","type":"userFact","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#,
+            sourceUtterance: "And remember my name is Dan Vermilion Quartz.",
             personalityID: personalityID,
-            sourceLocator: "test:retry-2",
+            sourceLocator: "test:one-save-2",
             effectLedger: effectLedger,
             authorization: authorization
         )
-        XCTAssertTrue(secondReply.contains("saved on this Mac"), secondReply)
-        XCTAssertTrue(memoryState.memoryRecords.contains { $0.statement == savedStatement })
-
-        // Attempt 3: a second save in the same turn is refused.
-        let thirdReply = model.applyMemoryProposalTool(
-            arguments: #"{"statement":"my name is Dan Vermilion Quartz","type":"userFact","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#,
-            sourceUtterance: "Remember my name is Dan Vermilion Quartz.",
-            personalityID: personalityID,
-            sourceLocator: "test:retry-3",
-            effectLedger: effectLedger,
-            authorization: authorization
-        )
-        XCTAssertTrue(thirdReply.contains("already saved a memory"), thirdReply)
-        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == "my name is Dan Vermilion Quartz" })
+        XCTAssertTrue(secondReply.contains("already saved a memory"), secondReply)
+        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == "My name is Dan Vermilion Quartz" })
 
         if let stored = memoryState.memoryRecords.first(where: { $0.statement == savedStatement }) {
             memoryState.forgetMemory(id: stored.id)
         }
         XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == savedStatement })
-    }
-
-    /// The retry loop is bounded: the third rejection tells the model to stop
-    /// and inform the user, and a fourth attempt is refused outright.
-    func testMemoryAttemptCapExhaustsAfterThreeRejections() throws {
-        let (model, defaults) = try makeModel()
-        defer { defaults.restore() }
-        let memoryState = AttacheContextUIState.shared
-        let priorMode = memoryState.memoryMode
-        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
-        memoryState.setMemoryMode(.on, explicit: false)
-        model.bindMemoryContextUI(to: memoryState)
-
-        model.startConversation()
-        defer { model.endConversation() }
-        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
-        let effectLedger = ConversationTurnEffectLedger()
-        let personalityID = model.activePersonality?.id ?? "attache"
-        let arguments = #"{"statement":"quartz gardens bloom at midnight","type":"userFact","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#
-
-        var replies: [String] = []
-        for attempt in 0..<4 {
-            replies.append(model.applyMemoryProposalTool(
-                arguments: arguments,
-                sourceUtterance: "Remember something else entirely.",
-                personalityID: personalityID,
-                sourceLocator: "test:cap-\(attempt)",
-                effectLedger: effectLedger,
-                authorization: authorization
-            ))
-        }
-
-        XCTAssertTrue(replies[0].contains("Retry propose_memory"), replies[0])
-        XCTAssertTrue(replies[1].contains("Retry propose_memory"), replies[1])
-        XCTAssertTrue(replies[2].contains("couldn't be saved"), replies[2])
-        XCTAssertFalse(replies[2].contains("Retry propose_memory"), replies[2])
-        XCTAssertTrue(replies[3].contains("No memory attempts remain"), replies[3])
-        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == "quartz gardens bloom at midnight" })
     }
 
     func testContextOverflowPublishesExplicitRetryWithoutAutoFallbackAndExpiresAtHangup() async throws {

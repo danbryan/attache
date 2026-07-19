@@ -121,11 +121,13 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         )
     }
 
-    /// Applies local policy to a proposal. Capture is explicit-only: the user's
-    /// explicit "remember" request in their own words is the consent, and it is
-    /// established deterministically upstream (`explicitlyUserRequested`).
-    /// A model-originated statement the user did not say can never authorize
-    /// its own durable write.
+    /// Applies local policy to a proposal. Capture is explicit-only by the
+    /// prompt contract: the tool is called only for an explicit ask, and the
+    /// statement is trusted as the model's faithful restatement (the ChatGPT
+    /// bio-tool design). The validator decides what may never be stored, and
+    /// the Memory pane is the user's review backstop. Saves record as
+    /// user-confirmed and authoritative: the user asked; the wording is the
+    /// model's restatement.
     @discardableResult
     func processProposal(
         statement: String,
@@ -134,7 +136,6 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         sensitivity: AttacheMemorySensitivity,
         egress: AttacheMemoryEgress,
         sourceLocator: String?,
-        explicitlyUserRequested: Bool,
         mode: AttacheMemoryProposalMode
     ) -> AttacheMemoryProposalDisposition {
         let proposal = AttacheMemoryProposal(
@@ -142,19 +143,19 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
             statement: statement.trimmingCharacters(in: .whitespacesAndNewlines),
             type: type,
             scope: scope,
-            sourceKind: explicitlyUserRequested ? .userAuthored : .modelProposed,
+            sourceKind: .userConfirmed,
             sourceLocator: sourceLocator,
-            confidence: explicitlyUserRequested ? .authoritative : .inferred,
+            confidence: .authoritative,
             sensitivity: sensitivity,
             // Storage is always local; egress only decides whether the saved
             // text may later be quoted to the model the personality talks to.
-            // An explicit low-sensitivity save exists to be USED by that model
-            // (the user already said the fact to it in conversation), so the
-            // requested egress is honored there. Everything else is forced
-            // local-only: a request can narrow, never widen beyond policy, and
-            // the native per-record control in Settings can change it later.
-            egress: (explicitlyUserRequested && sensitivity == .low) ? egress : .localOnly,
-            requiresConfirmation: !explicitlyUserRequested
+            // A low-sensitivity save exists to be USED by that model (the user
+            // already said the fact to it in conversation), so the requested
+            // egress is honored there. Everything else is forced local-only:
+            // a request can narrow, never widen beyond policy, and the native
+            // per-record control in Settings can change it later.
+            egress: sensitivity == .low ? egress : .localOnly,
+            requiresConfirmation: false
         )
         let disposition = AttacheMemoryProposalProcessor.process(
             proposal,

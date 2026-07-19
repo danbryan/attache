@@ -33,27 +33,6 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         )
     }
 
-    /// Capture is explicit-only: a statement the user did not say this turn is
-    /// rejected outright. There is no suggestion queue to fall back to.
-    func testModelOnlyStatementCannotAuthorizeAWrite() throws {
-        let (runtime, root, _) = try makeRuntime()
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let disposition = runtime.processProposal(
-            statement: "The user prefers concise answers.",
-            type: .preference,
-            scope: .global,
-            sensitivity: .low,
-            egress: .allowedRemote,
-            sourceLocator: "call-1:turn-2",
-            explicitlyUserRequested: false,
-            mode: .on
-        )
-
-        XCTAssertEqual(disposition, .rejected(reason: .notExplicitlyRequested))
-        XCTAssertTrue(runtime.activeRecords.isEmpty)
-    }
-
     /// The retired suggestion review queue's persistence file is removed at
     /// launch so no stale pre-explicit-only state lingers beside the ledger.
     func testStaleReviewQueueFileIsRemovedAtLaunch() throws {
@@ -95,7 +74,6 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             sensitivity: .low,
             egress: .allowedRemote,
             sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true,
             mode: .on
         )
 
@@ -120,13 +98,13 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             statement: "My private nickname is Ultramarine.",
             type: .userFact, scope: .global, sensitivity: .low,
             egress: .localOnly, sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true, mode: .on
+            mode: .on
         )
         _ = runtime.processProposal(
             statement: "I keep a standing meeting on Fridays.",
             type: .userFact, scope: .global, sensitivity: .medium,
             egress: .allowedRemote, sourceLocator: "call-1:turn-2",
-            explicitlyUserRequested: true, mode: .on
+            mode: .on
         )
 
         let byStatement = Dictionary(uniqueKeysWithValues: runtime.activeRecords.map { ($0.statement, $0) })
@@ -147,7 +125,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             statement: "My name is Dan.",
             type: .userFact, scope: .personality("p1"), sensitivity: .low,
             egress: .allowedRemote, sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true, mode: .on
+            mode: .on
         )
         guard case .saved = disposition else {
             return XCTFail("Expected the explicit name memory to save")
@@ -208,7 +186,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "My private nickname is Blue.", type: .userFact, scope: .global,
             sensitivity: .low, egress: .localOnly, sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true, mode: .on
+            mode: .on
         )
 
         let local = runtime.contextItems(
@@ -231,12 +209,12 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "I prefer concise answers.", type: .preference, scope: .global,
             sensitivity: .low, egress: .localOnly, sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true, mode: .on
+            mode: .on
         )
         _ = runtime.processProposal(
             statement: "I enjoy hiking on weekends.", type: .preference, scope: .global,
             sensitivity: .low, egress: .localOnly, sourceLocator: "call-1:turn-2",
-            explicitlyUserRequested: true, mode: .on
+            mode: .on
         )
 
         let selected = runtime.contextItems(
@@ -259,7 +237,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         let disposition = runtime.processProposal(
             statement: "I prefer concise answers.", type: .preference,
             scope: .global, sensitivity: .low, egress: .localOnly,
-            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true,
+            sourceLocator: "call-1:turn-1",
             mode: .on
         )
         guard case .saved(let record) = disposition else {
@@ -301,7 +279,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "Use the cash method for tax planning.", type: .projectTopic,
             scope: .topic("tax"), sensitivity: .low, egress: .allowedRemote,
-            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true, mode: .on
+            sourceLocator: "call-1:turn-1", mode: .on
         )
 
         let wrongTopic = runtime.contextItems(
@@ -323,12 +301,12 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "Use the cash method for Maryland taxes.", type: .projectTopic,
             scope: .topic("Maryland taxes"), sensitivity: .low, egress: .allowedRemote,
-            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true, mode: .on
+            sourceLocator: "call-1:turn-1", mode: .on
         )
         _ = runtime.processProposal(
             statement: "Keep the packing list short.", type: .projectTopic,
             scope: .topic("travel"), sensitivity: .low, egress: .allowedRemote,
-            sourceLocator: "call-1:turn-2", explicitlyUserRequested: true, mode: .on
+            sourceLocator: "call-1:turn-2", mode: .on
         )
 
         XCTAssertNil(runtime.explicitTopic(matching: "What should we work on next?"))
@@ -378,7 +356,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             statement: "My name is Dan.",
             type: .userFact, scope: .personality("attache-a"), sensitivity: .low,
             egress: .allowedRemote, sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true, mode: .on
+            mode: .on
         )
         guard case .saved = disposition else {
             return XCTFail("Expected the explicit name memory to save")
@@ -431,175 +409,6 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         XCTAssertEqual(runtime.activeRecords.count, countBefore)
     }
 
-    func testExplicitAskSupportRejectsModelOnlyAdditions() {
-        XCTAssertTrue(AppModel.memoryStatement(
-            "I prefer concise answers.",
-            isSupportedBy: "I prefer concise answers."
-        ))
-        XCTAssertFalse(AppModel.memoryStatement(
-            "I prefer concise answers and live in Baltimore.",
-            isSupportedBy: "I prefer concise answers."
-        ))
-        XCTAssertFalse(AppModel.memoryStatement(
-            "I like cats.",
-            isSupportedBy: "I do not like cats."
-        ))
-        XCTAssertTrue(AppModel.memoryStatement(
-            "I prefer concise answers.",
-            isSupportedBy: "Please remember that I prefer concise answers."
-        ))
-    }
-
-    /// Regression for Dan's 2026-07-19 session: the assistant offered to
-    /// remember, Dan affirmed, and the guard rejected because the fact lived
-    /// two turns earlier and the final restatement led with "That". Support is
-    /// now explicit-in-context: contiguous containment inside a clause of any
-    /// recent user turn of the active conversation.
-    func testDanSessionAffirmationAndFillerFramingAreSupported() {
-        let turns = [
-            "Yeah, my name's Dan",
-            "Yes, I want you to"
-        ]
-        // The fact was stated two turns before the affirmation; the window,
-        // with the statement in the words Dan used, supports it.
-        XCTAssertTrue(AppModel.memoryStatement(
-            "my name's Dan",
-            isSupportedByAny: turns
-        ))
-        // Leading filler "That" no longer breaks the match.
-        XCTAssertTrue(AppModel.memoryStatement(
-            "my name is Dan",
-            isSupportedBy: "the one we were just talking about. That my name is Dan."
-        ))
-        // Negation still rejects: "not" breaks contiguity.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "my name is Dan",
-            isSupportedBy: "my name is not Dan"
-        ))
-        XCTAssertFalse(AppModel.memoryStatement(
-            "my name is Dan",
-            isSupportedByAny: ["my name is not Dan"]
-        ))
-        // A fact the user never said anywhere in the conversation rejects.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "Dan lives in Baltimore",
-            isSupportedByAny: turns
-        ))
-        // Containment never crosses clause boundaries.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "my name is Dan",
-            isSupportedBy: "my name is. Dan asked about that."
-        ))
-    }
-
-    /// Regression for Dan's 2026-07-19 dogs turn: voice transcription dropped
-    /// "are" and inserted a "re please" disfluency, and the model's
-    /// grammatical restatement was rejected by contiguous matching. The
-    /// glue-tolerant ordered-subsequence matcher must accept it while
-    /// never-said facts, negation flips, and reordered names still reject.
-    func testDanDogsRegressionToleratesASRDisfluencies() {
-        let turn = "Yeah, can you re please remember that my other dogs named Alice and Orli"
-        XCTAssertTrue(AppModel.memoryStatement(
-            "my other dogs are named Alice and Orli",
-            isSupportedBy: turn
-        ))
-        // Negation add and negation drop both reject, in both directions.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "my other dogs are not named Alice and Orli",
-            isSupportedBy: turn
-        ))
-        XCTAssertFalse(AppModel.memoryStatement(
-            "my other dogs are named Alice and Orli",
-            isSupportedBy: "my other dogs are not named Alice and Orli"
-        ))
-        // A fact the user never stated rejects.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "Dan has three cats",
-            isSupportedByAny: [turn, "Yes, I want you to"]
-        ))
-        // Order matters: swapped names are not the user's statement.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "my other dogs are named Orli and Alice",
-            isSupportedBy: turn
-        ))
-    }
-
-    func testMatcherGlueContractionAndClauseRules() {
-        // Pure-glue proposals can never pass, however glue-rich the turn.
-        XCTAssertFalse(AppModel.memoryStatement("that is my", isSupportedBy: "that is my thing"))
-        XCTAssertFalse(AppModel.memoryStatement("my name is", isSupportedBy: "my name is Dan"))
-        // Contractions tokenize whole (apostrophes stripped) and negation is
-        // symmetric across grammatical person: "don't" in the turn matches
-        // "doesnt" in the proposal because both sides carry a negation.
-        XCTAssertTrue(AppModel.memoryStatement(
-            "the user doesnt like pepper",
-            isSupportedBy: "I don't like pepper"
-        ))
-        // Dropping the negation while keeping the content tokens rejects.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "the user does like pepper",
-            isSupportedBy: "I don't like pepper"
-        ))
-        // Ordered-subsequence matching never stitches across clauses.
-        XCTAssertFalse(AppModel.memoryStatement(
-            "my dogs are named Alice and Orli",
-            isSupportedBy: "My dog is Alice. Orli is my other dog."
-        ))
-    }
-
-    /// Attempts are refundable until a save claims the effect: rejections do
-    /// not consume the once-per-turn claim, the cap bounds retries, and a
-    /// claimed effect refuses further attempts.
-    func testEffectLedgerAttemptsAreRefundableUntilClaim() {
-        let ledger = ConversationTurnEffectLedger()
-        XCTAssertTrue(ledger.registerAttempt(.memoryProposal, cap: 3))
-        XCTAssertTrue(ledger.registerAttempt(.memoryProposal, cap: 3))
-        XCTAssertEqual(ledger.attemptCount(.memoryProposal), 2)
-        XCTAssertTrue(ledger.claim(.memoryProposal))
-        XCTAssertFalse(
-            ledger.registerAttempt(.memoryProposal, cap: 3),
-            "a claimed effect refuses further attempts"
-        )
-
-        let capped = ConversationTurnEffectLedger()
-        for _ in 0..<3 {
-            XCTAssertTrue(capped.registerAttempt(.memoryProposal, cap: 3))
-        }
-        XCTAssertFalse(capped.registerAttempt(.memoryProposal, cap: 3))
-        XCTAssertTrue(capped.claim(.memoryProposal), "the cap never blocks the actual claim")
-    }
-
-    /// The support window is the current utterance plus the last 10 user turns
-    /// of the active conversation; assistant turns never count as support.
-    func testMemorySupportWindowCapsUserTurnsAndExcludesAssistantTurns() {
-        var turns: [ConversationTurn] = (0..<12).map { index in
-            ConversationTurn(
-                id: "user-\(index)",
-                role: .user,
-                text: "user turn number \(index)",
-                createdAt: Date()
-            )
-        }
-        turns.append(ConversationTurn(
-            id: "assistant-1",
-            role: .assistant,
-            text: "assistant turn that must not count",
-            createdAt: Date()
-        ))
-
-        let window = AppModel.memorySupportWindow(
-            currentUtterance: "yes, save it",
-            turns: turns
-        )
-
-        XCTAssertEqual(window.first, "yes, save it")
-        XCTAssertEqual(window.count, 11, "current utterance plus the last 10 user turns")
-        XCTAssertFalse(window.contains("user turn number 0"))
-        XCTAssertFalse(window.contains("user turn number 1"))
-        XCTAssertTrue(window.contains("user turn number 11"))
-        XCTAssertFalse(window.contains("assistant turn that must not count"))
-    }
-
     /// The deterministic egress policy table: low sensitivity honors the
     /// requested egress in both directions; anything above low is clamped to
     /// local-only no matter what the tool requested.
@@ -635,7 +444,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         let disposition = runtime.processProposal(
             statement: "I prefer concise answers.", type: .preference,
             scope: .global, sensitivity: .low, egress: .localOnly,
-            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true,
+            sourceLocator: "call-1:turn-1",
             mode: .on
         )
         guard case .saved(let record) = disposition else {
@@ -667,7 +476,6 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             sensitivity: .low,
             egress: .localOnly,
             sourceLocator: "call-1:turn-2",
-            explicitlyUserRequested: true,
             mode: .on
         )
         guard case .saved(let record) = stored else {

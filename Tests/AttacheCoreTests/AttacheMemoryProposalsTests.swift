@@ -57,18 +57,6 @@ final class AttacheMemoryProposalsTests: XCTestCase {
         }
     }
 
-    /// Without the deterministic explicit-ask classification (authoritative,
-    /// user-authored) nothing saves; there is no queue to fall back to.
-    func testInferredConfidenceCannotSave() {
-        let p = proposal(statement: "User prefers terse summaries", confidence: .inferred, sensitivity: .low)
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
-        if case .rejected(let reason) = disposition {
-            XCTAssertEqual(reason, .notExplicitlyRequested)
-        } else {
-            XCTFail("an inferred fact must not save under explicit-only capture")
-        }
-    }
-
     // Criterion 3: secrets, inferred traits, temporary statements, agent-session
     // content never saved.
     func testSecretsNeverSaved() {
@@ -181,20 +169,6 @@ final class AttacheMemoryProposalsTests: XCTestCase {
         } else {
             XCTFail("should save")
         }
-    }
-
-    func testModelProposalCannotAuthorizeItsOwnWriteEvenIfItClaimsAuthority() {
-        let p = proposal(
-            statement: "User prefers terse summaries",
-            sourceKind: .modelProposed,
-            requiresConfirmation: false
-        )
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
-        if case .rejected(let reason) = disposition {
-            XCTAssertEqual(reason, .notExplicitlyRequested)
-            return
-        }
-        XCTFail("A model cannot authorize its own durable write")
     }
 
     // Criterion 7: turning Off stops proposals immediately.

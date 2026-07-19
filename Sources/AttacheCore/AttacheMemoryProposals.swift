@@ -75,7 +75,6 @@ public enum AttacheMemoryProposalRejection: String, Equatable, Sendable {
     case sessionContentNotRestated
     case duplicate
     case modeOff
-    case notExplicitlyRequested
 }
 
 /// The disposition of a proposal. Capture is explicit-only, so a proposal
@@ -143,9 +142,11 @@ public enum AttacheMemoryProposalValidator {
     }
 }
 
-/// The pure proposal processor. Capture is explicit-only: Off does nothing;
-/// On saves a validator-passing proposal immediately when the user's explicit
-/// ask authorized it, and rejects everything else with a typed reason.
+/// The pure proposal processor. Capture is explicit-only by the prompt
+/// contract, and the statement is trusted as the model's faithful restatement
+/// of what the user asked to remember: Off does nothing; On saves a
+/// validator-passing, non-duplicate proposal immediately. The validator list
+/// is the hard floor on what may ever be stored.
 public enum AttacheMemoryProposalProcessor {
 
     /// Process a proposal according to the mode.
@@ -168,16 +169,6 @@ public enum AttacheMemoryProposalProcessor {
             return .rejected(reason: .duplicate)
         }
 
-        // The user's explicit ask is the consent, established deterministically
-        // upstream: the statement must match the user's own clause in the
-        // current turn, which is what marks the proposal user-authored. A model
-        // can never authorize its own durable write, even if it marks the
-        // proposal authoritative or clears the confirmation flag.
-        guard proposal.sourceKind == .userAuthored,
-              !proposal.requiresConfirmation,
-              proposal.confidence == .authoritative else {
-            return .rejected(reason: .notExplicitlyRequested)
-        }
         // Stamp real creation times: the record initializer's placeholder
         // default is the 1970 epoch, which rots recency scoring and any date
         // display if it ever reaches the ledger.

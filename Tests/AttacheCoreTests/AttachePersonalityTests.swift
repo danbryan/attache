@@ -368,31 +368,29 @@ final class AttachePersonalityTests: XCTestCase {
             XCTAssertTrue(prompt.contains("you MUST call it then"))
             XCTAssertTrue(prompt.contains("Never volunteer it for details shared in passing"))
             XCTAssertTrue(prompt.contains("is not a request to remember it"))
-            XCTAssertTrue(prompt.contains("Restate the fact in the user's own words as the statement"))
+            XCTAssertTrue(prompt.contains("State the fact plainly and faithfully as the statement"))
+            XCTAssertTrue(prompt.contains("correcting obvious transcription garbles"))
             XCTAssertTrue(prompt.contains("A spoken acknowledgment alone saves nothing"))
             // Scoping: conversation saves belong to this Attaché; all-Attaché
             // memories are typed in Settings.
             XCTAssertTrue(prompt.contains("The save goes to this Attaché's own memory"))
             XCTAssertTrue(prompt.contains("memories for every Attaché are typed in Settings > Memory"))
-            // Explicit-in-context: affirming the assistant's own offer counts,
-            // the fact comes from the earlier turn in the user's words, and an
-            // accepted offer can never be refused.
+            // Affirmation-of-offer consent: an accepted offer can never be
+            // refused, and the user is never asked to re-say a visible fact.
             XCTAssertTrue(prompt.contains("affirming your own offer to remember"))
-            XCTAssertTrue(prompt.contains("the fact to restate is the one from the earlier turn"))
-            XCTAssertTrue(prompt.contains("in the words the user used when they stated it"))
+            XCTAssertTrue(prompt.contains("the fact to save is the one from the earlier turn"))
             XCTAssertTrue(prompt.contains("never offer and then refuse"))
+            XCTAssertTrue(prompt.contains("never ask the user to repeat a fact you can already see in this conversation"))
             // No narration: the UI chip confirms saves, the reply stays natural.
             XCTAssertTrue(prompt.contains("Do not narrate the save mechanics"))
             XCTAssertTrue(prompt.contains("Attaché's own UI confirms every save"))
             XCTAssertTrue(prompt.contains("greet a new name, react to their news, answer what they asked"))
             XCTAssertTrue(prompt.contains("Never claim a memory was saved unless the tool reported it"))
-            // Retry instead of deflect: a declined save is retried with the
-            // user's exact words, and the user is never asked to repeat a
-            // fact already visible in the transcript.
-            XCTAssertTrue(prompt.contains("retry once, restating the fact using the exact words the user spoke"))
-            XCTAssertTrue(prompt.contains("never ask the user to repeat a fact you can already see in this conversation"))
-            XCTAssertTrue(prompt.contains("Only after a failed retry"))
+            // A validator decline is final and relayed briefly; the retired
+            // retry-with-exact-words instruction is gone.
             XCTAssertTrue(prompt.contains("that it can't be saved and why"))
+            XCTAssertFalse(prompt.contains("retry once"))
+            XCTAssertFalse(prompt.contains("exact words the user spoke"))
             XCTAssertFalse(prompt.contains("You cannot save memories in this conversation"))
         }
 

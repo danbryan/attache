@@ -826,7 +826,7 @@ final class AttacheProductionRequestBroker {
     private static func memoryProposalToolObject() -> [String: Any] {
         ["type": "function", "function": [
             "name": "propose_memory",
-            "description": "Offer one durable user-stated fact for THIS Attaché's memory: something the user explicitly asked to remember this turn, restated in the user's own words. The save is always scoped to the current Attaché; memories for every Attaché are typed by the user in Settings. Attaché's local validator decides whether it is saved or rejected; never call it for facts shared in passing, and fallback retries cannot repeat the local effect.",
+            "description": "Offer one durable user-stated fact for THIS Attaché's memory: something the user explicitly asked to remember this turn, stated plainly and faithfully, correcting obvious transcription garbles. The save is always scoped to the current Attaché; memories for every Attaché are typed by the user in Settings. Attaché's local validator decides whether it is saved or rejected; never call it for facts shared in passing, and fallback retries cannot repeat the local effect.",
             "parameters": [
                 "type": "object",
                 "properties": [

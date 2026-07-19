@@ -5541,33 +5541,21 @@ final class AppModel: ObservableObject {
             return "That memory proposal was invalid and was not saved."
         }
 
-        // Explicit-in-context: the fact must have been stated by the user at
-        // some point in THIS conversation, not necessarily in the current
-        // utterance, so affirming an offer ("yes, save it") saves the fact
-        // from the earlier turn. A fact the user never said still rejects.
-        let userSupported = Self.memoryStatement(
-            decoded.statement,
-            isSupportedByAny: Self.memorySupportWindow(
-                currentUtterance: sourceUtterance,
-                turns: conversationMessages
-            )
-        )
+        // Trust-the-restatement design: the prompt's explicit-ask contract
+        // decides WHEN this tool is called, the validator decides WHAT may
+        // never be stored, and the chip plus the Memory pane are the user's
+        // review backstop. There is no verbatim-transcript guard.
+        _ = sourceUtterance
         let egress = Self.memoryEgressForToolProposal(
             decoded.egress,
             sensitivity: decoded.sensitivity
         )
         let mode = AttacheContextUIState.shared.memoryMode
-        // A rejected proposal saved nothing, so it must not consume the
-        // once-per-turn effect: attempts are counted (capped to prevent
-        // loops) and the claim is taken only when a save actually happens,
-        // so fallback retries still cannot repeat a completed save.
-        if let effectLedger {
-            if effectLedger.contains(.memoryProposal) {
-                return "This turn already saved a memory. It was not saved again."
-            }
-            guard effectLedger.registerAttempt(.memoryProposal, cap: Self.memoryProposalAttemptCap) else {
-                return "No memory attempts remain this turn. Briefly tell the user the fact couldn't be saved."
-            }
+        // One save per turn: the claim is taken only when a save actually
+        // happens, so fallback retries cannot repeat a completed save while a
+        // validator rejection consumes nothing.
+        if let effectLedger, effectLedger.contains(.memoryProposal) {
+            return "This turn already saved a memory. It was not saved again."
         }
         let disposition = memoryRuntime.processProposal(
             statement: decoded.statement,
@@ -5576,7 +5564,6 @@ final class AppModel: ObservableObject {
             sensitivity: decoded.sensitivity,
             egress: egress,
             sourceLocator: sourceLocator,
-            explicitlyUserRequested: userSupported,
             mode: mode
         )
         memoryRuntime.publish(to: .shared)
@@ -5586,20 +5573,12 @@ final class AppModel: ObservableObject {
             effectLedger?.claim(.memoryProposal)
             showMemorySavedChip()
             return "The memory was saved on this Mac. Attaché's own UI shows the confirmation, so keep replying naturally without narrating the save."
-        case .rejected(.notExplicitlyRequested):
-            let attemptsUsed = effectLedger?.attemptCount(.memoryProposal) ?? Self.memoryProposalAttemptCap
-            if attemptsUsed < Self.memoryProposalAttemptCap {
-                return "Nothing was saved. Retry propose_memory once, restating the fact using ONLY words the user actually spoke in this conversation, including their exact phrasing even if ungrammatical. Do not ask the user to repeat themselves."
-            }
-            return "Nothing was saved after retrying: the statement must use words the user actually said in this conversation. Briefly tell the user the fact couldn't be saved."
         case .rejected(let reason):
-            return "Local memory policy declined that (\(reason.rawValue)). Nothing was saved; if the user explicitly asked, tell them briefly it can't be saved and why."
+            return "Local memory policy declined that (\(reason.rawValue)). Nothing was saved; briefly tell the user it can't be saved and why."
         case .ignored:
             return "Remembering is off, so nothing was saved."
         }
     }
-
-    private static let memoryProposalAttemptCap = 3
 
     /// Shows the quiet transient "Memory saved" chip in the call/chat surface.
     /// The chip is the save confirmation channel; the spoken reply stays
@@ -5652,97 +5631,6 @@ final class AppModel: ObservableObject {
               let sensitivity = AttacheMemorySensitivity(rawValue: decoded.sensitivity),
               let egress = AttacheMemoryEgress(rawValue: decoded.egress) else { return nil }
         return (statement, type, .personality(personalityID), sensitivity, egress)
-    }
-
-    /// Tokens the model may freely insert or drop when restating a fact: the
-    /// grammatical scaffolding that voice transcription routinely mangles
-    /// ("my other dogs named Alice" for "my other dogs are named Alice").
-    /// Negation-bearing words are deliberately NOT glue.
-    static let memoryGlueTokens: Set<String> = [
-        "is", "are", "was", "were", "be", "been", "am", "my", "the", "a", "an",
-        "that", "this", "it", "its", "named", "called", "and", "to", "of",
-        "i", "im", "ive", "s", "t", "do", "does", "did", "has", "have", "had",
-        "user", "users"
-    ]
-
-    /// Negation markers compared as one canonical class between proposal and
-    /// clause: a grammatical restatement may map "don't" to "doesn't", but a
-    /// negation may never appear on one side only, in either direction.
-    static let memoryNegationMarkers: Set<String> = [
-        "not", "no", "never", "none", "dont", "doesnt", "didnt", "cant",
-        "cannot", "wont", "isnt", "arent", "wasnt", "werent", "without", "stop"
-    ]
-
-    /// Conservative local support check for explicit-in-context capture,
-    /// tolerant of voice-transcription disfluencies. Per clause of a user
-    /// turn (clauses never stitch together):
-    /// (a) the proposal's non-glue, non-negation tokens must appear as an
-    ///     ordered subsequence of the clause tokens, so a grammatical
-    ///     restatement of a mangled ASR turn still matches while a fact the
-    ///     user never said cannot;
-    /// (b) negation symmetry: the proposal and clause must agree on whether a
-    ///     negation marker is present, both directions, so dropping or adding
-    ///     a negation always rejects even though subsequence matching alone
-    ///     would accept "my name is dan" inside "my name is not dan";
-    /// (c) at least 2 non-glue tokens must match, so pure-glue proposals
-    ///     cannot pass.
-    /// Apostrophes are stripped before tokenizing so contractions become
-    /// single tokens (dont, doesnt, names).
-    static func memoryStatement(_ statement: String, isSupportedBy userTurn: String) -> Bool {
-        let proposed = normalizedMemoryClause(statement)
-        let proposedMatchTokens = proposed.filter {
-            !memoryGlueTokens.contains($0) && !memoryNegationMarkers.contains($0)
-        }
-        guard proposedMatchTokens.count >= 2 else { return false }
-        let proposedHasNegation = proposed.contains { memoryNegationMarkers.contains($0) }
-        let clauses = userTurn.split { character in
-            character == "." || character == "!" || character == "?"
-                || character == ";" || character == "\n"
-        }
-        return clauses.contains { rawClause in
-            let clause = normalizedMemoryClause(String(rawClause))
-            let clauseHasNegation = clause.contains { memoryNegationMarkers.contains($0) }
-            guard clauseHasNegation == proposedHasNegation else { return false }
-            return isOrderedSubsequence(proposedMatchTokens, of: clause)
-        }
-    }
-
-    /// True when the user stated the fact in any of the given turns. Callers
-    /// pass the active conversation's support window; hang-up clears it, so a
-    /// fact from a previous call can never authorize a save.
-    static func memoryStatement(_ statement: String, isSupportedByAny turns: [String]) -> Bool {
-        turns.contains { memoryStatement(statement, isSupportedBy: $0) }
-    }
-
-    /// The explicit-in-context support window: the current utterance plus the
-    /// last 10 user turns of the active conversation. Consent detection stays
-    /// the model's job; this window only verifies the fact was actually said
-    /// by the user at some point in THIS conversation.
-    static func memorySupportWindow(
-        currentUtterance: String,
-        turns: [ConversationTurn]
-    ) -> [String] {
-        [currentUtterance] + turns.filter { $0.role == .user }.suffix(10).map(\.text)
-    }
-
-    private static func isOrderedSubsequence(_ needle: [String], of haystack: [String]) -> Bool {
-        guard !needle.isEmpty else { return false }
-        var needleIndex = 0
-        for token in haystack where token == needle[needleIndex] {
-            needleIndex += 1
-            if needleIndex == needle.count { return true }
-        }
-        return false
-    }
-
-    private static func normalizedMemoryClause(_ text: String) -> [String] {
-        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
-            .replacingOccurrences(of: "'", with: "")
-            .replacingOccurrences(of: "\u{2019}", with: "")
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
-            .filter { !$0.isEmpty }
     }
 
     /// Deterministic egress clamp for tool-originated saves. Storage is always
