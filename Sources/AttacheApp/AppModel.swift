@@ -5557,8 +5557,17 @@ final class AppModel: ObservableObject {
             sensitivity: decoded.sensitivity
         )
         let mode = AttacheContextUIState.shared.memoryMode
-        if let effectLedger, !effectLedger.claim(.memoryProposal) {
-            return "This turn already handled a memory proposal. It was not saved or queued again."
+        // A rejected proposal saved nothing, so it must not consume the
+        // once-per-turn effect: attempts are counted (capped to prevent
+        // loops) and the claim is taken only when a save actually happens,
+        // so fallback retries still cannot repeat a completed save.
+        if let effectLedger {
+            if effectLedger.contains(.memoryProposal) {
+                return "This turn already saved a memory. It was not saved again."
+            }
+            guard effectLedger.registerAttempt(.memoryProposal, cap: Self.memoryProposalAttemptCap) else {
+                return "No memory attempts remain this turn. Briefly tell the user the fact couldn't be saved."
+            }
         }
         let disposition = memoryRuntime.processProposal(
             statement: decoded.statement,
@@ -5574,16 +5583,23 @@ final class AppModel: ObservableObject {
 
         switch disposition {
         case .saved:
+            effectLedger?.claim(.memoryProposal)
             showMemorySavedChip()
             return "The memory was saved on this Mac. Attaché's own UI shows the confirmation, so keep replying naturally without narrating the save."
         case .rejected(.notExplicitlyRequested):
-            return "Nothing was saved: the statement must be a fact the user actually said in this conversation, in their own words. If the user did ask, tell them briefly it couldn't be saved this time."
+            let attemptsUsed = effectLedger?.attemptCount(.memoryProposal) ?? Self.memoryProposalAttemptCap
+            if attemptsUsed < Self.memoryProposalAttemptCap {
+                return "Nothing was saved. Retry propose_memory once, restating the fact using ONLY words the user actually spoke in this conversation, including their exact phrasing even if ungrammatical. Do not ask the user to repeat themselves."
+            }
+            return "Nothing was saved after retrying: the statement must use words the user actually said in this conversation. Briefly tell the user the fact couldn't be saved."
         case .rejected(let reason):
             return "Local memory policy declined that (\(reason.rawValue)). Nothing was saved; if the user explicitly asked, tell them briefly it can't be saved and why."
         case .ignored:
             return "Remembering is off, so nothing was saved."
         }
     }
+
+    private static let memoryProposalAttemptCap = 3
 
     /// Shows the quiet transient "Memory saved" chip in the call/chat surface.
     /// The chip is the save confirmation channel; the spoken reply stays
@@ -5638,22 +5654,56 @@ final class AppModel: ObservableObject {
         return (statement, type, .personality(personalityID), sensitivity, egress)
     }
 
-    /// Conservative local support check for explicit-in-context capture. The
-    /// normalized proposed statement must appear as a contiguous token run
-    /// inside one normalized clause of a user turn, so leading fillers,
-    /// lead-ins ("remember that..."), and affirmation framing ("That my name
-    /// is Dan.") are all harmless, while negation and modality changes still
-    /// fail: inserting "not" breaks contiguity. A paraphrase the user never
-    /// said cannot gain user-authored authority from bag-of-words overlap.
+    /// Tokens the model may freely insert or drop when restating a fact: the
+    /// grammatical scaffolding that voice transcription routinely mangles
+    /// ("my other dogs named Alice" for "my other dogs are named Alice").
+    /// Negation-bearing words are deliberately NOT glue.
+    static let memoryGlueTokens: Set<String> = [
+        "is", "are", "was", "were", "be", "been", "am", "my", "the", "a", "an",
+        "that", "this", "it", "its", "named", "called", "and", "to", "of",
+        "i", "im", "ive", "s", "t", "do", "does", "did", "has", "have", "had",
+        "user", "users"
+    ]
+
+    /// Negation markers compared as one canonical class between proposal and
+    /// clause: a grammatical restatement may map "don't" to "doesn't", but a
+    /// negation may never appear on one side only, in either direction.
+    static let memoryNegationMarkers: Set<String> = [
+        "not", "no", "never", "none", "dont", "doesnt", "didnt", "cant",
+        "cannot", "wont", "isnt", "arent", "wasnt", "werent", "without", "stop"
+    ]
+
+    /// Conservative local support check for explicit-in-context capture,
+    /// tolerant of voice-transcription disfluencies. Per clause of a user
+    /// turn (clauses never stitch together):
+    /// (a) the proposal's non-glue, non-negation tokens must appear as an
+    ///     ordered subsequence of the clause tokens, so a grammatical
+    ///     restatement of a mangled ASR turn still matches while a fact the
+    ///     user never said cannot;
+    /// (b) negation symmetry: the proposal and clause must agree on whether a
+    ///     negation marker is present, both directions, so dropping or adding
+    ///     a negation always rejects even though subsequence matching alone
+    ///     would accept "my name is dan" inside "my name is not dan";
+    /// (c) at least 2 non-glue tokens must match, so pure-glue proposals
+    ///     cannot pass.
+    /// Apostrophes are stripped before tokenizing so contractions become
+    /// single tokens (dont, doesnt, names).
     static func memoryStatement(_ statement: String, isSupportedBy userTurn: String) -> Bool {
         let proposed = normalizedMemoryClause(statement)
-        guard proposed.count >= 3 else { return false }
+        let proposedMatchTokens = proposed.filter {
+            !memoryGlueTokens.contains($0) && !memoryNegationMarkers.contains($0)
+        }
+        guard proposedMatchTokens.count >= 2 else { return false }
+        let proposedHasNegation = proposed.contains { memoryNegationMarkers.contains($0) }
         let clauses = userTurn.split { character in
             character == "." || character == "!" || character == "?"
                 || character == ";" || character == "\n"
         }
         return clauses.contains { rawClause in
-            containsContiguousRun(proposed, in: normalizedMemoryClause(String(rawClause)))
+            let clause = normalizedMemoryClause(String(rawClause))
+            let clauseHasNegation = clause.contains { memoryNegationMarkers.contains($0) }
+            guard clauseHasNegation == proposedHasNegation else { return false }
+            return isOrderedSubsequence(proposedMatchTokens, of: clause)
         }
     }
 
@@ -5675,11 +5725,12 @@ final class AppModel: ObservableObject {
         [currentUtterance] + turns.filter { $0.role == .user }.suffix(10).map(\.text)
     }
 
-    private static func containsContiguousRun(_ needle: [String], in haystack: [String]) -> Bool {
-        guard !needle.isEmpty, needle.count <= haystack.count else { return false }
-        for start in 0...(haystack.count - needle.count)
-        where Array(haystack[start..<(start + needle.count)]) == needle {
-            return true
+    private static func isOrderedSubsequence(_ needle: [String], of haystack: [String]) -> Bool {
+        guard !needle.isEmpty else { return false }
+        var needleIndex = 0
+        for token in haystack where token == needle[needleIndex] {
+            needleIndex += 1
+            if needleIndex == needle.count { return true }
         }
         return false
     }
@@ -5687,6 +5738,8 @@ final class AppModel: ObservableObject {
     private static func normalizedMemoryClause(_ text: String) -> [String] {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .lowercased()
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "\u{2019}", with: "")
             .split { !$0.isLetter && !$0.isNumber }
             .map(String.init)
             .filter { !$0.isEmpty }

@@ -386,6 +386,12 @@ final class AttachePersonalityTests: XCTestCase {
             XCTAssertTrue(prompt.contains("Attaché's own UI confirms every save"))
             XCTAssertTrue(prompt.contains("greet a new name, react to their news, answer what they asked"))
             XCTAssertTrue(prompt.contains("Never claim a memory was saved unless the tool reported it"))
+            // Retry instead of deflect: a declined save is retried with the
+            // user's exact words, and the user is never asked to repeat a
+            // fact already visible in the transcript.
+            XCTAssertTrue(prompt.contains("retry once, restating the fact using the exact words the user spoke"))
+            XCTAssertTrue(prompt.contains("never ask the user to repeat a fact you can already see in this conversation"))
+            XCTAssertTrue(prompt.contains("Only after a failed retry"))
             XCTAssertTrue(prompt.contains("that it can't be saved and why"))
             XCTAssertFalse(prompt.contains("You cannot save memories in this conversation"))
         }

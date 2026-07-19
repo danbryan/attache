@@ -492,6 +492,83 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         ))
     }
 
+    /// Regression for Dan's 2026-07-19 dogs turn: voice transcription dropped
+    /// "are" and inserted a "re please" disfluency, and the model's
+    /// grammatical restatement was rejected by contiguous matching. The
+    /// glue-tolerant ordered-subsequence matcher must accept it while
+    /// never-said facts, negation flips, and reordered names still reject.
+    func testDanDogsRegressionToleratesASRDisfluencies() {
+        let turn = "Yeah, can you re please remember that my other dogs named Alice and Orli"
+        XCTAssertTrue(AppModel.memoryStatement(
+            "my other dogs are named Alice and Orli",
+            isSupportedBy: turn
+        ))
+        // Negation add and negation drop both reject, in both directions.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "my other dogs are not named Alice and Orli",
+            isSupportedBy: turn
+        ))
+        XCTAssertFalse(AppModel.memoryStatement(
+            "my other dogs are named Alice and Orli",
+            isSupportedBy: "my other dogs are not named Alice and Orli"
+        ))
+        // A fact the user never stated rejects.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "Dan has three cats",
+            isSupportedByAny: [turn, "Yes, I want you to"]
+        ))
+        // Order matters: swapped names are not the user's statement.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "my other dogs are named Orli and Alice",
+            isSupportedBy: turn
+        ))
+    }
+
+    func testMatcherGlueContractionAndClauseRules() {
+        // Pure-glue proposals can never pass, however glue-rich the turn.
+        XCTAssertFalse(AppModel.memoryStatement("that is my", isSupportedBy: "that is my thing"))
+        XCTAssertFalse(AppModel.memoryStatement("my name is", isSupportedBy: "my name is Dan"))
+        // Contractions tokenize whole (apostrophes stripped) and negation is
+        // symmetric across grammatical person: "don't" in the turn matches
+        // "doesnt" in the proposal because both sides carry a negation.
+        XCTAssertTrue(AppModel.memoryStatement(
+            "the user doesnt like pepper",
+            isSupportedBy: "I don't like pepper"
+        ))
+        // Dropping the negation while keeping the content tokens rejects.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "the user does like pepper",
+            isSupportedBy: "I don't like pepper"
+        ))
+        // Ordered-subsequence matching never stitches across clauses.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "my dogs are named Alice and Orli",
+            isSupportedBy: "My dog is Alice. Orli is my other dog."
+        ))
+    }
+
+    /// Attempts are refundable until a save claims the effect: rejections do
+    /// not consume the once-per-turn claim, the cap bounds retries, and a
+    /// claimed effect refuses further attempts.
+    func testEffectLedgerAttemptsAreRefundableUntilClaim() {
+        let ledger = ConversationTurnEffectLedger()
+        XCTAssertTrue(ledger.registerAttempt(.memoryProposal, cap: 3))
+        XCTAssertTrue(ledger.registerAttempt(.memoryProposal, cap: 3))
+        XCTAssertEqual(ledger.attemptCount(.memoryProposal), 2)
+        XCTAssertTrue(ledger.claim(.memoryProposal))
+        XCTAssertFalse(
+            ledger.registerAttempt(.memoryProposal, cap: 3),
+            "a claimed effect refuses further attempts"
+        )
+
+        let capped = ConversationTurnEffectLedger()
+        for _ in 0..<3 {
+            XCTAssertTrue(capped.registerAttempt(.memoryProposal, cap: 3))
+        }
+        XCTAssertFalse(capped.registerAttempt(.memoryProposal, cap: 3))
+        XCTAssertTrue(capped.claim(.memoryProposal), "the cap never blocks the actual claim")
+    }
+
     /// The support window is the current utterance plus the last 10 user turns
     /// of the active conversation; assistant turns never count as support.
     func testMemorySupportWindowCapsUserTurnsAndExcludesAssistantTurns() {

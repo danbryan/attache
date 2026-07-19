@@ -85,6 +85,7 @@ final class ConversationTurnEffectLedger: @unchecked Sendable {
 
     private let lock = NSLock()
     private var claimedEffects: Set<Effect> = []
+    private var attemptCounts: [Effect: Int] = [:]
 
     @discardableResult
     func claim(_ effect: Effect) -> Bool {
@@ -97,6 +98,28 @@ final class ConversationTurnEffectLedger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return claimedEffects.contains(effect)
+    }
+
+    /// Counts an attempt at an effect without consuming its once-per-turn
+    /// claim, so a rejected attempt (which had no side effect) can be retried.
+    /// Returns false once the cap for this turn is exhausted or the effect was
+    /// already claimed. The claim itself still happens only when the effect
+    /// actually occurs.
+    @discardableResult
+    func registerAttempt(_ effect: Effect, cap: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !claimedEffects.contains(effect) else { return false }
+        let next = (attemptCounts[effect] ?? 0) + 1
+        guard next <= cap else { return false }
+        attemptCounts[effect] = next
+        return true
+    }
+
+    func attemptCount(_ effect: Effect) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return attemptCounts[effect] ?? 0
     }
 
     var hasEffects: Bool {
