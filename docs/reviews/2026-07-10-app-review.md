@@ -77,7 +77,7 @@ can strand an instruction in `.delivering` with no error anywhere. Propagate.
 
 Also worth fixing while in there: CLI-personality tool calls are recovered by
 brace-balancing JSON scraping of free text
-(`CompanionPresentationService.swift:466-530`); when the model wraps the JSON in
+(`AttachePresentationService.swift:466-530`); when the model wraps the JSON in
 prose the tool call silently degrades into a spoken answer. One corrective
 retry turn ("re-emit exactly one JSON object, no prose") would recover most of
 these.
@@ -89,8 +89,8 @@ nothing owns the truth.
 
 | State | Exists? | Where | Gap |
 |---|---|---|---|
-| Listening | yes | top overlay live transcript (`CompanionRootView.swift:497-539`) | no indicator in the composer; `callMicStatusText` (`CallHUD.swift:141-163`) is rich but rendered only as a `.help` tooltip |
-| Thinking | yes | composer "Thinking… Xs" + spinner (`AppModel.swift:1739`, `CallHUD.swift:76`) | the entire top bar disappears while thinking: `topOverlayVisible` excludes `isConversing` (`CompanionRootView.swift:912-919`) |
+| Listening | yes | top overlay live transcript (`AttacheRootView.swift:497-539`) | no indicator in the composer; `callMicStatusText` (`CallHUD.swift:141-163`) is rich but rendered only as a `.help` tooltip |
+| Thinking | yes | composer "Thinking… Xs" + spinner (`AppModel.swift:1739`, `CallHUD.swift:76`) | the entire top bar disappears while thinking: `topOverlayVisible` excludes `isConversing` (`AttacheRootView.swift:912-919`) |
 | Generating audio | yes | "Preparing audio…" (composer) and "Preparing voice…" (top bar) | same state, two names |
 | Speaking | yes | "Speaking…" (composer), "Assistant speaking" (top bar) | pure duplication on-call |
 | Error | yes | red status + Switch model / Retry (`CallHUD.swift:80-95,231`) | error detection is substring matching, see below |
@@ -116,7 +116,7 @@ where they belong, and no state where the window goes silent.
 ("Assistant speaking", "Preparing voice…") duplicates the composer and should
 go. But off-call it is the only status surface there is: inbox playback, unread
 count, and "Listening for agent updates" all render there
-(`CompanionRootView.swift:921-927`), and f2/f3 smoke assertions target those
+(`AttacheRootView.swift:921-927`), and f2/f3 smoke assertions target those
 exact strings. And the second line (session · project provenance,
 `cardContext`, `:942`) is information the composer does not carry when the
 destination is Ask Attaché. Concrete proposal: on-call, suppress the top bar
@@ -130,7 +130,7 @@ assertions would need to move to the transport bar labels.
 Confirmed: one global selection. All five consumers - per-event presentation
 (`AppModel.swift:1277`), inbox recap (`:1509`), topic tagging (`:3475`), live
 conversation (`:1840`), and follow-up answers (`:3759`) - call the same
-`CompanionPresentationSettings.load()` (`CompanionPresentationService.swift:890`)
+`AttachePresentationSettings.load()` (`AttachePresentationService.swift:890`)
 reading the same `presentationLLM*` UserDefaults keys (`:902-967`). Instruction
 phrasing is a tool argument of the converse call, so it rides the conversation
 model. There is no way to run Grok for the personality and something else for
@@ -151,14 +151,14 @@ Because of that single funnel, the split is contained:
 
 Worth doing beyond the flexibility itself: tagging and presentation are
 high-volume and cheap, and pointing them at a local model (Ollama/LM Studio are
-already first-class providers, `CompanionPresentationProvider.swift:3-10`) cuts
+already first-class providers, `AttachePresentationProvider.swift:3-10`) cuts
 cost and rate-limit pressure on the conversation model.
 
 ## 4. Failure detection and fallback
 
 Current truth: no retry or backoff anywhere on chat calls (single
 `URLSession.shared.data`, 120s timeout,
-`CompanionPresentationService.swift:394-420,659-687`). Errors become strings.
+`AttachePresentationService.swift:394-420,659-687`). Errors become strings.
 `ConversationRecovery.classify` string-matches usage/model markers
 (`ConversationRecovery.swift:18-41`), only the live-converse path uses it
 (`AppModel.swift:1873-1887`), and recovery is manual: a Switch model menu and
@@ -185,13 +185,13 @@ Recommended order:
    next call. "Fall back to local" is then just chain order.
 4. **The pattern already exists in-repo:** voice playback deterministically
    reverts a broken cloud voice to the system voice with a surfaced reason
-   (`CompanionSpeechProvider.swift:82-117`). Mirror that shape for the LLM path,
+   (`AttacheSpeechProvider.swift:82-117`). Mirror that shape for the LLM path,
    with the plain-readback path remaining the final rung.
 
 ## 5. Wrong-agent awareness and the system prompt
 
 Partly built already, which is worth knowing before writing new prompt text.
-`conversationSystemPrompt` (`CompanionPersonality.swift:233-282`) is already
+`conversationSystemPrompt` (`AttachePersonality.swift:233-282`) is already
 layered - harness identity + personality profile + task rules + session
 context - and already contains the rule: "If the user names a different agent
 than the focused one, ask them to focus that session instead of staging"
@@ -219,7 +219,7 @@ What is missing is content, not a layer: the runtime inventory above, and a
 short error-behavior block ("when Attaché reports a blocked or failed send,
 tell the user exactly what happened and the single next step"). Keep persona
 files persona-only. One caution: the CLI tool bridge injects a second system
-message (`CompanionPresentationService.swift:447-464`); put new harness text in
+message (`AttachePresentationService.swift:447-464`); put new harness text in
 `conversationSystemPrompt` so the HTTP and CLI paths both receive it.
 
 ## 6. Verification coverage

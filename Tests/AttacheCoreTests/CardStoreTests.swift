@@ -136,8 +136,8 @@ final class CardStoreTests: XCTestCase {
             title: "Attached Codex response",
             text: "Technically yes, but I would not make that my first test path. The cleaner test is to use a secondary account, then verify the connection lands correctly.",
             metadata: [
-                "companion_summary": "Safer test path recommended",
-                "companion_spoken_text": "Use a secondary account as the cleaner test path. Verify the connection lands correctly before touching the main account."
+                "attache_summary": "Safer test path recommended",
+                "attache_spoken_text": "Use a secondary account as the cleaner test path. Verify the connection lands correctly before touching the main account."
             ]
         )
 
@@ -252,16 +252,16 @@ final class CardStoreTests: XCTestCase {
         let store = try CardStore(databaseURL: root.appendingPathComponent("cards.sqlite"))
         let event = NormalizedEvent(
             source: "codex",
-            eventType: "companion.conversation.reply",
+            eventType: "attache.conversation.reply",
             externalSessionID: "session-a",
             projectPath: "/tmp/session-a",
             title: "Attache reply",
             text: "The issue is probably scoped to the local app settings.",
             metadata: [
-                "companion_history_kind": "direct_reply",
-                "companion_summary": "Local app settings likely matter",
-                "companion_spoken_text": "The issue is probably scoped to the local app settings.",
-                "companion_direct_reply": "true"
+                "attache_history_kind": "direct_reply",
+                "attache_summary": "Local app settings likely matter",
+                "attache_spoken_text": "The issue is probably scoped to the local app settings.",
+                "attache_direct_reply": "true"
             ]
         )
 
@@ -367,8 +367,8 @@ final class CardStoreTests: XCTestCase {
             title: "History \(sessionID)",
             text: "\(summary). Full Codex response is preserved for the card.",
             metadata: [
-                "companion_summary": summary,
-                "companion_spoken_text": "\(summary). This is the personalized spoken recap."
+                "attache_summary": summary,
+                "attache_spoken_text": "\(summary). This is the personalized spoken recap."
             ]
         )
     }

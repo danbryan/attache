@@ -14,7 +14,7 @@ import { personalities, brain, outro, f, karaokeEnd, ssec, stext } from "./timin
 /* character with one Preview button.                                 */
 /* ------------------------------------------------------------------ */
 
-const WARDROBE = [
+const PRESENCES = [
   { key: "attache", title: "Attaché", detail: "Robot" },
   { key: "colt", title: "Colt", detail: "Cowboy" },
   { key: "echo", title: "Echo", detail: "Voice bars" },
@@ -24,7 +24,7 @@ const LOADOUTS = [
   {
     key: "editor",
     name: "The Editor",
-    wardrobe: "attache" as const,
+    presence: "attache" as const,
     prompt: "a sharp editor with strong opinions",
     voice: "Jessa",
     model: "Grok 4.3",
@@ -35,7 +35,7 @@ const LOADOUTS = [
   {
     key: "cowboy",
     name: "Colt",
-    wardrobe: "colt" as const,
+    presence: "colt" as const,
     prompt: "an old trail boss with a level voice",
     voice: "Grandpa Spuds",
     model: "qwen3:7b",
@@ -45,7 +45,7 @@ const LOADOUTS = [
   },
 ];
 
-const WardrobeFace: React.FC<{ kind: "attache" | "colt" | "echo"; size: number; talking?: boolean }> = ({ kind, size, talking = false }) => {
+const PresenceFace: React.FC<{ kind: "attache" | "colt" | "echo"; size: number; talking?: boolean }> = ({ kind, size, talking = false }) => {
   if (kind === "attache") return <Mark2 size={size} talking={talking} />;
   if (kind === "echo") return <WaveBars n={11} height={size * 0.52} barWidth={Math.max(5, size * 0.038)} color="#A75FFF" />;
   return (
@@ -91,7 +91,7 @@ export const Personalities2: React.FC = () => {
   const caret = Math.floor(frame / 14) % 2 === 0;
   const panelP = spring({ frame: frame - f(personalities.presetsAt), fps, config: { damping: 17, mass: 0.9 } });
   const swap = spring({ frame: frame - beats[1].typeF, fps, config: { damping: 13, mass: 0.7 } });
-  const selectedIndex = WARDROBE.findIndex((item) => item.key === active.wardrobe);
+  const selectedIndex = PRESENCES.findIndex((item) => item.key === active.presence);
   return (
     <Stage>
       <Aurora accent="violet" strength={0.9} />
@@ -115,10 +115,10 @@ export const Personalities2: React.FC = () => {
           <div style={{ position: "relative", padding: "30px 28px", background: `linear-gradient(160deg, ${active.tint}22, rgba(10,10,15,0.96) 72%)`, borderRight: `1px solid ${T.stroke}` }}>
             <div style={{ color: T.faint, fontSize: 16, fontWeight: 800, letterSpacing: "0.12em" }}>AUDITION STAGE</div>
             <div style={{ height: 290, display: "flex", alignItems: "center", justifyContent: "center", transform: `scale(${1 + 0.025 * Math.sin(frame / 17)}) rotate(${active.key === "cowboy" ? (1 - swap) * -4 : 0}deg)` }}>
-              <WardrobeFace kind={active.wardrobe} size={220} talking={speaking} />
+              <PresenceFace kind={active.presence} size={220} talking={speaking} />
             </div>
             <div style={{ textAlign: "center", color: T.text, fontSize: 30, fontWeight: 750 }}>{active.name}</div>
-            <div style={{ textAlign: "center", color: T.dim, fontSize: 18, marginTop: 5 }}>{WARDROBE[selectedIndex].title} · {active.voice}</div>
+            <div style={{ textAlign: "center", color: T.dim, fontSize: 18, marginTop: 5 }}>{PRESENCES[selectedIndex].title} · {active.voice}</div>
             <div
               style={{
                 marginTop: 24, height: 48, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
@@ -143,13 +143,13 @@ export const Personalities2: React.FC = () => {
             </div>
 
             <div>
-              <div style={{ color: T.faint, fontSize: 14, fontWeight: 800, letterSpacing: "0.09em", marginBottom: 8 }}>WARDROBE</div>
+              <div style={{ color: T.faint, fontSize: 14, fontWeight: 800, letterSpacing: "0.09em", marginBottom: 8 }}>PRESENCES</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 9 }}>
-                {WARDROBE.map((item) => {
-                  const chosen = item.key === active.wardrobe;
+                {PRESENCES.map((item) => {
+                  const chosen = item.key === active.presence;
                   return (
                     <div key={item.key} style={{ height: 94, borderRadius: 12, display: "flex", alignItems: "center", gap: 10, padding: "0 13px", background: chosen ? `${active.tint}1f` : T.bgRaised, border: `1px solid ${chosen ? active.tint : T.stroke}`, boxShadow: chosen ? `0 0 22px ${active.tint}2f` : "none" }}>
-                      <WardrobeFace kind={item.key} size={54} />
+                      <PresenceFace kind={item.key} size={54} />
                       <div>
                         <div style={{ color: chosen ? active.tint : T.text, fontSize: 18, fontWeight: 750 }}>{item.title}</div>
                         <div style={{ color: T.faint, fontSize: 14 }}>{item.detail}</div>

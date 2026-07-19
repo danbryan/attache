@@ -127,9 +127,9 @@
           <tbody>
             <tr><td><span class="status riskb">Delete has no confirm, no undo</span></td><td>The Delete action removes a personality immediately (PersonalitiesPane.swift:139); deleting the active one silently reassigns to the first in the list. History and Memory both use confirmation dialogs; this is the one destructive action in the app without one. Hours of prompt-crafting can vanish on a misclick.</td><td>Highest. Add a confirmation naming the personality, and ideally a brief undo window.</td></tr>
             <tr><td><span class="status gap">Voice catalog blocks launch</span></td><td><code>AttacheVoiceCatalog.installedOptions</code> enumerates every installed system voice synchronously; the code's own comment says it can take seconds. It runs on the main thread during app init through the personality-load path (AppModel.swift:1057 → Personality.swift:518).</td><td>The single biggest hang risk in the app. Move enumeration off-main with a cached snapshot.</td></tr>
-            <tr><td><span class="status gap">Single-click switch waits for a double-click</span></td><td>Wardrobe cards stack a double-tap (edit) over a single-tap (switch), so the primary action always waits out the disambiguation delay (PersonalitiesPane.swift:177-180). This reads as sluggishness on the most common interaction.</td><td>Medium. Make single-click switch immediate; move edit to the visible Edit control and context menu.</td></tr>
+            <tr><td><span class="status gap">Single-click switch waits for a double-click</span></td><td>Character cards stack a double-tap (edit) over a single-tap (switch), so the primary action always waits out the disambiguation delay (PersonalitiesPane.swift:177-180). This reads as sluggishness on the most common interaction.</td><td>Medium. Make single-click switch immediate; move edit to the visible Edit control and context menu.</td></tr>
             <tr><td><span class="status gap">Voice settings are dual-sourced</span></td><td>A personality owns its voiceRef, but applying it writes back onto about 11 global speech preference keys, and edits get folded back into the active personality afterward. It works, and it is tested, but it is a standing drift hazard every future voice feature must respect.</td><td>Medium, architectural. Worth converging on personality-owned voice with globals as a derived cache.</td></tr>
-            <tr><td><span class="status gap">Small polish items</span></td><td>Per-render voice-summary lookups re-filter the whole catalog for every wardrobe card (a cached lookup exists and should be used); a canceled greeting preview can leave a stuck "Preparing…" spinner; palette filtering logic lives inside the view, so its behavior has no unit tests.</td><td>Low each; the palette-logic extraction also buys testability.</td></tr>
+            <tr><td><span class="status gap">Small polish items</span></td><td>Per-render voice-summary lookups re-filter the whole catalog for every character card (a cached lookup exists and should be used); a canceled greeting preview can leave a stuck "Preparing…" spinner; palette filtering logic lives inside the view, so its behavior has no unit tests.</td><td>Low each; the palette-logic extraction also buys testability.</td></tr>
           </tbody>
         </table>
       </div>
@@ -239,7 +239,7 @@
             <li><strong>Number keys 1 through 9</strong> switch to that personality while the ⇧⌘P palette is open.</li>
             <li><strong>j / k navigation</strong> in the ⌘I inbox and ⌘Y history, matching the type-to-filter that exists.</li>
             <li><strong>Hover-scrub captions:</strong> hovering a karaoke word previews position, click jumps (click already works).</li>
-            <li><strong>Global summon hotkey</strong> (user-configurable) to bring the mini window or dock forward from any app, since Attaché is a background companion by design.</li>
+            <li><strong>Global summon hotkey</strong> (user-configurable) to bring the mini window or dock forward from any app, since Attaché is a background utility by design.</li>
           </ul>
         </div>
       </div>

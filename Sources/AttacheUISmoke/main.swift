@@ -3476,7 +3476,7 @@ if enabled("f22") {
 // uses only built-in prompts, the on-device voice, and a disposable profile.
 
 if enabled("personality") {
-    run.step("personality-studio", "the personality wardrobe opens from Settings") {
+    run.step("personality-studio", "the personality gallery opens from Settings") {
         try dismissOnboardingIfPresent()
         app.activate()
         app.key(Key.comma, command: true)
@@ -3497,7 +3497,7 @@ if enabled("personality") {
         let studio = try personalityStudioWindow()
         _ = try waitForElement("creator title", in: studio, containing: "Create your Attaché")
         _ = try waitForElement("explicit configuration promise", in: studio, containing: "Every Attaché owns its personality, voice, and model")
-        _ = try waitForElement("wardrobe choice", in: studio, containing: "Choose Echo presence")
+        _ = try waitForElement("character presence choice", in: studio, containing: "Choose Echo presence")
         _ = try waitForElement("personality prompt", in: studio, containing: "Personality instructions")
         _ = try waitForElement("personality starting point", in: studio, containing: "Starting point")
         _ = try waitForElement("new personality affordance", in: studio, containing: "Write a new personality")
@@ -3703,26 +3703,26 @@ if enabled("personality") {
         _ = try waitForElement("active character in dock", in: try mainWindow(), containing: "Active Attaché Smoke Character")
     }
 
-    // INF-351: wardrobe cards used to stack a double-tap (edit) gesture over
+    // INF-351: character cards used to stack a double-tap (edit) gesture over
     // the single-tap (switch) gesture, so the primary single-click switch
     // always waited out double-click disambiguation. A single AXPress on a
     // non-active card must now flip it to active immediately, with Edit
     // still reachable through the visible ellipsis Menu and the card's
     // context menu (not exercised by AXPress; see PersonalitiesPane.swift).
-    run.step("personality-studio", "a single click on a non-active wardrobe card switches to it immediately") {
+    run.step("personality-studio", "a single click on a non-active character card switches to it immediately") {
         app.key(Key.comma, command: true)
         try waitUntil("settings window reopens", timeout: 10) { (try? settingsWindow()) != nil }
         try selectSettingsSection("Personalities", paneMarker: "New Attaché")
         // The character-switcher steps above left "Smoke Character" active,
         // so the built-in "Attaché" card is available, not active.
         let card = try waitForElement(
-            "non-active Attaché wardrobe card",
+            "non-active Attaché character card",
             in: try settingsWindow(),
             containing: "Attaché, available personality"
         )
         guard card.press() else { throw SmokeError(message: "AXPress failed on \(card.summary)") }
         _ = try waitForElement(
-            "activated Attaché wardrobe card",
+            "activated Attaché character card",
             in: try settingsWindow(),
             containing: "Attaché, active personality"
         )

@@ -131,7 +131,7 @@ only from an explicit play control or an active live session.
 
 ## Built-in presence contract
 
-The wardrobe has exactly three built-in presences:
+There are exactly three built-in presences:
 
 - **Attaché**: the brand robot. LED eyes implement openness, worry, gaze, and
   error. The mouth is an equalizer driven by `mouthOpen`.

@@ -15,7 +15,7 @@ final class PersonalityDeleteUndoTests: XCTestCase {
         "attache.deletedBuiltInPersonalityIDs",
         "attache.speechProvider", "attache.speechVoiceIdentifier",
         "attache.elevenLabsVoiceID", "attache.elevenLabsVoiceName",
-        "attache.petCharacter", "attache.visualMode", "attache.personalityVoicePetMigrated",
+        "attache.character", "attache.visualMode", "attache.personalityVoicePetMigrated",
         "attache.presentationLLMProvider", "attache.presentationLLMBaseURL",
         "attache.presentationLLMModel", "attache.presentationReasoningEffort",
         "attache.presentationServiceTier", "attache.conversationFallbackChainEnabled",

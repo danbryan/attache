@@ -2,7 +2,7 @@ import XCTest
 @testable import AttacheApp
 
 final class PersonalityTests: XCTestCase {
-    func testBuiltInWardrobeIsExactlyAttacheColtAndEcho() {
+    func testBuiltInCharactersAreExactlyAttacheColtAndEcho() {
         XCTAssertEqual(Personality.builtIns.map(\.id), ["builtin.bigPicture", "builtin.cowboy", "builtin.echo"])
         XCTAssertEqual(Personality.builtIns.map(\.name), ["Attaché", "Colt", "Echo"])
         for personality in Personality.builtIns {
@@ -145,24 +145,6 @@ final class PersonalityTests: XCTestCase {
         let imported = try PersonalityStore.importPersonality(from: exported, newID: { "custom.premium.new" })
         XCTAssertEqual(imported.voiceRef?.provider, .attachePremium)
         XCTAssertEqual(imported.id, "custom.premium.new")
-    }
-
-    func testLegacyPetKeysImportAsCurrentCharacterPresence() throws {
-        let json = Data("""
-        {
-          "id": "legacy",
-          "name": "Legacy",
-          "prompt": "Keep it concise.",
-          "isBuiltIn": false,
-          "petCharacter": "cowboy",
-          "visualMode": "pet"
-        }
-        """.utf8)
-
-        let imported = try JSONDecoder().decode(Personality.self, from: json)
-
-        XCTAssertEqual(imported.character, .cowboy)
-        XCTAssertEqual(imported.visualMode, .character)
     }
 
     func testRetiredAbstractVisualizerImportsAsEchoBars() throws {

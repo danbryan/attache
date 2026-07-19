@@ -14,8 +14,8 @@ The deterministic local provider is mandatory. Hosted providers are tested when
 credentials are available and reported as SKIP when they are not, so the suite
 does not require paid subscriptions to pass.
 
-Set ATTACHE_PROVIDER_CANARIES_REQUIRE_HOSTED=1 to make xAI, OpenAI-compatible,
-and Groq credentials mandatory.
+Set ATTACHE_PROVIDER_CANARIES_REQUIRE_HOSTED=1 to make xAI and
+OpenAI-compatible credentials mandatory.
 Set OLLAMA_CANARY_REQUIRE=1 to require a live local Ollama model.
 EOF
 }
@@ -65,7 +65,6 @@ fi
 
 run_canary "xAI" env ATTACHE_CANARY_ALLOW_SKIP="$HOSTED_SKIP" scripts/xai-tool-calling-canary.sh
 run_canary "OpenAI-compatible" env ATTACHE_CANARY_ALLOW_SKIP="$HOSTED_SKIP" scripts/openai-tool-calling-canary.sh
-run_canary "Groq" env ATTACHE_CANARY_ALLOW_SKIP="$HOSTED_SKIP" scripts/groq-tool-calling-canary.sh
 run_canary "Ollama" scripts/ollama-tool-calling-canary.sh
 
 echo "Provider canaries: $passes passed, $skips skipped, $failures failed"

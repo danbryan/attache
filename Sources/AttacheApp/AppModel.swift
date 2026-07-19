@@ -1332,6 +1332,14 @@ final class AppModel: ObservableObject {
     private var twoWayEnablePendingSend: PendingAgentSend?
     private let codexSessionWatcher = CodexSessionWatcher()
     private let sessionActivityWatcher = SessionActivityWatcher()
+    /// Source-of-truth for per-source adapter tags, so a fallback-filed card
+    /// carries the same provenance the live watcher would stamp (INF-396).
+    private let sessionSourceRegistry = SessionSourceRegistry.production()
+    /// Grace window before the delivered-reply fallback files a `grok_build`
+    /// card, giving the live watcher (which polls every ~2s) time to narrate and
+    /// link the reply itself. Kept short so a watcher miss still surfaces the
+    /// card promptly. Tests drive `fileDeliveredReplyFallbackIfUnlinked` directly.
+    private let deliveredReplyFallbackGrace: TimeInterval = 6
     private let presentationEnvironment: [String: String]
     private let presentationService: AttachePresentationService
     private let attacheMemoryStore: AttacheMemoryStore
@@ -1808,7 +1816,6 @@ final class AppModel: ObservableObject {
     private func resolvedProfilePrompt(for personality: Personality?) -> String {
         let testOverride = presentationEnvironment["ATTACHE_PERSONALITY_PROMPT"]
             ?? presentationEnvironment["ATTACHE_PROFILE_PROMPT"]
-            ?? presentationEnvironment["COMPANION_PERSONALITY_PROMPT"]
         return AttacheRequestAuthority.resolvedProfilePrompt(
             testOverride: testOverride,
             selectedPersonalityPrompt: personality?.prompt ?? "",
@@ -2249,8 +2256,8 @@ final class AppModel: ObservableObject {
         // session's transcript moves again.
         if event.eventType == "needs_attention" {
             var notice = event
-            notice.metadata["companion_needs_decision"] = "1"
-            notice.metadata["companion_notice"] = "needs_attention"
+            notice.metadata["attache_needs_decision"] = "1"
+            notice.metadata["attache_notice"] = "needs_attention"
             if let sessionID = event.externalSessionID {
                 // Exact waiting-on-you from Claude Code's Notification hook.
                 // Record it as a hook state so the transcript classifier can't
@@ -2418,8 +2425,8 @@ final class AppModel: ObservableObject {
             title: title,
             text: line,
             metadata: [
-                "companion_needs_decision": "1",
-                "companion_notice": "needs_attention"
+                "attache_needs_decision": "1",
+                "attache_notice": "needs_attention"
             ]
         )
         persistNeedsYouNotice(event: event, line: line)
@@ -2451,7 +2458,7 @@ final class AppModel: ObservableObject {
             let hasOpenNotice = cards.contains { card in
                 card.externalSessionID == id
                     && card.status == .unread
-                    && metadataDictionary(for: card)["companion_notice"] == "needs_attention"
+                    && metadataDictionary(for: card)["attache_notice"] == "needs_attention"
             }
             if !hasOpenNotice {
                 sessionAttention.removeValue(forKey: id)
@@ -2475,7 +2482,7 @@ final class AppModel: ObservableObject {
         let notices = cards.filter { card in
             card.externalSessionID == sessionID
                 && card.status == .unread
-                && metadataDictionary(for: card)["companion_notice"] == "needs_attention"
+                && metadataDictionary(for: card)["attache_notice"] == "needs_attention"
         }
         guard !notices.isEmpty else { return }
         archiveCards(notices)
@@ -2703,7 +2710,7 @@ final class AppModel: ObservableObject {
     /// a whole work-session transcript from history.
     func anotherTakeUnderlyingSource(for card: VoicemailCard) -> String {
         let metadata = metadataDictionary(for: card)
-        if let encoded = metadata["companion_conversation_context_v1"],
+        if let encoded = metadata["attache_conversation_context_v1"],
            let data = encoded.data(using: .utf8),
            let turns = try? JSONDecoder().decode([StoredConversationContextTurn].self, from: data),
            !turns.isEmpty {
@@ -2712,7 +2719,7 @@ final class AppModel: ObservableObject {
             }.joined(separator: "\n")
             return "Conversation context through the user's request:\n\(transcript)"
         }
-        if let userTurn = metadata["companion_conversation_user_turn"], !userTurn.isEmpty {
+        if let userTurn = metadata["attache_conversation_user_turn"], !userTurn.isEmpty {
             return "The user asked:\n\(userTurn)"
         }
         return card.rawText
@@ -3249,15 +3256,15 @@ final class AppModel: ObservableObject {
         inference: AttacheInferenceMetadata
     ) {
         var metadata: [String: String] = [
-            "companion_recap": "1",
-            "companion_history_kind": "recap",
-            "companion_summary": Self.conversationReplySummary(from: recapText),
-            "companion_spoken_text": recapText,
-            "companion_presentation_strategy": "attache-inbox-recap"
+            "attache_recap": "1",
+            "attache_history_kind": "recap",
+            "attache_summary": Self.conversationReplySummary(from: recapText),
+            "attache_spoken_text": recapText,
+            "attache_presentation_strategy": "attache-inbox-recap"
         ]
         if let personality {
-            metadata["companion_personality_id"] = personality.id
-            metadata["companion_personality_name"] = personality.name
+            metadata["attache_personality_id"] = personality.id
+            metadata["attache_personality_name"] = personality.name
         }
         if let receipt = inference.receiptView.encodedMetadataValue() {
             metadata[AttacheContextReceiptView.metadataKey] = receipt
@@ -3544,7 +3551,7 @@ final class AppModel: ObservableObject {
     ///       slip through as a newly saved card or capsule,
     ///   (b) hard-delete every already-persisted card, reply, and alternate
     ///       take linked to this conversation id (they all share the
-    ///       `companion_conversation_id` metadata tag), plus its direct-chat
+    ///       `attache_conversation_id` metadata tag), plus its direct-chat
     ///       capsules,
     ///   (c) verify the deletions by re-querying for zero remaining rows,
     ///   (d) only once verification succeeds, finalize the UI-facing status.
@@ -4696,34 +4703,34 @@ final class AppModel: ObservableObject {
         let session = conversationTargetSnapshot?.target
         let personality = activePersonality
         var metadata: [String: String] = [
-            "companion_history_kind": "direct_reply",
-            "companion_summary": Self.conversationReplySummary(from: trimmed),
-            "companion_spoken_text": trimmed,
-            "companion_presentation_strategy": "attache-direct-chat",
-            "companion_direct_reply": "true"
+            "attache_history_kind": "direct_reply",
+            "attache_summary": Self.conversationReplySummary(from: trimmed),
+            "attache_spoken_text": trimmed,
+            "attache_presentation_strategy": "attache-direct-chat",
+            "attache_direct_reply": "true"
         ]
         if let conversationID = activeConversationID {
-            metadata["companion_conversation_id"] = conversationID.uuidString
+            metadata["attache_conversation_id"] = conversationID.uuidString
         }
         if let userTurn = conversationMessages.last(where: { $0.role == .user })?.text {
-            metadata["companion_conversation_user_turn"] = Self.boundedConversationText(userTurn, limit: 4_000)
+            metadata["attache_conversation_user_turn"] = Self.boundedConversationText(userTurn, limit: 4_000)
         }
         if let context = encodedConversationContext() {
-            metadata["companion_conversation_context_v1"] = context
+            metadata["attache_conversation_context_v1"] = context
         }
         // INF-243: a CLI personality attempted a tool call that never
         // recovered into a valid directive, even after the one corrective
         // retry. The card still carries the spoken degrade above; this only
         // flags that a tool call was attempted and lost.
         if toolCallLost {
-            metadata["companion_tool_call_lost"] = "true"
+            metadata["attache_tool_call_lost"] = "true"
         }
         if egress == .localOnly {
             metadata["attache_local_only_derived"] = "true"
         }
         if let personality {
-            metadata["companion_personality_id"] = personality.id
-            metadata["companion_personality_name"] = personality.name
+            metadata["attache_personality_id"] = personality.id
+            metadata["attache_personality_name"] = personality.name
         }
         if let receipt = inference?.receiptView.encodedMetadataValue() {
             metadata[AttacheContextReceiptView.metadataKey] = receipt
@@ -5145,7 +5152,7 @@ final class AppModel: ObservableObject {
             intakeStatus = message
             liveFollowUpStatus = message
             if conversationActive { conversationStatus = message }
-            narrateOpencodeReplyIfNeeded(instruction)
+            narrateDeliveredReplyIfNeeded(instruction)
         case .failed:
             // Mirrors CallPhase.derive's failed-send formatting (the message is
             // shown verbatim, no generic prefix) so on-call and off-call read
@@ -5165,33 +5172,90 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Surface a delivered opencode reply as a card (INF-395). opencode has no
-    /// live file watcher (its sessions are SQLite rows, not a tailable
-    /// `.jsonl`), so unlike Codex/Claude/Grok nothing else narrates the reply.
-    /// The authoritative text is the DB's first completed assistant turn after
-    /// the delivery checkpoint; feeding it through `receive` files a card and
-    /// runs the same `linkResponseCard` correlation the file sources use. Only
-    /// opencode reaches this, so file sources never double-narrate.
-    private func narrateOpencodeReplyIfNeeded(_ instruction: Instruction) {
-        guard SourceKind(rawValue: instruction.sourceKind) == .opencode else { return }
+    /// Surface a delivered agent reply as a card when the normal live-narration
+    /// path will not (INF-395/INF-396). Two sources need this:
+    ///
+    /// - **opencode** has no live file watcher (its sessions are SQLite rows, not
+    ///   a tailable `.jsonl`), so nothing else narrates the reply. It is filed
+    ///   immediately on delivery.
+    /// - **grok_build** DOES have a live watcher, but this is a belt-and-suspenders
+    ///   fallback for when that watcher does not file the delivered turn as a card
+    ///   (leaving `resulting_card_id` unset). It waits a short grace window for the
+    ///   watcher, then files only if no card has been correlated to the instruction
+    ///   meanwhile, so it never double-files a card the watcher already narrated.
+    ///
+    /// Either way the reply is fed through `receive`, which files a card and runs
+    /// the same `linkResponseCard` correlation the file sources use, with the same
+    /// per-source provenance the watcher would stamp.
+    private func narrateDeliveredReplyIfNeeded(_ instruction: Instruction) {
+        switch SourceKind(rawValue: instruction.sourceKind) {
+        case .opencode:
+            fileDeliveredReplyFallbackIfUnlinked(instruction)
+        case .grokBuild:
+            let id = instruction.id
+            let sessionID = instruction.sessionID
+            DispatchQueue.main.asyncAfter(deadline: .now() + deliveredReplyFallbackGrace) { [weak self] in
+                guard let self,
+                      let current = self.twoWay?.instruction(id: id, sessionID: sessionID) else { return }
+                self.fileDeliveredReplyFallbackIfUnlinked(current)
+            }
+        default:
+            break
+        }
+    }
+
+    /// File the delivered reply as a card, but only while the instruction is
+    /// still delivered with no correlated card. The gate is what keeps the grok
+    /// fallback from double-filing when the live watcher already narrated and
+    /// linked the reply; opencode always passes it (it has no watcher). Not
+    /// `private`: the fallback tests drive this synchronously, bypassing the
+    /// grok grace timer.
+    func fileDeliveredReplyFallbackIfUnlinked(_ instruction: Instruction) {
+        guard let twoWay,
+              twoWay.isDeliveredAwaitingCard(instructionID: instruction.id, sessionID: instruction.sessionID)
+        else { return }
+        fileDeliveredReplyCard(instruction)
+    }
+
+    private func fileDeliveredReplyCard(_ instruction: Instruction) {
+        guard let source = SourceKind(rawValue: instruction.sourceKind) else { return }
         let sessionID = instruction.sessionID
-        let replyText = twoWay.opencodeReplyText(forInstruction: instruction)
-            ?? instruction.deliveryReplyText
+        let replyText: String?
+        switch source {
+        case .opencode:
+            // The DB's first completed assistant turn after the delivery
+            // checkpoint is authoritative; fall back to the captured evidence.
+            replyText = twoWay.opencodeReplyText(forInstruction: instruction)
+                ?? instruction.deliveryReplyText
+        default:
+            replyText = instruction.deliveryReplyText
+        }
         guard let replyText, !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let title = instruction.targetDisplayName
             ?? sessionRecords.first(where: { $0.id == sessionID })?.title
-            ?? SourceKind.opencode.displayName
+            ?? source.displayName
         var event = NormalizedEvent(
-            source: SourceKind.opencode.rawValue,
+            source: source.rawValue,
             eventType: "assistant.completed",
             externalSessionID: sessionID,
             projectPath: instruction.workingDirectory,
             title: title,
             text: replyText
         )
-        event.metadata["adapter"] = "opencode-session-db"
+        event.metadata["adapter"] = sessionSourceRegistry.adapterTag(for: source) ?? "codex-session-file"
         event.metadata["source_time"] = PipelineOrdering.isoString(from: Date())
-        event.metadata["companion_summary"] = EventNormalizer.summary(for: event)
+        // File-transcript sources correlate by transcript byte offset. Stamp the
+        // current end offset (as the live watcher does) so `linkResponseCard` can
+        // attach this card to the delivered instruction; opencode routes through
+        // its own SQLite-positional path and needs no offset (INF-395/INF-396).
+        if source != .opencode,
+           let fileURL = AttacheSessionReader.sessionFileURL(forSessionID: sessionID) {
+            event.metadata["codex_session_file"] = fileURL.path
+            if let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                event.metadata["transcript_end_offset"] = String(size)
+            }
+        }
+        event.metadata["attache_summary"] = EventNormalizer.summary(for: event)
         receive(event)
     }
 
@@ -7397,8 +7461,8 @@ final class AppModel: ObservableObject {
 
     func personalityMarker(for card: VoicemailCard) -> CardPersonalityMarker? {
         let metadata = metadataDictionary(for: card)
-        let id = metadata["companion_personality_id"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let storedName = metadata["companion_personality_name"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let id = metadata["attache_personality_id"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedName = metadata["attache_personality_name"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !id.isEmpty || !storedName.isEmpty else { return nil }
 
         if !id.isEmpty, let current = personalities.first(where: { $0.id == id }) {
@@ -8964,7 +9028,7 @@ final class AppModel: ObservableObject {
     }
 
     func conversationID(for card: VoicemailCard) -> String? {
-        let value = metadataDictionary(for: card)["companion_conversation_id"]?
+        let value = metadataDictionary(for: card)["attache_conversation_id"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return value?.isEmpty == false ? value : nil
     }
@@ -9397,8 +9461,8 @@ final class AppModel: ObservableObject {
 
     private func isDirectConversationReply(_ card: VoicemailCard) -> Bool {
         let metadata = metadataDictionary(for: card)
-        return metadata["companion_history_kind"] == "direct_reply"
-            || metadata["companion_direct_reply"] == "true"
+        return metadata["attache_history_kind"] == "direct_reply"
+            || metadata["attache_direct_reply"] == "true"
     }
 
     /// Resume the live queue after a conversation reply (a preview) finished.
@@ -9758,7 +9822,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             let presentation = self.readConfiguredSecret(account: presentationAccount) ?? ""
             let elevenLabs = self.readConfiguredSecret(account: Self.elevenLabsDevelopmentSecretAccount)
-                ?? self.environmentValue("COMPANION_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY")
+                ?? self.environmentValue("ELEVENLABS_API_KEY")
                 ?? ""
             let xai = self.readConfiguredSecret(account: Self.xaiDevelopmentSecretAccount) ?? ""
             let custom = self.readConfiguredSecret(account: AttachePresentationProvider.custom.developmentSecretAccount) ?? ""

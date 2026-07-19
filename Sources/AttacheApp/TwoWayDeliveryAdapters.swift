@@ -269,12 +269,22 @@ struct AgentResumeDeliveryAdapter: InstructionDeliveryAdapter {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["is_error"] as? Bool != true,
               let reply = grokAssistantText(fromObject: object) else { return nil }
-        return (reply, (object["session_id"] as? String) ?? (object["id"] as? String))
+        let turnID = (object["requestId"] as? String)
+            ?? (object["sessionId"] as? String)
+            ?? (object["session_id"] as? String)
+            ?? (object["id"] as? String)
+        return (reply, turnID)
     }
 
-    /// Non-empty assistant text from a Grok result/assistant object: the
-    /// Claude-style `result` field, or an assistant message's `content` string.
+    /// Non-empty assistant text from a Grok result object. The REAL contract
+    /// (verified live against grok 0.1.219 on this machine, INF-394 gate): a
+    /// single pretty-printed object with a `text` string, `stopReason` (e.g.
+    /// "EndTurn"), `sessionId`, and `requestId`. The Claude-style `result`
+    /// field and assistant `content` shapes are kept as defensive fallbacks.
     private static func grokAssistantText(fromObject object: [String: Any]) -> String? {
+        if let text = (object["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            return text
+        }
         if let result = (object["result"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !result.isEmpty {
             return result
         }

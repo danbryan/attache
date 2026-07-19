@@ -9,7 +9,7 @@ import XCTest
 /// every role resolves identically to the pre-INF-247 global-only behavior
 /// (the regression gate), a role-specific override only ever changes the one
 /// field it targets, one role's override never leaks into another's, and the
-/// `ATTACHE_LLM_*` / `COMPANION_LLM_*` environment overrides keep winning for
+/// `ATTACHE_LLM_*` environment overrides keep winning for
 /// every role, not just one.
 final class PerRoleModelSettingsTests: XCTestCase {
     private func makeIsolatedDefaults() -> (defaults: UserDefaults, suiteName: String) {
@@ -143,7 +143,7 @@ final class PerRoleModelSettingsTests: XCTestCase {
         XCTAssertEqual(recapAfter.model, "recap-model")
     }
 
-    /// The `ATTACHE_LLM_*` / `COMPANION_LLM_*` env overrides stay global: they
+    /// The `ATTACHE_LLM_*` env overrides stay global: they
     /// must win over both a role-specific key and the global default key,
     /// for every role, so smoke scripts setting one env var still affect all
     /// four consumers.
@@ -167,22 +167,6 @@ final class PerRoleModelSettingsTests: XCTestCase {
             let settings = AttachePresentationSettings.load(role: role, defaults: defaults, environment: environment, resolveSecrets: false)
             XCTAssertEqual(settings.provider, .xai, "\(role) should honor the env override over its own role key and the global key")
             XCTAssertEqual(settings.model, "env-model-wins", "\(role) should honor the env override over its own role key and the global key")
-        }
-    }
-
-    /// The legacy `COMPANION_LLM_*` alias must win too, and still for every role.
-    func testLegacyEnvironmentAliasAlsoWinsForEveryRole() {
-        let (defaults, suiteName) = makeIsolatedDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        for role in ModelRole.allCases {
-            defaults.set("role-model-\(role.rawValue)", forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model))
-        }
-        let environment = ["COMPANION_LLM_MODEL": "legacy-env-model"]
-
-        for role in ModelRole.allCases {
-            let settings = AttachePresentationSettings.load(role: role, defaults: defaults, environment: environment, resolveSecrets: false)
-            XCTAssertEqual(settings.model, "legacy-env-model")
         }
     }
 }

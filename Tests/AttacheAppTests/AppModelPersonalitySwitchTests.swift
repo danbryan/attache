@@ -13,7 +13,7 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         "attache.personalities", "attache.activePersonalityID",
         "attache.speechProvider", "attache.speechVoiceIdentifier",
         "attache.elevenLabsVoiceID", "attache.elevenLabsVoiceName",
-        "attache.petCharacter", "attache.visualMode", "attache.personalityVoicePetMigrated",
+        "attache.character", "attache.visualMode", "attache.personalityVoicePetMigrated",
         "attache.presentationLLMProvider", "attache.presentationLLMBaseURL",
         "attache.presentationLLMModel", "attache.presentationReasoningEffort",
         "attache.presentationServiceTier", "attache.conversationFallbackChainEnabled",
@@ -133,7 +133,7 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
                 title: "Private reply",
                 text: "A reply derived from local-only memory.",
                 metadata: [
-                    "companion_spoken_text": "A reply derived from local-only memory.",
+                    "attache_spoken_text": "A reply derived from local-only memory.",
                     "attache_local_only_derived": "true"
                 ]
             ))
@@ -168,7 +168,7 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
                 title: "Private reply",
                 text: "Keep this narration on device.",
                 metadata: [
-                    "companion_spoken_text": "Keep this narration on device.",
+                    "attache_spoken_text": "Keep this narration on device.",
                     "attache_local_only_derived": "true"
                 ]
             ))
@@ -459,7 +459,7 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
                 externalSessionID: unrelatedSessionID,
                 title: "Private session B",
                 text: "Content from B must never be inferred during a switch.",
-                metadata: ["companion_summary": "Private B summary"]
+                metadata: ["attache_summary": "Private B summary"]
             ))
             let model = AppModel(store: store)
             let a = Personality(id: "custom.a", name: "A", prompt: "p", character: .robot)
@@ -504,7 +504,7 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             _ = try store.insertEvent(NormalizedEvent(
                 source: "codex", eventType: "assistant.completed", externalSessionID: "s1",
                 title: "T", text: "did stuff",
-                metadata: ["companion_summary": "did stuff", "companion_spoken_text": "I did stuff."]
+                metadata: ["attache_summary": "did stuff", "attache_spoken_text": "I did stuff."]
             ))
             let model = try AppModel(store: store)
             let a = Personality(id: "custom.a", name: "A", prompt: "p")

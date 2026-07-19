@@ -140,6 +140,23 @@ final class TwoWayCoordinator: ObservableObject, @unchecked Sendable {
         refreshLog()
     }
 
+    /// The current instruction with `id` for `sessionID`, or nil. The
+    /// delivered-reply fallback (INF-396) uses this to re-read fresh state
+    /// (including any card the live watcher linked meanwhile) after its grace
+    /// window elapses, rather than acting on a stale captured copy.
+    func instruction(id: String, sessionID: String) -> Instruction? {
+        engine.instructions(forSessionID: sessionID).first { $0.id == id }
+    }
+
+    /// True while the instruction is delivered with no reply card correlated yet.
+    /// The delivered-reply fallback checks this so it never double-files a card
+    /// the live watcher already narrated and linked (INF-396).
+    func isDeliveredAwaitingCard(instructionID: String, sessionID: String) -> Bool {
+        engine.instructions(forSessionID: sessionID).contains {
+            $0.id == instructionID && $0.state == .delivered && $0.resultingCardID == nil
+        }
+    }
+
     // MARK: Pump / expiry / linking (driven by AppModel on watcher signals)
 
     /// Deliver any confirmed instruction whose session is quiet, and expire stale

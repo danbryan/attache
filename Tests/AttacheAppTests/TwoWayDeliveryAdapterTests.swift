@@ -243,6 +243,27 @@ final class TwoWayDeliveryAdapterTests: XCTestCase {
         }
     }
 
+    func testGrokEvidenceParsesTheRealResultObject() {
+        // Verbatim shape captured live from `grok --resume <id> --output-format
+        // json -p "..."` (grok 0.1.219, INF-394 gate forensics): a single
+        // pretty-printed object with `text`, `stopReason`, `sessionId`, and
+        // `requestId`. No Claude-style `result` field exists.
+        let stdout = """
+        {
+          "text": "PONG_SHAPE_2",
+          "stopReason": "EndTurn",
+          "sessionId": "019f77f8-4067-72d2-a12b-9bef546692fc",
+          "requestId": "01c38df7-ee5e-4eef-aa8e-7076354c8588",
+          "thought": "The user wants me to reply exactly.",
+          "usage": { "input_tokens": 1153, "output_tokens": 31 },
+          "num_turns": 2
+        }
+        """
+        let evidence = AgentResumeDeliveryAdapter.evidence(forVendor: .grok, stdout: stdout)
+        XCTAssertEqual(evidence?.replyText, "PONG_SHAPE_2")
+        XCTAssertEqual(evidence?.turnID, "01c38df7-ee5e-4eef-aa8e-7076354c8588")
+    }
+
     func testGrokEvidenceParsesStreamingFallback() {
         // streaming-json / JSONL: a trailing result line still proves the turn.
         let stream = [

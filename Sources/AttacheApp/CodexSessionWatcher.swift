@@ -369,7 +369,7 @@ final class CodexSessionWatcher {
         if let endOffset = fileSize(fileURL) {
             event.metadata["transcript_end_offset"] = String(endOffset)
         }
-        event.metadata["companion_summary"] = EventNormalizer.summary(for: event)
+        event.metadata["attache_summary"] = EventNormalizer.summary(for: event)
         if !turn.interstitials.isEmpty {
             event.metadata["interstitial_count"] = String(turn.interstitials.count)
             if let data = try? JSONSerialization.data(withJSONObject: turn.interstitials),
@@ -542,8 +542,7 @@ final class CodexSessionWatcher {
 
         var matches: [(url: URL, modified: Date)] = []
         for case let fileURL as URL in enumerator {
-            guard fileURL.pathExtension == "jsonl",
-                  fileURL.lastPathComponent.contains(id) else {
+            guard fileURL.pathExtension == "jsonl", matchesSession(fileURL, id: id) else {
                 continue
             }
             let modified = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
@@ -551,6 +550,22 @@ final class CodexSessionWatcher {
             matches.append((fileURL, modified))
         }
         return matches.sorted { $0.modified > $1.modified }.first?.url
+    }
+
+    /// Codex and Claude Code carry the session id in the transcript's own
+    /// filename, so a substring match locates them. Grok Build keeps the id on
+    /// the session DIRECTORY and always names the transcript `chat_history.jsonl`
+    /// (see `GrokBuildSessionScanner` and `AttacheSessionReader.locateSessionFile`),
+    /// so the filename never contains the id. Match the id-named parent directory
+    /// instead, and only the narratable transcript (never the sibling
+    /// `events.jsonl` / `hunk_records.jsonl`). Without this branch the watcher
+    /// never locates a Grok session and never narrates its turns into cards,
+    /// even though two-way delivery (which uses `AttacheSessionReader`) can read
+    /// the same file (INF-396).
+    private func matchesSession(_ fileURL: URL, id: String) -> Bool {
+        if fileURL.lastPathComponent.contains(id) { return true }
+        return fileURL.lastPathComponent == "chat_history.jsonl"
+            && fileURL.deletingLastPathComponent().lastPathComponent.lowercased() == id.lowercased()
     }
 
     private func seenKey(sessionID: String) -> String {

@@ -208,7 +208,7 @@ extension AttacheRootView {
                 if let notice = presentationNotice(for: card) {
                     PresentationFallbackBadge(
                         notice: notice,
-                        fullText: metadataDictionary(for: card)["companion_presentation_error"]
+                        fullText: metadataDictionary(for: card)["attache_presentation_error"]
                     )
                     .id(card.id)
                 }
@@ -621,9 +621,9 @@ extension AttacheRootView {
 
     func presentationNotice(for card: VoicemailCard) -> String? {
         let metadata = metadataDictionary(for: card)
-        let strategy = metadata["companion_presentation_strategy"] ?? ""
+        let strategy = metadata["attache_presentation_strategy"] ?? ""
         switch strategy {
-        case "attache-personality-llm", "companion-personality-llm":
+        case "attache-personality-llm":
             return nil
         case "plain-readback":
             return "Read the source output verbatim because personality presentation was unavailable."
@@ -635,7 +635,7 @@ extension AttacheRootView {
             // is still available on tap/hover via the badge itself. Falls
             // back to the old generic wording for any card written before
             // the category was recorded in metadata.
-            if let category = ConversationFailureCategory(rawValue: metadata["companion_presentation_error_category"] ?? "") {
+            if let category = ConversationFailureCategory(rawValue: metadata["attache_presentation_error_category"] ?? "") {
                 return "Spoken plainly · \(category.shortLabel)"
             }
             return "Read the source output verbatim because personality summary couldn't run."

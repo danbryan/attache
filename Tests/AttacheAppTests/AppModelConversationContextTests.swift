@@ -29,7 +29,7 @@ final class AppModelConversationContextTests: XCTestCase {
             projectPath: "/private/hidden-project",
             title: "Secret redesign topic",
             text: "Secret agent reply that must not enter a context-free call.",
-            metadata: ["companion_summary": "Secret session summary"]
+            metadata: ["attache_summary": "Secret session summary"]
         ))
 
         let model = AppModel(store: store)
@@ -79,21 +79,21 @@ final class AppModelConversationContextTests: XCTestCase {
             title: "Context test",
             text: "Agent detail one. Agent detail two. Agent detail three.",
             metadata: [
-                "companion_summary": "Three agent details",
+                "attache_summary": "Three agent details",
                 "source_time": "2026-07-10T13:40:00.000Z"
             ]
         ))
         _ = try store.insertEvent(NormalizedEvent(
             source: SourceKind.codex.rawValue,
-            eventType: "companion.conversation.reply",
+            eventType: "attache.conversation.reply",
             externalSessionID: sessionID,
             projectPath: "/tmp/project",
             title: "Context test",
             text: "I could not find the details.",
             metadata: [
-                "companion_summary": "Attaché did not find the details",
-                "companion_direct_reply": "true",
-                "companion_history_kind": "direct_reply",
+                "attache_summary": "Attaché did not find the details",
+                "attache_direct_reply": "true",
+                "attache_history_kind": "direct_reply",
                 "source_time": "2026-07-10T13:41:00.000Z"
             ]
         ), status: .heard)
@@ -163,8 +163,8 @@ final class AppModelConversationContextTests: XCTestCase {
                 text: text,
                 metadata: [
                     "source_time": time,
-                    "companion_history_kind": "direct_reply",
-                    "companion_conversation_id": id
+                    "attache_history_kind": "direct_reply",
+                    "attache_conversation_id": id
                 ]
             )
         }
@@ -193,7 +193,7 @@ final class AppModelConversationContextTests: XCTestCase {
             eventType: "attache.conversation.reply",
             title: "Attaché reply",
             text: "The prior personality's answer.",
-            metadata: ["companion_conversation_context_v1": context]
+            metadata: ["attache_conversation_context_v1": context]
         ))
         let model = AppModel(store: try CardStore.inMemory())
 

@@ -15,14 +15,14 @@ final class VoicemailCardTakeTests: XCTestCase {
     }
 
     func testTakeOfAndProducerFromMetadata() {
-        let c = card(metadataJSON: #"{"companion_take_of":"orig-1","companion_personality_name":"Cowboy"}"#)
+        let c = card(metadataJSON: #"{"attache_take_of":"orig-1","attache_personality_name":"Cowboy"}"#)
         XCTAssertEqual(c.takeOf, "orig-1")
         XCTAssertTrue(c.isAnotherTake)
         XCTAssertEqual(c.producedByPersonalityName, "Cowboy")
     }
 
     func testOrdinaryCardIsNotATake() {
-        let c = card(metadataJSON: #"{"companion_personality_name":"Explainer"}"#)
+        let c = card(metadataJSON: #"{"attache_personality_name":"Explainer"}"#)
         XCTAssertNil(c.takeOf)
         XCTAssertFalse(c.isAnotherTake)
         XCTAssertEqual(c.producedByPersonalityName, "Explainer")

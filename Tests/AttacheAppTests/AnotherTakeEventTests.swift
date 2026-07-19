@@ -23,16 +23,16 @@ final class AnotherTakeEventTests: XCTestCase {
             from: original, targetPersonality: target,
             summary: "Where it stands", spoken: "Bottom line, you shipped.", needsDecision: false
         )
-        XCTAssertEqual(event.metadata["companion_take_of"], "orig-1")
-        XCTAssertEqual(event.metadata["companion_personality_id"], "builtin.bigPicture")
-        XCTAssertEqual(event.metadata["companion_personality_name"], "Big Picture")
-        XCTAssertEqual(event.metadata["companion_spoken_text"], "Bottom line, you shipped.")
-        XCTAssertEqual(event.metadata["companion_summary"], "Where it stands")
-        XCTAssertEqual(event.metadata["companion_presentation_strategy"], "another-take")
+        XCTAssertEqual(event.metadata["attache_take_of"], "orig-1")
+        XCTAssertEqual(event.metadata["attache_personality_id"], "builtin.bigPicture")
+        XCTAssertEqual(event.metadata["attache_personality_name"], "Big Picture")
+        XCTAssertEqual(event.metadata["attache_spoken_text"], "Bottom line, you shipped.")
+        XCTAssertEqual(event.metadata["attache_summary"], "Where it stands")
+        XCTAssertEqual(event.metadata["attache_presentation_strategy"], "another-take")
         XCTAssertEqual(event.externalSessionID, "sess-9")
         XCTAssertEqual(event.projectPath, "/tmp/p")
         XCTAssertEqual(event.text, "deploy details")
-        XCTAssertNil(event.metadata["companion_needs_decision"])
+        XCTAssertNil(event.metadata["attache_needs_decision"])
     }
 
     func testAnotherTakeEventFlagsNeedsDecision() {
@@ -41,12 +41,12 @@ final class AnotherTakeEventTests: XCTestCase {
         let event = AttachePresentationService.anotherTakeEvent(
             from: original, targetPersonality: target, summary: "s", spoken: "sp", needsDecision: true
         )
-        XCTAssertEqual(event.metadata["companion_needs_decision"], "1")
+        XCTAssertEqual(event.metadata["attache_needs_decision"], "1")
     }
 
     func testAnotherTakeStaysLinkedToSavedConversationForDeletion() {
         var original = makeCard(id: "conversation-reply", sessionID: nil, project: nil)
-        original.metadataJSON = #"{"companion_conversation_id":"call-1","companion_conversation_user_turn":"Explain this","companion_conversation_context_v1":"[]"}"#
+        original.metadataJSON = #"{"attache_conversation_id":"call-1","attache_conversation_user_turn":"Explain this","attache_conversation_context_v1":"[]"}"#
         let target = Personality(id: "custom.colt", name: "Colt", prompt: "p")
 
         let event = AttachePresentationService.anotherTakeEvent(
@@ -57,9 +57,9 @@ final class AnotherTakeEventTests: XCTestCase {
             needsDecision: false
         )
 
-        XCTAssertEqual(event.metadata["companion_conversation_id"], "call-1")
-        XCTAssertEqual(event.metadata["companion_conversation_user_turn"], "Explain this")
-        XCTAssertEqual(event.metadata["companion_conversation_context_v1"], "[]")
+        XCTAssertEqual(event.metadata["attache_conversation_id"], "call-1")
+        XCTAssertEqual(event.metadata["attache_conversation_user_turn"], "Explain this")
+        XCTAssertEqual(event.metadata["attache_conversation_context_v1"], "[]")
     }
 
     func testInsertedAnotherTakeCardCarriesTakeOfThroughStore() throws {

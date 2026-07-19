@@ -96,7 +96,7 @@ final class AttachePresentationService {
                     event,
                     strategy: "plain-readback-after-llm-error"
                 )
-                failed.metadata["companion_presentation_error"] = error.localizedDescription
+                failed.metadata["attache_presentation_error"] = error.localizedDescription
                 // Store the classified category too (INF-254), not just the raw
                 // error text, so a badge can show a short label ("rate limited")
                 // instead of a raw error dump. Uses the same structural
@@ -112,7 +112,7 @@ final class AttachePresentationService {
                     urlErrorCode: presentationError?.urlErrorCode ?? (rootError as? URLError)?.code,
                     isCLIProvider: attempt.provider.isCLI
                 )
-                failed.metadata["companion_presentation_error_category"] = recovery.category.rawValue
+                failed.metadata["attache_presentation_error_category"] = recovery.category.rawValue
                 prepared = Self.preparedResult(
                     event: failed,
                     inference: Self.failureInference(error, snapshot: snapshot)
@@ -737,7 +737,7 @@ final class AttachePresentationService {
     /// never tried to call a tool at all.
     private static func cliTextIndicatesAttemptedToolCall(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.contains("companion_tool_call") { return true }
+        if trimmed.contains("attache_tool_call") { return true }
         if fencedJSON(in: trimmed) != nil { return true }
         if let object = firstJSONObject(in: trimmed) {
             let parsesAsJSON = object.data(using: .utf8)
@@ -804,7 +804,7 @@ final class AttachePresentationService {
     }
 
     private static func cliToolDirectives(in object: [String: Any]) -> [CLIToolCallDirective] {
-        if let call = object["companion_tool_call"] as? [String: Any],
+        if let call = object["attache_tool_call"] as? [String: Any],
            let directive = cliToolDirective(in: call) {
             return [directive]
         }
@@ -846,11 +846,11 @@ final class AttachePresentationService {
         strategy: String = "plain-readback"
     ) -> NormalizedEvent {
         var presented = event
-        if presented.metadata["companion_summary"] == nil {
-            presented.metadata["companion_summary"] = EventNormalizer.summary(for: event)
+        if presented.metadata["attache_summary"] == nil {
+            presented.metadata["attache_summary"] = EventNormalizer.summary(for: event)
         }
-        presented.metadata["companion_spoken_text"] = event.text
-        presented.metadata["companion_presentation_strategy"] = strategy
+        presented.metadata["attache_spoken_text"] = event.text
+        presented.metadata["attache_presentation_strategy"] = strategy
         return presented
     }
 
@@ -879,37 +879,37 @@ final class AttachePresentationService {
         }
 
         var presented = event
-        if presented.metadata["companion_summary"] == nil {
-            presented.metadata["companion_summary"] = EventNormalizer.summary(for: event)
+        if presented.metadata["attache_summary"] == nil {
+            presented.metadata["attache_summary"] = EventNormalizer.summary(for: event)
         }
         if !response.summary.isEmpty {
-            presented.metadata["companion_summary"] = response.summary
+            presented.metadata["attache_summary"] = response.summary
         }
-        presented.metadata["companion_spoken_text"] = response.spokenText
+        presented.metadata["attache_spoken_text"] = response.spokenText
         if response.needsDecision {
-            presented.metadata["companion_needs_decision"] = "1"
+            presented.metadata["attache_needs_decision"] = "1"
         }
         // Metadata keys remain backward compatible, but new strategy values use
         // the current product vocabulary.
-        presented.metadata["companion_presentation_strategy"] = "attache-personality-llm"
-        presented.metadata["companion_llm_provider"] = attempt.provider.rawValue
-        presented.metadata["companion_llm_model"] = attempt.model
-        presented.metadata["companion_llm_base_url"] = attempt.endpoint.absoluteString
-        presented.metadata["companion_personality_id"] = snapshot.personality.id
-        presented.metadata["companion_personality_name"] = snapshot.personality.name
-        presented.metadata["companion_personality_profile"] = snapshot.personality.id
-        presented.metadata["companion_memory_context_chars"] = String(
+        presented.metadata["attache_presentation_strategy"] = "attache-personality-llm"
+        presented.metadata["attache_llm_provider"] = attempt.provider.rawValue
+        presented.metadata["attache_llm_model"] = attempt.model
+        presented.metadata["attache_llm_base_url"] = attempt.endpoint.absoluteString
+        presented.metadata["attache_personality_id"] = snapshot.personality.id
+        presented.metadata["attache_personality_name"] = snapshot.personality.name
+        presented.metadata["attache_personality_profile"] = snapshot.personality.id
+        presented.metadata["attache_memory_context_chars"] = String(
             snapshot.contextItems
                 .filter { $0.source == .durableMemory }
                 .reduce(0) { $0 + $1.content.count }
         )
-        presented.metadata["companion_raw_output_chars"] = String(prompt.rawOutputCharacterCount)
-        presented.metadata["companion_raw_output_truncated"] = prompt.truncatedRawOutput ? "true" : "false"
+        presented.metadata["attache_raw_output_chars"] = String(prompt.rawOutputCharacterCount)
+        presented.metadata["attache_raw_output_truncated"] = prompt.truncatedRawOutput ? "true" : "false"
         if let receipt = brokerResponse.metadata.receiptView.encodedMetadataValue() {
             presented.metadata[AttacheContextReceiptView.metadataKey] = receipt
         }
         if let reasoningEffort = attempt.reasoningEffort, !reasoningEffort.isEmpty {
-            presented.metadata["companion_llm_reasoning_effort"] = reasoningEffort
+            presented.metadata["attache_llm_reasoning_effort"] = reasoningEffort
         }
         return presented
     }
@@ -993,17 +993,17 @@ final class AttachePresentationService {
         needsDecision: Bool
     ) -> NormalizedEvent {
         var metadata: [String: String] = [:]
-        metadata["companion_summary"] = summary
-        metadata["companion_spoken_text"] = spoken
-        if needsDecision { metadata["companion_needs_decision"] = "1" }
-        metadata["companion_presentation_strategy"] = "another-take"
-        metadata["companion_personality_id"] = targetPersonality.id
-        metadata["companion_personality_name"] = targetPersonality.name
-        metadata["companion_take_of"] = original.id
+        metadata["attache_summary"] = summary
+        metadata["attache_spoken_text"] = spoken
+        if needsDecision { metadata["attache_needs_decision"] = "1" }
+        metadata["attache_presentation_strategy"] = "another-take"
+        metadata["attache_personality_id"] = targetPersonality.id
+        metadata["attache_personality_name"] = targetPersonality.name
+        metadata["attache_take_of"] = original.id
         for key in [
-            "companion_conversation_id",
-            "companion_conversation_user_turn",
-            "companion_conversation_context_v1"
+            "attache_conversation_id",
+            "attache_conversation_user_turn",
+            "attache_conversation_context_v1"
         ] {
             if let value = original.metadataObject[key] as? String {
                 metadata[key] = value
@@ -1292,8 +1292,8 @@ struct AttachePresentationSettings: Equatable {
     }
 
     /// - Parameter role: which LLM consumer this load is for (INF-247).
-    ///   Every field below checks, in order: the global `ATTACHE_LLM_*` /
-    ///   `COMPANION_LLM_*` environment overrides (so smoke scripts and
+    ///   Every field below checks, in order: the global `ATTACHE_LLM_*`
+    ///   environment overrides (so smoke scripts and
     ///   canaries keep affecting every role, not just one), then the
     ///   `role`-specific default key, then the existing global default key,
     ///   then the provider's built-in default. With no per-role key ever
@@ -1312,14 +1312,12 @@ struct AttachePresentationSettings: Equatable {
 
         let explicitProviderText = firstNonEmpty(
             environment["ATTACHE_LLM_PROVIDER"],
-            environment["COMPANION_LLM_PROVIDER"],
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .provider)),
             defaults.string(forKey: AttachePreferenceKey.presentationLLMProvider),
             ""
         )
         let configuredBaseURLText = firstNonEmpty(
             environment["ATTACHE_LLM_BASE_URL"],
-            environment["COMPANION_LLM_BASE_URL"],
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .baseURL)),
             defaults.string(forKey: AttachePreferenceKey.presentationLLMBaseURL),
             ""
@@ -1338,7 +1336,6 @@ struct AttachePresentationSettings: Equatable {
         let baseURL = URL(string: baseURLText) ?? URL(string: AttachePresentationProvider.ollama.defaultBaseURL)!
         let apiKeySecretRef = firstNonEmpty(
             environment["ATTACHE_LLM_API_KEY_SECRET_REF"],
-            environment["COMPANION_LLM_API_KEY_SECRET_REF"],
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .apiKeySecretRef)),
             defaults.string(forKey: AttachePreferenceKey.presentationLLMAPIKeySecretRef),
             ""
@@ -1350,7 +1347,6 @@ struct AttachePresentationSettings: Equatable {
             .contains(provider.developmentSecretAccount)
         var apiKey = firstNonEmpty(
             environment["ATTACHE_LLM_API_KEY"],
-            environment["COMPANION_LLM_API_KEY"],
             resolveSecrets ? configuredSecret(defaults: defaults, account: provider.developmentSecretAccount) : nil,
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .apiKey)),
             defaults.string(forKey: AttachePreferenceKey.presentationLLMAPIKey),
@@ -1363,14 +1359,12 @@ struct AttachePresentationSettings: Equatable {
             ? AttachePresentationProvider.ollama.defaultModel
             : firstNonEmpty(
                 environment["ATTACHE_LLM_MODEL"],
-                environment["COMPANION_LLM_MODEL"],
                 defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .model)),
                 defaults.string(forKey: AttachePreferenceKey.presentationLLMModel),
                 provider.defaultModel
             )
         let configuredReasoningEffort = firstNonEmpty(
             environment["ATTACHE_REASONING_EFFORT"],
-            environment["COMPANION_REASONING_EFFORT"],
             defaults.string(forKey: AttachePreferenceKey.presentationLLMRoleKey(role, .reasoningEffort)),
             defaults.string(forKey: AttachePreferenceKey.presentationReasoningEffort),
             provider.defaultReasoningEffort
@@ -1387,7 +1381,6 @@ struct AttachePresentationSettings: Equatable {
         let profilePrompt = firstNonEmpty(
             environment["ATTACHE_PERSONALITY_PROMPT"],
             environment["ATTACHE_PROFILE_PROMPT"],
-            environment["COMPANION_PERSONALITY_PROMPT"],
             defaults.string(forKey: AttachePreferenceKey.personalityPrompt),
             ""
         )

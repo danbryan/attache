@@ -277,12 +277,12 @@ an explicit app-owned action and are not exposed to the personality model.
 
 The provider canaries are separate: `scripts/provider-canaries.sh` always runs a
 deterministic local OpenAI-compatible provider as a free positive control, then
-tests xAI, OpenAI-compatible, Groq, and Ollama when credentials or local models
+tests xAI, OpenAI-compatible, and Ollama when credentials or local models
 are available. Missing hosted-provider credentials are reported as SKIP by
 default so the suite does not require paid subscriptions; set
 `ATTACHE_PROVIDER_CANARIES_REQUIRE_HOSTED=1` to make hosted-provider credentials
 mandatory. The individual wrappers are `scripts/xai-tool-calling-canary.sh`,
-`scripts/openai-tool-calling-canary.sh`, `scripts/groq-tool-calling-canary.sh`,
+`scripts/openai-tool-calling-canary.sh`,
 `scripts/ollama-tool-calling-canary.sh`, and
 `scripts/local-provider-tool-calling-canary.sh`.
 

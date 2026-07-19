@@ -54,8 +54,8 @@ final class AppModelPrivateCallConversionTests: XCTestCase {
             title: "Attaché reply",
             text: text,
             metadata: [
-                "companion_history_kind": kind,
-                "companion_conversation_id": conversationID
+                "attache_history_kind": kind,
+                "attache_conversation_id": conversationID
             ]
         )
     }
@@ -97,7 +97,7 @@ final class AppModelPrivateCallConversionTests: XCTestCase {
         _ = try store.insertEvent(cardEvent(conversationID: conversationIDString, kind: "direct_reply", text: "Second answer"))
         _ = try store.insertEvent(cardEvent(conversationID: conversationIDString, kind: "direct_reply", text: "Third answer"))
         // 1 alternate take linked to the same conversation (another-take cards
-        // carry the same companion_conversation_id, see AttachePresentationService.anotherTakeEvent).
+        // carry the same attache_conversation_id, see AttachePresentationService.anotherTakeEvent).
         _ = try store.insertEvent(cardEvent(conversationID: conversationIDString, kind: "direct_reply", text: "Another take"))
         // An unrelated card in a different conversation must survive.
         let otherConversationCard = try store.insertEvent(cardEvent(conversationID: UUID().uuidString, kind: "direct_reply", text: "Unrelated"))

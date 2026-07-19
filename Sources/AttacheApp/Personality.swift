@@ -191,7 +191,6 @@ struct Personality: Identifiable, Codable, Equatable {
         case id, name, prompt, isBuiltIn, voiceRef, character, visualMode
         case modelRef, playbackSpeed, accentColorHex, contextStrategy
         case contextStrategyMigrationNotice, mcpToolGrants
-        case legacyCharacter = "petCharacter"
     }
 
     init(from decoder: Decoder) throws {
@@ -202,7 +201,6 @@ struct Personality: Identifiable, Codable, Equatable {
         isBuiltIn = try container.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
         voiceRef = try container.decodeIfPresent(PersonalityVoiceRef.self, forKey: .voiceRef)
         character = try container.decodeIfPresent(AttacheCharacter.self, forKey: .character)
-            ?? container.decodeIfPresent(AttacheCharacter.self, forKey: .legacyCharacter)
         visualMode = try container.decodeIfPresent(AttacheVisualMode.self, forKey: .visualMode)
         modelRef = try container.decodeIfPresent(PersonalityModelRef.self, forKey: .modelRef)
         playbackSpeed = try container.decodeIfPresent(Double.self, forKey: .playbackSpeed)
@@ -389,7 +387,7 @@ extension Personality {
     /// Takes an already-computed system voice options list (e.g.
     /// `AppModel.speechVoiceOptions`) rather than calling
     /// `AttacheVoiceCatalog.options()` itself, which re-filters and re-sorts
-    /// the whole catalog on every call. Wardrobe cards recompute this on
+    /// the whole catalog on every call. Character cards recompute this on
     /// every render, so a fresh catalog call there was the largest avoidable
     /// per-render cost in the personality list (INF-352 step 6). Callers with
     /// no options handy (e.g. a personality known not to use a system voice)

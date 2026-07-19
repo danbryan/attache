@@ -3,8 +3,8 @@ import AttacheCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A wardrobe first, not a database editor. The pane is for switching among
-/// finished characters; creation and editing happen in the focused studio sheet.
+/// A character gallery first, not a database editor. The pane is for switching
+/// among finished characters; creation and editing happen in the focused studio sheet.
 struct PersonalitiesPane: View {
     @ObservedObject var model: AppModel
 
@@ -18,7 +18,7 @@ struct PersonalitiesPane: View {
             if let active = model.activePersonality {
                 activeCharacter(active)
             }
-            wardrobe
+            characterGallery
             if let deleted = model.recentlyDeletedPersonality {
                 undoBar(for: deleted)
             }
@@ -136,7 +136,7 @@ struct PersonalitiesPane: View {
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(model.theme.signatureColor.opacity(0.24)))
     }
 
-    private var wardrobe: some View {
+    private var characterGallery: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Your personalities").typoSection()
@@ -156,7 +156,7 @@ struct PersonalitiesPane: View {
 
             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(model.personalities) { personality in
-                    wardrobeCard(personality)
+                    characterCard(personality)
                 }
             }
 
@@ -166,7 +166,7 @@ struct PersonalitiesPane: View {
         }
     }
 
-    private func wardrobeCard(_ personality: Personality) -> some View {
+    private func characterCard(_ personality: Personality) -> some View {
         let active = personality.id == model.activePersonalityID
         return VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topTrailing) {
@@ -175,7 +175,7 @@ struct PersonalitiesPane: View {
                     .frame(height: 112)
 
                 Menu {
-                    wardrobeCardMenuItems(personality)
+                    characterCardMenuItems(personality)
                 } label: {
                     Image(systemName: "ellipsis.circle.fill")
                         .typoIcon(size: 17)
@@ -218,7 +218,7 @@ struct PersonalitiesPane: View {
             openStudio(personality.isBuiltIn ? .customize(personality) : .edit(personality))
         }
         .onTapGesture { model.switchPersonalityFromUI(personality.id) }
-        .contextMenu { wardrobeCardMenuItems(personality) }
+        .contextMenu { characterCardMenuItems(personality) }
         .help("Click to switch, double-click to \(personality.isBuiltIn ? "customize" : "edit").")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(personality.name), \(active ? "active" : "available") personality")
@@ -230,7 +230,7 @@ struct PersonalitiesPane: View {
     }
 
     @ViewBuilder
-    private func wardrobeCardMenuItems(_ personality: Personality) -> some View {
+    private func characterCardMenuItems(_ personality: Personality) -> some View {
         if personality.isBuiltIn {
             Button("Customize") { openStudio(.customize(personality)) }
         } else {
@@ -535,7 +535,7 @@ struct PersonalityStudioSheet: View {
     private var presenceSection: some View {
         studioSection(title: "Presence", trailing: AnyView(spriteHelpLink)) {
             HStack(spacing: 10) {
-                ForEach(WardrobeChoice.allCases) { choice in
+                ForEach(CharacterChoice.allCases) { choice in
                     Button {
                         choice.apply(to: &draft)
                     } label: {
@@ -1412,7 +1412,7 @@ struct PersonalityStudioSheet: View {
     }
 }
 
-private enum WardrobeChoice: String, CaseIterable, Identifiable {
+private enum CharacterChoice: String, CaseIterable, Identifiable {
     case robot
     case cowboy
     case bars

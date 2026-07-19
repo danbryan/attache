@@ -37,7 +37,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
 
     func testParsesAttacheToolCallObject() {
         let calls = AttachePresentationService.parseCLIToolDirectives(in: """
-        {"companion_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"reply exactly PONG"}}}
+        {"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"reply exactly PONG"}}}
         """)
 
         XCTAssertEqual(calls.count, 1)
@@ -48,7 +48,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     func testParsesFencedToolCall() {
         let calls = AttachePresentationService.parseCLIToolDirectives(in: """
         ```json
-        {"companion_tool_call":{"name":"read_session_transcript","arguments":{"start_turn":3}}}
+        {"attache_tool_call":{"name":"read_session_transcript","arguments":{"start_turn":3}}}
         ```
         """)
 
@@ -78,7 +78,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
 
         XCTAssertTrue(message.content.contains("Attaché app tools"))
         XCTAssertTrue(message.content.contains("stage_agent_instruction"))
-        XCTAssertTrue(message.content.contains(#"{"companion_tool_call":{"name":"tool_name","arguments":{}}}"#))
+        XCTAssertTrue(message.content.contains(#"{"attache_tool_call":{"name":"tool_name","arguments":{}}}"#))
     }
 
     func testAgentInstructionToolDescriptionDistinguishesQuestionFromDelegation() {
@@ -129,10 +129,10 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     /// clean JSON.
     func testCorrectiveRetryRecoversProseWrappedMalformedToolCall() async {
         let original = #"""
-        Sure, I'll do that: {"companion_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}} let me know if you need anything else
+        Sure, I'll do that: {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}} let me know if you need anything else
         """#
         let recorder = RetryRecorder()
-        let cleaned = #"{"companion_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
+        let cleaned = #"{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
 
         let resolution = await AttachePresentationService.resolveCLIToolCall(
             text: original,
@@ -155,10 +155,10 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     /// text is recognized as an attempted call and retried.
     func testCorrectiveRetryRecoversFromConcatenatedJSONObjects() async {
         let original = #"""
-        {"note":"thinking it over"}{"companion_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}
+        {"note":"thinking it over"}{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}
         """#
         let recorder = RetryRecorder()
-        let cleaned = #"{"companion_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
+        let cleaned = #"{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
 
         let resolution = await AttachePresentationService.resolveCLIToolCall(
             text: original,
@@ -180,10 +180,10 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     /// before it, only after).
     func testCorrectiveRetryRecoversFromTrailingCommentaryAfterMalformedJSON() async {
         let original = #"""
-        {"companion_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}} Let me know if that's not what you meant.
+        {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}} Let me know if that's not what you meant.
         """#
         let recorder = RetryRecorder()
-        let cleaned = #"{"companion_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
+        let cleaned = #"{"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
 
         let resolution = await AttachePresentationService.resolveCLIToolCall(
             text: original,
@@ -200,7 +200,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
         XCTAssertEqual(retries, 1, "expected exactly one corrective retry turn")
     }
 
-    /// A malformed attempt that never contains the literal "companion_tool_call"
+    /// A malformed attempt that never contains the literal "attache_tool_call"
     /// substring or a fenced block, only a brace-balanced object that fails to
     /// parse as JSON (the `tool_call` spelling, missing the comma before
     /// "arguments"). This isolates the third detection signal on its own.
@@ -211,7 +211,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
         let recorder = RetryRecorder()
         let cleaned = #"{"tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}"#
 
-        XCTAssertFalse(original.contains("companion_tool_call"))
+        XCTAssertFalse(original.contains("attache_tool_call"))
 
         let resolution = await AttachePresentationService.resolveCLIToolCall(
             text: original,
@@ -234,7 +234,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     /// one retry is ever attempted, never a loop.
     func testCorrectiveRetryGivesUpAfterOneAttemptAndFlagsToolCallLost() async {
         let original = #"""
-        Sure, I'll do that: {"companion_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}}
+        Sure, I'll do that: {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}}
         """#
         let recorder = RetryRecorder()
         let stillBroken = "Sorry, here's another try: still not JSON."
@@ -276,7 +276,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     /// call in the tool-round loop, which passes `tools: nil`).
     func testCorrectiveRetryNeverInvokedWhenToolsWereNotOffered() async {
         let malformedLookingText = #"""
-        {"companion_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}}
+        {"attache_tool_call":{"name":"stage_agent_instruction" "arguments":{"instruction":"send this"}}}
         """#
 
         let resolution = await AttachePresentationService.resolveCLIToolCall(
@@ -294,7 +294,7 @@ final class AttachePresentationCLIToolBridgeTests: XCTestCase {
     /// A successful tool call on the first try must never retry.
     func testCorrectiveRetryNeverInvokedWhenFirstReplyAlreadyParses() async {
         let validCall = #"""
-        {"companion_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}
+        {"attache_tool_call":{"name":"stage_agent_instruction","arguments":{"instruction":"send this"}}}
         """#
 
         let resolution = await AttachePresentationService.resolveCLIToolCall(

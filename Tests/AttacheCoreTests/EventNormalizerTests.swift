@@ -108,8 +108,8 @@ final class EventNormalizerTests: XCTestCase {
             title: "Long",
             text: "First sentence only. Second sentence should still be available for speech.",
             metadata: [
-                "companion_summary": "Short card summary",
-                "companion_spoken_text": "Full attache spoken update with the second sentence preserved."
+                "attache_summary": "Short card summary",
+                "attache_spoken_text": "Full attache spoken update with the second sentence preserved."
             ]
         )
 

@@ -62,7 +62,7 @@ struct HistoryOverlay: View {
     }
 
     private func isRecap(_ card: VoicemailCard) -> Bool {
-        model.metadataDictionary(for: card)["companion_recap"] == "1"
+        model.metadataDictionary(for: card)["attache_recap"] == "1"
     }
 
     private struct Group: Identifiable {
@@ -679,8 +679,8 @@ struct HistoryOverlay: View {
 
     private func isDirectReply(_ card: VoicemailCard) -> Bool {
         let metadata = model.metadataDictionary(for: card)
-        return metadata["companion_history_kind"] == "direct_reply"
-            || metadata["companion_direct_reply"] == "true"
+        return metadata["attache_history_kind"] == "direct_reply"
+            || metadata["attache_direct_reply"] == "true"
     }
 
     private func formatDuration(_ durationMs: Int) -> String {

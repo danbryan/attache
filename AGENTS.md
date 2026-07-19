@@ -358,10 +358,14 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
 
 ## Decisions of Record
 
-- **No "companion" in user-facing text.** Current code uses Attaché naming.
-  Frozen metadata, environment variables, preference keys, and migration paths
-  may retain older strings solely so existing users and stored cards keep
-  working. Never surface those compatibility strings to users.
+- **The retired pre-Attaché term for the app is banned repo-wide (any case) in
+  tracked files**, enforced by a guard test (`RepositoryVocabularyGuardTests`,
+  which spells the forbidden token via string concatenation so the check itself
+  stays green). No legacy compatibility strings remain: metadata keys,
+  environment variables, preference keys, and support-folder/database names were
+  all renamed to Attaché-named identifiers outright, because the rename shipped
+  before any external users existed, so there was nothing to migrate. Current
+  code uses Attaché naming.
 - **Tagline: "Give your agents a voice."** (2026-07-11). Retires "Fluent in
   agent. Speaks human." and the older "Your AI agents, out loud" everywhere
   (README, brand, site, video).
@@ -388,9 +392,11 @@ They live in `bryanlabs/bare-metal` at `cluster/apps/attache/`: `index.html`,
   A single unit in the picker is an Attaché ("New Attaché", "Create your Attaché",
   "Save changes"); "personality" / "personalities" stays acceptable vocabulary
   and is the generic noun where a count is needed (the grid is "Your
-  personalities"). Both "character" and "wardrobe" are retired from user-VISIBLE
-  text (labels, titles, menu items, tooltips, confirmations, AX labels heard via
-  VoiceOver). Internal identifiers may keep their names: the `AttacheCharacter`
+  personalities"). The user-facing noun "character" and the retired pre-Attaché
+  closet metaphor for the character set are both gone from user-VISIBLE text
+  (labels, titles, menu items, tooltips, confirmations, AX labels heard via
+  VoiceOver); the closet metaphor is additionally banned repo-wide (any case) by
+  `RepositoryVocabularyGuardTests`. Internal identifiers may keep their names: the `AttacheCharacter`
   type, the `character`/`visualMode` properties, the `attache.openCharacterSwitcher`
   notification, the "Character Studio" AX identifier, `--render-character-poses`,
   `ATTACHE_CHARACTER_RARE_IDLE_SECONDS`, and personality prompts (which may tell

@@ -365,17 +365,14 @@ struct AttacheCaptionLanguage: Identifiable, Hashable {
 
 enum AttachePreferenceKey {
     static let visualMode = "attache.visualMode"
-    // Stable persisted keys from the pre-Attaché naming era. Identifiers are
-    // current; raw strings stay frozen so upgrades retain window and character
-    // state without a destructive defaults migration.
-    static let miniAttache = "attache.miniCompanion"
-    static let miniAttacheClickThrough = "attache.miniCompanionClickThrough"
-    static let miniAttacheFrames = "attache.miniCompanionFrames"
+    static let miniAttache = "attache.miniAttache"
+    static let miniAttacheClickThrough = "attache.miniAttacheClickThrough"
+    static let miniAttacheFrames = "attache.miniAttacheFrames"
     static let characterTypesAlong = "attache.petTypesAlong"
     static let characterRareIdles = "attache.petRareIdles"
     static let characterHoverReaction = "attache.petHoverReaction"
     static let characterFocusAngle = "attache.petFocusAngle"
-    static let character = "attache.petCharacter"
+    static let character = "attache.character"
     static let characterShinySeed = "attache.petShinySeed"
     static let installClaudeHooks = "attache.installClaudeHooks"
     static let visualSymmetry = "attache.visualSymmetry"

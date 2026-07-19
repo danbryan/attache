@@ -7,12 +7,12 @@ try today, moving toward a single native desktop product:
 
 - one app install,
 - one menu bar/background presence,
-- one optional translucent companion window,
+- one optional translucent Attaché window,
 - voicemail-style agent update cards,
 - spoken recaps with karaoke captions,
 - Echoform-style visual presence,
 - optional avatar surface,
-- companion-side follow-up questions about observed Codex updates.
+- Attaché-side follow-up questions about observed Codex updates.
 
 This is a clean, standalone prototype.
 
@@ -20,8 +20,8 @@ This is a clean, standalone prototype.
 
 - Do not try to preserve every existing settings screen on day one.
 - Do not build a separate user-managed bridge app.
-- Do not expose unsafe one-command code mutation from casual companion chat.
-- Do not depend on system audio capture for the companion MVP.
+- Do not expose unsafe one-command code mutation from casual Attaché chat.
+- Do not depend on system audio capture for Attaché MVP.
 
 ## Product Model
 
@@ -34,11 +34,11 @@ Attaché is one app with two internal roles:
    - manages adapter state.
 
 2. Foreground role:
-   - shows the companion window,
+   - shows Attaché window,
    - renders Echoform visuals or avatar visuals,
    - plays voicemail cards,
    - shows captions,
-   - lets the user speak, type, replay, pause, or ask the companion about an update.
+   - lets the user speak, type, replay, pause, or ask Attaché about an update.
 
 In the MVP these roles can live in the same process. The architecture should
 make it possible to split out an internal helper later without changing the user
@@ -51,10 +51,10 @@ experience.
 - Double-click the app.
 - It appears in the Dock as `Attaché`.
 - It appears in the menu bar.
-- It can open a companion window.
+- It can open a Attaché window.
 - It can keep running when the window is closed.
 
-### Companion Window
+### Attaché Window
 
 - Transparent or translucent native macOS window.
 - Uses a normal window level by default so it can sit behind other apps.
@@ -76,7 +76,7 @@ experience.
   a confirmation step.
 - Right-click or the top-right gear opens a compact custom Settings surface
   rather than a long native menu. It groups Appearance, Audio, Personality, and
-  companion controls.
+  Attaché controls.
 - The top-right control cluster should expose separate Settings, Voicemail, and
   Codex focus entry points. Codex session selection belongs in the Codex focus
   entry point, not inside the general settings surface.
@@ -100,7 +100,7 @@ experience.
   - unread updates,
   - error or permission needed.
 - The bottom Live strip is for focus sessions, not voicemail. It should
-  show active Codex sessions the user can watch, let them lock the companion to one
+  show active Codex sessions the user can watch, let them lock Attaché to one
   session, and show small unread counts without turning the window into a
   dashboard. Automation definitions are schedules, not watchable focus targets;
   when an automation is running, the watch target is the concrete Codex session
@@ -117,10 +117,10 @@ experience.
   the active focus and offers detach. While a session is locked, the bottom
   focus strip should omit that same session to avoid duplicating the selected
   target.
-- Companion History is separate from Voicemail. When a Codex session is
+- Attaché History is separate from Voicemail. When a Codex session is
   attached, the live surface may show a compact history row for prior spoken
-  companion recaps from that same session. Those history items are for quickly
-  re-hearing what the companion already said while the user was actively working in
+  Attaché recaps from that same session. Those history items are for quickly
+  re-hearing what Attaché already said while the user was actively working in
   that thread; they are not missed-message voicemail cards.
 - The history row belongs in a fixed bottom HUD tray that stays inside the
   current window bounds. Showing history, captions, or playback state must not
@@ -147,7 +147,7 @@ MVP mode: Echoform abstract renderer.
   translucent, audio-reactive bars and rings with rich visual interest.
 - The visual surface opacity is a live user setting. The user can make the window
   more translucent or more opaque without restarting the app.
-- At 100% surface opacity, the companion window should be visually opaque. Apps
+- At 100% surface opacity, Attaché window should be visually opaque. Apps
   behind it should not show through the renderer or quick action surface.
 - Visual motion must be driven by audio analysis, not random or decorative time
   animation. No audio should mean near-still visuals with only minimal ambient
@@ -160,7 +160,7 @@ MVP mode: Echoform abstract renderer.
   - bass, mid, treble, and spectral centroid,
   - waveform snapshot,
   - envelope-followed render signals.
-- For companion speech, the audio source is the generated companion voice asset
+- For Attaché speech, the audio source is the generated Attaché voice asset
   rather than system capture. The rendered frame at playback time should come
   from the same audio that is being played.
 - Bars, pulse, heat, or flow visuals react to assistant speech audio.
@@ -192,7 +192,7 @@ When a harness update arrives while the user is away or the app is not speaking:
 - mark it unread,
 - optionally pre-generate spoken recap audio,
 - persist audio and caption alignment when available,
-- show unread count in the menu bar and companion window,
+- show unread count in the menu bar and Attaché window,
 - show unread count in the menu bar and as a compact in-window badge,
 - let the user play or pause from one shared transport button,
 - let the user replay, mark heard, delete, or send a follow-up.
@@ -208,23 +208,23 @@ When a harness update arrives while the user is away or the app is not speaking:
 
 This is a core MVP feature.
 
-### Companion Presentation
+### Attaché Presentation
 
-Raw Codex output is not the spoken product surface. The companion should follow
+Raw Codex output is not the spoken product surface. Attaché should follow
 the prior Attaché bridge lifecycle:
 
 - preserve the full raw Codex response on the card,
-- pass that full response to a companion-owned presentation LLM when
+- pass that full response to a Attaché-owned presentation LLM when
   configured,
 - build the presentation request from separate chat roles:
   - system: Attaché's durable persona, the current
-    user-configurable character prompt, and relevant companion memory,
+    user-configurable character prompt, and relevant Attaché memory,
   - user: the observed Codex session, project, event metadata, and full raw
     Codex response,
 - let the LLM produce:
   - a short `CARD_SUMMARY` for the voicemail card,
-  - the spoken companion update used for TTS and karaoke captions,
-- make the spoken update companion-written and personalized. It should explain
+  - the spoken Attaché update used for TTS and karaoke captions,
+- make the spoken update Attaché-written and personalized. It should explain
   what matters to the user, what changed, what was confirmed, what is uncertain when
   relevant, and what the user can say or do next. It must not default to reading
   Codex verbatim,
@@ -265,24 +265,24 @@ the prior Attaché bridge lifecycle:
 - never use the card summary as the spoken text unless the summary is all that
   is available.
 
-The character prompt is a product setting. The user may use it to make the
-companion concise, detailed, stylistic, or otherwise personalized, and that
+The character prompt is a product setting. The user may use it to make
+Attaché concise, detailed, stylistic, or otherwise personalized, and that
 prompt should affect both Codex-response presentation and later follow-up
 message routing.
 
 The persona prompt is also user-editable. Presets may exist for fast switching,
 but they are not the only customization surface. The app must expose an editable
-personality prompt file or equivalent settings editor so The user can change the
-companion's identity, tone, relationship, and working style without rebuilding
+personality prompt file or equivalent settings editor so the user can change
+Attaché's identity, tone, relationship, and working style without rebuilding
 the app.
 
 Personality edits apply to model-written presentations. If no presentation LLM
 is configured, fallback cards must clearly say that the personality prompt was
-not applied rather than implying the companion ignored the user's prompt.
+not applied rather than implying Attaché ignored the user's prompt.
 
-The companion has its own durable memory surface. MVP memory can start as an
+Attaché has its own durable memory surface. MVP memory can start as an
 editable local file in app support, but the presentation prompt must treat it
-as persistent companion preference and routing context rather than as proof
+as persistent Attaché preference and routing context rather than as proof
 that project files, tools, or external services were checked. The memory block
 should be bounded before being sent to the provider and used quietly unless the
 user asks about memory directly.
@@ -300,7 +300,7 @@ Assistant speech should display synced captions.
   around the active word, not as one giant SwiftUI text run for the whole raw
   Codex output.
 - Do not show the active word as a separate pill or detached label.
-- Default styling should match the prior companion caption surface: bottom
+- Default styling should match the prior Attaché caption surface: bottom
   centered, readable white text, translucent black rounded background, and
   `#fbbf24` active-word color.
 - The active word is computed from the current audio playback clock plus
@@ -317,7 +317,7 @@ Assistant speech should display synced captions.
 
 MVP:
 
-- Text input to the active companion conversation.
+- Text input to the active Attaché conversation.
 - Assistant speech uses a selectable voice. If no voice has been chosen, use
   the macOS system default voice.
 - The right-click settings surface should expose Assistant Voice controls and a
@@ -367,7 +367,7 @@ MVP target:
   - do not show automation definitions as selectable watch targets,
   - if a saved automation id matches an active session run by name, migrate the
     attachment to that active session id,
-  - let the user attach or detach the companion from one Codex session,
+  - let the user attach or detach Attaché from one Codex session,
   - show a compact top-center indicator for the attached session when controls
     are visible,
   - show active watched targets as stable focus-session chips in Live,
@@ -378,7 +378,7 @@ MVP target:
   - refresh the active-session list periodically, roughly every five to ten
     seconds, so newly created Codex sessions appear without manual refresh,
   - use the attached session as the default target for simulated Codex events
-    and companion follow-up context,
+    and Attaché follow-up context,
   - when a matching active attached session emits a Codex update, treat it as a
     live interactive response that can be spoken immediately rather than an
     unread voicemail card,
@@ -394,7 +394,7 @@ Claude Code is already supported via its session-transcript watcher (the same
 mechanism as Codex). Stretch targets (alternative delivery mechanisms):
 
 - Claude Code hooks adapter.
-- Companion MCP server surface.
+- Attaché MCP server surface.
 - Generic local webhook or CLI adapter.
 
 Harness adapters are observation-first and must declare capture capabilities:
@@ -475,12 +475,12 @@ For MVP, expose a local endpoint for adapters:
 
 Codex session attachment is local app state in the MVP. The app may read
 `~/.codex/session_index.jsonl` directly to populate the chooser. Attachment is
-used for observation, live playback, history, and companion-side questions, not
+used for observation, live playback, history, and Attaché-side questions, not
 for sending messages into Codex.
 
 For attached active sessions, the MVP should also observe the local Codex
 session transcript file under `~/.codex/sessions`. If the loopback bridge does
-not emit a normalized event, the companion should still detect the latest final
+not emit a normalized event, Attaché should still detect the latest final
 assistant response for the attached session and play it as live interaction.
 This direct watcher is for the attached active session first. Automation and
 non-attached session capture should come through the local event bridge or a
@@ -518,9 +518,9 @@ This API can be in-process and only bound to loopback for the prototype.
 
 ## Adapter Rules
 
-Adapters are not trusted to mutate code from companion chat. Observation and
-delivery are separate capabilities: harnesses send observed updates to the
-companion, and the companion may deliver an instruction back to a session only
+Adapters are not trusted to mutate code from Attaché chat. Observation and
+delivery are separate capabilities: harnesses send observed updates to
+Attaché, and Attaché may deliver an instruction back to a session only
 under the two-way rules (design of record: docs/two-way.md):
 
 - Delivery uses a supported vendor channel only (headless resume:
@@ -530,27 +530,27 @@ under the two-way rules (design of record: docs/two-way.md):
   delivery. Nothing is ever auto-sent.
 - Delivery waits until the target session is idle (queue-until-idle); at most
   one delivery is in flight per session.
-- The companion must never deliver an agent-side permission or tool approval
+- Attaché must never deliver an agent-side permission or tool approval
   (bare "yes"/"approve"/"allow" style payloads are refused).
 - Every delivery is recorded in a persisted instruction log with its outcome,
   and the agent's subsequent response is narrated and linked to it.
 - Two-way is off by default and enabled per session.
-- Card follow-up and live attached-session follow-up remain companion-side
-  question flows. They use the selected card, raw Codex output, companion spoken
-  recap, character prompt, bounded companion memory, and recent attached-session
+- Card follow-up and live attached-session follow-up remain Attaché-side
+  question flows. They use the selected card, raw Codex output, Attaché spoken
+  recap, character prompt, bounded Attaché memory, and recent attached-session
   history as context; answering Dan and sending to the agent are distinct,
   clearly labeled actions.
 - Short or elliptical follow-ups such as "next chapter", "same thing", "what
   changed", or "what should I do next" should be answered from the observed
   session context when possible. If acting on it would require the agent to take
-  an action, the companion may offer the send flow, which still requires
+  an action, Attaché may offer the send flow, which still requires
   explicit confirmation; it must never claim to have sent something it did not.
-- The companion answer can be copied or cleared. A send control, where present,
+- Attaché answer can be copied or cleared. A send control, where present,
   goes through the confirmed two-way flow above.
 - Dan can ask about the focused session from Live without selecting
   or creating a voicemail card first. That composer accepts typed text and can
   copy the current voice transcript into the question input.
-- If context is unknown, the companion says what is missing instead of sending
+- If context is unknown, Attaché says what is missing instead of sending
   or inventing a target.
 - Store raw adapter payloads for debugging.
 - Store normalized payloads for UI and summaries.
@@ -572,8 +572,8 @@ The first day-project prototype is acceptable when:
 
 - The repo builds a macOS app.
 - The app launches from Finder.
-- The app can run with no companion window visible.
-- The app can open a translucent companion window.
+- The app can run with no Attaché window visible.
+- The app can open a translucent Attaché window.
 - The app can receive a simulated Codex event through a local endpoint or test
   command.
 - The event becomes an unread voicemail card.
@@ -586,7 +586,7 @@ The first day-project prototype is acceptable when:
   second interval.
 - Echoform theme and visual mode choices can be changed from the context menu
   while playback is active or paused.
-- The companion can attach to a recent active local Codex session and show the
+- Attaché can attach to a recent active local Codex session and show the
   attached-target indicator.
 - The attached-session watcher does not repeatedly reparse the whole Codex
   transcript and remains low CPU while idle in the background.
@@ -616,13 +616,13 @@ The first day-project prototype is acceptable when:
 
 ## Suggested Build Order
 
-1. Create native macOS app shell with menu bar and companion window.
+1. Create native macOS app shell with menu bar and Attaché window.
 2. Add SQLite card storage.
 3. Add simulated event intake.
 4. Add voicemail card list.
 5. Add speech playback and caption timing.
 6. Add Echoform visual renderer during playback.
 7. Add Codex adapter.
-8. Add companion-side follow-up questions for selected cards and attached sessions.
+8. Add Attaché-side follow-up questions for selected cards and attached sessions.
 9. Add settings for renderer, voice, and model providers.
 10. Add app packaging and install instructions.

@@ -88,13 +88,13 @@ public enum EventNormalizer {
     }
 
     public static func storedSummary(for event: NormalizedEvent) -> String {
-        metadataText(event.metadata["companion_summary"])
+        metadataText(event.metadata["attache_summary"])
             ?? metadataText(event.metadata["card_summary"])
             ?? summary(for: event)
     }
 
     public static func storedSpokenText(for event: NormalizedEvent, summary: String? = nil) -> String {
-        if let override = metadataText(event.metadata["companion_spoken_text"])
+        if let override = metadataText(event.metadata["attache_spoken_text"])
             ?? metadataText(event.metadata["spoken_text"]) {
             return override
         }

@@ -595,7 +595,7 @@ final class AttacheProductionRequestBroker {
         </attache-tool-schemas>
 
         To propose a tool call, reply with exactly one JSON object and no prose:
-        {"companion_tool_call":{"name":"tool_name","arguments":{}}}
+        {"attache_tool_call":{"name":"tool_name","arguments":{}}}
 
         Use one tool call at a time. Attaché validates authorization and local policy. A model proposal never authorizes a memory write or an agent send.
         """)

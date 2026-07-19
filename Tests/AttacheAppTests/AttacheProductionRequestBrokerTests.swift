@@ -208,7 +208,7 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
             service.prepare(event, snapshot: snapshot) { continuation.resume(returning: $0) }
         }
 
-        let persistedError = try XCTUnwrap(prepared.event.metadata["companion_presentation_error"])
+        let persistedError = try XCTUnwrap(prepared.event.metadata["attache_presentation_error"])
         XCTAssertEqual(persistedError, "LLM request failed with HTTP 500.")
         XCTAssertFalse(persistedError.contains(marker))
         XCTAssertFalse("I hit a problem: \(persistedError)".contains(marker))
