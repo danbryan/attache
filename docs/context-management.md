@@ -181,10 +181,12 @@ is no suggestion review queue. Two modes:
 
 - **Off** (default for fresh users who skip onboarding): no writes at all.
 - **On**: an explicit ask saves immediately after the local validator passes.
-  The saved statement must appear in the user's own current turn, with
-  negation preserved; a statement the user did not say is rejected. A quiet
-  "Memory saved" chip in the call surface is the confirmation channel and
-  opens the Memory settings pane.
+  The ask is explicit-in-context: affirming Attaché's own offer to remember
+  counts, and the saved statement must appear, in the user's own words, in one
+  of the user's recent turns of the active conversation (negation preserved;
+  hang-up clears the window). A statement the user never said is rejected. A
+  quiet "Memory saved" chip in the call surface is the confirmation channel
+  and opens the Memory settings pane.
 
 ### What is never saved
 

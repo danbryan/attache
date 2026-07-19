@@ -5532,9 +5532,16 @@ final class AppModel: ObservableObject {
             return "That memory proposal was invalid and was not saved."
         }
 
+        // Explicit-in-context: the fact must have been stated by the user at
+        // some point in THIS conversation, not necessarily in the current
+        // utterance, so affirming an offer ("yes, save it") saves the fact
+        // from the earlier turn. A fact the user never said still rejects.
         let userSupported = Self.memoryStatement(
             decoded.statement,
-            isSupportedBy: sourceUtterance
+            isSupportedByAny: Self.memorySupportWindow(
+                currentUtterance: sourceUtterance,
+                turns: conversationMessages
+            )
         )
         let egress = Self.memoryEgressForToolProposal(decoded.egress)
         let mode = AttacheContextUIState.shared.memoryMode
@@ -5558,7 +5565,7 @@ final class AppModel: ObservableObject {
             showMemorySavedChip()
             return "The memory was saved on this Mac. Attaché's own UI shows the confirmation, so keep replying naturally without narrating the save."
         case .rejected(.notExplicitlyRequested):
-            return "Nothing was saved: Attaché saves only when the user explicitly asked this turn and the statement is in the user's own words. If the user did ask, tell them briefly it couldn't be saved this time."
+            return "Nothing was saved: the statement must be a fact the user actually said in this conversation, in their own words. If the user did ask, tell them briefly it couldn't be saved this time."
         case .rejected(let reason):
             return "Local memory policy declined that (\(reason.rawValue)). Nothing was saved; if the user explicitly asked, tell them briefly it can't be saved and why."
         case .ignored:
@@ -5629,25 +5636,50 @@ final class AppModel: ObservableObject {
         return (statement, type, scope, sensitivity, egress)
     }
 
-    /// Conservative local support check used before an Automatic-mode write.
-    /// Exact normalized clause matching preserves negation and modality. A
-    /// paraphrase can still be queued for review, but it cannot silently gain
-    /// user-authored authority from bag-of-words overlap.
+    /// Conservative local support check for explicit-in-context capture. The
+    /// normalized proposed statement must appear as a contiguous token run
+    /// inside one normalized clause of a user turn, so leading fillers,
+    /// lead-ins ("remember that..."), and affirmation framing ("That my name
+    /// is Dan.") are all harmless, while negation and modality changes still
+    /// fail: inserting "not" breaks contiguity. A paraphrase the user never
+    /// said cannot gain user-authored authority from bag-of-words overlap.
     static func memoryStatement(_ statement: String, isSupportedBy userTurn: String) -> Bool {
         let proposed = normalizedMemoryClause(statement)
-        guard proposed.count >= 2 else { return false }
+        guard proposed.count >= 3 else { return false }
         let clauses = userTurn.split { character in
             character == "." || character == "!" || character == "?"
                 || character == ";" || character == "\n"
         }
         return clauses.contains { rawClause in
-            var clause = normalizedMemoryClause(String(rawClause))
-            for prefix in memoryCaptureLeadIns where clause.starts(with: prefix) {
-                clause.removeFirst(prefix.count)
-                break
-            }
-            return clause == proposed
+            containsContiguousRun(proposed, in: normalizedMemoryClause(String(rawClause)))
         }
+    }
+
+    /// True when the user stated the fact in any of the given turns. Callers
+    /// pass the active conversation's support window; hang-up clears it, so a
+    /// fact from a previous call can never authorize a save.
+    static func memoryStatement(_ statement: String, isSupportedByAny turns: [String]) -> Bool {
+        turns.contains { memoryStatement(statement, isSupportedBy: $0) }
+    }
+
+    /// The explicit-in-context support window: the current utterance plus the
+    /// last 10 user turns of the active conversation. Consent detection stays
+    /// the model's job; this window only verifies the fact was actually said
+    /// by the user at some point in THIS conversation.
+    static func memorySupportWindow(
+        currentUtterance: String,
+        turns: [ConversationTurn]
+    ) -> [String] {
+        [currentUtterance] + turns.filter { $0.role == .user }.suffix(10).map(\.text)
+    }
+
+    private static func containsContiguousRun(_ needle: [String], in haystack: [String]) -> Bool {
+        guard !needle.isEmpty, needle.count <= haystack.count else { return false }
+        for start in 0...(haystack.count - needle.count)
+        where Array(haystack[start..<(start + needle.count)]) == needle {
+            return true
+        }
+        return false
     }
 
     private static func normalizedMemoryClause(_ text: String) -> [String] {
@@ -5657,16 +5689,6 @@ final class AppModel: ObservableObject {
             .map(String.init)
             .filter { !$0.isEmpty }
     }
-
-    private static let memoryCaptureLeadIns: [[String]] = [
-        ["please", "remember", "that"],
-        ["remember", "that"],
-        ["please", "remember"],
-        ["remember"],
-        ["please", "note", "that"],
-        ["note", "that"],
-        ["keep", "in", "mind", "that"]
-    ]
 
     static func memoryEgressForToolProposal(
         _ requested: AttacheMemoryEgress

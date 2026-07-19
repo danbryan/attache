@@ -269,6 +269,79 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         ))
     }
 
+    /// Regression for Dan's 2026-07-19 session: the assistant offered to
+    /// remember, Dan affirmed, and the guard rejected because the fact lived
+    /// two turns earlier and the final restatement led with "That". Support is
+    /// now explicit-in-context: contiguous containment inside a clause of any
+    /// recent user turn of the active conversation.
+    func testDanSessionAffirmationAndFillerFramingAreSupported() {
+        let turns = [
+            "Yeah, my name's Dan",
+            "Yes, I want you to"
+        ]
+        // The fact was stated two turns before the affirmation; the window,
+        // with the statement in the words Dan used, supports it.
+        XCTAssertTrue(AppModel.memoryStatement(
+            "my name's Dan",
+            isSupportedByAny: turns
+        ))
+        // Leading filler "That" no longer breaks the match.
+        XCTAssertTrue(AppModel.memoryStatement(
+            "my name is Dan",
+            isSupportedBy: "the one we were just talking about. That my name is Dan."
+        ))
+        // Negation still rejects: "not" breaks contiguity.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "my name is Dan",
+            isSupportedBy: "my name is not Dan"
+        ))
+        XCTAssertFalse(AppModel.memoryStatement(
+            "my name is Dan",
+            isSupportedByAny: ["my name is not Dan"]
+        ))
+        // A fact the user never said anywhere in the conversation rejects.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "Dan lives in Baltimore",
+            isSupportedByAny: turns
+        ))
+        // Containment never crosses clause boundaries.
+        XCTAssertFalse(AppModel.memoryStatement(
+            "my name is Dan",
+            isSupportedBy: "my name is. Dan asked about that."
+        ))
+    }
+
+    /// The support window is the current utterance plus the last 10 user turns
+    /// of the active conversation; assistant turns never count as support.
+    func testMemorySupportWindowCapsUserTurnsAndExcludesAssistantTurns() {
+        var turns: [ConversationTurn] = (0..<12).map { index in
+            ConversationTurn(
+                id: "user-\(index)",
+                role: .user,
+                text: "user turn number \(index)",
+                createdAt: Date()
+            )
+        }
+        turns.append(ConversationTurn(
+            id: "assistant-1",
+            role: .assistant,
+            text: "assistant turn that must not count",
+            createdAt: Date()
+        ))
+
+        let window = AppModel.memorySupportWindow(
+            currentUtterance: "yes, save it",
+            turns: turns
+        )
+
+        XCTAssertEqual(window.first, "yes, save it")
+        XCTAssertEqual(window.count, 11, "current utterance plus the last 10 user turns")
+        XCTAssertFalse(window.contains("user turn number 0"))
+        XCTAssertFalse(window.contains("user turn number 1"))
+        XCTAssertTrue(window.contains("user turn number 11"))
+        XCTAssertFalse(window.contains("assistant turn that must not count"))
+    }
+
     func testToolProposalCannotGrantItsOwnRemoteMemoryEgress() {
         XCTAssertEqual(
             AppModel.memoryEgressForToolProposal(.allowedRemote),

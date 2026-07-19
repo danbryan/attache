@@ -370,6 +370,13 @@ final class AttachePersonalityTests: XCTestCase {
             XCTAssertTrue(prompt.contains("is not a request to remember it"))
             XCTAssertTrue(prompt.contains("Restate the fact in the user's own words as the statement"))
             XCTAssertTrue(prompt.contains("A spoken acknowledgment alone saves nothing"))
+            // Explicit-in-context: affirming the assistant's own offer counts,
+            // the fact comes from the earlier turn in the user's words, and an
+            // accepted offer can never be refused.
+            XCTAssertTrue(prompt.contains("affirming your own offer to remember"))
+            XCTAssertTrue(prompt.contains("the fact to restate is the one from the earlier turn"))
+            XCTAssertTrue(prompt.contains("in the words the user used when they stated it"))
+            XCTAssertTrue(prompt.contains("never offer and then refuse"))
             // No narration: the UI chip confirms saves, the reply stays natural.
             XCTAssertTrue(prompt.contains("Do not narrate the save mechanics"))
             XCTAssertTrue(prompt.contains("Attaché's own UI confirms every save"))
