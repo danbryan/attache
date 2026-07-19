@@ -20,7 +20,7 @@ final class OpencodeSessionScannerTests: XCTestCase {
     private func makeDatabase(
         in dataHome: URL,
         sessions: [(id: String, directory: String, title: String, timeUpdated: Double, archived: Bool)],
-        messages: [String: [(id: String, role: String, finish: String?, timeCreated: Double, parts: [(type: String, text: String?)])]]
+        messages: [String: [(id: String, role: String, finish: String?, timeCreated: Double, parts: [(type: String, text: String?)], model: (providerID: String?, modelID: String?)?)]]
     ) throws -> URL {
         try FileManager.default.createDirectory(at: dataHome, withIntermediateDirectories: true)
         let dbURL = dataHome.appendingPathComponent("opencode.db")
@@ -69,6 +69,12 @@ final class OpencodeSessionScannerTests: XCTestCase {
             for message in messages[session.id] ?? [] {
                 var dataObject: [String: Any] = ["role": message.role]
                 if let finish = message.finish { dataObject["finish"] = finish }
+                if let model = message.model {
+                    var modelObject: [String: Any] = [:]
+                    if let providerID = model.providerID { modelObject["providerID"] = providerID }
+                    if let modelID = model.modelID { modelObject["modelID"] = modelID }
+                    dataObject["model"] = modelObject
+                }
                 let dataJSON = try! JSONSerialization.data(withJSONObject: dataObject)
                 let dataText = String(data: dataJSON, encoding: .utf8)!
                 exec("""
@@ -210,8 +216,8 @@ final class OpencodeSessionScannerTests: XCTestCase {
             sessions: [(id: "ses_1", directory: "/tmp/proj", title: "Ship it", timeUpdated: 1000, archived: false)],
             messages: [
                 "ses_1": [
-                    (id: "m1", role: "user", finish: nil, timeCreated: 900, parts: [(type: "text", text: "Fix the flaky login test")]),
-                    (id: "m2", role: "assistant", finish: "stop", timeCreated: 1000, parts: [(type: "text", text: "Done, tests pass now")])
+                    (id: "m1", role: "user", finish: nil, timeCreated: 900, parts: [(type: "text", text: "Fix the flaky login test")], model: nil),
+                    (id: "m2", role: "assistant", finish: "stop", timeCreated: 1000, parts: [(type: "text", text: "Done, tests pass now")], model: nil)
                 ]
             ]
         )
@@ -221,6 +227,91 @@ final class OpencodeSessionScannerTests: XCTestCase {
         let record = scanner.makeRecord(for: files[0], priorTopicTag: nil, contentCap: 4_000)
         XCTAssertTrue(record.content.contains("fix the flaky login test"))
         XCTAssertTrue(record.content.contains("done, tests pass now"))
+    }
+
+    // MARK: - Local-model badge (INF-398)
+
+    func testScannerSetsLocalModelHintForOllamaSession() throws {
+        let home = makeDataHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try makeDatabase(
+            in: home,
+            sessions: [(id: "ses_local", directory: "/tmp/proj", title: "Local run", timeUpdated: 1000, archived: false)],
+            messages: [
+                "ses_local": [
+                    (id: "m1", role: "user", finish: nil, timeCreated: 900, parts: [(type: "text", text: "hi")], model: nil),
+                    (id: "m2", role: "assistant", finish: "stop", timeCreated: 1000, parts: [(type: "text", text: "hello")],
+                     model: (providerID: "ollama", modelID: "glm-5.2"))
+                ]
+            ]
+        )
+        let scanner = OpencodeSessionScanner(opencodeDataHome: home)
+        scanner.beginScan()
+        let files = scanner.enumerateFiles()
+        let record = scanner.makeRecord(for: files[0], priorTopicTag: nil, contentCap: 4_000)
+        XCTAssertEqual(record.localModelHint, "glm-5.2")
+    }
+
+    func testScannerLeavesLocalModelHintNilForOllamaCloudSession() throws {
+        let home = makeDataHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try makeDatabase(
+            in: home,
+            sessions: [(id: "ses_cloud", directory: "/tmp/proj", title: "Cloud run", timeUpdated: 1000, archived: false)],
+            messages: [
+                "ses_cloud": [
+                    (id: "m1", role: "user", finish: nil, timeCreated: 900, parts: [(type: "text", text: "hi")], model: nil),
+                    (id: "m2", role: "assistant", finish: "stop", timeCreated: 1000, parts: [(type: "text", text: "hello")],
+                     model: (providerID: "ollama", modelID: "glm-5.2:cloud"))
+                ]
+            ]
+        )
+        let scanner = OpencodeSessionScanner(opencodeDataHome: home)
+        scanner.beginScan()
+        let files = scanner.enumerateFiles()
+        let record = scanner.makeRecord(for: files[0], priorTopicTag: nil, contentCap: 4_000)
+        XCTAssertNil(record.localModelHint, "a :cloud-suffixed ollama model is cloud inference, no badge")
+    }
+
+    func testScannerLeavesLocalModelHintNilForCloudProviderSession() throws {
+        let home = makeDataHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try makeDatabase(
+            in: home,
+            sessions: [(id: "ses_anthropic", directory: "/tmp/proj", title: "Anthropic run", timeUpdated: 1000, archived: false)],
+            messages: [
+                "ses_anthropic": [
+                    (id: "m1", role: "user", finish: nil, timeCreated: 900, parts: [(type: "text", text: "hi")], model: nil),
+                    (id: "m2", role: "assistant", finish: "stop", timeCreated: 1000, parts: [(type: "text", text: "hello")],
+                     model: (providerID: "anthropic", modelID: "claude-sonnet-5"))
+                ]
+            ]
+        )
+        let scanner = OpencodeSessionScanner(opencodeDataHome: home)
+        scanner.beginScan()
+        let files = scanner.enumerateFiles()
+        let record = scanner.makeRecord(for: files[0], priorTopicTag: nil, contentCap: 4_000)
+        XCTAssertNil(record.localModelHint)
+    }
+
+    func testScannerLeavesLocalModelHintNilWhenNoModelInfo() throws {
+        let home = makeDataHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try makeDatabase(
+            in: home,
+            sessions: [(id: "ses_none", directory: "/tmp/proj", title: "No model", timeUpdated: 1000, archived: false)],
+            messages: [
+                "ses_none": [
+                    (id: "m1", role: "user", finish: nil, timeCreated: 900, parts: [(type: "text", text: "hi")], model: nil),
+                    (id: "m2", role: "assistant", finish: "stop", timeCreated: 1000, parts: [(type: "text", text: "hello")], model: nil)
+                ]
+            ]
+        )
+        let scanner = OpencodeSessionScanner(opencodeDataHome: home)
+        scanner.beginScan()
+        let files = scanner.enumerateFiles()
+        let record = scanner.makeRecord(for: files[0], priorTopicTag: nil, contentCap: 4_000)
+        XCTAssertNil(record.localModelHint)
     }
 
     // MARK: - Incremental re-read

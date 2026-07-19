@@ -101,7 +101,7 @@ public final class OpencodeReadOnlyDatabase {
         defer { sqlite3_finalize(messageStatement) }
         bindText(messageStatement, index: 1, value: sessionID)
 
-        var rows: [(id: String, role: String?, finish: String?, timeCreated: Double)] = []
+        var rows: [(id: String, role: String?, finish: String?, timeCreated: Double, providerID: String?, modelID: String?)] = []
         while sqlite3_step(messageStatement) == SQLITE_ROW {
             guard let id = columnText(messageStatement, 0) else { continue }
             let dataText = columnText(messageStatement, 1) ?? ""
@@ -109,13 +109,18 @@ public final class OpencodeReadOnlyDatabase {
             let json = decodeJSONObject(dataText)
             let role = json?["role"] as? String
             let finish = json?["finish"] as? String
-            rows.append((id: id, role: role, finish: finish, timeCreated: timeCreated))
+            // `data.model` is `{providerID, modelID}` on assistant messages
+            // (verified on real sessions, INF-398): the local-model badge signal.
+            let model = json?["model"] as? [String: Any]
+            let providerID = model?["providerID"] as? String
+            let modelID = model?["modelID"] as? String
+            rows.append((id: id, role: role, finish: finish, timeCreated: timeCreated, providerID: providerID, modelID: modelID))
         }
         guard !rows.isEmpty else { return [] }
 
         let partSQL = "SELECT message_id, id, data FROM part WHERE session_id = ? ORDER BY message_id ASC, id ASC"
         guard let partStatement = prepare(partSQL) else {
-            return rows.map { OpencodeTranscriptAdapter.MessageRow(id: $0.id, role: $0.role, finish: $0.finish, timeCreated: $0.timeCreated, parts: []) }
+            return rows.map { OpencodeTranscriptAdapter.MessageRow(id: $0.id, role: $0.role, finish: $0.finish, timeCreated: $0.timeCreated, parts: [], providerID: $0.providerID, modelID: $0.modelID) }
         }
         defer { sqlite3_finalize(partStatement) }
         bindText(partStatement, index: 1, value: sessionID)
@@ -133,7 +138,8 @@ public final class OpencodeReadOnlyDatabase {
         return rows.map { row in
             OpencodeTranscriptAdapter.MessageRow(
                 id: row.id, role: row.role, finish: row.finish, timeCreated: row.timeCreated,
-                parts: partsByMessage[row.id] ?? []
+                parts: partsByMessage[row.id] ?? [],
+                providerID: row.providerID, modelID: row.modelID
             )
         }
     }

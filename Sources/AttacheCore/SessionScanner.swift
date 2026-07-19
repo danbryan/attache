@@ -85,6 +85,13 @@ public final class CodexSessionScanner: SessionScanner {
             byteCap: indexTitle == nil ? 262_144 : 16_384
         )
         let title = indexTitle ?? parsed.firstUserMessage ?? "Session \(file.id.prefix(8))"
+        // No localModelHint for Codex (INF-398): the rollout data the scanner
+        // reads (session_meta.cwd, response_item message turns) carries no model
+        // identity, and Codex's own transcript records none on the lines this
+        // scanner parses. Absent an evidence field, the honest choice is to skip
+        // rather than invent one. Wire it here through
+        // LocalModelHint.classify(providerID:modelID:) if a model field is ever
+        // confirmed on real Codex rollout data.
         return SessionRecord(
             id: file.id,
             title: title,
@@ -376,11 +383,10 @@ public final class ClaudeCodeSessionScanner: SessionScanner {
     /// whose id does not start with `claude` would be misclassified as local.
     /// No such id exists today; if one ships, this allowlist should grow.
     public static func localModelHint(forModelID modelID: String?) -> String? {
-        guard let modelID else { return nil }
-        let trimmed = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard !trimmed.lowercased().hasPrefix("claude") else { return nil }
-        return trimmed
+        // Claude Code reports a model id but no provider id, so classify on the
+        // model-id-only axis. The shared classifier preserves this scanner's
+        // original claude-prefix behavior byte-for-byte (INF-398).
+        LocalModelHint.classify(providerID: nil, modelID: modelID)
     }
 
     /// Extract readable text from a Claude `message` (content is a string for user
@@ -456,6 +462,11 @@ public final class GrokBuildSessionScanner: SessionScanner {
         let title = Self.planTitle(inSessionDirectory: sessionDir)
             ?? parsed.firstUserMessage
             ?? "Session \(file.id.prefix(8))"
+        // No localModelHint for Grok Build (INF-398): chat_history.jsonl records
+        // carry no model field (nor even a cwd), and Grok sessions are always
+        // xAI cloud models today. Absent an evidence field there is nothing to
+        // classify, so skip rather than invent. Wire it here through
+        // LocalModelHint.classify if a model field ever appears in Grok data.
         return SessionRecord(
             id: file.id,
             title: title,

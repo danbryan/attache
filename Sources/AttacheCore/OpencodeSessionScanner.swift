@@ -43,9 +43,11 @@ public final class OpencodeSessionScanner: SessionScanner {
         guard let summary = db.sessionSummary(id: file.id) else {
             return fallbackRecord(for: file, priorTopicTag: priorTopicTag)
         }
-        let content = OpencodeTranscriptAdapter.searchDigest(
-            forSessionID: file.id, database: db, contentCap: contentCap
-        )
+        // One query serves both the search digest and the local-model hint so
+        // adding the badge signal costs no extra round trip (INF-398).
+        let messages = db.messages(forSessionID: file.id)
+        let content = OpencodeTranscriptAdapter.searchDigest(from: messages, contentCap: contentCap)
+        let localModelHint = OpencodeTranscriptAdapter.localModelHint(from: messages)
         return SessionRecord(
             id: summary.id,
             title: summary.title,
@@ -57,7 +59,8 @@ public final class OpencodeSessionScanner: SessionScanner {
             fileMtime: summary.timeUpdated,
             content: content,
             topicTag: priorTopicTag,
-            sourceKind: .opencode
+            sourceKind: .opencode,
+            localModelHint: localModelHint
         )
     }
 
@@ -109,13 +112,29 @@ public enum OpencodeTranscriptAdapter {
         public let finish: String?
         public let timeCreated: Double
         public let parts: [PartRow]
+        /// From the message's `data.model` object (`{providerID, modelID}`,
+        /// verified on real assistant messages). Present on assistant messages;
+        /// nil on user messages. Feeds the local-model badge via
+        /// `LocalModelHint.classify` (INF-398).
+        public let providerID: String?
+        public let modelID: String?
 
-        public init(id: String, role: String?, finish: String?, timeCreated: Double, parts: [PartRow]) {
+        public init(
+            id: String,
+            role: String?,
+            finish: String?,
+            timeCreated: Double,
+            parts: [PartRow],
+            providerID: String? = nil,
+            modelID: String? = nil
+        ) {
             self.id = id
             self.role = role
             self.finish = finish
             self.timeCreated = timeCreated
             self.parts = parts
+            self.providerID = providerID
+            self.modelID = modelID
         }
     }
 
@@ -189,7 +208,12 @@ public enum OpencodeTranscriptAdapter {
     /// wants the user's own words indexed too, so this walks the rows
     /// directly rather than routing through `ParsedTranscriptRecord`.
     static func searchDigest(forSessionID sessionID: String, database: OpencodeReadOnlyDatabase, contentCap: Int) -> String {
-        let messages = database.messages(forSessionID: sessionID)
+        searchDigest(from: database.messages(forSessionID: sessionID), contentCap: contentCap)
+    }
+
+    /// The search digest built from already-queried message rows, so a caller
+    /// that also needs the model hint queries the DB only once (INF-398).
+    static func searchDigest(from messages: [MessageRow], contentCap: Int) -> String {
         let parts = messages.compactMap { message -> String? in
             guard message.role == "user" || message.role == "assistant" else { return nil }
             let text = concatenatedText(message.parts)
@@ -198,5 +222,22 @@ public enum OpencodeTranscriptAdapter {
         var content = parts.joined(separator: " ").lowercased()
         if content.count > contentCap { content = String(content.prefix(contentCap)) }
         return content
+    }
+
+    /// The local-model badge hint for an opencode session, from the latest
+    /// assistant message that carries model info. opencode records the model
+    /// per assistant message as `data.model.{providerID, modelID}`; a local
+    /// provider (`ollama` without a `:cloud` tag suffix, `lmstudio`, ...) is
+    /// local, a named cloud provider is not. The whole rule lives in
+    /// `LocalModelHint.classify` so every source classifies identically
+    /// (INF-398). Returns nil when no assistant message carries model info or
+    /// the model is cloud.
+    public static func localModelHint(from messages: [MessageRow]) -> String? {
+        for message in messages.reversed() where message.role == "assistant" {
+            let hasModelEvidence = !(message.providerID ?? "").isEmpty || !(message.modelID ?? "").isEmpty
+            guard hasModelEvidence else { continue }
+            return LocalModelHint.classify(providerID: message.providerID, modelID: message.modelID)
+        }
+        return nil
     }
 }
