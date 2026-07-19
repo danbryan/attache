@@ -131,10 +131,11 @@ public enum OpencodeTranscriptAdapter {
 
     /// The concatenated narratable (`text`-type) prose of one message's parts,
     /// the same shape `records(from:cwd:)` narrates and the two-way SQLite
-    /// reply correlation returns for a completed assistant turn. Internal so
-    /// `OpencodeReplyCorrelation` reuses the exact part-composition rules
-    /// instead of re-deriving them.
-    static func narratableText(of message: MessageRow) -> String {
+    /// reply correlation returns for a completed assistant turn. Public so both
+    /// `OpencodeReplyCorrelation` and the app-layer `OpencodeLiveWatcher`
+    /// (INF-397) reuse the exact part-composition rules instead of re-deriving
+    /// them.
+    public static func narratableText(of message: MessageRow) -> String {
         concatenatedText(message.parts)
     }
 

@@ -1344,6 +1344,10 @@ final class AppModel: ObservableObject {
     private var twoWayEnablePendingSend: PendingAgentSend?
     private let codexSessionWatcher = CodexSessionWatcher()
     private let sessionActivityWatcher = SessionActivityWatcher()
+    /// Live narration + coarse activity for watched opencode sessions (INF-397).
+    /// opencode's sessions are SQLite rows, not tailable files, so the file
+    /// watchers structurally skip it; this polls the shared database instead.
+    private let opencodeLiveWatcher = OpencodeLiveWatcher()
     /// Source-of-truth for per-source adapter tags, so a fallback-filed card
     /// carries the same provenance the live watcher would stamp (INF-396).
     private let sessionSourceRegistry = SessionSourceRegistry.production()
@@ -1631,6 +1635,26 @@ final class AppModel: ObservableObject {
                 self?.activityPhrases = phrases
             }
         }
+        // opencode live narration (INF-397): the SQLite analog of
+        // codexSessionWatcher's onEvent/onAttention wiring above. Callbacks fire
+        // on the watcher's work queue, so hop to main exactly as the file
+        // watchers do.
+        opencodeLiveWatcher.onEvent = { [weak self] event in
+            DispatchQueue.main.async {
+                self?.receive(event)
+                self?.twoWay.scheduleEventDrivenPump()
+            }
+        }
+        opencodeLiveWatcher.onAttention = { [weak self] sessionID, state, recordAt in
+            DispatchQueue.main.async {
+                self?.handleAttentionChange(sessionID: sessionID, state: state, recordTimestamp: recordAt)
+            }
+        }
+        opencodeLiveWatcher.onStatus = { [weak self] status in
+            DispatchQueue.main.async {
+                self?.intakeStatus = status
+            }
+        }
         applyMicConfiguration()
         if !self.store.isInMemory {
             updateCodexWatcher()
@@ -1673,6 +1697,7 @@ final class AppModel: ObservableObject {
         codexSessionRefreshTimer?.invalidate()
         conversationRequestTimeoutTimer?.invalidate()
         sessionActivityWatcher.stop()
+        opencodeLiveWatcher.stop()
         typingMonitor.stop()
         modelDiscoveryTask?.cancel()
     }
@@ -5197,26 +5222,28 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Surface a delivered agent reply as a card when the normal live-narration
-    /// path will not (INF-395/INF-396). Two sources need this:
+    /// Surface a delivered agent reply as a card as a belt-and-suspenders
+    /// fallback for when a source's live watcher does not file the delivered turn
+    /// (leaving `resulting_card_id` unset) (INF-395/INF-396/INF-397).
     ///
-    /// - **opencode** has no live file watcher (its sessions are SQLite rows, not
-    ///   a tailable `.jsonl`), so nothing else narrates the reply. It is filed
-    ///   immediately on delivery.
-    /// - **grok_build** DOES have a live watcher, but this is a belt-and-suspenders
-    ///   fallback for when that watcher does not file the delivered turn as a card
-    ///   (leaving `resulting_card_id` unset). It waits a short grace window for the
-    ///   watcher, then files only if no card has been correlated to the instruction
-    ///   meanwhile, so it never double-files a card the watcher already narrated.
+    /// Both sources that use this now HAVE a live watcher:
     ///
-    /// Either way the reply is fed through `receive`, which files a card and runs
-    /// the same `linkResponseCard` correlation the file sources use, with the same
-    /// per-source provenance the watcher would stamp.
+    /// - **grok_build** has the file-tailing `CodexSessionWatcher`.
+    /// - **opencode** has the polling `OpencodeLiveWatcher` (INF-397); its
+    ///   sessions are SQLite rows, not a tailable `.jsonl`, but the poll watcher
+    ///   narrates the completed reply the same way. Before INF-397 opencode had
+    ///   no watcher and was filed immediately here; now it waits the same grace
+    ///   window as grok so the live watcher normally files+links first.
+    ///
+    /// Either way it waits a short grace window for the watcher, then files only
+    /// if no card has been correlated to the instruction meanwhile, so it never
+    /// double-files a card the watcher already narrated. The reply is fed through
+    /// `receive`, which files a card and runs the same `linkResponseCard`
+    /// correlation the live watcher's card runs, with the same per-source
+    /// provenance, so whichever lands first links and the other backs off.
     private func narrateDeliveredReplyIfNeeded(_ instruction: Instruction) {
         switch SourceKind(rawValue: instruction.sourceKind) {
-        case .opencode:
-            fileDeliveredReplyFallbackIfUnlinked(instruction)
-        case .grokBuild:
+        case .opencode, .grokBuild:
             let id = instruction.id
             let sessionID = instruction.sessionID
             DispatchQueue.main.asyncAfter(deadline: .now() + deliveredReplyFallbackGrace) { [weak self] in
@@ -10060,6 +10087,7 @@ final class AppModel: ObservableObject {
         guard !store.isInMemory else {
             codexSessionWatcher.stop()
             sessionActivityWatcher.stop()
+            opencodeLiveWatcher.stop()
             return
         }
         // Watch every attached active session; their updates become voicemails, and the
@@ -10077,16 +10105,40 @@ final class AppModel: ObservableObject {
                     || ($0.sourceKind == .grokBuild && grokBuildSourceEnabled)
                     || ($0.sourceKind == .opencode && opencodeSourceEnabled))
         }
-        codexSessionWatcher.watch(enabledTargets)
+        // opencode sessions are SQLite rows, not tailable files, so the file
+        // watchers can never narrate them; route them to the polling live
+        // watcher instead and keep the file watchers on the file sources only.
+        let fileTargets = enabledTargets.filter { $0.sourceKind != .opencode }
+        let opencodeTargets = enabledTargets.filter { $0.sourceKind == .opencode }
+        codexSessionWatcher.watch(fileTargets)
+        // opencode's coarse working/idle activity is the analog of
+        // codexSessionWatcher's own attention path (always on, not gated by the
+        // tool-phrase insight toggle); watch([]) tears its timer down.
+        opencodeLiveWatcher.watch(opencodeTargets)
         // Ambient verbs cover every watched session, not just the focused
         // one: the corner-glance experience ("oh, it's committing something")
         // has to work while a background worker is the only thing running,
         // which is exactly when nothing is focused.
-        if showActivityInsights, !enabledTargets.isEmpty {
-            sessionActivityWatcher.watch(enabledTargets)
+        if showActivityInsights, !fileTargets.isEmpty {
+            sessionActivityWatcher.watch(fileTargets)
         } else {
             sessionActivityWatcher.stop()
         }
+    }
+
+    /// Test seam (INF-397): register a session with the opencode live watcher
+    /// directly, bypassing `updateCodexWatcher`'s in-memory-store gating so a
+    /// test can exercise the watcher against a fixture database. Not used by the
+    /// app itself.
+    func watchOpencodeSessionForTesting(_ target: CodexSessionTarget) {
+        opencodeLiveWatcher.watch([target])
+    }
+
+    /// Test seam (INF-397): run one opencode live-watcher poll synchronously so a
+    /// test can drive narration/activity tick-by-tick without the wall-clock
+    /// timer. Not used by the app itself.
+    func pollOpencodeLiveWatcherForTesting() {
+        opencodeLiveWatcher.poll()
     }
 
     /// Switch which attached session is focused, without changing the watch list.
