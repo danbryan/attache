@@ -327,6 +327,92 @@ final class AttachePersonalityTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Do not infer one from recency, watched sessions, a selected voicemail, conversation history, or other app activity"))
     }
 
+    // MARK: - Memory proposal tool availability
+
+    /// The prompt must name propose_memory in every branch where the tool is
+    /// offered, including the context-free no-focused-session branch, and must
+    /// carry the behavioral rule that an acknowledgment alone saves nothing.
+    func testConversationPromptNamesMemoryToolInEveryBranchWhenAvailable() {
+        let focusedWithStaging = AttachePersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: "Codex smoke",
+            sessionSourceName: "Codex",
+            workingDirectory: "/tmp/smoke",
+            latestSummary: "Ready",
+            canStageAgentInstruction: true,
+            canProposeMemory: true
+        )
+        let focusedReadOnly = AttachePersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: "Codex smoke",
+            sessionSourceName: "Codex",
+            workingDirectory: "/tmp/smoke",
+            latestSummary: "Ready",
+            canStageAgentInstruction: false,
+            canProposeMemory: true
+        )
+        let contextFree = AttachePersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: nil,
+            workingDirectory: nil,
+            latestSummary: nil,
+            canStageAgentInstruction: false,
+            canProposeMemory: true
+        )
+
+        for prompt in [focusedWithStaging, focusedReadOnly, contextFree] {
+            XCTAssertTrue(prompt.contains("propose_memory"))
+            XCTAssertTrue(prompt.contains("you MUST call propose_memory"))
+            XCTAssertTrue(prompt.contains("restate the fact in the user's own words"))
+            XCTAssertTrue(prompt.contains("A spoken acknowledgment alone saves nothing"))
+            XCTAssertTrue(prompt.contains("never claim a memory was saved or queued unless the tool reported it"))
+            XCTAssertFalse(prompt.contains("You cannot save memories in this conversation"))
+        }
+
+        // The context-free branch keeps its honest session-tool disclaimer,
+        // which names only the tools that are genuinely absent, while still
+        // offering the memory tool.
+        XCTAssertTrue(contextFree.contains("No work-session, transcript, project-file, rename, or agent-send tools are available in this conversation."))
+        XCTAssertTrue(contextFree.contains("Tools available: propose_memory"))
+        XCTAssertFalse(contextFree.contains("read_session_transcript"))
+        XCTAssertFalse(contextFree.contains("stage_agent_instruction"))
+    }
+
+    /// When the tool is not offered (Off mode or a private call), the prompt
+    /// must not mention it and must tell the model to say plainly that nothing
+    /// will be saved instead of fake-acknowledging a remember request.
+    func testConversationPromptNeverNamesMemoryToolWhenUnavailable() {
+        let focused = AttachePersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: "Codex smoke",
+            sessionSourceName: "Codex",
+            workingDirectory: "/tmp/smoke",
+            latestSummary: "Ready",
+            canStageAgentInstruction: true,
+            canProposeMemory: false
+        )
+        let contextFree = AttachePersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: nil,
+            workingDirectory: nil,
+            latestSummary: nil,
+            canStageAgentInstruction: false,
+            canProposeMemory: false
+        )
+        let defaulted = AttachePersonality.conversationSystemPrompt(
+            memoryContext: nil,
+            sessionTitle: nil,
+            workingDirectory: nil,
+            latestSummary: nil
+        )
+
+        for prompt in [focused, contextFree, defaulted] {
+            XCTAssertFalse(prompt.contains("propose_memory"))
+            XCTAssertTrue(prompt.contains("You cannot save memories in this conversation: remembering is off or this is a private call."))
+            XCTAssertTrue(prompt.contains("say plainly that nothing will be saved right now; never imply you will remember it"))
+        }
+    }
+
     // MARK: - Error-behavior guidance for blocked/failed/expired sends (INF-252)
 
     /// The error-behavior block explains how to relay a blocked/failed/expired

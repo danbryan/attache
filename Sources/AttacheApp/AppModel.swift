@@ -1537,7 +1537,7 @@ final class AppModel: ObservableObject {
         }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.memoryRuntime.bind(to: .shared)
+            self.bindMemoryContextUI(to: .shared)
             self.bindExhaustiveReviewUI(to: .shared)
         }
         twoWay.onEventDrivenPump = { [weak self] changed in
@@ -5321,7 +5321,8 @@ final class AppModel: ObservableObject {
             workingDirectory: nil,
             latestSummary: nil,
             latestAgentReply: nil,
-            canStageAgentInstruction: snapshot.isFocused
+            canStageAgentInstruction: snapshot.isFocused,
+            canProposeMemory: conversationAllowsMemoryProposals
         )
         var messages = [AttacheChatMessage(role: "system", content: system)]
         messages.append(contentsOf: snapshot.directChatMessages)
@@ -5484,6 +5485,15 @@ final class AppModel: ObservableObject {
         guard !instruction.isEmpty else { return nil }
         let intendedAgent = decoded.intendedAgent?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (instruction, (intendedAgent?.isEmpty == false) ? intendedAgent : nil)
+    }
+
+    /// Binds the memory runtime's callbacks and snapshot into the context UI
+    /// state. Init schedules this on the main actor; tests call it directly so
+    /// review-queue and forget actions are wired deterministically instead of
+    /// racing the deferred task.
+    @MainActor
+    func bindMemoryContextUI(to state: AttacheContextUIState) {
+        memoryRuntime.bind(to: state)
     }
 
     /// Applies a model's non-effectful memory proposal through local policy.

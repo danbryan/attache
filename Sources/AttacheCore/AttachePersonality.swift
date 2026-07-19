@@ -311,7 +311,8 @@ public enum AttachePersonality {
         workingDirectory: String?,
         latestSummary: String?,
         latestAgentReply: String? = nil,
-        canStageAgentInstruction: Bool = false
+        canStageAgentInstruction: Bool = false,
+        canProposeMemory: Bool = false
     ) -> String {
         let memoryBlock = memoryContext.map { "\n\n\($0)" } ?? ""
         let hasSessionContext = sessionIsFocused ?? (sessionTitle != nil)
@@ -337,14 +338,27 @@ public enum AttachePersonality {
 
             """
             : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
+        let memoryToolDescription = "propose_memory (offer one durable user-stated fact to Attaché's local memory policy)"
         let toolsLine: String
         if canStage {
-            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and stage_agent_instruction (prepare a user-confirmed instruction for the work agent). Only read or stage what you need.\n"
+            toolsLine = canProposeMemory
+                ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), stage_agent_instruction (prepare a user-confirmed instruction for the work agent), and \(memoryToolDescription). Only read, stage, or propose what you need.\n"
+                : "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and stage_agent_instruction (prepare a user-confirmed instruction for the work agent). Only read or stage what you need.\n"
         } else if hasSessionContext {
-            toolsLine = "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), and read_file (a file's contents). Only read what you need.\n"
+            toolsLine = canProposeMemory
+                ? "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), read_file (a file's contents), and \(memoryToolDescription). Only read or propose what you need.\n"
+                : "- Tools available: read_session_transcript (the full earlier conversation), list_working_directory (what files exist), and read_file (a file's contents). Only read what you need.\n"
         } else {
-            toolsLine = "- No work-session, transcript, project-file, rename, or agent-send tools are available in this conversation.\n"
+            // The disclaimer names only the session, rename, and agent-send
+            // tools that are genuinely absent in a context-free conversation,
+            // so it can never contradict an offered memory tool.
+            toolsLine = canProposeMemory
+                ? "- No work-session, transcript, project-file, rename, or agent-send tools are available in this conversation.\n- Tools available: \(memoryToolDescription).\n"
+                : "- No work-session, transcript, project-file, rename, or agent-send tools are available in this conversation.\n"
         }
+        let memoryProposalLine = canProposeMemory
+            ? "- When the user explicitly asks you to remember, save, or note a durable fact, you MUST call propose_memory and restate the fact in the user's own words as the statement. A spoken acknowledgment alone saves nothing. Attaché's local policy decides whether the fact is saved, queued for the user's review, or rejected; report the tool's actual result and never claim a memory was saved or queued unless the tool reported it.\n"
+            : "- You cannot save memories in this conversation: remembering is off or this is a private call. If the user asks you to remember something, say plainly that nothing will be saved right now; never imply you will remember it.\n"
         let contextGuidance = hasSessionContext
             ? "- You start with the explicitly focused session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing. When a summary mentions a count but omits the items, read the transcript for the specifics. Find an artifact's exact path from the transcript before reading it; never guess a path or probe an unrelated protected folder."
             : "- No work session is focused. Do not infer one from recency, watched sessions, a selected voicemail, conversation history, or other app activity. Treat this as a context-free conversation. If the user asks about past agent work, ask them to focus that session with the session picker; never guess which session they mean."
@@ -362,7 +376,7 @@ public enum AttachePersonality {
         - You are in a back-and-forth voice conversation with the user about their work. This is your own chat with the user, not the work agent.
         - Speak directly to the user. Replies are read aloud, so keep them short and listenable: headline first, then the key point. No long lists, no code blocks, no reciting paths, hashes, or URLs.
         \(contextGuidance)
-        \(agentInstructionLine)\(toolsLine)
+        \(agentInstructionLine)\(toolsLine)\(memoryProposalLine)
         - Preserve uncertainty. Do not invent file contents, results, approvals, or repository state. If a tool returns nothing useful, say what is missing.
         - If a tool result or a status update tells you a send to the work agent was blocked, failed, or expired, say plainly what happened and the one next step the user can take right now. Never say a send succeeded unless Attaché actually reported that it did. Never invent a retry, workaround, or recovery option that was not reported to you; if none was given, just say what happened.
         - Output only your spoken reply. No labels, no markdown fences, no stage directions.

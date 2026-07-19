@@ -235,6 +235,97 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         XCTAssertFalse(later.contextItems.contains { $0.content.contains(sentinel) })
     }
 
+    /// Model-free end-to-end run of the live-call propose_memory dispatch: the
+    /// same handler the conversation executeTool closure routes the tool to,
+    /// with a valid seven-field payload, must land the proposal in the review
+    /// queue in Suggest mode. Ledger and queue live in temp storage because the
+    /// card store is in-memory.
+    func testLiveCallMemoryProposalQueuesForReviewInSuggestMode() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.suggest, explicit: false)
+        // Init defers the same bind to a main-actor task; wire it now so the
+        // review-queue cleanup below persists through this model's runtime.
+        model.bindMemoryContextUI(to: memoryState)
+
+        model.startConversation()
+        defer { model.endConversation() }
+        XCTAssertTrue(model.conversationAllowsMemoryProposals)
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+        let effectLedger = ConversationTurnEffectLedger()
+
+        let statement = "The user's name is Dan Vermilion Quartz"
+        let reply = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"The user's name is Dan Vermilion Quartz","type":"userFact","scope":"global","scope_value":"global","sensitivity":"low","egress":"localOnly","requires_confirmation":true}"#,
+            sourceUtterance: "remember my name is Dan Vermilion Quartz",
+            personalityID: model.activePersonality?.id ?? "attache",
+            sourceLocator: "test:suggest-queue",
+            effectLedger: effectLedger,
+            authorization: authorization
+        )
+
+        XCTAssertTrue(reply.contains("waiting for the user to review"), reply)
+        let queued = memoryState.memoryReviewItems.first { $0.proposal.statement == statement }
+        XCTAssertNotNil(queued)
+        XCTAssertEqual(queued?.proposal.egress, .localOnly)
+        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == statement })
+        XCTAssertFalse(
+            effectLedger.claim(.memoryProposal),
+            "the dispatch must have claimed the per-turn memory effect"
+        )
+
+        if let queued {
+            memoryState.rejectMemoryProposal(id: queued.proposal.id)
+        }
+        XCTAssertFalse(memoryState.memoryReviewItems.contains { $0.proposal.statement == statement })
+    }
+
+    /// Automatic mode with an exact user restatement (after the "remember"
+    /// lead-in is stripped) auto-stores as a user-authored record instead of
+    /// queueing, and the record is forced local-only.
+    func testLiveCallMemoryProposalAutoStoresExactUserRestatementInAutomaticMode() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.automatic, explicit: false)
+        // Init defers the same bind to a main-actor task; wire it now so the
+        // forget cleanup below persists through this model's runtime.
+        model.bindMemoryContextUI(to: memoryState)
+
+        model.startConversation()
+        defer { model.endConversation() }
+        XCTAssertTrue(model.conversationAllowsMemoryProposals)
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+        let effectLedger = ConversationTurnEffectLedger()
+
+        let statement = "my name is Dan Vermilion Quartz"
+        let reply = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"my name is Dan Vermilion Quartz","type":"userFact","scope":"global","scope_value":"global","sensitivity":"low","egress":"localOnly","requires_confirmation":false}"#,
+            sourceUtterance: "Remember my name is Dan Vermilion Quartz.",
+            personalityID: model.activePersonality?.id ?? "attache",
+            sourceLocator: "test:automatic-store",
+            effectLedger: effectLedger,
+            authorization: authorization
+        )
+
+        XCTAssertTrue(reply.contains("saved on this Mac"), reply)
+        XCTAssertFalse(memoryState.memoryReviewItems.contains { $0.proposal.statement == statement })
+        let stored = memoryState.memoryRecords.first { $0.statement == statement }
+        XCTAssertNotNil(stored)
+        XCTAssertEqual(stored?.sourceKind, .userAuthored)
+        XCTAssertEqual(stored?.egress, .localOnly)
+
+        if let stored {
+            memoryState.forgetMemory(id: stored.id)
+        }
+        XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == statement })
+    }
+
     func testContextOverflowPublishesExplicitRetryWithoutAutoFallbackAndExpiresAtHangup() async throws {
         let (model, defaults) = try makeModel()
         defer { defaults.restore() }
