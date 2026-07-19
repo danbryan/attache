@@ -1,4 +1,5 @@
 import AttacheCore
+import CryptoKit
 import Foundation
 
 /// The main text model a personality owns. Legacy `nil` values are filled from
@@ -156,6 +157,14 @@ struct Personality: Identifiable, Codable, Equatable {
     /// A missing key (and a legacy personality without the field) decodes as
     /// empty, i.e. every tool defaults to Not offered.
     var mcpToolGrants: MCPToolGrants
+    /// Cached "Preview personality" audition line so every click speaks the
+    /// exact same words. Regenerated only when the brain (name or prompt)
+    /// changes, or via an explicit New take. Non-load-bearing.
+    var auditionGreeting: String?
+    /// Fingerprint of the name and prompt the cached greeting was generated
+    /// for; a mismatch invalidates the cache. Voice and engine changes do not
+    /// participate, so switching voices keeps the same words.
+    var auditionGreetingKey: String?
 
     init(
         id: String,
@@ -170,7 +179,9 @@ struct Personality: Identifiable, Codable, Equatable {
         accentColorHex: String? = nil,
         contextStrategy: AttacheContextStrategy? = nil,
         contextStrategyMigrationNotice: String? = nil,
-        mcpToolGrants: MCPToolGrants = [:]
+        mcpToolGrants: MCPToolGrants = [:],
+        auditionGreeting: String? = nil,
+        auditionGreetingKey: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -185,12 +196,15 @@ struct Personality: Identifiable, Codable, Equatable {
         self.contextStrategy = contextStrategy
         self.contextStrategyMigrationNotice = contextStrategyMigrationNotice
         self.mcpToolGrants = mcpToolGrants
+        self.auditionGreeting = auditionGreeting
+        self.auditionGreetingKey = auditionGreetingKey
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, prompt, isBuiltIn, voiceRef, character, visualMode
         case modelRef, playbackSpeed, accentColorHex, contextStrategy
         case contextStrategyMigrationNotice, mcpToolGrants
+        case auditionGreeting, auditionGreetingKey
     }
 
     init(from decoder: Decoder) throws {
@@ -206,6 +220,8 @@ struct Personality: Identifiable, Codable, Equatable {
         playbackSpeed = try container.decodeIfPresent(Double.self, forKey: .playbackSpeed)
         accentColorHex = try container.decodeIfPresent(String.self, forKey: .accentColorHex)
         mcpToolGrants = try container.decodeIfPresent(MCPToolGrants.self, forKey: .mcpToolGrants) ?? [:]
+        auditionGreeting = try container.decodeIfPresent(String.self, forKey: .auditionGreeting)
+        auditionGreetingKey = try container.decodeIfPresent(String.self, forKey: .auditionGreetingKey)
         let decodedContextStrategy = try container.decodeIfPresent(
             AttacheContextStrategy.self,
             forKey: .contextStrategy
@@ -244,6 +260,33 @@ struct Personality: Identifiable, Codable, Equatable {
             contextStrategyMigrationNotice,
             forKey: .contextStrategyMigrationNotice
         )
+        try container.encodeIfPresent(auditionGreeting, forKey: .auditionGreeting)
+        try container.encodeIfPresent(auditionGreetingKey, forKey: .auditionGreetingKey)
+    }
+
+    /// Stable fingerprint for the audition-greeting cache. Only the brain
+    /// (name and prompt) participates: a voice or engine switch keeps the
+    /// exact same words, any brain change regenerates them.
+    static func auditionGreetingKey(name: String, prompt: String) -> String {
+        let material = [name, prompt].joined(separator: "\u{1f}")
+        return SHA256.hash(data: Data(material.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    /// The cached greeting when it is still valid for the current name and
+    /// prompt; nil forces regeneration.
+    var validAuditionGreeting: String? {
+        guard let auditionGreeting,
+              auditionGreetingKey == Self.auditionGreetingKey(name: name, prompt: prompt) else {
+            return nil
+        }
+        return auditionGreeting
+    }
+
+    mutating func cacheAuditionGreeting(_ greeting: String) {
+        auditionGreeting = greeting
+        auditionGreetingKey = Self.auditionGreetingKey(name: name, prompt: prompt)
     }
 
     private static func contextStrategyIsValid(_ strategy: AttacheContextStrategy) -> Bool {

@@ -308,6 +308,7 @@ struct PersonalityStudioSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: Personality
     @State private var previewText = ""
+    @State private var previewIsNewTake = false
     @State private var previewPreparing = false
     @State private var modelOptions: [AttachePresentationModelOption] = []
     @State private var modelDiscoveryStatus = ""
@@ -483,13 +484,23 @@ struct PersonalityStudioSheet: View {
                     .multilineTextAlignment(.center)
             }
 
-            Button(action: requestPersonalityPreview) {
-                Label(previewPreparing ? "Preparing…" : "Preview personality", systemImage: "play.fill")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                Button(action: { requestPersonalityPreview() }) {
+                    Label(previewPreparing ? "Preparing…" : "Preview personality", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(previewPreparing || !canSave)
+
+                Button(action: { requestPersonalityPreview(newTake: true) }) {
+                    Label("New take", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.large)
+                .disabled(previewPreparing || !canSave)
+                .help("Generate a fresh greeting. Preview otherwise repeats the same words every time.")
+                .accessibilityLabel("New preview take")
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(previewPreparing || !canSave)
 
             if !previewText.isEmpty {
                 Text("“\(previewText)”")
@@ -503,6 +514,15 @@ struct PersonalityStudioSheet: View {
                     .typoCaption()
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
+            }
+
+            if let fallbackNote = model.personalityPreviewFallbackNote {
+                Label(fallbackNote, systemImage: "speaker.wave.1")
+                    .typoCaption()
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Voice fallback: \(fallbackNote)")
             }
             Spacer()
         }
@@ -743,10 +763,12 @@ struct PersonalityStudioSheet: View {
 
                 voicePicker(for: voice.provider)
 
-                if !model.connectedVoiceEngines.contains(voice.provider) {
-                    Label("\(voice.provider.title) is not configured. Preview and playback will use an on-device voice until its key is added in Integrations.", systemImage: "exclamationmark.triangle.fill")
+                if let warning = model.voiceReadiness(for: voice).warningText {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
                         .typoCaption()
                         .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Voice warning: \(warning)")
                 }
 
                 if voice.provider.sendsToCloud {
@@ -1177,7 +1199,8 @@ struct PersonalityStudioSheet: View {
         }
     }
 
-    private func requestPersonalityPreview() {
+    private func requestPersonalityPreview(newTake: Bool = false) {
+        previewIsNewTake = newTake
         guard let provider = draft.voiceRef?.provider else { return }
         if provider.sendsToCloud,
            !model.cloudVoiceConsentAcknowledged(
@@ -1193,9 +1216,14 @@ struct PersonalityStudioSheet: View {
 
     private func beginPersonalityPreview() {
         previewPreparing = true
-        model.previewPersonality(draft) { greeting in
+        let handle: (String) -> Void = { greeting in
             previewText = greeting
             previewPreparing = false
+        }
+        if previewIsNewTake {
+            model.regeneratePersonalityPreview(draft, completion: handle)
+        } else {
+            model.previewPersonality(draft, completion: handle)
         }
     }
 

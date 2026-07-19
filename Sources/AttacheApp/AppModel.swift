@@ -410,6 +410,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var memorySavedChipVisible = false
     private var memorySavedChipTimer: Timer?
 
+    /// The quiet fallback-voice disclosure for the personality preview site:
+    /// set when a preview resolves to a different voice than the personality's
+    /// chosen one, nil when the chosen voice actually speaks.
+    @Published private(set) var personalityPreviewFallbackNote: String?
+
     @Published var voiceInputMode: AttacheVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -7201,11 +7206,36 @@ final class AppModel: ObservableObject {
         )
     }
 
-    /// Explicit creator audition. The prompt asks for one tiny greeting, then the
-    /// draft's own voice configuration speaks it without saving or changing the
-    /// live character. If no model is available, the visible fallback still lets
-    /// the user audition the voice.
+    /// Explicit creator audition. The greeting is generated once per brain
+    /// (name plus prompt) and cached on the personality, so every click speaks
+    /// the exact same words in the personality's own voice; a voice or engine
+    /// switch keeps the words. If no model is available, the visible fallback
+    /// still lets the user audition the voice.
     func previewPersonality(_ personality: Personality, completion: @escaping (String) -> Void = { _ in }) {
+        previewPersonality(personality, ignoringCachedGreeting: false, completion: completion)
+    }
+
+    /// Explicit "New take": regenerates the audition line even when a cached
+    /// one is still valid, replacing the cache on success.
+    func regeneratePersonalityPreview(_ personality: Personality, completion: @escaping (String) -> Void = { _ in }) {
+        previewPersonality(personality, ignoringCachedGreeting: true, completion: completion)
+    }
+
+    private func previewPersonality(
+        _ personality: Personality,
+        ignoringCachedGreeting: Bool,
+        completion: @escaping (String) -> Void
+    ) {
+        personalityPreviewFallbackNote = speakTimeFallbackNote(for: personality.voiceRef)
+        let voice = speechConfiguration(for: personality.voiceRef)
+        if !ignoringCachedGreeting, let cached = cachedAuditionGreeting(for: personality) {
+            personalityPreviewRequestID = nil
+            voiceProviderStatus = "Previewing \(personality.name)."
+            playback.preview(cached, configuration: voice)
+            completion(cached)
+            return
+        }
+
         let requestID = UUID()
         personalityPreviewRequestID = requestID
         let fallback = "Hi, I'm \(personality.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Attaché" : personality.name). Ready when you are."
@@ -7219,7 +7249,6 @@ final class AppModel: ObservableObject {
         let settings = personalityPreviewSettings(for: personality)
         guard let settings else {
             personalityPreviewRequestID = nil
-            let voice = speechConfiguration(for: personality.voiceRef)
             voiceProviderStatus = "Previewing \(personality.name) with its configured voice."
             playback.preview(fallback, configuration: voice)
             completion(fallback)
@@ -7231,11 +7260,11 @@ final class AppModel: ObservableObject {
             personalityOverride: personality,
             settingsOverride: settings
         )
-        let voice = speechConfiguration(for: personality.voiceRef)
         voiceProviderStatus = "Preparing personality preview."
 
         Task {
             let generated: String
+            var generationSucceeded = false
             do {
                 let result = try await presentationService.complete(
                     snapshot: snapshot,
@@ -7244,6 +7273,7 @@ final class AppModel: ObservableObject {
                     settingsOverride: settings
                 )
                 generated = Self.shortPersonalityGreeting(result.text, fallback: fallback)
+                generationSucceeded = true
                 await MainActor.run {
                     AttacheContextUIState.shared.publishReceipt(result.inference.receiptView)
                 }
@@ -7253,11 +7283,80 @@ final class AppModel: ObservableObject {
             await MainActor.run {
                 guard self.personalityPreviewRequestID == requestID else { return }
                 self.personalityPreviewRequestID = nil
+                if generationSucceeded {
+                    // Only a real model take is cached. The offline fallback
+                    // line is already deterministic and must not freeze out a
+                    // later configured model.
+                    self.storeAuditionGreeting(generated, for: personality)
+                }
                 self.voiceProviderStatus = "Previewing \(personality.name)."
                 self.playback.preview(generated, configuration: voice)
                 completion(generated)
             }
         }
+    }
+
+    /// The cached audition line valid for the personality's CURRENT brain:
+    /// the passed value's own cache first (an edited draft), then the stored
+    /// personality's cache when the brains still match.
+    private func cachedAuditionGreeting(for personality: Personality) -> String? {
+        if let valid = personality.validAuditionGreeting { return valid }
+        guard let stored = personalities.first(where: { $0.id == personality.id }),
+              stored.auditionGreetingKey == Personality.auditionGreetingKey(
+                  name: personality.name,
+                  prompt: personality.prompt
+              ) else {
+            return nil
+        }
+        return stored.auditionGreeting
+    }
+
+    private func storeAuditionGreeting(_ greeting: String, for personality: Personality) {
+        guard let index = personalities.firstIndex(where: { $0.id == personality.id }) else { return }
+        // Persist only while the stored brain still matches the brain the
+        // greeting was generated for, so an unsaved draft edit can never
+        // attach stale words to the stored personality.
+        var updated = personalities[index]
+        guard updated.name == personality.name, updated.prompt == personality.prompt else { return }
+        updated.cacheAuditionGreeting(greeting)
+        personalities[index] = updated
+        personalityStore.save(personalities, activeID: activePersonalityID)
+    }
+
+    /// Deterministic per-engine readiness for a personality's chosen voice,
+    /// feeding the editor banner and the speak-time fallback disclosure.
+    func voiceReadiness(for ref: PersonalityVoiceRef?) -> PersonalityVoiceReadiness {
+        guard let ref else { return .ready }
+        return PersonalityVoiceReadiness.evaluate(
+            ref: ref,
+            installedSystemVoiceIDs: installedSystemVoiceIDs(),
+            premiumVoiceReady: AttachePremiumVoiceAvailability.isReady(),
+            connectedCloudEngines: Set(connectedVoiceEngines)
+        )
+    }
+
+    /// The quiet "Using fallback voice" note for a speak site, naming the
+    /// voice playback actually resolves to. Nil when the chosen voice is used.
+    func speakTimeFallbackNote(for ref: PersonalityVoiceRef?) -> String? {
+        let readiness = voiceReadiness(for: ref)
+        switch readiness {
+        case .ready:
+            return nil
+        case .systemVoiceAssetMissing:
+            // A missing Apple asset resolves to the synthesizer default, not
+            // the app's saved voice.
+            return readiness.fallbackDisclosure(fallbackVoiceName: "the default system voice")
+        case .attachePremiumNotInstalled, .cloudKeyMissing:
+            // resolvedForPlayback substitutes the app's saved system voice.
+            return readiness.fallbackDisclosure(
+                fallbackVoiceName: systemVoiceDisplayName(for: speechVoiceIdentifier)
+            )
+        }
+    }
+
+    func systemVoiceDisplayName(for identifier: String?) -> String {
+        guard let identifier, !identifier.isEmpty else { return "the default system voice" }
+        return speechVoiceOptions.first { $0.id == identifier }?.name ?? "the default system voice"
     }
 
     func cancelPersonalityPreview() {

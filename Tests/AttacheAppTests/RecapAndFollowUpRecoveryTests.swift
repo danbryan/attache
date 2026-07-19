@@ -71,6 +71,30 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         }
     }
 
+    /// Every completion await in this file talks to the loopback mock server.
+    /// A starved accept loop must fail the one test at a bounded deadline
+    /// instead of wedging the whole suite until the harness watchdog fires
+    /// (which it did once on 2026-07-19, killing an otherwise green run at
+    /// 900s). Sized far above the sub-second normal cost.
+    private struct CompletionDeadlineExceeded: Error {}
+    private func withDeadline<T: Sendable>(
+        seconds: TimeInterval = 60,
+        _ body: @escaping () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await body() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw CompletionDeadlineExceeded()
+            }
+            guard let first = try await group.next() else {
+                throw CompletionDeadlineExceeded()
+            }
+            group.cancelAll()
+            return first
+        }
+    }
+
     /// Starts `scripts/personality-two-way-smoke-server.py` as a loopback-only
     /// subprocess, same as `AttachePresentationErrorRelayTests`. `errorMode`
     /// and `recoveryModel` map onto `ATTACHE_SMOKE_PROVIDER_ERROR` /
@@ -146,11 +170,13 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         let service = AttachePresentationService(defaults: defaults, environment: environment)
 
         do {
-            _ = try await service.complete(
-                snapshot: requestSnapshot(role: .recap, userInput: "user prompt", modelSettings: settings),
-                system: "system prompt",
-                user: "user prompt"
-            )
+            _ = try await withDeadline {
+                try await service.complete(
+                    snapshot: self.requestSnapshot(role: .recap, userInput: "user prompt", modelSettings: settings),
+                    system: "system prompt",
+                    user: "user prompt"
+                )
+            }
             XCTFail("expected complete(snapshot:) to throw on a 429 usage-limit response")
         } catch {
             let rootError = (error as? AttacheBrokerAttemptFailure)?.underlying ?? error
@@ -189,11 +215,13 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
         )
         let service = AttachePresentationService(defaults: defaults, environment: environment)
 
-        let result = try await service.complete(
-            snapshot: requestSnapshot(role: .recap, userInput: "user prompt", modelSettings: settings),
-            system: "system prompt",
-            user: "user prompt"
-        )
+        let result = try await withDeadline {
+            try await service.complete(
+                snapshot: self.requestSnapshot(role: .recap, userInput: "user prompt", modelSettings: settings),
+                system: "system prompt",
+                user: "user prompt"
+            )
+        }
         XCTAssertEqual(result.text, "ATTACHE_RECOVERY_SUCCEEDED_\(nonce)")
     }
 
@@ -399,11 +427,13 @@ final class RecapAndFollowUpRecoveryTests: XCTestCase {
 
         var taggingFailureCount = 0
         do {
-            _ = try await service.complete(
-                snapshot: requestSnapshot(role: .topicTagging, userInput: "user", modelSettings: settings),
-                system: "system",
-                user: "user"
-            )
+            _ = try await withDeadline {
+                try await service.complete(
+                    snapshot: self.requestSnapshot(role: .topicTagging, userInput: "user", modelSettings: settings),
+                    system: "system",
+                    user: "user"
+                )
+            }
             XCTFail("expected the tagging request to fail against the usage-limit mock")
         } catch {
             // Mirrors AppModel.tagUntaggedSessions' catch branch: skip silently
