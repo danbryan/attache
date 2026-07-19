@@ -171,6 +171,50 @@ export const voiceBeat = (() => {
   return { headlineAt, sublineAt, speakAt, len };
 })();
 
+// ---- launch cut: two-way and brain re-derived from the recut narration -----
+// The launch cut replaces the two-way narration (n_two_a_launch / n_two_b_launch)
+// and the watched-harness narration (n_brain_launch). Both beats derive their
+// choreography the same way the baseline objects do, but from the recut clip
+// lengths, so the baseline `twoway` / `brain` (and Promo2) stay untouched.
+export const twowayLaunch = (() => {
+  const aStart = 0.25;
+  const chipFlipAt = 0.9;
+  const typedAt = 1.7;
+  const typedDur = 1.9;
+  const confirmAt = aStart + nsec("n_two_a_launch") + 0.35;
+  const sendPressAt = confirmAt + 1.15;
+  const bStart = sendPressAt + 0.55;
+  const queuedAt = sendPressAt + 0.4;
+  const quietAt = queuedAt + 3.4;
+  const deliverTypeAt = quietAt + 0.5;
+  const deliveredAt = deliverTypeAt + 1.5;
+  const waitingAt = deliveredAt + 2.4;
+  const bEnd = bStart + nsec("n_two_b_launch");
+  const replyPrintAt = Math.max(waitingAt + 3.0, bEnd - 1.2);
+  const replyCardAt = replyPrintAt + 1.0;
+  const replySpeakAt = Math.max(replyCardAt + 0.6, bEnd + 0.3);
+  const len = replySpeakAt + ssec("va_reply") + 1.3;
+  return {
+    aStart, chipFlipAt, typedAt, typedDur, confirmAt, sendPressAt,
+    bStart, queuedAt, quietAt, deliverTypeAt, deliveredAt, waitingAt,
+    replyPrintAt, replyCardAt, replySpeakAt, len,
+  };
+})();
+
+export const brainLaunch = (() => {
+  const narrStart = 0.35;
+  const watchAt = 0.6;
+  const brainAt = narrStart + 3.2;
+  const toggleAt = narrStart + nsec("n_brain_launch") * 0.64;
+  const fallbackAt = narrStart + nsec("n_brain_launch") * 0.80;
+  const len = narrStart + nsec("n_brain_launch") + 1.7;
+  return { narrStart, watchAt, brainAt, toggleAt, fallbackAt, len };
+})();
+
+// The launch ambient beat drops the "Pick your Attaché" picker tail (beat D),
+// ending just after the "it speaks up" caption completes.
+export const ambientLaunchLen = ambient.charactersAt + 0.4;
+
 export type SceneSpec = { key: string; lenSec: number };
 // Personalities ("it talks your way") runs BEFORE the conversational block
 // (live + two-way), per direction: establish how it speaks, then talk to it.
@@ -188,20 +232,20 @@ export const SCENES2: SceneSpec[] = [
 ];
 
 // The launch cut: the baseline sequence with the lineup beat after the hook
-// (which establishes the wall of watched agents) and the bundled-voice beat
-// right after the personalities/voice scene.
+// (which establishes the wall of watched agents). The "Pick your Attaché"
+// picker tail and the bundled-voice beat are cut; the two-way and watched-
+// harness beats run on their recut narration lengths.
 export const SCENES2_LAUNCH: SceneSpec[] = [
   { key: "hook", lenSec: hook.len },
   { key: "lineup", lenSec: lineup.len },
   { key: "title", lenSec: title.len },
   { key: "pin", lenSec: pin.len },
   { key: "inbox", lenSec: inbox.len },
-  { key: "ambient", lenSec: ambient.len },
+  { key: "ambient", lenSec: ambientLaunchLen },
   { key: "personalities", lenSec: personalities.len },
-  { key: "voice", lenSec: voiceBeat.len },
   { key: "live", lenSec: live.len },
-  { key: "twoway", lenSec: twoway.len },
-  { key: "brain", lenSec: brain.len },
+  { key: "twoway", lenSec: twowayLaunch.len },
+  { key: "brain", lenSec: brainLaunch.len },
   { key: "outro", lenSec: outro.len },
 ];
 

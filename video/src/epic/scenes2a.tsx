@@ -34,7 +34,155 @@ const WALL: { title: string; line: string }[] = [
   { title: "claude — inbox triage", line: "▸ sorting 63 threads…" },
 ];
 
-export const Hook2: React.FC = () => {
+/* Agent-manager audience: a generic session-manager GUI (a sidebar of ~20
+   threads, one selected with a chat pane) plus a few terminals running all
+   four CLIs. Message: people run many agents in managers and terminals, not
+   twenty bare terminals. Deliberately unbranded chrome — no product imitation. */
+
+type Thread = { name: string; state: "work" | "done" | "idle" };
+const THREADS: Thread[] = [
+  { name: "auth refactor", state: "work" },
+  { name: "invoice sync", state: "done" },
+  { name: "clip captions", state: "work" },
+  { name: "sponsor research", state: "idle" },
+  { name: "newsletter draft", state: "done" },
+  { name: "thumbnail C", state: "idle" },
+  { name: "course outline", state: "idle" },
+  { name: "market brief", state: "done" },
+  { name: "site refresh", state: "work" },
+  { name: "b-roll tags", state: "idle" },
+  { name: "inbox triage", state: "done" },
+  { name: "release notes", state: "idle" },
+  { name: "api client", state: "idle" },
+  { name: "db migration", state: "work" },
+  { name: "unit tests", state: "done" },
+  { name: "changelog", state: "idle" },
+  { name: "i18n pass", state: "idle" },
+  { name: "perf audit", state: "done" },
+  { name: "webhook retry", state: "idle" },
+  { name: "docs sweep", state: "idle" },
+];
+
+const CLI_TERMS: { title: string; tint: string; lines: (w: number) => TermLine[] }[] = [
+  { title: "claude", tint: "#D97757", lines: (w) => [
+    { at: w + 2, text: "$ claude" },
+    { at: w + 12, text: "▸ reading AuthClient.swift…" },
+    { at: w + 26, text: "▸ 3 files to change" },
+  ] },
+  { title: "codex", tint: "#C7CBD1", lines: (w) => [
+    { at: w + 6, text: "$ codex" },
+    { at: w + 16, text: "▸ drafting patch…" },
+    { at: w + 30, text: "▸ running tests (8/8)", color: "#30D158" },
+  ] },
+  { title: "grok", tint: "#8AB4FF", lines: (w) => [
+    { at: w + 10, text: "$ grok" },
+    { at: w + 20, text: "▸ reasoning…" },
+    { at: w + 34, text: "▸ 2 tools called" },
+  ] },
+  { title: "opencode", tint: "#30D158", lines: (w) => [
+    { at: w + 14, text: "$ opencode" },
+    { at: w + 24, text: "▸ indexing project…" },
+    { at: w + 38, text: "✓ ready" },
+  ] },
+];
+
+const StateDot: React.FC<{ state: Thread["state"] }> = ({ state }) => {
+  const frame = useCurrentFrame();
+  const pulse = 0.5 + 0.5 * Math.sin(frame / 5);
+  const color = state === "work" ? "#FF9F0A" : state === "done" ? "#30D158" : "#55555E";
+  return (
+    <div style={{ width: 9, height: 9, borderRadius: 5, background: color, flexShrink: 0, opacity: state === "work" ? 0.5 + 0.5 * pulse : 1, boxShadow: state === "work" ? `0 0 8px ${color}` : "none" }} />
+  );
+};
+
+const ManagerGUI: React.FC = () => {
+  const frame = useCurrentFrame();
+  const caret = Math.floor(frame / 14) % 2 === 0;
+  return (
+    <div style={{ width: 992, height: 792, borderRadius: 16, overflow: "hidden", border: `1px solid ${T.stroke}`, background: "linear-gradient(180deg, rgba(28,28,35,0.96), rgba(17,17,22,0.97))", boxShadow: "0 54px 120px rgba(0,0,0,0.62)" }}>
+      {/* title bar */}
+      <div style={{ position: "relative", display: "flex", alignItems: "center", padding: "12px 15px", background: "rgba(255,255,255,0.045)", borderBottom: `1px solid ${T.stroke}` }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          {["#FF5F57", "#FEBC2E", "#28C840"].map((c) => (
+            <div key={c} style={{ width: 12, height: 12, borderRadius: 6, background: c, opacity: 0.9 }} />
+          ))}
+        </div>
+        <div style={{ position: "absolute", left: 0, right: 0, textAlign: "center", color: T.dim, fontSize: 20, fontWeight: 600 }}>Agents</div>
+        <div style={{ marginLeft: "auto", color: T.faint, fontSize: 17, fontWeight: 700 }}>20 sessions</div>
+      </div>
+      <div style={{ display: "flex", height: 744 }}>
+        {/* sidebar */}
+        <div style={{ width: 320, borderRight: `1px solid ${T.stroke}`, background: "rgba(255,255,255,0.015)", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.stroke}`, color: T.faint, fontSize: 16 }}>
+            Search sessions…
+          </div>
+          <div style={{ overflow: "hidden", flex: 1 }}>
+            {THREADS.map((t, i) => {
+              const sel = i === 0;
+              return (
+                <div key={t.name} style={{ display: "flex", alignItems: "center", gap: 11, padding: "12px 16px", background: sel ? "rgba(10,132,255,0.14)" : "transparent", borderLeft: `3px solid ${sel ? T.gold : "transparent"}` }}>
+                  <StateDot state={t.state} />
+                  <span style={{ color: sel ? T.text : T.dim, fontSize: 18, fontWeight: sel ? 700 : 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.name}</span>
+                  {t.state === "work" && <span style={{ marginLeft: "auto", color: "#FF9F0A", fontSize: 14, fontWeight: 600 }}>working</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* chat pane */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "20px 26px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, paddingBottom: 16, borderBottom: `1px solid ${T.stroke}` }}>
+            <StateDot state="work" />
+            <span style={{ color: T.text, fontSize: 24, fontWeight: 700 }}>auth refactor</span>
+            <span style={{ marginLeft: "auto", color: T.faint, fontSize: 17, fontFamily: T.mono }}>claude · ~/app</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, paddingTop: 18, flex: 1 }}>
+            <div style={{ alignSelf: "flex-end", maxWidth: 440, padding: "13px 17px", borderRadius: 14, background: "rgba(10,132,255,0.16)", border: `1px solid rgba(10,132,255,0.4)`, color: T.text, fontSize: 18, lineHeight: 1.4 }}>
+              Pull the token flow into a helper and cover it with tests.
+            </div>
+            <div style={{ alignSelf: "flex-start", maxWidth: 500, padding: "13px 17px", borderRadius: 14, background: "rgba(255,255,255,0.05)", border: `1px solid ${T.stroke}`, color: T.dim, fontSize: 18, lineHeight: 1.4 }}>
+              Done. Extracted AuthClient, added 8 tests, all green. Starting the refresh-token path next.
+            </div>
+            <div style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 10, color: T.faint, fontSize: 17, fontFamily: T.mono }}>
+              <StateDot state="work" />
+              working… editing AuthClient.swift{caret ? " ▍" : ""}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ManagerHookInner: React.FC<{ wallF: number }> = ({ wallF }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const guiIn = interpolate(frame, [4, 22], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const positions = [
+    { left: 1112, top: 152 },
+    { left: 1500, top: 152 },
+    { left: 1112, top: 520 },
+    { left: 1500, top: 520 },
+  ];
+  return (
+    <>
+      <div style={{ position: "absolute", left: 76, top: 150, opacity: guiIn, transform: `translateY(${(1 - guiIn) * 24}px)`, zIndex: 2 }}>
+        <ManagerGUI />
+      </div>
+      {CLI_TERMS.map((tm, i) => {
+        const p = spring({ frame: frame - (wallF + i * 7), fps, config: { damping: 15, mass: 0.7 } });
+        const pos = positions[i];
+        return (
+          <div key={tm.title} style={{ position: "absolute", left: pos.left, top: pos.top, opacity: p, transform: `translateY(${(1 - p) * 44}px) scale(${0.9 + p * 0.1})`, transformOrigin: "top left", zIndex: 1 }}>
+            <Terminal width={372} title={tm.title} lines={tm.lines(wallF)} minHeight={168} fontSize={15} />
+          </div>
+        );
+      })}
+    </>
+  );
+};
+
+export const Hook2: React.FC<{ manager?: boolean }> = ({ manager = false }) => {
   const frame = useCurrentFrame();
   const wallF = f(hook.wallAt);
   const lineF = f(hook.lineAt);
@@ -55,6 +203,10 @@ export const Hook2: React.FC = () => {
       <Particles count={38} />
       <Camera from={1} to={1.05} over={collapseF}>
         <AbsoluteFill style={{ opacity: dim * (1 - collapse), transform: `scale(${1 - collapse * 0.22})`, filter: collapse > 0 ? `blur(${collapse * 14}px)` : undefined }}>
+          {manager ? (
+            <ManagerHookInner wallF={wallF} />
+          ) : (
+          <>
           {/* hero session */}
           <div
             style={{
@@ -76,6 +228,8 @@ export const Hook2: React.FC = () => {
               ))}
             </div>
           </AbsoluteFill>
+          </>
+          )}
         </AbsoluteFill>
         <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", opacity: 1 - collapse }}>
           <div style={{ fontSize: 66, fontWeight: 700, color: T.text, textAlign: "center", letterSpacing: "-0.02em", lineHeight: 1.25, textShadow: "0 8px 60px rgba(0,0,0,0.9)" }}>

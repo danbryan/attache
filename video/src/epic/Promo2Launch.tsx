@@ -5,24 +5,22 @@ import {
 } from "remotion";
 import { T } from "../theme";
 import { Stage } from "../components";
-import {
-  Aurora, Particles, LightSweep, RingPulse, Mark2, WordSweep, Shell,
-} from "./components2";
+import { Aurora, Particles, LightSweep, Shell } from "./components2";
 import { Hook2, Title2, Pin2, Inbox2 } from "./scenes2a";
 import { Ambient2, Live2, TwoWay2 } from "./scenes2b";
 import { Personalities2, Brain2, Outro2 } from "./scenes2c";
 import {
-  SCENES2_LAUNCH, layoutScenes, OVERLAP, f, karaokeEnd, ssec, stext,
-  hook, title, pin, inbox, ambient, live, twoway, personalities, brain, outro,
-  lineup, voiceBeat,
+  SCENES2_LAUNCH, layoutScenes, OVERLAP, f,
+  hook, title, pin, inbox, ambient, live, personalities, outro,
+  lineup, twowayLaunch, brainLaunch,
 } from "./timing2";
 
 const clampBoth = { extrapolateLeft: "clamp" as const, extrapolateRight: "clamp" as const };
 
 /* ------------------------------------------------------------------ */
-/* NEW BEAT A — the agent lineup: "works with the agents you run".     */
-/* Music-carried, on-screen copy only (no narration). Text-only cards, */
-/* no third-party logos, dark-with-aurora to match neighboring scenes. */
+/* BEAT A — the agent lineup: "works with the agents you already run".  */
+/* Music-carried, on-screen copy only (no narration). Text-only cards,  */
+/* no third-party logos, dark-with-aurora to match neighboring scenes.  */
 /* ------------------------------------------------------------------ */
 
 const LINEUP: { name: string; tint: string }[] = [
@@ -85,7 +83,7 @@ export const AgentLineup: React.FC = () => {
             fontSize: 44, fontWeight: 600, color: T.gold,
           }}
         >
-          Watch them. <span style={{ color: T.text }}>Reply to them.</span>
+          Watch them. <span style={{ color: T.text }}>Direct them.</span>
         </div>
       </AbsoluteFill>
       <LightSweep start={cardsF} dur={46} opacity={0.06} />
@@ -94,72 +92,42 @@ export const AgentLineup: React.FC = () => {
 };
 
 /* ------------------------------------------------------------------ */
-/* NEW BEAT B — the bundled voice: "a premium voice, included", runs   */
-/* on your Mac. Attaché speaks the Azelma preview with caption-synced   */
-/* karaoke while the robot mark (and ring) are present. Music + Azelma  */
-/* only; no narration overlaps the in-app voice.                        */
+/* Launch-specific scene variants. Each keeps Promo2 (baseline)         */
+/* untouched by driving the shared scene through an opt-in prop:         */
+/*  - Hook2 manager: agent-manager GUI + four CLI terminals              */
+/*  - Ambient2 showPicker=false: the "Pick your Attaché" tail is cut     */
+/*  - Personalities2 deliveryFraming: "Shape your Attaché" headline      */
+/*  - TwoWay2: recut narration timing + conversation headline            */
+/*  - Brain2 fourHarnesses: all four watched harnesses with real marks   */
 /* ------------------------------------------------------------------ */
 
-export const BundledVoice: React.FC = () => {
-  const frame = useCurrentFrame();
-  const headF = f(voiceBeat.headlineAt);
-  const subF = f(voiceBeat.sublineAt);
-  const speakF = f(voiceBeat.speakAt);
-  const headIn = interpolate(frame, [headF, headF + 16], [0, 1], clampBoth);
-  const subIn = interpolate(frame, [subF, subF + 16], [0, 1], clampBoth);
-  const speaking = frame >= speakF && frame < speakF + f(ssec("va_azelma"));
-  return (
-    <Stage>
-      <Aurora accent="violet" strength={0.9} />
-      <Particles count={28} />
-      <RingPulse at={speakF} />
-      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 26 }}>
-        <div
-          style={{
-            opacity: headIn, transform: `translateY(${(1 - headIn) * 22}px)`,
-            fontSize: 64, fontWeight: 700, color: T.text, textAlign: "center", letterSpacing: "-0.02em",
-            textShadow: "0 8px 60px rgba(0,0,0,0.8)",
-          }}
-        >
-          A premium voice, <span style={{ color: T.gold }}>included</span>
-        </div>
-        <div style={{ opacity: subIn, fontSize: 34, fontWeight: 600, color: T.dim }}>
-          Runs entirely on your Mac
-        </div>
-        <div style={{ filter: "drop-shadow(0 0 40px rgba(10,132,255,0.42))", marginTop: 6 }}>
-          <Mark2 size={264} talking={speaking} buildFrom={headF} />
-        </div>
-        {frame >= speakF && (
-          <div style={{ width: 1140 }}>
-            <WordSweep
-              text={stext("va_azelma")}
-              startFrame={speakF + 2}
-              endFrame={speakF + karaokeEnd(ssec("va_azelma"))}
-              fontSize={36}
-              align="center"
-            />
-          </div>
-        )}
-      </AbsoluteFill>
-      <LightSweep start={speakF} dur={44} opacity={0.06} />
-    </Stage>
-  );
-};
+const HookLaunch: React.FC = () => <Hook2 manager />;
+const AmbientLaunch: React.FC = () => <Ambient2 showPicker={false} />;
+const PersonalitiesLaunch: React.FC = () => <Personalities2 deliveryFraming />;
+const TwoWayLaunch: React.FC = () => (
+  <TwoWay2
+    t={twowayLaunch}
+    headline="It's not a feed. It's a conversation."
+    subline="Answer any update with your agent's next instruction."
+    simpleStatus
+  />
+);
+const BrainLaunch: React.FC = () => <Brain2 t={brainLaunch} fourHarnesses />;
 
 /* ------------------------------------------------------------------ */
-/* PROMO2LAUNCH — the baseline sequence plus the two launch beats.      */
-/* Mirrors Promo2's wiring (crossfade, narration, in-app voices, sound  */
-/* design, music bed); the two new keys carry no narration.             */
+/* PROMO2LAUNCH — the baseline sequence plus the agent-lineup beat, with */
+/* the picker tail and premium-voice beat cut and the two-way + watched- */
+/* harness beats running their recut narration.                          */
 /* ------------------------------------------------------------------ */
 
 const COMPS: Record<string, React.FC> = {
-  hook: Hook2, lineup: AgentLineup, title: Title2, pin: Pin2, inbox: Inbox2,
-  ambient: Ambient2, personalities: Personalities2, voice: BundledVoice,
-  live: Live2, twoway: TwoWay2, brain: Brain2, outro: Outro2,
+  hook: HookLaunch, lineup: AgentLineup, title: Title2, pin: Pin2, inbox: Inbox2,
+  ambient: AmbientLaunch, personalities: PersonalitiesLaunch,
+  live: Live2, twoway: TwoWayLaunch, brain: BrainLaunch, outro: Outro2,
 };
 
-// Narration clip per scene, at that scene's narrStart offset. The two new
-// beats (lineup, voice) are intentionally absent: they are music-carried.
+// Narration clip per scene, at that scene's narrStart offset. The lineup beat
+// is intentionally absent: it is music-carried. Brain runs the recut clip.
 const NARRATION: Record<string, { clip: string; at: number }> = {
   hook: { clip: "n_hook", at: f(hook.narrStart) },
   title: { clip: "n_title", at: f(title.narrStart) },
@@ -168,7 +136,7 @@ const NARRATION: Record<string, { clip: string; at: number }> = {
   ambient: { clip: "n_ambient", at: f(ambient.narrStart) },
   live: { clip: "n_live", at: f(live.narrStart) },
   personalities: { clip: "n_personalities", at: f(personalities.narrStart) },
-  brain: { clip: "n_brain", at: f(brain.narrStart) },
+  brain: { clip: "n_brain_launch", at: f(brainLaunch.narrStart) },
   outro: { clip: "n_outro", at: f(outro.narrStart) },
 };
 
@@ -186,11 +154,6 @@ export const Promo2Launch: React.FC = () => {
   const twowayStart = startOf("twoway");
   const persStart = startOf("personalities");
   const brainStart = startOf("brain");
-  const voiceStart = startOf("voice");
-
-  // Azelma window (absolute frames), for gently ducking the music under it.
-  const azelmaFrom = voiceStart + f(voiceBeat.speakAt);
-  const azelmaTo = azelmaFrom + f(ssec("va_azelma"));
 
   return (
     <AbsoluteFill style={{ backgroundColor: T.bg }}>
@@ -216,12 +179,12 @@ export const Promo2Launch: React.FC = () => {
           </Sequence>
         );
       })}
-      {/* two-way narration is split around the confirm beat */}
-      <Sequence from={twowayStart + f(twoway.aStart)}>
-        <Audio src={a2("n_two_a")} />
+      {/* two-way narration is split around the confirm beat (recut clips) */}
+      <Sequence from={twowayStart + f(twowayLaunch.aStart)}>
+        <Audio src={a2("n_two_a_launch")} />
       </Sequence>
-      <Sequence from={twowayStart + f(twoway.bStart)}>
-        <Audio src={a2("n_two_b")} />
+      <Sequence from={twowayStart + f(twowayLaunch.bStart)}>
+        <Audio src={a2("n_two_b_launch")} />
       </Sequence>
 
       {/* ---- in-app voices ---- */}
@@ -231,7 +194,7 @@ export const Promo2Launch: React.FC = () => {
       <Sequence from={liveStart + f(live.speakAt)}>
         <Audio src={a2("va_live")} />
       </Sequence>
-      <Sequence from={twowayStart + f(twoway.replySpeakAt)}>
+      <Sequence from={twowayStart + f(twowayLaunch.replySpeakAt)}>
         <Audio src={a2("va_reply")} />
       </Sequence>
       <Sequence from={persStart + f(personalities.editorSpeakAt)}>
@@ -239,10 +202,6 @@ export const Promo2Launch: React.FC = () => {
       </Sequence>
       <Sequence from={persStart + f(personalities.cowboySpeakAt)}>
         <Audio src={a2("vs_cowboy")} />
-      </Sequence>
-      {/* bundled-voice beat: the Azelma preview (from public/, music + voice only) */}
-      <Sequence from={azelmaFrom}>
-        <Audio src={staticFile("azelma-preview.wav")} />
       </Sequence>
 
       {/* ---- sound design ---- */}
@@ -262,42 +221,34 @@ export const Promo2Launch: React.FC = () => {
       <Sequence from={pinStart + f(pin.pinAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
-      <Sequence from={twowayStart + f(twoway.chipFlipAt)}>
+      <Sequence from={twowayStart + f(twowayLaunch.chipFlipAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
-      <Sequence from={twowayStart + f(twoway.confirmAt)}>
+      <Sequence from={twowayStart + f(twowayLaunch.confirmAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
-      <Sequence from={twowayStart + f(twoway.deliveredAt)}>
+      <Sequence from={twowayStart + f(twowayLaunch.deliveredAt)}>
         <Audio src={a2("sfx_ding")} volume={0.6} />
       </Sequence>
-      <Sequence from={brainStart + f(brain.toggleAt)}>
+      <Sequence from={brainStart + f(brainLaunch.toggleAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
-      <Sequence from={brainStart + f(brain.fallbackAt)}>
+      <Sequence from={brainStart + f(brainLaunch.fallbackAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
 
-      {/* ---- music bed: same fade envelope as Promo2, gently ducked under
-             the Azelma preview so the bundled voice reads cleanly ---- */}
+      {/* ---- music bed: same fade envelope as Promo2 ---- */}
       <Audio
         src={a2("music_bed")}
         loop
-        volume={(frame) => {
-          const env = interpolate(
+        volume={(frame) =>
+          interpolate(
             frame,
             [0, 40, PROMO2_LAUNCH_FRAMES - 80, PROMO2_LAUNCH_FRAMES - 8],
             [0, 0.4, 0.4, 0],
             clampBoth,
-          );
-          const duck = interpolate(
-            frame,
-            [azelmaFrom - 10, azelmaFrom + 6, azelmaTo - 6, azelmaTo + 12],
-            [1, 0.55, 0.55, 1],
-            clampBoth,
-          );
-          return env * duck;
-        }}
+          )
+        }
       />
     </AbsoluteFill>
   );

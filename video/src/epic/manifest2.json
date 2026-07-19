@@ -32,6 +32,14 @@
       "seconds": 8.177,
       "text": "Attashay locks the target, waits for the session to go quiet, delivers, and reads the answer back the moment it lands."
     },
+    "n_two_a_launch": {
+      "seconds": 5.73,
+      "text": "It's not a feed. It's a conversation. Answer any update with your agent's next instruction."
+    },
+    "n_two_b_launch": {
+      "seconds": 4.52,
+      "text": "Attach to any session, and hand your agent its next instruction."
+    },
     "n_personalities": {
       "seconds": 8.435,
       "text": "You decide how it talks. Pick a preset, write your own, or just have fun with it. Updates from your agents don't have to be boring."
@@ -39,6 +47,10 @@
     "n_brain": {
       "seconds": 14.992,
       "text": "It watches Claude Code and Codex, but it thinks with its own model. Run it fully local on your Mac, or reach for the frontier. And if one model runs dry, the next one steps in, mid-conversation."
+    },
+    "n_brain_launch": {
+      "seconds": 16.324,
+      "text": "It watches Claude Code, Codex, Grok, and opencode, but it thinks with its own model. Run it fully local on your Mac, or reach for the frontier. And if one model runs dry, the next one steps in, mid-conversation."
     },
     "n_outro": {
       "seconds": 3.022,
@@ -79,7 +91,7 @@
     "va_azelma": {
       "voice": "Azelma",
       "seconds": 3.68,
-      "text": "Hi, I'm your Attaché, looking forward to working with you."
+      "text": "Hi, I'm your Attach\u00e9, looking forward to working with you."
     }
   },
   "sfx": {

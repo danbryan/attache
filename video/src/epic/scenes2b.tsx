@@ -200,14 +200,16 @@ const cursorPath = (frame: number, pts: { f: number; x: number; y: number }[]) =
   return pts[pts.length - 1];
 };
 
-export const Ambient2: React.FC = () => {
+export const Ambient2: React.FC<{ showPicker?: boolean }> = ({ showPicker = true }) => {
   const frame = useCurrentFrame();
   const charStart = f(ambient.charactersAt);
   const deskOut = interpolate(frame, [82, 102], [1, 0], clampBoth);
   const deskOpacity = Math.min(interpolate(frame, [0, 14], [0, 1], clampBoth), deskOut);
+  // When the picker tail is cut (launch cut), the fleet-ring app holds through
+  // the end of the beat instead of dissolving into the picker.
   const appOpacity = Math.min(
     interpolate(frame, [90, 108], [0, 1], clampBoth),
-    interpolate(frame, [charStart - 16, charStart], [1, 0], clampBoth)
+    showPicker ? interpolate(frame, [charStart - 16, charStart], [1, 0], clampBoth) : 1
   );
   const charOpacity = interpolate(frame, [charStart, charStart + 16], [0, 1], clampBoth);
   const breathe = 0.98 + 0.02 * Math.sin(frame / 22);
@@ -270,7 +272,9 @@ export const Ambient2: React.FC = () => {
         {cursorShown && <Cursor x={cur.x} y={cur.y} />}
       </AbsoluteFill>
 
-      {/* Beat D - make it yours: the character picker (Attaché + Colt) */}
+      {/* Beat D - make it yours: the picker (Attaché + Colt). Cut in the
+          launch cut, where showPicker is false. */}
+      {showPicker && (
       <AbsoluteFill style={{ opacity: charOpacity, alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 40 }}>
         <Aurora accent="blue" strength={0.6} />
         <div style={{ fontSize: 52, fontWeight: 700, color: T.text, letterSpacing: "-0.02em" }}>
@@ -290,6 +294,7 @@ export const Ambient2: React.FC = () => {
           ))}
         </div>
       </AbsoluteFill>
+      )}
       <LightSweep start={12} dur={60} opacity={0.05} />
     </Stage>
   );
@@ -362,23 +367,31 @@ export const Live2: React.FC = () => {
 const INSTRUCTION = "Post clip two and schedule the rest, one a day at nine.";
 const TARGET = "Codex · episode 14 pipeline";
 
-export const TwoWay2: React.FC = () => {
+export const TwoWay2: React.FC<{
+  t?: typeof twoway;
+  headline?: string;
+  subline?: string;
+  simpleStatus?: boolean;
+}> = ({ t = twoway, headline, subline, simpleStatus = false }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const chipFlipF = f(twoway.chipFlipAt);
-  const typedF = f(twoway.typedAt);
-  const typedDurF = f(twoway.typedDur);
-  const confirmF = f(twoway.confirmAt);
-  const sendPressF = f(twoway.sendPressAt);
-  const queuedF = f(twoway.queuedAt);
-  const quietF = f(twoway.quietAt);
-  const deliverTypeF = f(twoway.deliverTypeAt);
-  const deliveredF = f(twoway.deliveredAt);
-  const waitingF = f(twoway.waitingAt);
-  const replyPrintF = f(twoway.replyPrintAt);
-  const replyCardF = f(twoway.replyCardAt);
-  const replySpeakF = f(twoway.replySpeakAt);
+  const chipFlipF = f(t.chipFlipAt);
+  const typedF = f(t.typedAt);
+  const typedDurF = f(t.typedDur);
+  const confirmF = f(t.confirmAt);
+  const sendPressF = f(t.sendPressAt);
+  const queuedF = f(t.queuedAt);
+  const quietF = f(t.quietAt);
+  const deliverTypeF = f(t.deliverTypeAt);
+  const deliveredF = f(t.deliveredAt);
+  const waitingF = f(t.waitingAt);
+  const replyPrintF = f(t.replyPrintAt);
+  const replyCardF = f(t.replyCardAt);
+  const replySpeakF = f(t.replySpeakAt);
+  const headIn = interpolate(frame, [10, 26], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const headOut = interpolate(frame, [confirmF - 2, confirmF + 14], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
+  const subIn = interpolate(frame, [24, 40], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
 
   const termLines: TermLine[] = [
     { at: 0, text: "▸ codex — episode 14 pipeline" },
@@ -398,7 +411,7 @@ export const TwoWay2: React.FC = () => {
   const waitingSecs = Math.max(1, Math.floor((frame - deliveredF) / FPS) + 1);
   let status: React.ReactNode = null;
   if (frame >= queuedF && frame < deliveredF) {
-    status = <StatusRow icon="spinner" text={`Sending to Codex when the session is quiet… ${queuedSecs}s`} />;
+    status = <StatusRow icon="spinner" text={simpleStatus ? `Sending to Codex… ${queuedSecs}s` : `Sending to Codex when the session is quiet… ${queuedSecs}s`} />;
   } else if (frame >= deliveredF && frame < waitingF) {
     status = <StatusRow icon="check" emphasis text="Sent to Codex · watching for the reply" />;
   } else if (frame >= waitingF && frame < replyCardF + 10) {
@@ -416,7 +429,21 @@ export const TwoWay2: React.FC = () => {
     <Stage>
       <Aurora accent="ember" strength={0.7} />
       <Particles count={22} />
-      <Camera from={1} to={1.035} over={f(twoway.len)}>
+      {headline && (
+        <AbsoluteFill style={{ alignItems: "center", justifyContent: "flex-start", pointerEvents: "none", zIndex: 20 }}>
+          <div style={{ marginTop: 52, textAlign: "center", opacity: headIn * headOut }}>
+            <div style={{ fontSize: 50, fontWeight: 700, color: T.text, letterSpacing: "-0.02em", textShadow: "0 8px 50px rgba(0,0,0,0.85)" }}>
+              {headline}
+            </div>
+            {subline && (
+              <div style={{ marginTop: 10, fontSize: 28, fontWeight: 600, color: T.gold, opacity: subIn }}>
+                {subline}
+              </div>
+            )}
+          </div>
+        </AbsoluteFill>
+      )}
+      <Camera from={1} to={1.035} over={f(t.len)}>
         <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
           <div style={{ display: "flex", gap: 46, alignItems: "stretch" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

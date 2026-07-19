@@ -75,7 +75,7 @@ const LoadoutSlot: React.FC<{ icon: string; label: string; value: string; tint: 
   );
 };
 
-export const Personalities2: React.FC = () => {
+export const Personalities2: React.FC<{ deliveryFraming?: boolean }> = ({ deliveryFraming = false }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const typeDurF = f(personalities.typeDur);
@@ -98,10 +98,21 @@ export const Personalities2: React.FC = () => {
       <Particles count={30} />
       <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 22 }}>
         <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 52, fontWeight: 750, color: T.text, letterSpacing: "-0.025em" }}>
-            Build the Attaché <span style={{ color: T.gold }}>you want to hear</span>
-          </div>
-          <div style={{ marginTop: 7, color: T.dim, fontSize: 21 }}>One loadout. Presence, personality, voice, and brain.</div>
+          {deliveryFraming ? (
+            <>
+              <div style={{ fontSize: 52, fontWeight: 750, color: T.text, letterSpacing: "-0.025em" }}>
+                Shape your <span style={{ color: T.gold }}>Attaché</span>
+              </div>
+              <div style={{ marginTop: 7, color: T.dim, fontSize: 21 }}>Choose how your updates are delivered.</div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 52, fontWeight: 750, color: T.text, letterSpacing: "-0.025em" }}>
+                Build the Attaché <span style={{ color: T.gold }}>you want to hear</span>
+              </div>
+              <div style={{ marginTop: 7, color: T.dim, fontSize: 21 }}>One loadout. Presence, personality, voice, and brain.</div>
+            </>
+          )}
         </div>
 
         <div
@@ -204,13 +215,61 @@ export const Personalities2: React.FC = () => {
 /*     local or frontier, with a visible fallback.                     */
 /* ------------------------------------------------------------------ */
 
-export const Brain2: React.FC = () => {
+// Recognizable, single-color product marks for the four watched harnesses,
+// recreated as inline SVG. Codex (OpenAI blossom) and Grok (xAI) reuse the
+// accurate marks from logos.ts; Claude's starburst and opencode's terminal
+// square are drawn here so the mark is right (not the angular Anthropic mark)
+// and pairs with its product name.
+const HarnessMark: React.FC<{ kind: "claude" | "codex" | "grok" | "opencode"; size?: number }> = ({ kind, size = 26 }) => {
+  if (kind === "codex") return <Logo name="openai" size={size} color="#C7CBD1" />;
+  if (kind === "grok") return <Logo name="xai" size={size} color="#E8E8ED" />;
+  if (kind === "claude") {
+    const CORAL = "#D97757";
+    const rays = 12;
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: "block", flexShrink: 0 }}>
+        {Array.from({ length: rays }).map((_, i) => {
+          const a = (i / rays) * Math.PI * 2;
+          return (
+            <line
+              key={i}
+              x1={12 + Math.cos(a) * 2.2}
+              y1={12 + Math.sin(a) * 2.2}
+              x2={12 + Math.cos(a) * 10.6}
+              y2={12 + Math.sin(a) * 10.6}
+              stroke={CORAL}
+              strokeWidth={2.2}
+              strokeLinecap="round"
+            />
+          );
+        })}
+      </svg>
+    );
+  }
+  const GREEN = "#30D158";
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: "block", flexShrink: 0 }}>
+      <rect x="2.5" y="3.5" width="19" height="17" rx="4" fill="none" stroke={GREEN} strokeWidth={2} />
+      <path d="M7 9 L10.5 12 L7 15" fill="none" stroke={GREEN} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <line x1="12.5" y1="15.5" x2="17" y2="15.5" stroke={GREEN} strokeWidth={2} strokeLinecap="round" />
+    </svg>
+  );
+};
+
+const WATCHED: { kind: "claude" | "codex" | "grok" | "opencode"; label: string }[] = [
+  { kind: "claude", label: "Claude Code" },
+  { kind: "codex", label: "Codex CLI" },
+  { kind: "grok", label: "Grok Build" },
+  { kind: "opencode", label: "opencode" },
+];
+
+export const Brain2: React.FC<{ t?: typeof brain; fourHarnesses?: boolean }> = ({ t = brain, fourHarnesses = false }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const watchF = f(brain.watchAt);
-  const brainF = f(brain.brainAt);
-  const toggleF = f(brain.toggleAt);
-  const fallbackF = f(brain.fallbackAt);
+  const watchF = f(t.watchAt);
+  const brainF = f(t.brainAt);
+  const toggleF = f(t.toggleAt);
+  const fallbackF = f(t.fallbackAt);
 
   const watchP = spring({ frame: frame - watchF, fps, config: { damping: 16, mass: 0.8 } });
   const brainP = spring({ frame: frame - brainF, fps, config: { damping: 16, mass: 0.8 } });
@@ -226,14 +285,21 @@ export const Brain2: React.FC = () => {
       <Particles count={30} />
       <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 30 }}>
         {/* watched agents */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16, opacity: watchP, transform: `translateY(${(1 - watchP) * 26}px)` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, opacity: watchP, transform: `translateY(${(1 - watchP) * 26}px)`, flexWrap: "wrap", justifyContent: "center" }}>
           <span style={{ color: T.dim, fontSize: 24, fontWeight: 600 }}>Watches your agents</span>
-          {([["claude", "Claude Code"], ["openai", "Codex"]] as const).map(([lg, label]) => (
-            <div key={label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 18px", borderRadius: 12, background: T.bgRaised, border: `1px solid ${T.stroke}` }}>
-              <Logo name={lg} size={24} />
-              <span style={{ color: T.text, fontSize: 23, fontWeight: 600 }}>{label}</span>
-            </div>
-          ))}
+          {fourHarnesses
+            ? WATCHED.map(({ kind, label }) => (
+                <div key={label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", borderRadius: 12, background: T.bgRaised, border: `1px solid ${T.stroke}` }}>
+                  <HarnessMark kind={kind} size={24} />
+                  <span style={{ color: T.text, fontSize: 22, fontWeight: 600 }}>{label}</span>
+                </div>
+              ))
+            : ([["claude", "Claude Code"], ["openai", "Codex"]] as const).map(([lg, label]) => (
+                <div key={label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 18px", borderRadius: 12, background: T.bgRaised, border: `1px solid ${T.stroke}` }}>
+                  <Logo name={lg} size={24} />
+                  <span style={{ color: T.text, fontSize: 23, fontWeight: 600 }}>{label}</span>
+                </div>
+              ))}
         </div>
 
         <div style={{ color: T.faint, fontSize: 30, opacity: brainP }}>·</div>
