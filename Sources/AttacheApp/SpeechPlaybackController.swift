@@ -1012,7 +1012,11 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         case .system:
             raw = "system|\(voiceIdentifier ?? config.systemVoiceIdentifier ?? "default")"
         case .attachePremium:
-            raw = "attache-premium|\(AttacheSpeechProvider.attachePremiumVoiceID)"
+            // The flow-integration step count changes synthesis quality, so it
+            // is part of the identity: raising it must invalidate cached audio
+            // rendered with the old setting, or a frozen bad realization would
+            // replay forever (the 2026-07-19 robotic-recap incident).
+            raw = "attache-premium|\(AttacheSpeechProvider.attachePremiumVoiceID)|steps\(AttachePremiumVoiceRuntime.flowIntegrationSteps)"
         case .elevenLabs:
             raw = "eleven|\(config.elevenLabsVoiceID)|\(config.elevenLabsModelID)|\(config.elevenLabsOutputFormat)"
         case .xai:

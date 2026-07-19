@@ -12,6 +12,8 @@ final class AttachePremiumVoiceRuntimeTests: XCTestCase {
         var destroyedHandles = 0
         var samplesPerChunk = 512
         var chunkCount = 20
+        var lastLsdSteps: Int32?
+        var lastTemperature: Float?
         private let handle = OpaquePointer(bitPattern: 0xABCD)!
 
         func create(
@@ -19,6 +21,8 @@ final class AttachePremiumVoiceRuntimeTests: XCTestCase {
             precision: String, temperature: Float, lsdSteps: Int32, numThreads: Int32
         ) -> OpaquePointer? {
             createdHandles += 1
+            lastLsdSteps = lsdSteps
+            lastTemperature = temperature
             return handle
         }
         func warmup(_ handle: OpaquePointer) -> Double { 1.0 }
@@ -65,6 +69,27 @@ final class AttachePremiumVoiceRuntimeTests: XCTestCase {
 
         runtime.unload()
         XCTAssertEqual(fake.destroyedHandles, 1)
+    }
+
+    /// The engine must be created with enough flow-matching integration steps to
+    /// avoid the single-step overshoot that decodes as robotic/broadband audio
+    /// and is then frozen into the recap audio cache. A single Euler step (the
+    /// vendored runtime's latency-first default of 1) is not acceptable for
+    /// Attaché's cached recaps; guard the quality value so a future edit cannot
+    /// silently drop back to it.
+    func testEngineIsCreatedWithMultiStepFlowIntegration() throws {
+        let fake = FakeLibrary()
+        let runtime = AttachePremiumVoiceRuntime(idleUnloadInterval: 1000, libraryFactory: { fake })
+        let paths = try makeValidPaths()
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("out-\(UUID().uuidString).wav")
+
+        try runtime.synthesize(text: "hello", paths: paths, outputURL: out)
+
+        XCTAssertEqual(fake.lastLsdSteps, AttachePremiumVoiceRuntime.flowIntegrationSteps)
+        XCTAssertGreaterThanOrEqual(
+            AttachePremiumVoiceRuntime.flowIntegrationSteps, 4,
+            "one or two flow-integration steps overshoot into robotic frames on the licensed weights"
+        )
     }
 
     func testMissingWeightsThrowsTypedError() {

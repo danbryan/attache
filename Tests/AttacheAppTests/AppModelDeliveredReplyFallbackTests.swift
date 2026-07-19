@@ -125,6 +125,65 @@ final class AppModelDeliveredReplyFallbackTests: XCTestCase {
         XCTAssertTrue(model.cards.filter { $0.externalSessionID == sessionID }.isEmpty)
     }
 
+    /// (c) INF-398: a two-way delivered reply for the session the live call is
+    /// focused on must get the same live-narration suppression as any other
+    /// focused-session update: it is filed HEARD, never as an unread inbox
+    /// voicemail, since the user hears it live in the call.
+    func testGrokDeliveredReplyOnCallFocusedTargetIsFiledHeardNotUnread() async throws {
+        _ = NSApplication.shared
+        setenv("ATTACHE_FORCE_PLAIN_READBACK", "1", 1)
+        setenv("ATTACHE_UI_TEST_MUTE_AUDIO", "1", 1)
+        defer {
+            unsetenv("ATTACHE_FORCE_PLAIN_READBACK")
+            unsetenv("ATTACHE_UI_TEST_MUTE_AUDIO")
+        }
+        let sessionID = "grok-oncall-\(UUID().uuidString.lowercased())"
+        let (home, checkpoint) = try makeGrokHome(sessionID: sessionID, reply: "Pong from Grok.")
+        setenv("GROK_HOME", home.path, 1)
+        defer { unsetenv("GROK_HOME") }
+
+        // Watch + focus the grok session, then open a call so it freezes as the
+        // conversation target.
+        let keys = [
+            AttachePreferenceKey.attachedCodexSessionID,
+            AttachePreferenceKey.watchedSessions,
+            AttachePreferenceKey.grokBuildSourceEnabled
+        ]
+        let snapshot = ConversationContextDefaultsSnapshot(keys: keys, defaults: .standard)
+        defer { snapshot.restore() }
+        let defaults = UserDefaults.standard
+        let target = CodexSessionTarget(
+            id: sessionID, title: "Grok Build", updatedAt: Date(),
+            category: .activeSession, status: nil, sourceKind: .grokBuild
+        )
+        defaults.set(true, forKey: AttachePreferenceKey.grokBuildSourceEnabled)
+        defaults.set(sessionID, forKey: AttachePreferenceKey.attachedCodexSessionID)
+        defaults.set(try JSONEncoder().encode([target]), forKey: AttachePreferenceKey.watchedSessions)
+
+        let store = try CardStore.inMemory()
+        let delivered = deliveredGrokInstruction(
+            id: "instr-oncall", sessionID: sessionID, checkpoint: checkpoint, reply: "Pong from Grok."
+        )
+        try store.upsertInstruction(delivered)
+
+        let model = makeModel(store: store)
+        model.startConversation()
+        XCTAssertEqual(model.conversationTargetSnapshot?.target.id, sessionID)
+        XCTAssertTrue(model.onCall)
+
+        model.fileDeliveredReplyFallbackIfUnlinked(delivered)
+        try await waitUntil { model.cards.contains { $0.externalSessionID == sessionID } }
+        defer { model.playback.stop() }
+
+        let sessionCards = model.cards.filter { $0.externalSessionID == sessionID }
+        XCTAssertEqual(sessionCards.count, 1)
+        XCTAssertEqual(
+            sessionCards.first?.status, .heard,
+            "a delivered reply for the focused call target is heard live, never an unread voicemail"
+        )
+        XCTAssertEqual(model.unreadCount, 0)
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 5,
         _ condition: @escaping () -> Bool

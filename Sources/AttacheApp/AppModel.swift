@@ -2575,7 +2575,18 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            let card = try store.insertEvent(event)
+            // The focused session is what the live call talks about: an update
+            // from the call's frozen target is live-narrated and must never also
+            // surface as an unread inbox voicemail for a message the user already
+            // heard live. File it as HEARD history the instant it lands (INF-398),
+            // decoupled from whether audio actually completed, so no unread badge
+            // ever appears and no mark-heard race can strand it. Off-call, or from
+            // a watched-but-not-focused session, it stays a normal unread
+            // voicemail. This is the single intake authority; every focused-session
+            // path (live watcher, two-way delivered-reply fallback) routes through
+            // here.
+            let liveNarrated = shouldPlayLive(event)
+            let card = try store.insertEvent(event, status: liveNarrated ? .heard : .unread)
             // If this narration is the agent's reply to an instruction we sent,
             // link it so the delivery log can jump to it (INF-173).
             if let sessionID = event.externalSessionID {
@@ -2596,10 +2607,10 @@ final class AppModel: ObservableObject {
                 intakeStatus = "Filed a late out-of-order update as read."
                 return
             }
-            if shouldPlayLive(event) {
-                // The card stays unread until it has actually been spoken; the
-                // queue decides whether to play now or hold it. Heard state is set
-                // in finishPlayback on success, never before synthesis.
+            if liveNarrated {
+                // The card is already filed heard (see above), so it never counts
+                // toward the unread badge while it plays; the queue only decides
+                // whether to speak it now or hold it to play next.
                 livePlaybackQueue.reconcile(isBusy: playback.isBusy)
                 // Newest-wins coalescing (the queue holds at most one pending):
                 // a still-waiting earlier live update is about to be superseded

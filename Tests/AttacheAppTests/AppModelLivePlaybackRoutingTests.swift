@@ -220,4 +220,83 @@ final class AppModelLivePlaybackRoutingTests: XCTestCase {
         XCTAssertTrue(model.unreadCards.isEmpty)
         XCTAssertEqual(model.cards.first(where: { $0.id == card.id })?.status, .heard)
     }
+
+    // MARK: - Focused-session live updates never file unread inbox (INF-398)
+
+    /// (a) On a live call, an update from the frozen focused target is filed as
+    /// HEARD history the instant it lands, so it never adds an unread inbox
+    /// voicemail for a message the user already heard live, and the badge never
+    /// increments. This is decoupled from whether audio finished, so no
+    /// mark-heard race can strand it unread.
+    func testFocusedCallTargetEventIsFiledHeardNotUnreadInbox() throws {
+        _ = NSApplication.shared
+        setenv("ATTACHE_UI_TEST_MUTE_AUDIO", "1", 1)
+        defer { unsetenv("ATTACHE_UI_TEST_MUTE_AUDIO") }
+        let sessionID = "live-heard-inbox-\(UUID().uuidString)"
+        let snapshot = ConversationContextDefaultsSnapshot(keys: defaultsKeys(), defaults: .standard)
+        defer { snapshot.restore() }
+        let model = try makeCallingModel(sessionID: sessionID, category: .activeSession)
+        XCTAssertEqual(model.conversationTargetSnapshot?.target.id, sessionID)
+        XCTAssertEqual(model.unreadCount, 0)
+
+        model.persist(agentEvent(sessionID: sessionID))
+        defer { model.playback.stop() }
+
+        let card = model.cards.first { $0.externalSessionID == sessionID }
+        XCTAssertNotNil(card, "the update is still recorded in History")
+        XCTAssertEqual(
+            card?.status, .heard,
+            "a live-narrated focused-session update must be filed heard, never unread inbox"
+        )
+        XCTAssertEqual(model.unreadCount, 0, "it must not increment the unread badge")
+        XCTAssertTrue(model.unreadCards.isEmpty)
+    }
+
+    /// (b) During the same call, an update from a watched session that is NOT the
+    /// frozen call target keeps normal voicemail behavior: it lands unread and
+    /// counts toward the badge.
+    func testWatchedNonFocusedEventStaysUnreadVoicemailDuringCall() throws {
+        _ = NSApplication.shared
+        let sessionID = "live-focused-\(UUID().uuidString)"
+        let snapshot = ConversationContextDefaultsSnapshot(keys: defaultsKeys(), defaults: .standard)
+        defer { snapshot.restore() }
+        let model = try makeCallingModel(sessionID: sessionID, category: .activeSession)
+        // Filing a voicemail card posts a system notification when voicemailMode
+        // is on; the test process has no app bundle, so keep it off.
+        model.voicemailMode = false
+        XCTAssertTrue(model.conversationActive)
+
+        let otherSessionID = "watched-not-focused-\(UUID().uuidString)"
+        model.persist(agentEvent(sessionID: otherSessionID))
+
+        let card = model.cards.first { $0.externalSessionID == otherSessionID }
+        XCTAssertEqual(
+            card?.status, .unread,
+            "a watched-but-not-focused session keeps normal unread voicemail during a call"
+        )
+        XCTAssertEqual(model.unreadCount, 1)
+    }
+
+    /// (d) After hang-up the call target is gone, so an update from the same
+    /// session files as an unread voicemail again: the suppression is scoped to
+    /// the active call.
+    func testFocusedEventFilesUnreadVoicemailAfterHangUp() throws {
+        _ = NSApplication.shared
+        let sessionID = "live-hangup-\(UUID().uuidString)"
+        let snapshot = ConversationContextDefaultsSnapshot(keys: defaultsKeys(), defaults: .standard)
+        defer { snapshot.restore() }
+        let model = try makeCallingModel(sessionID: sessionID, category: .activeSession)
+        model.voicemailMode = false
+        model.endConversation()
+        XCTAssertFalse(model.conversationActive)
+
+        model.persist(agentEvent(sessionID: sessionID))
+
+        let card = model.cards.first { $0.externalSessionID == sessionID }
+        XCTAssertEqual(
+            card?.status, .unread,
+            "off-call, the focused session's update is a normal unread voicemail again"
+        )
+        XCTAssertEqual(model.unreadCount, 1)
+    }
 }

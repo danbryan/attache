@@ -187,6 +187,27 @@ final class AttachePremiumVoiceRuntime {
     private var loadedPaths: PremiumVoiceRuntimePaths?
     private var idleTimer: DispatchSourceTimer?
 
+    /// Flow-matching integration steps per latent frame (the runtime's
+    /// `lsd_steps`). The vendored runtime defaults this to 1, a single Euler
+    /// step (`dt = 1/steps = 1.0`) tuned for lowest real-time streaming latency.
+    /// A single coarse step frequently overshoots the flow ODE into a degenerate
+    /// latent, so a large fraction of voiced frames decode as broadband,
+    /// metallic "robotic" audio; because Attaché caches each recap's WAV, that
+    /// one bad realization is then replayed identically every time (the reported
+    /// "same robotic spots on every replay").
+    ///
+    /// Attaché's recaps are synthesized once and cached, not streamed in real
+    /// time, so accuracy matters more than first-frame latency here. Measured on
+    /// the licensed v1 weights over 8 independent draws of a reported phrase, the
+    /// fraction of voiced frames with unnatural (>7 kHz) broadband energy was
+    /// ~24% at 1 step, ~3.9% at 4 steps, and ~1.9% at 8 steps (the sibilant
+    /// floor), while per-synthesis wall time was unchanged because the flow net
+    /// is tiny next to the main LM and Mimi decoder. Eight steps removes the
+    /// artifact at no meaningful cost and preserves Azelma's timbre (more steps
+    /// integrate the same target distribution more accurately, they do not change
+    /// it). See PremiumVoice robotic-audio investigation (INF-385 follow-up).
+    static let flowIntegrationSteps: Int32 = 8
+
     /// Environment override pointing directly at libpocket_tts.dylib, used by the
     /// guarded integration test and dev runs.
     static let dylibEnvOverride = "ATTACHE_PREMIUM_VOICE_DYLIB"
@@ -293,7 +314,7 @@ final class AttachePremiumVoiceRuntime {
             tokenizerPath: paths.tokenizerPath.path,
             precision: paths.precision,
             temperature: 0.7,
-            lsdSteps: 1,
+            lsdSteps: Self.flowIntegrationSteps,
             // 0 = the runtime auto-selects thread count. The C API does not
             // expose the ONNX Runtime arena knobs; the runtime already disables
             // the arena on the encoder/decoder sessions (see vendored source).
