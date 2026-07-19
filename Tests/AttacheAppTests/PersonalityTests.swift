@@ -210,6 +210,7 @@ final class PersonalityTests: XCTestCase {
         let name = "personality-migrate-custom"
         let (suite, store) = makeSuite(name)
         // A v0.3.0 user: a custom personality is active, voice + character are globals.
+        suite.set(true, forKey: AttachePreferenceKey.onboardingCompleted)
         let custom = Personality(id: "custom.mine", name: "Mine", prompt: "Be brief.")
         store.save(Personality.builtIns + [custom], activeID: custom.id)
         suite.set(AttacheSpeechProvider.elevenLabs.rawValue, forKey: AttachePreferenceKey.speechProvider)
@@ -229,6 +230,7 @@ final class PersonalityTests: XCTestCase {
     func testMigrationIsIdempotentAndDoesNotOverwriteUserEdits() {
         let name = "personality-migrate-idempotent"
         let (suite, store) = makeSuite(name)
+        suite.set(true, forKey: AttachePreferenceKey.onboardingCompleted)
         let custom = Personality(id: "custom.mine", name: "Mine", prompt: "Be brief.")
         store.save(Personality.builtIns + [custom], activeID: custom.id)
         suite.set(AttacheSpeechProvider.elevenLabs.rawValue, forKey: AttachePreferenceKey.speechProvider)
@@ -253,6 +255,7 @@ final class PersonalityTests: XCTestCase {
         let name = "personality-migrate-builtin"
         let (suite, store) = makeSuite(name)
         // Active is a built-in (Big Picture), but the user customized voice + character.
+        suite.set(true, forKey: AttachePreferenceKey.onboardingCompleted)
         store.save(Personality.builtIns, activeID: "builtin.bigPicture")
         suite.set(AttacheSpeechProvider.elevenLabs.rawValue, forKey: AttachePreferenceKey.speechProvider)
         suite.set("v-eleven", forKey: AttachePreferenceKey.elevenLabsVoiceID)
@@ -284,6 +287,29 @@ final class PersonalityTests: XCTestCase {
         // No customization to fold: no extra copy, still on the built-in.
         XCTAssertEqual(loaded.activeID, "builtin.bigPicture")
         XCTAssertFalse(loaded.personalities.contains { $0.id.hasPrefix("custom.migrated") })
+        suite.removePersistentDomain(forName: name)
+    }
+
+    func testFreshOnboardingVoicePickNeverFabricatesAMigratedCopy() {
+        let name = "personality-migrate-fresh-onboarding"
+        let (suite, store) = makeSuite(name)
+        // The 2026-07-19 phantom "My Attaché": an in-app Reset wiped every
+        // default including the migration flag, then onboarding's voice step
+        // wrote a custom global voice before the store first loaded. With
+        // onboarding still incomplete there is no pre-unification setup to
+        // preserve, so the store must not clone the built-in.
+        suite.set(AttacheSpeechProvider.elevenLabs.rawValue, forKey: AttachePreferenceKey.speechProvider)
+        suite.set("v-eleven", forKey: AttachePreferenceKey.elevenLabsVoiceID)
+
+        let loaded = store.load()
+        XCTAssertFalse(loaded.personalities.contains { $0.id.hasPrefix("custom.migrated") })
+        XCTAssertEqual(loaded.personalities.first { $0.id == loaded.activeID }?.isBuiltIn, true)
+        // The one-shot flag is consumed, so completing onboarding later can
+        // never retroactively trigger the clone from this era's voice pick.
+        XCTAssertTrue(suite.bool(forKey: "attache.personalityVoicePetMigrated"))
+        suite.set(true, forKey: AttachePreferenceKey.onboardingCompleted)
+        let reloaded = store.load()
+        XCTAssertFalse(reloaded.personalities.contains { $0.id.hasPrefix("custom.migrated") })
         suite.removePersistentDomain(forName: name)
     }
 

@@ -15,6 +15,10 @@ struct MCPServersPane: View {
     /// Per-harness collapsed state for the detected section, remembered for the
     /// life of the pane (session), mirroring SessionSwitcher's group headers.
     @State private var collapsedHarnesses: Set<MCPHarness> = []
+    /// The whole detected section starts collapsed so a user who has already
+    /// imported what they want is not confronted with every server their other
+    /// tools configure; expanding it is a deliberate act.
+    @State private var detectedSectionExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -65,24 +69,50 @@ struct MCPServersPane: View {
     @ViewBuilder private var detectedSection: some View {
         if !registry.detectedServers.isEmpty {
             let grouping = detectedGrouping
+            let count = registry.detectedServers.count
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Detected in your other tools").typoSection()
+                    Button {
+                        withAnimation(.easeOut(duration: 0.14)) {
+                            detectedSectionExpanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chevron.right")
+                                .typoIcon(size: 8, .bold)
+                                .rotationEffect(.degrees(detectedSectionExpanded ? 90 : 0))
+                            Text(detectedSectionExpanded
+                                 ? "Detected in your other tools"
+                                 : "Detected in your other tools · \(count) server\(count == 1 ? "" : "s")")
+                                .typoSection()
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("MCP Detected Toggle")
+                    .accessibilityLabel(detectedSectionExpanded
+                        ? "Collapse servers detected in your other tools"
+                        : "Expand servers detected in your other tools, \(count) available")
                     Spacer()
-                    Button("Refresh") { registry.refreshDetection() }
-                        .accessibilityIdentifier("MCP Refresh Detected")
-                        .disabled(registry.isDetecting)
+                    if detectedSectionExpanded {
+                        Button("Refresh") { registry.refreshDetection() }
+                            .accessibilityIdentifier("MCP Refresh Detected")
+                            .disabled(registry.isDetecting)
+                    }
                 }
-                Text("Servers found in your other agent tools. Importing copies the server into Attaché's own mcp.json; nothing in the other tool is changed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if detectedSectionExpanded {
+                    Text("Servers found in your other agent tools. Importing copies the server into Attaché's own mcp.json; nothing in the other tool is changed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                if !grouping.shared.isEmpty {
-                    sharedGroupView(grouping.shared)
-                }
-                ForEach(grouping.harnessGroups) { group in
-                    detectedHarnessGroupView(group)
+                    if !grouping.shared.isEmpty {
+                        sharedGroupView(grouping.shared)
+                    }
+                    ForEach(grouping.harnessGroups) { group in
+                        detectedHarnessGroupView(group)
+                    }
                 }
             }
             .padding(.top, 6)

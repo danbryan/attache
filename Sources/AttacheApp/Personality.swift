@@ -660,6 +660,14 @@ final class PersonalityStore {
         guard !defaults.bool(forKey: voiceCharacterMigratedKey) else { return false }
         defaults.set(true, forKey: voiceCharacterMigratedKey)
 
+        // Only a profile that finished onboarding before this store first
+        // loaded can hold a pre-unification setup worth preserving. On a
+        // fresh or freshly-reset profile the store loads while onboarding is
+        // still in progress, and any custom global voice was written moments
+        // ago by onboarding itself; cloning it would fabricate a phantom
+        // "My <name>" personality out of the user's own picks.
+        guard defaults.bool(forKey: AttachePreferenceKey.onboardingCompleted) else { return false }
+
         let globalVoice = PersonalityVoiceRef.capture(from: defaults)
         let globalCharacter = defaults.string(forKey: AttachePreferenceKey.character)
             .flatMap(AttacheCharacter.init(rawValue:))

@@ -362,6 +362,29 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
         }
     }
 
+    /// Customizing a built-in produces a copy whose nil modelRef means "uses
+    /// your connected model". Saving must preserve that nil rather than
+    /// stamping whatever provider happens to be configured (the 2026-07-19
+    /// smoke regression: the studio's Create button was disabled for exactly
+    /// this draft because an explicit model was demanded).
+    func testSavePersonalityPreservesInheritConnectedModel() throws {
+        try restoringDefaults {
+            let model = try AppModel(store: CardStore.inMemory())
+            var draft = Personality.builtIns[0]
+            draft.name = "My Attaché"
+            XCTAssertNil(draft.modelRef)
+
+            let savedID = model.savePersonality(draft, replacingID: draft.id)
+
+            let saved = model.personalities.first { $0.id == savedID }
+            XCTAssertEqual(saved?.isBuiltIn, false)
+            XCTAssertNil(
+                saved?.modelRef,
+                "nil modelRef is the uses-your-connected-model state and must survive save"
+            )
+        }
+    }
+
     func testHangUpDisconnectsThinkingAndPreventsOffCallPersonalityClarify() throws {
         try restoringDefaults {
             let model = try AppModel(store: CardStore.inMemory())

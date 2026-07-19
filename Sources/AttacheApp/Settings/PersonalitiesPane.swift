@@ -1042,6 +1042,25 @@ struct PersonalityStudioSheet: View {
                 Text("The preferred model and ordered fallbacks travel with this Attaché. It announces a live-call fallback once, then returns to the preferred model on the next call.")
                     .typoCaption()
                     .foregroundStyle(.secondary)
+
+                Button("Use your connected model instead") { draft.modelRef = nil }
+                    .accessibilityIdentifier("Use Connected Model")
+            } else {
+                Text(model.displayModelSummary(for: draft))
+                    .typoBody(.medium)
+                Text("This Attaché follows whatever model you connect under Integrations. Pin a specific model only if you want this Attaché to differ from the app.")
+                    .typoCaption()
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Choose a specific model…") {
+                    let seed = model.presentationProvider
+                    requestModelProvider(
+                        seed.supportsSafePersonalityInference
+                            ? seed
+                            : (modelProviderOptions.first ?? .ollama)
+                    )
+                }
+                .accessibilityIdentifier("Choose Specific Model")
             }
         }
     }
@@ -1120,11 +1139,19 @@ struct PersonalityStudioSheet: View {
             && !draft.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && draft.voiceRef != nil
             && draftVoiceIsComplete
-            && draft.modelRef?.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            && draft.modelRef?.provider.supportsSafePersonalityInference == true
-            && draft.modelRef?.fallbackProviders.allSatisfy(\.supportsSafePersonalityInference) == true
+            && draftModelIsValid
             && draftReasoningIsValid
             && (draft.contextStrategy?.isValidForSaving ?? true)
+    }
+
+    /// A nil modelRef is the first-class "uses your connected model" state
+    /// that every built-in ships with; an explicit ref must be complete and
+    /// restricted to providers that are safe for personality inference.
+    private var draftModelIsValid: Bool {
+        guard let ref = draft.modelRef else { return true }
+        return !ref.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && ref.provider.supportsSafePersonalityInference
+            && ref.fallbackProviders.allSatisfy(\.supportsSafePersonalityInference)
     }
 
     private var voiceEngineOptions: [AttacheSpeechProvider] {

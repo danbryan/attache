@@ -7140,7 +7140,9 @@ final class AppModel: ObservableObject {
             voice.systemVoiceIdentifier = speechVoiceOptions.first?.id ?? Personality.defaultPreferredVoiceID
             saved.voiceRef = voice
         }
-        if saved.modelRef == nil { saved.modelRef = currentPersonalityModelRef }
+        // A nil modelRef stays nil: it is the explicit "uses your connected
+        // model" state, never to be stamped with whatever happens to be
+        // configured at save time.
         if saved.playbackSpeed == nil { saved.playbackSpeed = playbackSpeed }
         saved.isBuiltIn = false
 
