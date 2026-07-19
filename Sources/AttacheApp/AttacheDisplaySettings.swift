@@ -375,6 +375,7 @@ enum AttachePreferenceKey {
     static let character = "attache.character"
     static let characterShinySeed = "attache.petShinySeed"
     static let installClaudeHooks = "attache.installClaudeHooks"
+    static let installCodexNotify = "attache.installCodexNotify"
     static let visualSymmetry = "attache.visualSymmetry"
     static let idleBrand = "attache.idleBrand"
     static let idleCustomText = "attache.idleCustomText"

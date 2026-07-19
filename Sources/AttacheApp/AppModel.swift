@@ -473,6 +473,18 @@ final class AppModel: ObservableObject {
             applyClaudeHooks()
         }
     }
+    /// Add Attaché's Codex `notify` program so Codex turn completion is exact
+    /// (done comes from Codex itself, not a transcript quiet-gap guess),
+    /// analogous to `installClaudeHooks`. Off by default because enabling it
+    /// edits the user's real `~/.codex/config.toml`; toggling it on chains any
+    /// existing notify program, and toggling off restores exactly what was
+    /// there before.
+    @Published var installCodexNotify: Bool = false {
+        didSet {
+            defaults.set(installCodexNotify, forKey: AttachePreferenceKey.installCodexNotify)
+            applyCodexNotify()
+        }
+    }
     /// Where the user last parked the focused mote on the session ring
     /// (INF-280); only dragging it writes a new angle.
     @Published var characterFocusAngle: Double = AttacheCharacterChoreography.defaultFocusAngle {
@@ -2120,6 +2132,7 @@ final class AppModel: ObservableObject {
                 intakeStatus = "Listening on \(serverURLText)."
             }
             applyClaudeHooks()
+            applyCodexNotify()
         } catch {
             intakeStatus = "Event intake blocked: \(error.localizedDescription)"
         }
@@ -2134,6 +2147,18 @@ final class AppModel: ObservableObject {
         let enabled = installClaudeHooks
         DispatchQueue.global(qos: .utility).async {
             ClaudeHookSetup.apply(enabled: enabled)
+        }
+    }
+
+    /// Install or remove Attaché's Codex `notify` program off the main thread
+    /// (small file IO). Idempotent, so calling it on launch and on every toggle
+    /// is cheap; when disabled and never installed, it makes no write. Under UI
+    /// tests, skip it so a headless run never edits the real Codex config.
+    func applyCodexNotify() {
+        guard ProcessInfo.processInfo.environment["ATTACHE_UI_TEST"] != "1" else { return }
+        let enabled = installCodexNotify
+        DispatchQueue.global(qos: .utility).async {
+            CodexNotifySetup.apply(enabled: enabled)
         }
     }
 
@@ -9710,6 +9735,9 @@ final class AppModel: ObservableObject {
         }
         if defaults.object(forKey: AttachePreferenceKey.installClaudeHooks) != nil {
             installClaudeHooks = defaults.bool(forKey: AttachePreferenceKey.installClaudeHooks)
+        }
+        if defaults.object(forKey: AttachePreferenceKey.installCodexNotify) != nil {
+            installCodexNotify = defaults.bool(forKey: AttachePreferenceKey.installCodexNotify)
         }
         if defaults.object(forKey: AttachePreferenceKey.showPersonalitySwitcher) != nil {
             showPersonalitySwitcher = defaults.bool(forKey: AttachePreferenceKey.showPersonalitySwitcher)
