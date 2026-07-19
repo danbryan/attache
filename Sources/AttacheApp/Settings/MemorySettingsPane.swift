@@ -6,18 +6,21 @@ struct MemorySettingsPane: View {
     @ObservedObject var state: AttacheContextUIState
 
     @State private var confirmDeleteAll = false
+    @State private var newGlobalStatement = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Memory").typoTitle()
-                Text("Attaché saves a memory only when you ask it to remember something. Nothing is noticed or suggested automatically. Saved memories stay on this Mac unless you say otherwise.")
+                Text("Attaché saves a memory only when you ask it to remember something, and it belongs to the Attaché you told it to. Facts for every Attaché are added below. Nothing is noticed or suggested automatically. Memories are stored only on this Mac; the model your Attaché talks to may use them unless you mark one Local only.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             modeSection
+
+            globalAuthoringSection
 
             storedSection
 
@@ -74,7 +77,7 @@ struct MemorySettingsPane: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Label(
-                "Memory stays local by default. A saved item marked Local only is never sent to a cloud model.",
+                "Memories are stored only on this Mac. A saved item marked Local only is never sent to a cloud model; other saved memories may be quoted to the model your Attaché uses.",
                 systemImage: "lock.shield.fill"
             )
             .typoCaption()
@@ -87,8 +90,43 @@ struct MemorySettingsPane: View {
         .accessibilityLabel("Memory capture settings")
     }
 
-    private var storedSection: some View {
+    /// The only path that creates an all-Attachés memory: the user types it
+    /// here. Conversation captures always belong to a single Attaché.
+    private var globalAuthoringSection: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("Applies to all Attachés").typoSection()
+            Text("Type a fact every Attaché should know. The same safety checks apply, and each added memory keeps its own Local only control below.")
+                .typoCaption()
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 8) {
+                TextField("A fact every Attaché should know", text: $newGlobalStatement, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...4)
+                    .onSubmit(addGlobalMemory)
+                    .accessibilityLabel("New memory for all Attachés")
+                Button("Add") { addGlobalMemory() }
+                    .disabled(newGlobalStatement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Add memory for all Attachés")
+            }
+        }
+        .padding(14)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Memories for all Attachés")
+    }
+
+    private func addGlobalMemory() {
+        let statement = newGlobalStatement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !statement.isEmpty else { return }
+        state.addGlobalMemory(statement: statement)
+        if state.memoryStatusMessage == "Memory saved for all Attachés." {
+            newGlobalStatement = ""
+        }
+    }
+
+    private var storedSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Saved on this Mac").typoSection()
                 Spacer()
@@ -112,10 +150,56 @@ struct MemorySettingsPane: View {
                         : "Memories you ask Attaché to remember will be listed here with their scope and privacy policy."
                 )
             } else {
-                ForEach(state.memoryRecords, id: \.id) { record in
-                    MemoryRecordRow(record: record, state: state)
+                if !globalRecords.isEmpty {
+                    recordGroup(title: "All Attachés", records: globalRecords)
+                }
+                ForEach(personalityGroups, id: \.id) { group in
+                    recordGroup(title: group.title, records: group.records)
+                }
+                if !topicRecords.isEmpty {
+                    recordGroup(title: "Topic memories", records: topicRecords)
                 }
             }
+        }
+    }
+
+    private func recordGroup(title: String, records: [AttacheMemoryRecord]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .typoLabel(.semibold)
+                .foregroundStyle(.secondary)
+            ForEach(records, id: \.id) { record in
+                MemoryRecordRow(record: record, state: state)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(title) memories")
+    }
+
+    private var globalRecords: [AttacheMemoryRecord] {
+        state.memoryRecords.filter { $0.scope == .global }
+    }
+
+    /// Per-Attaché groups by personality name; a deleted personality's rows
+    /// stay visible under the raw id.
+    private var personalityGroups: [(id: String, title: String, records: [AttacheMemoryRecord])] {
+        var byID: [String: [AttacheMemoryRecord]] = [:]
+        for record in state.memoryRecords {
+            if case .personality(let id) = record.scope {
+                byID[id, default: []].append(record)
+            }
+        }
+        return byID
+            .map { id, records in
+                (id: id, title: model.personalities.first { $0.id == id }?.name ?? id, records: records)
+            }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    private var topicRecords: [AttacheMemoryRecord] {
+        state.memoryRecords.filter {
+            if case .topic = $0.scope { return true }
+            return false
         }
     }
 
@@ -195,8 +279,8 @@ private struct MemoryRecordRow: View {
                     Button("Edit") { editing = true }
                 }
                 if record.egress == .localOnly {
-                    Button("Allow active model") { confirmRemoteEgress = true }
-                        .accessibilityLabel("Allow this memory to be sent to the active model")
+                    Button("Make usable by your model") { confirmRemoteEgress = true }
+                        .accessibilityLabel("Make this memory usable by the model this personality talks to")
                 } else {
                     Button("Make local only") {
                         state.setMemoryEgress(id: record.id, egress: .localOnly)
@@ -213,11 +297,11 @@ private struct MemoryRecordRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Saved \(memoryTypeTitle(record.type)) memory")
         .confirmationDialog(
-            "Allow the active model to use this memory?",
+            "Let your model use this memory?",
             isPresented: $confirmRemoteEgress,
             titleVisibility: .visible
         ) {
-            Button("Allow active model") {
+            Button("Make usable by your model") {
                 state.setMemoryEgress(id: record.id, egress: .allowedRemote)
             }
             Button("Keep local only", role: .cancel) {}
@@ -256,8 +340,8 @@ private func memoryTypeTitle(_ type: AttacheMemoryType) -> String {
 
 private func memoryScopeTitle(_ scope: AttacheMemoryScope) -> String {
     switch scope {
-    case .global: return "All personalities"
-    case .personality: return "This personality"
+    case .global: return "All Attachés"
+    case .personality: return "This Attaché"
     case .topic: return "This topic"
     }
 }
@@ -274,6 +358,6 @@ private func memorySourceTitle(_ source: AttacheMemorySourceKind) -> String {
 private func memoryEgressTitle(_ egress: AttacheMemoryEgress) -> String {
     switch egress {
     case .localOnly: return "Local only"
-    case .allowedRemote: return "May be sent to active model"
+    case .allowedRemote: return "Usable by your model"
     }
 }

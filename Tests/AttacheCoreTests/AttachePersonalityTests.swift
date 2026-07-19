@@ -370,6 +370,10 @@ final class AttachePersonalityTests: XCTestCase {
             XCTAssertTrue(prompt.contains("is not a request to remember it"))
             XCTAssertTrue(prompt.contains("Restate the fact in the user's own words as the statement"))
             XCTAssertTrue(prompt.contains("A spoken acknowledgment alone saves nothing"))
+            // Scoping: conversation saves belong to this Attaché; all-Attaché
+            // memories are typed in Settings.
+            XCTAssertTrue(prompt.contains("The save goes to this Attaché's own memory"))
+            XCTAssertTrue(prompt.contains("memories for every Attaché are typed in Settings > Memory"))
             // Explicit-in-context: affirming the assistant's own offer counts,
             // the fact comes from the earlier turn in the user's words, and an
             // accepted offer can never be refused.

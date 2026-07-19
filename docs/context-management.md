@@ -188,6 +188,14 @@ is no suggestion review queue. Two modes:
   quiet "Memory saved" chip in the call surface is the confirmation channel
   and opens the Memory settings pane.
 
+A conversation capture always belongs to the Attaché the user told it to: the
+save is stamped with the active personality's scope deterministically, and the
+tool exposes no scope choice. Memories for every Attaché are typed by the
+user in Settings > Memory ("Applies to all Attachés"); that authored path runs
+the same validator, and a model can never create or widen a memory to global.
+Nothing new creates topic scope; existing topic-scoped records remain
+supported by the ledger and selector.
+
 ### What is never saved
 
 Secrets, credentials, financial account data, private reasoning, transient
@@ -197,30 +205,32 @@ work-session content not explicitly restated by the user.
 ### Local storage and egress
 
 Memory records are stored locally with 0600 file permissions. Each record has
-an egress label (local-only or allowed-remote). Local-only memories never
-appear in remote-bound requests, even when the active personality uses a
-remote model. A model tool can only propose local-only memory. Promoting one
-record for remote use requires an explicit native per-item confirmation in
-Settings. Legacy migration and JSON import also start every record local-only;
-an imported egress label is never treated as disclosure consent.
+an egress label (local-only or usable-by-your-model). Local-only memories
+never appear in remote-bound requests, even when the active personality uses
+a remote model. An explicit low-sensitivity save defaults to usable by the
+personality's model: the user already said the fact to that model in
+conversation, so quoting it back later expands nothing. The saving tool may
+narrow a record to local-only but can never widen egress beyond policy;
+anything above low sensitivity is forced local-only, and the per-record
+control in Settings can change either direction at any time. Legacy migration
+and JSON import still start every record local-only; an imported egress label
+is never treated as disclosure consent.
 
 ### Scope
 
 Memory visibility and network egress are separate controls. A saved record can
 be scoped to:
 
-- **All personalities** for stable facts and preferences that should follow the
-  user everywhere.
-- **This personality** for a relationship, tone, shared history, or standing
-  instruction that belongs only to one character.
-- **This topic** for a bounded subject that should not leak into unrelated
-  conversations.
+- **All Attachés** for stable facts and preferences that should follow the
+  user everywhere. Created only by the user typing them in Settings > Memory.
+- **This Attaché** for anything captured in conversation: a fact told to one
+  Attaché is known only to that Attaché.
+- **This topic** (legacy) for a bounded subject; nothing new creates this
+  scope, but existing records keep working.
 
 Attaché filters scope before memory text enters a request. A personality-scoped
-record is invisible to other personalities, and switching characters does not
-copy it. Global memory should remain the default for ordinary user facts;
-personality scope should be reserved for details whose meaning really depends on
-that character.
+record is invisible to other personalities, and switching personalities does
+not copy it.
 
 ### Inspection and correction
 

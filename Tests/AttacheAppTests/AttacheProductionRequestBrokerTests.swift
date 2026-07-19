@@ -1156,7 +1156,9 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         XCTAssertFalse(effects.claim(.memoryProposal), "the same effect runs only once across fallback")
     }
 
-    func testMemoryProposalSchemaRequiresBoundScopeValue() throws {
+    /// Conversation captures are always scoped to the active Attaché, so the
+    /// schema exposes no scope choice at all; the model cannot even ask.
+    func testMemoryProposalSchemaExposesNoScopeChoice() throws {
         let data = try AttacheProductionRequestBroker.conversationToolDefinitions(
             allowSessionContextTools: false,
             allowAgentInstructionTool: false,
@@ -1167,10 +1169,14 @@ final class AttacheProductionRequestBrokerTests: XCTestCase {
         XCTAssertEqual(function["name"] as? String, "propose_memory")
         let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
         let required = try XCTUnwrap(parameters["required"] as? [String])
-        XCTAssertTrue(required.contains("scope_value"))
+        XCTAssertEqual(
+            Set(required),
+            ["statement", "type", "sensitivity", "egress", "requires_confirmation"]
+        )
         let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
-        let scopeValue = try XCTUnwrap(properties["scope_value"] as? [String: Any])
-        XCTAssertEqual(scopeValue["minLength"] as? Int, 1)
+        XCTAssertNil(properties["scope"])
+        XCTAssertNil(properties["scope_value"])
+        XCTAssertTrue((function["description"] as? String)?.contains("THIS Attaché's memory") == true)
     }
 
     func testSessionReadSchemasExposeBoundedContinuationLocators() throws {

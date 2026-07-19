@@ -817,7 +817,7 @@ struct OnboardingSheet: View {
         case .off:
             return "Nothing new is saved. You can turn memory on later in Settings."
         case .on:
-            return "Attaché saves a memory only when you ask it to remember something. Saved memories stay on this Mac unless you say otherwise."
+            return "Attaché saves a memory only when you ask it to remember something. Memories are stored only on this Mac; your Attaché's model may use them unless you mark one Local only."
         }
     }
 

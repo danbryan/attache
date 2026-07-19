@@ -152,7 +152,8 @@ public enum AttacheMemoryProposalProcessor {
     public static func process(
         _ proposal: AttacheMemoryProposal,
         mode: AttacheMemoryProposalMode,
-        existingRecords: [AttacheMemoryRecord]
+        existingRecords: [AttacheMemoryRecord],
+        now: Date = Date()
     ) -> AttacheMemoryProposalDisposition {
         // Off: no proposals, no writes.
         guard mode.allowsProposals else { return .ignored }
@@ -177,12 +178,16 @@ public enum AttacheMemoryProposalProcessor {
               proposal.confidence == .authoritative else {
             return .rejected(reason: .notExplicitlyRequested)
         }
+        // Stamp real creation times: the record initializer's placeholder
+        // default is the 1970 epoch, which rots recency scoring and any date
+        // display if it ever reaches the ledger.
         let record = AttacheMemoryRecord(
             id: proposal.id, statement: proposal.statement,
             type: proposal.type, scope: proposal.scope,
             sourceKind: proposal.sourceKind, sourceLocator: proposal.sourceLocator,
             confidence: proposal.confidence, sensitivity: proposal.sensitivity,
-            egress: proposal.egress
+            egress: proposal.egress,
+            createdAt: now, updatedAt: now
         )
         return .saved(record: record)
     }

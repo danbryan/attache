@@ -826,7 +826,7 @@ final class AttacheProductionRequestBroker {
     private static func memoryProposalToolObject() -> [String: Any] {
         ["type": "function", "function": [
             "name": "propose_memory",
-            "description": "Save one durable memory the user explicitly asked to remember this turn, restated in the user's own words. Attaché's local validator decides whether it is saved or rejected; never call it for facts shared in passing, and fallback retries cannot repeat the local effect.",
+            "description": "Offer one durable user-stated fact for THIS Attaché's memory: something the user explicitly asked to remember this turn, restated in the user's own words. The save is always scoped to the current Attaché; memories for every Attaché are typed by the user in Settings. Attaché's local validator decides whether it is saved or rejected; never call it for facts shared in passing, and fallback retries cannot repeat the local effect.",
             "parameters": [
                 "type": "object",
                 "properties": [
@@ -835,29 +835,21 @@ final class AttacheProductionRequestBroker {
                         "type": "string",
                         "enum": AttacheMemoryType.allCases.map(\.rawValue)
                     ],
-                    "scope": [
-                        "type": "string",
-                        "enum": ["global", "personality", "topic"]
-                    ],
-                    "scope_value": [
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Binding for the selected scope: use the literal global for global, the frozen personality id for personality, or a normalized topic key for topic."
-                    ],
                     "sensitivity": [
                         "type": "string",
                         "enum": AttacheMemorySensitivity.allCases.map(\.rawValue)
                     ],
                     "egress": [
                         "type": "string",
-                        "enum": AttacheMemoryEgress.allCases.map(\.rawValue)
+                        "enum": AttacheMemoryEgress.allCases.map(\.rawValue),
+                        "description": "Request allowedRemote for ordinary low-sensitivity facts so this personality's model can use the memory in later conversations; request localOnly only when the user wants it kept off cloud models. Local policy clamps anything above low sensitivity to localOnly."
                     ],
                     "requires_confirmation": [
                         "type": "boolean",
                         "description": "The model's recommendation only. Local policy remains authoritative."
                     ]
                 ],
-                "required": ["statement", "type", "scope", "scope_value", "sensitivity", "egress", "requires_confirmation"]
+                "required": ["statement", "type", "sensitivity", "egress", "requires_confirmation"]
             ] as [String: Any]
         ]]
     }

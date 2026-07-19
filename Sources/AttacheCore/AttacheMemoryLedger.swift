@@ -450,6 +450,18 @@ public final class AttacheMemoryLedger: @unchecked Sendable {
         return true
     }
 
+    /// One-shot repair for rows stamped with the 1970 epoch by an earlier save
+    /// and migration path that relied on the record initializer's placeholder
+    /// dates. Zero timestamps rot recency scoring and date display, so they
+    /// become the given time at launch.
+    @discardableResult
+    public func repairEpochZeroTimestamps(now: Date = Date()) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let stamp = now.timeIntervalSince1970
+        return execute("UPDATE memories SET created_at = \(stamp) WHERE created_at <= 0;")
+            && execute("UPDATE memories SET updated_at = \(stamp) WHERE updated_at <= 0;")
+    }
+
     /// Forget a record: mark it forgotten so it leaves active retrieval without
     /// destroying the audit trail.
     @discardableResult

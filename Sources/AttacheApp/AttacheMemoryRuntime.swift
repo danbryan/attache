@@ -39,6 +39,10 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
             at: databaseURL.deletingLastPathComponent()
                 .appendingPathComponent("memory-review-queue.json")
         )
+        // Rows written before creation times were stamped carry the 1970
+        // epoch, which rots recency scoring and date display. Repair once at
+        // launch by mapping zero timestamps to now.
+        ledger.repairEpochZeroTimestamps()
     }
 
     var activeRecords: [AttacheMemoryRecord] { ledger.list(activeOnly: true) }
@@ -133,7 +137,6 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         explicitlyUserRequested: Bool,
         mode: AttacheMemoryProposalMode
     ) -> AttacheMemoryProposalDisposition {
-        _ = egress
         let proposal = AttacheMemoryProposal(
             id: "memory.\(UUID().uuidString)",
             statement: statement.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -143,10 +146,14 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
             sourceLocator: sourceLocator,
             confidence: explicitlyUserRequested ? .authoritative : .inferred,
             sensitivity: sensitivity,
-            // A model proposal and an in-chat "remember" request can authorize
-            // local persistence, never remote disclosure. Only the native
-            // per-record control may promote a saved memory to allowedRemote.
-            egress: .localOnly,
+            // Storage is always local; egress only decides whether the saved
+            // text may later be quoted to the model the personality talks to.
+            // An explicit low-sensitivity save exists to be USED by that model
+            // (the user already said the fact to it in conversation), so the
+            // requested egress is honored there. Everything else is forced
+            // local-only: a request can narrow, never widen beyond policy, and
+            // the native per-record control in Settings can change it later.
+            egress: (explicitlyUserRequested && sensitivity == .low) ? egress : .localOnly,
             requiresConfirmation: !explicitlyUserRequested
         )
         let disposition = AttacheMemoryProposalProcessor.process(
@@ -174,9 +181,62 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         return finalDisposition
     }
 
+    /// Settings-authored global memory: the user types a statement in the
+    /// Memory pane and it applies to every Attaché. This is the ONLY path that
+    /// creates a global record; conversation captures are always scoped to one
+    /// personality and a model can never create or widen to global. The same
+    /// validator, secret filter, and duplicate check as conversation captures
+    /// apply.
+    func addGlobalMemory(statement: String) -> AttacheMemoryRecord? {
+        let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 1_000 else { return nil }
+        let now = Date()
+        let proposal = AttacheMemoryProposal(
+            id: "memory.\(UUID().uuidString)",
+            statement: trimmed,
+            type: .userFact,
+            scope: .global,
+            sourceKind: .userConfirmed,
+            sourceLocator: "settings:memory-pane",
+            confidence: .authoritative,
+            sensitivity: .low,
+            egress: .allowedRemote,
+            requiresConfirmation: false
+        )
+        guard AttacheMemoryProposalValidator.validate(proposal) == nil,
+              !AttacheMemoryProposalProcessor.isDuplicate(
+                  proposal,
+                  existing: ledger.list(activeOnly: true)
+              ) else {
+            return nil
+        }
+        let record = AttacheMemoryRecord(
+            id: proposal.id,
+            statement: proposal.statement,
+            type: proposal.type,
+            scope: proposal.scope,
+            sourceKind: proposal.sourceKind,
+            sourceLocator: proposal.sourceLocator,
+            confidence: proposal.confidence,
+            sensitivity: proposal.sensitivity,
+            egress: proposal.egress,
+            createdAt: now,
+            updatedAt: now
+        )
+        guard ledger.add(record) else { return nil }
+        return record
+    }
+
     @MainActor
     func bind(to state: AttacheContextUIState) {
         state.onMemoryModeChange = { [weak self] _ in self?.publish(to: state) }
+        state.onAddGlobalMemory = { [weak self] statement in
+            guard let self, let record = self.addGlobalMemory(statement: statement) else {
+                return nil
+            }
+            self.publish(to: state)
+            return record
+        }
         state.onEditMemory = { [weak self] record, statement in
             guard let self else { return nil }
             let replaced = self.replace(record: record, statement: statement)

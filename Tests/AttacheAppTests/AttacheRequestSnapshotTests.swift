@@ -273,6 +273,13 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         XCTAssertNotNil(stored)
         XCTAssertEqual(stored?.sourceKind, .userAuthored)
         XCTAssertEqual(stored?.egress, .localOnly)
+        // The payload's scope-like fields are ignored: a conversation capture
+        // always binds to the active Attaché, never global.
+        XCTAssertEqual(
+            stored?.scope,
+            .personality(model.activePersonality?.id ?? "attache"),
+            "the tool must never produce a global row"
+        )
         XCTAssertTrue(model.memorySavedChipVisible, "the save confirmation chip must show")
         XCTAssertFalse(
             effectLedger.claim(.memoryProposal),

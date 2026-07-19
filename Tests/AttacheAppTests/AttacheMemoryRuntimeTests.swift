@@ -81,7 +81,10 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: queueURL.path))
     }
 
-    func testExplicitMemorySavesImmediatelyAndStaysLocalOnly() throws {
+    /// An explicit low-sensitivity save exists to be used by whatever model
+    /// the personality talks to, so the requested allowedRemote egress is
+    /// honored. Creation times are stamped at save, never the 1970 epoch.
+    func testExplicitLowSensitivitySaveHonorsRequestedRemoteEgressAndStampsDates() throws {
         let (runtime, root, _) = try makeRuntime()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -99,8 +102,104 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         guard case .saved = disposition else {
             return XCTFail("Expected the explicit memory to save immediately")
         }
-        XCTAssertEqual(runtime.activeRecords.map(\.statement), ["I prefer concise answers."])
-        XCTAssertEqual(runtime.activeRecords.first?.egress, .localOnly)
+        let record = try XCTUnwrap(runtime.activeRecords.first)
+        XCTAssertEqual(record.statement, "I prefer concise answers.")
+        XCTAssertEqual(record.egress, .allowedRemote)
+        XCTAssertLessThan(abs(record.createdAt.timeIntervalSinceNow), 300)
+        XCTAssertLessThan(abs(record.updatedAt.timeIntervalSinceNow), 300)
+    }
+
+    /// The egress clamp: a request can narrow to localOnly and be honored, and
+    /// anything above low sensitivity is forced local-only regardless of the
+    /// requested value.
+    func testRequestedLocalOnlyIsHonoredAndAboveLowSensitivityForcesLocalOnly() throws {
+        let (runtime, root, _) = try makeRuntime()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        _ = runtime.processProposal(
+            statement: "My private nickname is Ultramarine.",
+            type: .userFact, scope: .global, sensitivity: .low,
+            egress: .localOnly, sourceLocator: "call-1:turn-1",
+            explicitlyUserRequested: true, mode: .on
+        )
+        _ = runtime.processProposal(
+            statement: "I keep a standing meeting on Fridays.",
+            type: .userFact, scope: .global, sensitivity: .medium,
+            egress: .allowedRemote, sourceLocator: "call-1:turn-2",
+            explicitlyUserRequested: true, mode: .on
+        )
+
+        let byStatement = Dictionary(uniqueKeysWithValues: runtime.activeRecords.map { ($0.statement, $0) })
+        XCTAssertEqual(byStatement["My private nickname is Ultramarine."]?.egress, .localOnly)
+        XCTAssertEqual(byStatement["I keep a standing meeting on Fridays."]?.egress, .localOnly)
+    }
+
+    /// Regression for Dan's 2026-07-19 recall failure: an explicit save was
+    /// forced local-only, his personality model is remote, and the selector
+    /// correctly excludes local-only memories from remote requests, so "do you
+    /// remember my name" found nothing. The explicit low-sensitivity save is
+    /// now usable by the remote model.
+    func testDanRecallRegressionExplicitSaveIsSelectableForRemoteRequests() throws {
+        let (runtime, root, _) = try makeRuntime()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let disposition = runtime.processProposal(
+            statement: "My name is Dan.",
+            type: .userFact, scope: .personality("p1"), sensitivity: .low,
+            egress: .allowedRemote, sourceLocator: "call-1:turn-1",
+            explicitlyUserRequested: true, mode: .on
+        )
+        guard case .saved = disposition else {
+            return XCTFail("Expected the explicit name memory to save")
+        }
+
+        let remote = runtime.contextItems(
+            userTurn: "Do you remember my name?", personalityID: "p1",
+            strategy: .automatic, memoryBudgetTokens: 1_000, requestIsRemote: true
+        )
+        let local = runtime.contextItems(
+            userTurn: "Do you remember my name?", personalityID: "p1",
+            strategy: .automatic, memoryBudgetTokens: 1_000, requestIsRemote: false
+        )
+
+        XCTAssertEqual(remote.items.count, 1, "the saved name must be usable by the remote model")
+        XCTAssertTrue(remote.items.first?.content.contains("My name is Dan.") == true)
+        XCTAssertEqual(local.items.count, 1)
+    }
+
+    /// Rows stamped with the 1970 epoch by the earlier save path are repaired
+    /// to a current timestamp once at launch.
+    func testEpochZeroTimestampsAreRepairedAtLaunch() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-memory-epoch-repair-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacyURL = root.appendingPathComponent("AttacheMemory.md")
+        try AttachePersonality.defaultMemoryFileText.write(to: legacyURL, atomically: true, encoding: .utf8)
+        let databaseURL = root.appendingPathComponent("memory.sqlite")
+        let ledger = AttacheMemoryLedger(databaseURL: databaseURL)
+        XCTAssertTrue(ledger.add(AttacheMemoryRecord(
+            id: "memory.epoch-zero",
+            statement: "My name is Dan.",
+            type: .userFact
+        )))
+        XCTAssertEqual(ledger.list(activeOnly: true).first?.createdAt, Date(timeIntervalSince1970: 0))
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "memory-epoch-repair.\(UUID().uuidString)"))
+        let runtime = AttacheMemoryRuntime(
+            databaseURL: databaseURL,
+            legacySnapshot: AttacheMemorySnapshot(
+                fileURL: legacyURL,
+                rawText: AttachePersonality.defaultMemoryFileText,
+                context: nil,
+                errorDescription: nil
+            ),
+            defaults: defaults
+        )
+
+        let repaired = try XCTUnwrap(runtime.activeRecords.first { $0.id == "memory.epoch-zero" })
+        XCTAssertLessThan(abs(repaired.createdAt.timeIntervalSinceNow), 300)
+        XCTAssertLessThan(abs(repaired.updatedAt.timeIntervalSinceNow), 300)
     }
 
     func testLocalOnlyMemoryNeverEntersRemoteRequest() throws {
@@ -182,6 +281,18 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             strategy: .automatic, memoryBudgetTokens: 1_000,
             requestIsRemote: true
         ).items.count, 1)
+
+        // The pane control round-trips: narrowing back to local-only excludes
+        // the record from remote requests again.
+        let widened = try XCTUnwrap(state.memoryRecords.first)
+        state.setMemoryEgress(id: widened.id, egress: .localOnly)
+        XCTAssertEqual(state.memoryRecords.first?.egress, .localOnly)
+        XCTAssertEqual(runtime.activeRecords.first?.egress, .localOnly)
+        XCTAssertTrue(runtime.contextItems(
+            userTurn: "I prefer concise answers.", personalityID: "p1",
+            strategy: .automatic, memoryBudgetTokens: 1_000,
+            requestIsRemote: true
+        ).items.isEmpty)
     }
 
     func testTopicScopedMemoryRequiresExactTopic() throws {
@@ -230,7 +341,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
     }
 
     func testMemoryProposalParsingBindsPersonalityScopeLocally() throws {
-        let arguments = #"{"statement":"I prefer concise answers.","type":"preference","scope":"personality","sensitivity":"low","egress":"allowedRemote"}"#
+        let arguments = #"{"statement":"I prefer concise answers.","type":"preference","sensitivity":"low","egress":"allowedRemote"}"#
         let decoded = try XCTUnwrap(AppModel.memoryProposalArguments(
             fromToolArguments: arguments,
             personalityID: "personality-colt"
@@ -242,12 +353,82 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         XCTAssertEqual(decoded.egress, .allowedRemote)
     }
 
-    func testTopicMemoryRequiresBoundedScopeValue() {
-        let arguments = #"{"statement":"Use the cash method.","type":"projectTopic","scope":"topic","sensitivity":"low","egress":"localOnly"}"#
-        XCTAssertNil(AppModel.memoryProposalArguments(
-            fromToolArguments: arguments,
-            personalityID: "p1"
-        ))
+    /// The tool exposes no scope. Even if a model still sends scope-like
+    /// fields, they are ignored and the save binds to the active personality;
+    /// a model can never create a global or topic row.
+    func testToolScopeFieldsCannotProduceGlobalOrTopicRows() throws {
+        for arguments in [
+            #"{"statement":"I prefer concise answers.","type":"preference","scope":"global","scope_value":"global","sensitivity":"low","egress":"allowedRemote"}"#,
+            #"{"statement":"I prefer concise answers.","type":"preference","scope":"topic","scope_value":"taxes","sensitivity":"low","egress":"allowedRemote"}"#
+        ] {
+            let decoded = try XCTUnwrap(AppModel.memoryProposalArguments(
+                fromToolArguments: arguments,
+                personalityID: "personality-colt"
+            ))
+            XCTAssertEqual(decoded.scope, .personality("personality-colt"))
+        }
+    }
+
+    /// (a) A fact saved with Attaché A is selected for A and never for B.
+    func testPersonalityScopedMemoryIsInvisibleToOtherAttaches() throws {
+        let (runtime, root, _) = try makeRuntime()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let disposition = runtime.processProposal(
+            statement: "My name is Dan.",
+            type: .userFact, scope: .personality("attache-a"), sensitivity: .low,
+            egress: .allowedRemote, sourceLocator: "call-1:turn-1",
+            explicitlyUserRequested: true, mode: .on
+        )
+        guard case .saved = disposition else {
+            return XCTFail("Expected the explicit name memory to save")
+        }
+
+        let forA = runtime.contextItems(
+            userTurn: "Do you remember my name?", personalityID: "attache-a",
+            strategy: .automatic, memoryBudgetTokens: 1_000, requestIsRemote: true
+        )
+        let forB = runtime.contextItems(
+            userTurn: "Do you remember my name?", personalityID: "attache-b",
+            strategy: .automatic, memoryBudgetTokens: 1_000, requestIsRemote: true
+        )
+
+        XCTAssertEqual(forA.items.count, 1)
+        XCTAssertTrue(forB.items.isEmpty, "another Attaché must not see this memory")
+    }
+
+    /// (b) A Settings-authored global is selected for every Attaché, is
+    /// validator-gated, and rejects duplicates.
+    func testSettingsAuthoredGlobalMemoryIsSharedAndValidatorGated() throws {
+        let (runtime, root, _) = try makeRuntime()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let record = try XCTUnwrap(runtime.addGlobalMemory(statement: "I always prefer metric units."))
+        XCTAssertEqual(record.scope, .global)
+        XCTAssertEqual(record.sourceKind, .userConfirmed)
+        XCTAssertEqual(record.confidence, .authoritative)
+        XCTAssertEqual(record.egress, .allowedRemote)
+        XCTAssertLessThan(abs(record.createdAt.timeIntervalSinceNow), 300)
+
+        for personality in ["attache-a", "attache-b"] {
+            let selected = runtime.contextItems(
+                userTurn: "Which units do I prefer, metric or imperial?",
+                personalityID: personality,
+                strategy: .automatic, memoryBudgetTokens: 1_000, requestIsRemote: true
+            )
+            XCTAssertEqual(selected.items.count, 1, "global memory must reach \(personality)")
+        }
+
+        let countBefore = runtime.activeRecords.count
+        XCTAssertNil(
+            runtime.addGlobalMemory(statement: "The API key is sk-1234567890abcdef"),
+            "the authored path runs the same validator"
+        )
+        XCTAssertNil(
+            runtime.addGlobalMemory(statement: "I always prefer metric units."),
+            "duplicates are rejected"
+        )
+        XCTAssertEqual(runtime.activeRecords.count, countBefore)
     }
 
     func testExplicitAskSupportRejectsModelOnlyAdditions() {
@@ -342,15 +523,29 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         XCTAssertFalse(window.contains("assistant turn that must not count"))
     }
 
-    func testToolProposalCannotGrantItsOwnRemoteMemoryEgress() {
+    /// The deterministic egress policy table: low sensitivity honors the
+    /// requested egress in both directions; anything above low is clamped to
+    /// local-only no matter what the tool requested.
+    func testToolProposalEgressClampFollowsPolicyTable() {
         XCTAssertEqual(
-            AppModel.memoryEgressForToolProposal(.allowedRemote),
-            .localOnly
+            AppModel.memoryEgressForToolProposal(.allowedRemote, sensitivity: .low),
+            .allowedRemote
         )
         XCTAssertEqual(
-            AppModel.memoryEgressForToolProposal(.localOnly),
+            AppModel.memoryEgressForToolProposal(.localOnly, sensitivity: .low),
             .localOnly
         )
+        for sensitivity in [AttacheMemorySensitivity.medium, .high, .secret] {
+            XCTAssertEqual(
+                AppModel.memoryEgressForToolProposal(.allowedRemote, sensitivity: sensitivity),
+                .localOnly,
+                "\(sensitivity) must clamp to local-only"
+            )
+            XCTAssertEqual(
+                AppModel.memoryEgressForToolProposal(.localOnly, sensitivity: sensitivity),
+                .localOnly
+            )
+        }
     }
 
     @MainActor

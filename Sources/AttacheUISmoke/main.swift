@@ -2367,7 +2367,7 @@ if enabled("f10") {
 
         try selectSettingsSection("Memory", paneMarker: "Remembering")
         _ = try waitForElement("memory mode", in: window, containing: "Memory mode")
-        _ = try waitForElement("local memory privacy explanation", in: window, containing: "Memory stays local by default")
+        _ = try waitForElement("local memory privacy explanation", in: window, containing: "stored only on this Mac")
         _ = try waitForElement("structured memory empty state", in: window, containing: "No structured memories yet")
         _ = try waitForElement("memory import action", in: window, role: kAXButtonRole as String, exactly: "Import structured memory")
         _ = try waitForElement("memory export action", in: window, role: kAXButtonRole as String, exactly: "Export structured memory")
@@ -3978,7 +3978,7 @@ if enabled("context") {
         let window = try settingsWindow()
         _ = try waitForElement("memory mode", in: window, containing: "Memory mode")
         _ = try waitForElement("explicit-only capture promise", in: window, containing: "only when you ask it to remember")
-        _ = try waitForElement("memory privacy promise", in: window, containing: "Memory stays local by default")
+        _ = try waitForElement("memory privacy promise", in: window, containing: "stored only on this Mac")
         _ = try waitForElement("saved memory", in: window, containing: "Saved Preference memory")
         _ = try waitForElement("forget saved memory", in: window, role: kAXButtonRole as String, exactly: "Forget saved memory")
         _ = try waitForElement("import structured memory", in: window, role: kAXButtonRole as String, exactly: "Import structured memory")

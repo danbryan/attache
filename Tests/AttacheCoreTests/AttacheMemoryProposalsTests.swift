@@ -164,15 +164,20 @@ final class AttacheMemoryProposalsTests: XCTestCase {
 
     // Criterion 6: every stored record has source, scope, confidence,
     // sensitivity, and egress policy.
-    func testStoredRecordHasAllFields() {
+    func testStoredRecordHasAllFieldsAndStampedCreationTimes() {
         let p = proposal(statement: "User prefers terse summaries")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let disposition = AttacheMemoryProposalProcessor.process(
+            p, mode: .on, existingRecords: [], now: now
+        )
         if case .saved(let record) = disposition {
             XCTAssertEqual(record.sourceKind, .userAuthored)
             XCTAssertEqual(record.scope, .global)
             XCTAssertEqual(record.confidence, .authoritative)
             XCTAssertEqual(record.sensitivity, .low)
             XCTAssertEqual(record.egress, .localOnly)
+            XCTAssertEqual(record.createdAt, now, "never the 1970 epoch placeholder")
+            XCTAssertEqual(record.updatedAt, now)
         } else {
             XCTFail("should save")
         }

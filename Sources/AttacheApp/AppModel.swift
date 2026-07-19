@@ -140,15 +140,8 @@ private struct AgentInstructionToolArguments: Decodable {
 private struct MemoryProposalToolArguments: Decodable {
     let statement: String
     let type: String
-    let scope: String
-    let scopeValue: String?
     let sensitivity: String
     let egress: String
-
-    private enum CodingKeys: String, CodingKey {
-        case statement, type, scope, sensitivity, egress
-        case scopeValue = "scope_value"
-    }
 }
 
 struct CardPersonalityMarker: Equatable {
@@ -5543,7 +5536,10 @@ final class AppModel: ObservableObject {
                 turns: conversationMessages
             )
         )
-        let egress = Self.memoryEgressForToolProposal(decoded.egress)
+        let egress = Self.memoryEgressForToolProposal(
+            decoded.egress,
+            sensitivity: decoded.sensitivity
+        )
         let mode = AttacheContextUIState.shared.memoryMode
         if let effectLedger, !effectLedger.claim(.memoryProposal) {
             return "This turn already handled a memory proposal. It was not saved or queued again."
@@ -5598,6 +5594,11 @@ final class AppModel: ObservableObject {
         AttacheNavigation.openSettings(.memory)
     }
 
+    /// Conversation-captured memories always belong to the Attaché the user
+    /// told them to. The tool schema exposes no scope; any scope-like field a
+    /// model still sends is ignored by decoding, and the scope is stamped
+    /// deterministically to the frozen active personality. Global memories are
+    /// Settings-authored only; the model can never create or widen to global.
     static func memoryProposalArguments(
         fromToolArguments arguments: String,
         personalityID: String
@@ -5618,22 +5619,7 @@ final class AppModel: ObservableObject {
               let type = AttacheMemoryType(rawValue: decoded.type),
               let sensitivity = AttacheMemorySensitivity(rawValue: decoded.sensitivity),
               let egress = AttacheMemoryEgress(rawValue: decoded.egress) else { return nil }
-
-        let scope: AttacheMemoryScope
-        switch decoded.scope {
-        case "global":
-            scope = .global
-        case "personality":
-            scope = .personality(personalityID)
-        case "topic":
-            guard let topic = decoded.scopeValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !topic.isEmpty,
-                  topic.count <= 200 else { return nil }
-            scope = .topic(topic)
-        default:
-            return nil
-        }
-        return (statement, type, scope, sensitivity, egress)
+        return (statement, type, .personality(personalityID), sensitivity, egress)
     }
 
     /// Conservative local support check for explicit-in-context capture. The
@@ -5690,11 +5676,19 @@ final class AppModel: ObservableObject {
             .filter { !$0.isEmpty }
     }
 
+    /// Deterministic egress clamp for tool-originated saves. Storage is always
+    /// local; egress only decides whether the saved text may later be quoted
+    /// to the model the personality talks to. A low-sensitivity explicit save
+    /// honors the requested egress (the model may narrow to localOnly, never
+    /// widen beyond policy); anything above low sensitivity is forced
+    /// local-only, and secret content never reaches this clamp because the
+    /// validator rejects it outright.
     static func memoryEgressForToolProposal(
-        _ requested: AttacheMemoryEgress
+        _ requested: AttacheMemoryEgress,
+        sensitivity: AttacheMemorySensitivity
     ) -> AttacheMemoryEgress {
-        _ = requested
-        return .localOnly
+        guard sensitivity == .low else { return .localOnly }
+        return requested
     }
 
     // MARK: - System media controls

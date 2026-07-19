@@ -32,6 +32,9 @@ final class AttacheContextUIState: ObservableObject {
     @Published private(set) var exhaustiveReview: AttacheExhaustiveReviewUIState?
 
     var onMemoryModeChange: ((AttacheMemoryProposalMode) -> Void)?
+    /// Settings-authored all-Attachés memory. Returns nil when the validator,
+    /// duplicate check, or storage rejected the statement.
+    var onAddGlobalMemory: ((String) -> AttacheMemoryRecord?)?
     var onEditMemory: ((AttacheMemoryRecord, String) -> AttacheMemoryRecord?)?
     var onSetMemoryEgress: ((AttacheMemoryRecord, AttacheMemoryEgress) -> AttacheMemoryRecord?)?
     /// Returns true only after the active row was marked forgotten in storage.
@@ -147,6 +150,24 @@ final class AttacheContextUIState: ObservableObject {
     ) {
         memoryRecords = records
         memoryStatusMessage = status
+    }
+
+    /// Adds a Settings-authored memory that every Attaché can use. The bound
+    /// runtime republishes the full snapshot on success, so this only surfaces
+    /// the outcome message on rejection.
+    func addGlobalMemory(statement: String) {
+        let trimmed = statement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            memoryStatusMessage = "A memory needs some text before it can be saved."
+            return
+        }
+        guard let record = onAddGlobalMemory?(trimmed) else {
+            memoryStatusMessage = "Memory was not saved because local policy rejected it or storage was unavailable."
+            return
+        }
+        memoryRecords.removeAll { $0.id == record.id }
+        memoryRecords.insert(record, at: 0)
+        memoryStatusMessage = "Memory saved for all Attachés."
     }
 
     func editMemory(id: String, statement: String) {

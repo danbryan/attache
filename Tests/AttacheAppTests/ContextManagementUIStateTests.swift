@@ -212,6 +212,40 @@ final class ContextManagementUIStateTests: XCTestCase {
         XCTAssertTrue(state.memoryStatusMessage?.contains("not updated") == true)
     }
 
+    /// The "Applies to all Attachés" authoring path: trims and forwards the
+    /// statement through the injectable callback, publishes the accepted
+    /// record, and surfaces a rejection without inventing a phantom row.
+    func testAddGlobalMemoryUsesInjectableCallbackAndSurfacesRejection() {
+        let state = AttacheContextUIState(defaults: defaults)
+
+        state.addGlobalMemory(statement: "   ")
+        XCTAssertTrue(state.memoryStatusMessage?.contains("needs some text") == true)
+
+        var authored: String?
+        state.onAddGlobalMemory = { statement in
+            authored = statement
+            return AttacheMemoryRecord(
+                id: "memory.global-one",
+                statement: statement,
+                type: .userFact,
+                scope: .global,
+                sourceKind: .userConfirmed,
+                confidence: .authoritative,
+                sensitivity: .low,
+                egress: .allowedRemote
+            )
+        }
+        state.addGlobalMemory(statement: "  I always prefer metric units.  ")
+        XCTAssertEqual(authored, "I always prefer metric units.")
+        XCTAssertEqual(state.memoryRecords.map(\.id), ["memory.global-one"])
+        XCTAssertEqual(state.memoryStatusMessage, "Memory saved for all Attachés.")
+
+        state.onAddGlobalMemory = { _ in nil }
+        state.addGlobalMemory(statement: "another statement the policy rejects")
+        XCTAssertEqual(state.memoryRecords.map(\.id), ["memory.global-one"])
+        XCTAssertTrue(state.memoryStatusMessage?.contains("not saved") == true)
+    }
+
     func testFailedForgetLeavesMemoryVisibleAndEligibleForRetry() {
         let state = AttacheContextUIState(defaults: defaults)
         let saved = AttacheMemoryRecord(
