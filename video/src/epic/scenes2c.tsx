@@ -215,45 +215,52 @@ export const Personalities2: React.FC<{ deliveryFraming?: boolean }> = ({ delive
 /*     local or frontier, with a visible fallback.                     */
 /* ------------------------------------------------------------------ */
 
-// Recognizable, single-color product marks for the four watched harnesses,
-// recreated as inline SVG. Codex (OpenAI blossom) and Grok (xAI) reuse the
-// accurate marks from logos.ts; Claude's starburst and opencode's terminal
-// square are drawn here so the mark is right (not the angular Anthropic mark)
-// and pairs with its product name.
-const HarnessMark: React.FC<{ kind: "claude" | "codex" | "grok" | "opencode"; size?: number }> = ({ kind, size = 26 }) => {
-  if (kind === "codex") return <Logo name="openai" size={size} color="#C7CBD1" />;
-  if (kind === "grok") return <Logo name="xai" size={size} color="#E8E8ED" />;
-  if (kind === "claude") {
-    const CORAL = "#D97757";
-    const rays = 12;
-    return (
-      <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: "block", flexShrink: 0 }}>
-        {Array.from({ length: rays }).map((_, i) => {
-          const a = (i / rays) * Math.PI * 2;
-          return (
-            <line
-              key={i}
-              x1={12 + Math.cos(a) * 2.2}
-              y1={12 + Math.sin(a) * 2.2}
-              x2={12 + Math.cos(a) * 10.6}
-              y2={12 + Math.sin(a) * 10.6}
-              stroke={CORAL}
-              strokeWidth={2.2}
-              strokeLinecap="round"
-            />
-          );
-        })}
-      </svg>
-    );
-  }
-  const GREEN = "#30D158";
+// Recognizable product marks for the watched harnesses, inlined as SVG.
+// Codex uses the OpenAI blossom from logos.ts; Grok and opencode use the
+// official vectors Dan supplied (comet/swirl and nested-block, geometry
+// verbatim); Claude is its starburst (not the angular Anthropic mark).
+const GrokMark: React.FC<{ size?: number; color?: string }> = ({ size = 26, color = "#E8E8ED" }) => (
+  <svg width={size} height={size} viewBox="0 0 150 150" fill={color} style={{ display: "block", flexShrink: 0 }}>
+    <path d="M59.95,93.59l45.05-33.3c2.21-1.63,5.37-1,6.42,1.54,5.54,13.37,3.06,29.44-7.96,40.48-11.02,11.03-26.35,13.45-40.37,7.94l-15.31,7.1c21.96,15.03,48.63,11.31,65.29-5.38,13.22-13.23,17.31-31.27,13.48-47.54l.03,.03c-5.55-23.9,1.36-33.45,15.53-52.98,.33-.46,.67-.93,1.01-1.4l-18.64,18.66v-.06L59.94,93.6" />
+    <path d="M50.65,101.68c-15.76-15.07-13.04-38.4,.4-51.86,9.94-9.96,26.24-14.02,40.46-8.05l15.28-7.06c-2.75-1.99-6.28-4.13-10.33-5.64-18.29-7.54-40.2-3.79-55.07,11.09-14.3,14.32-18.8,36.34-11.08,55.13,5.77,14.04-3.69,23.98-13.22,34-3.38,3.55-6.76,7.11-9.49,10.87l43.03-38.48" />
+  </svg>
+);
+
+const OpencodeMark: React.FC<{ size?: number }> = ({ size = 26 }) => (
+  <svg height={size} width={size} viewBox="0 0 240 300" fill="none" style={{ display: "block", flexShrink: 0 }}>
+    <path d="M180 240H60V120H180V240Z" fill="#4B4646" />
+    <path d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z" fill="#F1ECEC" />
+  </svg>
+);
+
+const ClaudeMark: React.FC<{ size?: number; color?: string }> = ({ size = 26, color = "#D97757" }) => {
+  const rays = 12;
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" style={{ display: "block", flexShrink: 0 }}>
-      <rect x="2.5" y="3.5" width="19" height="17" rx="4" fill="none" stroke={GREEN} strokeWidth={2} />
-      <path d="M7 9 L10.5 12 L7 15" fill="none" stroke={GREEN} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-      <line x1="12.5" y1="15.5" x2="17" y2="15.5" stroke={GREEN} strokeWidth={2} strokeLinecap="round" />
+      {Array.from({ length: rays }).map((_, i) => {
+        const a = (i / rays) * Math.PI * 2;
+        return (
+          <line
+            key={i}
+            x1={12 + Math.cos(a) * 2.2}
+            y1={12 + Math.sin(a) * 2.2}
+            x2={12 + Math.cos(a) * 10.6}
+            y2={12 + Math.sin(a) * 10.6}
+            stroke={color}
+            strokeWidth={2.2}
+            strokeLinecap="round"
+          />
+        );
+      })}
     </svg>
   );
+};
+
+const HarnessMark: React.FC<{ kind: "claude" | "codex" | "grok" | "opencode"; size?: number }> = ({ kind, size = 26 }) => {
+  if (kind === "codex") return <Logo name="openai" size={size} color="#C7CBD1" />;
+  if (kind === "grok") return <GrokMark size={size} />;
+  if (kind === "claude") return <ClaudeMark size={size} />;
+  return <OpencodeMark size={size} />;
 };
 
 const WATCHED: { kind: "claude" | "codex" | "grok" | "opencode"; label: string }[] = [
@@ -294,9 +301,9 @@ export const Brain2: React.FC<{ t?: typeof brain; fourHarnesses?: boolean }> = (
                   <span style={{ color: T.text, fontSize: 22, fontWeight: 600 }}>{label}</span>
                 </div>
               ))
-            : ([["claude", "Claude Code"], ["openai", "Codex"]] as const).map(([lg, label]) => (
+            : ([["claude", "Claude Code"], ["codex", "Codex"]] as const).map(([kind, label]) => (
                 <div key={label} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 18px", borderRadius: 12, background: T.bgRaised, border: `1px solid ${T.stroke}` }}>
-                  <Logo name={lg} size={24} />
+                  <HarnessMark kind={kind} size={24} />
                   <span style={{ color: T.text, fontSize: 23, fontWeight: 600 }}>{label}</span>
                 </div>
               ))}
@@ -328,9 +335,9 @@ export const Brain2: React.FC<{ t?: typeof brain; fourHarnesses?: boolean }> = (
             {/* frontier */}
             <div style={{ width: 470, boxSizing: "border-box", padding: "24px 28px", borderRadius: 20, background: frontier ? "rgba(255,255,255,0.05)" : T.bgPanel, border: `1px solid ${frontier ? T.gold : T.stroke}`, boxShadow: frontier ? `0 0 40px ${T.gold}33` : "none", opacity: frontier ? 1 : 0.6 }}>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                {([["xai", "Grok"], ["claude", "Claude"], ["openai", "GPT"]] as const).map(([lg, label]) => (
+                {([["grok", "Grok"], ["claude", "Claude"], ["gpt", "GPT"]] as const).map(([kind, label]) => (
                   <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 10, background: T.bgRaised, border: `1px solid ${T.stroke}` }}>
-                    <Logo name={lg} size={20} />
+                    {kind === "grok" ? <GrokMark size={20} /> : kind === "claude" ? <ClaudeMark size={20} /> : <Logo name="openai" size={20} />}
                     <span style={{ color: T.text, fontSize: 20, fontWeight: 600 }}>{label}</span>
                   </div>
                 ))}
