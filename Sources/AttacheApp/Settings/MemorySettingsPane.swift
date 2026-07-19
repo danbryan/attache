@@ -11,17 +11,13 @@ struct MemorySettingsPane: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Memory").typoTitle()
-                Text("Choose whether Attaché notices durable details you explicitly share in direct conversation. Work-session transcripts are never remembered just because they were visible.")
+                Text("Attaché saves a memory only when you ask it to remember something. Nothing is noticed or suggested automatically. Saved memories stay on this Mac unless you say otherwise.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             modeSection
-
-            if state.memoryMode != .off || !state.memoryReviewItems.isEmpty {
-                reviewSection
-            }
 
             storedSection
 
@@ -37,7 +33,7 @@ struct MemorySettingsPane: View {
                 Button("Delete all structured memory", role: .destructive) {
                     confirmDeleteAll = true
                 }
-                .disabled(state.memoryRecords.isEmpty && state.memoryReviewItems.isEmpty)
+                .disabled(state.memoryRecords.isEmpty)
                 .accessibilityLabel("Delete all structured memory")
             }
 
@@ -57,7 +53,7 @@ struct MemorySettingsPane: View {
             Button("Delete all memory", role: .destructive) { state.deleteAllMemory() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes saved memories and pending suggestions from this Mac. It does not delete agent session transcripts.")
+            Text("This permanently removes saved memories from this Mac. It does not delete agent session transcripts.")
         }
     }
 
@@ -66,8 +62,7 @@ struct MemorySettingsPane: View {
             Text("Remembering").typoSection()
             Picker("Remembering", selection: modeBinding) {
                 Text("Off").tag(AttacheMemoryProposalMode.off)
-                Text("Suggest").tag(AttacheMemoryProposalMode.suggest)
-                Text("Automatic").tag(AttacheMemoryProposalMode.automatic)
+                Text("On").tag(AttacheMemoryProposalMode.on)
             }
             .pickerStyle(.segmented)
             .accessibilityLabel("Memory mode")
@@ -92,30 +87,6 @@ struct MemorySettingsPane: View {
         .accessibilityLabel("Memory capture settings")
     }
 
-    @ViewBuilder private var reviewSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Review suggestions").typoSection()
-                Spacer()
-                Text("\(state.memoryReviewItems.count) pending")
-                    .typoCaption(.medium, monoDigit: true)
-                    .foregroundStyle(.secondary)
-            }
-
-            if state.memoryReviewItems.isEmpty {
-                emptyCard(
-                    icon: "checkmark.circle",
-                    title: "Nothing waiting for review",
-                    detail: "Suggestions that need your approval will appear here."
-                )
-            } else {
-                ForEach(state.memoryReviewItems, id: \.proposal.id) { item in
-                    MemoryProposalReviewRow(item: item, state: state)
-                }
-            }
-        }
-    }
-
     private var storedSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -137,8 +108,8 @@ struct MemorySettingsPane: View {
                     icon: "tray",
                     title: "No structured memories yet",
                     detail: state.memoryMode == .off
-                        ? "Remembering is Off. Attaché will not propose or save new memories."
-                        : "Durable details you approve will be listed here with their scope and privacy policy."
+                        ? "Remembering is Off. Attaché will not save new memories."
+                        : "Memories you ask Attaché to remember will be listed here with their scope and privacy policy."
                 )
             } else {
                 ForEach(state.memoryRecords, id: \.id) { record in
@@ -163,79 +134,6 @@ struct MemorySettingsPane: View {
 
     private var modeBinding: Binding<AttacheMemoryProposalMode> {
         Binding(get: { state.memoryMode }, set: { state.setMemoryMode($0) })
-    }
-}
-
-private struct MemoryProposalReviewRow: View {
-    let item: AttacheMemoryReviewItem
-    @ObservedObject var state: AttacheContextUIState
-
-    @State private var editedStatement: String
-    @State private var confirmNever = false
-
-    init(item: AttacheMemoryReviewItem, state: AttacheContextUIState) {
-        self.item = item
-        self.state = state
-        _editedStatement = State(initialValue: item.proposal.statement)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Label(memoryTypeTitle(item.proposal.type), systemImage: "sparkles")
-                    .typoLabel(.semibold)
-                Spacer()
-                Text(memoryScopeTitle(item.proposal.scope))
-                    .typoCaption(.medium)
-                    .foregroundStyle(.secondary)
-            }
-
-            TextField("Memory suggestion", text: $editedStatement, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(2...5)
-                .accessibilityLabel("Edit suggested memory")
-
-            HStack(spacing: 8) {
-                Label(memorySourceTitle(item.proposal.sourceKind), systemImage: "quote.bubble")
-                Label(memoryEgressTitle(item.proposal.egress), systemImage: item.proposal.egress == .localOnly ? "lock.fill" : "cloud")
-            }
-            .typoCaption()
-            .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                Button("Save") {
-                    state.acceptMemoryProposal(id: item.proposal.id, editedStatement: editedStatement)
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityLabel("Save suggested memory")
-
-                Button("Not now") { state.rejectMemoryProposal(id: item.proposal.id) }
-                    .accessibilityLabel("Dismiss suggested memory")
-
-                Spacer(minLength: 0)
-
-                Button("Never suggest this type") { confirmNever = true }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Never suggest \(memoryTypeTitle(item.proposal.type)) memories")
-            }
-        }
-        .padding(12)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Pending \(memoryTypeTitle(item.proposal.type)) memory")
-        .confirmationDialog(
-            "Stop suggesting \(memoryTypeTitle(item.proposal.type)) memories?",
-            isPresented: $confirmNever,
-            titleVisibility: .visible
-        ) {
-            Button("Never suggest this type", role: .destructive) {
-                state.rejectMemoryProposal(id: item.proposal.id, neverRememberType: true)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This dismisses all pending suggestions of this type and asks the memory service not to propose them again.")
-        }
     }
 }
 
@@ -332,19 +230,16 @@ private struct MemoryRecordRow: View {
 private func memoryModeTitle(_ mode: AttacheMemoryProposalMode) -> String {
     switch mode {
     case .off: return "Off"
-    case .suggest: return "Suggest"
-    case .automatic: return "Automatic"
+    case .on: return "On"
     }
 }
 
 private func memoryModeExplanation(_ mode: AttacheMemoryProposalMode) -> String {
     switch mode {
     case .off:
-        return "Attaché does not propose or save new memories. Existing saved items remain available until you forget them."
-    case .suggest:
-        return "Attaché can notice durable details, but nothing is saved until you review and approve it."
-    case .automatic:
-        return "Attaché may save low-sensitivity facts you stated clearly. Sensitive or uncertain details still wait for your approval."
+        return "Attaché does not save new memories. Existing saved items remain available until you forget them."
+    case .on:
+        return "Say \"remember\" in a call or chat and Attaché saves it after a local safety check. Nothing is saved without an explicit ask."
     }
 }
 

@@ -338,7 +338,7 @@ public enum AttachePersonality {
 
             """
             : "- Do not address, write to, or imply you can message the work agent from this conversation.\n"
-        let memoryToolDescription = "propose_memory (offer one durable user-stated fact to Attaché's local memory policy)"
+        let memoryToolDescription = "propose_memory (save one fact the user explicitly asked you to remember)"
         let toolsLine: String
         if canStage {
             toolsLine = canProposeMemory
@@ -357,7 +357,7 @@ public enum AttachePersonality {
                 : "- No work-session, transcript, project-file, rename, or agent-send tools are available in this conversation.\n"
         }
         let memoryProposalLine = canProposeMemory
-            ? "- When the user explicitly asks you to remember, save, or note a durable fact, you MUST call propose_memory and restate the fact in the user's own words as the statement. A spoken acknowledgment alone saves nothing. You may also propose a clearly durable fact the user shares in passing, at most one per turn; let small talk and passing details go unproposed.\n- Stay a conversation partner, not a filing clerk. Respond to the person and the moment first: greet a new name, react to their news, answer their question. Mention memory afterward in one short natural aside that matches what the tool actually reported (saved, waiting for their review, or declined), and never make the mechanics the centerpiece of your reply. Never claim a memory was saved or queued unless the tool reported it.\n"
+            ? "- Call propose_memory ONLY when the user explicitly asks you to remember, save, or note something, and you MUST call it then. A spoken acknowledgment alone saves nothing. Never volunteer it for details shared in passing: a name, preference, or fact mentioned in conversation is not a request to remember it. Restate the fact in the user's own words as the statement.\n- After a save, reply to the person naturally and in character: greet a new name, react to their news, answer what they asked. Do not narrate the save mechanics; Attaché's own UI confirms every save, so at most weave in a brief natural acknowledgment such as \"noted\". Never claim a memory was saved unless the tool reported it. If the user explicitly asked and the tool declined the fact, tell them briefly, in one clause, that it can't be saved and why.\n"
             : "- You cannot save memories in this conversation: remembering is off or this is a private call. If the user asks you to remember something, say plainly that nothing will be saved right now; never imply you will remember it.\n"
         let contextGuidance = hasSessionContext
             ? "- You start with the explicitly focused session context below. If you need MORE than that to answer well (earlier turns, what files exist, or a file's contents), call your tools to read it before answering. Prefer reading over guessing. When a summary mentions a count but omits the items, read the transcript for the specifics. Find an artifact's exact path from the transcript before reading it; never guess a path or probe an unrelated protected folder."

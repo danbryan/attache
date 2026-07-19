@@ -33,7 +33,9 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         )
     }
 
-    func testModelProposalCannotAuthorizeAutomaticWrite() throws {
+    /// Capture is explicit-only: a statement the user did not say this turn is
+    /// rejected outright. There is no suggestion queue to fall back to.
+    func testModelOnlyStatementCannotAuthorizeAWrite() throws {
         let (runtime, root, _) = try makeRuntime()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -45,54 +47,41 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             egress: .allowedRemote,
             sourceLocator: "call-1:turn-2",
             explicitlyUserRequested: false,
-            mode: .automatic
+            mode: .on
         )
 
-        XCTAssertEqual(disposition, .queuedForReview)
+        XCTAssertEqual(disposition, .rejected(reason: .notExplicitlyRequested))
         XCTAssertTrue(runtime.activeRecords.isEmpty)
     }
 
-    @MainActor
-    func testReviewQueueSurvivesRelaunchAndRemainsLocalOnly() throws {
-        let (runtime, root, defaults) = try makeRuntime()
+    /// The retired suggestion review queue's persistence file is removed at
+    /// launch so no stale pre-explicit-only state lingers beside the ledger.
+    func testStaleReviewQueueFileIsRemovedAtLaunch() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-memory-stale-queue-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let disposition = runtime.processProposal(
-            statement: "The user prefers concise answers.",
-            type: .preference,
-            scope: .global,
-            sensitivity: .low,
-            egress: .allowedRemote,
-            sourceLocator: "call-1:turn-2",
-            explicitlyUserRequested: false,
-            mode: .automatic
-        )
-        XCTAssertEqual(disposition, .queuedForReview)
-
         let legacyURL = root.appendingPathComponent("AttacheMemory.md")
-        let relaunched = AttacheMemoryRuntime(
+        try AttachePersonality.defaultMemoryFileText.write(to: legacyURL, atomically: true, encoding: .utf8)
+        let queueURL = root.appendingPathComponent("memory-review-queue.json")
+        try Data("[]".utf8).write(to: queueURL)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "memory-stale-queue.\(UUID().uuidString)"))
+
+        _ = AttacheMemoryRuntime(
             databaseURL: root.appendingPathComponent("memory.sqlite"),
             legacySnapshot: AttacheMemorySnapshot(
                 fileURL: legacyURL,
-                rawText: try String(contentsOf: legacyURL, encoding: .utf8),
+                rawText: AttachePersonality.defaultMemoryFileText,
                 context: nil,
                 errorDescription: nil
             ),
             defaults: defaults
         )
-        let state = AttacheContextUIState(defaults: defaults)
-        relaunched.bind(to: state)
 
-        XCTAssertEqual(state.memoryReviewItems.count, 1)
-        XCTAssertEqual(state.memoryReviewItems.first?.proposal.egress, .localOnly)
-        XCTAssertTrue(relaunched.activeRecords.isEmpty)
-        let queueURL = root.appendingPathComponent("memory-review-queue.json")
-        let permissions = try XCTUnwrap(
-            FileManager.default.attributesOfItem(atPath: queueURL.path)[.posixPermissions] as? NSNumber
-        )
-        XCTAssertEqual(permissions.intValue & 0o777, 0o600)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queueURL.path))
     }
 
-    func testExplicitLowSensitivityMemoryCanAutoStore() throws {
+    func testExplicitMemorySavesImmediatelyAndStaysLocalOnly() throws {
         let (runtime, root, _) = try makeRuntime()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -104,11 +93,11 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             egress: .allowedRemote,
             sourceLocator: "call-1:turn-1",
             explicitlyUserRequested: true,
-            mode: .automatic
+            mode: .on
         )
 
-        guard case .autoStored = disposition else {
-            return XCTFail("Expected explicit memory to pass Automatic policy")
+        guard case .saved = disposition else {
+            return XCTFail("Expected the explicit memory to save immediately")
         }
         XCTAssertEqual(runtime.activeRecords.map(\.statement), ["I prefer concise answers."])
         XCTAssertEqual(runtime.activeRecords.first?.egress, .localOnly)
@@ -120,7 +109,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "My private nickname is Blue.", type: .userFact, scope: .global,
             sensitivity: .low, egress: .localOnly, sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true, mode: .automatic
+            explicitlyUserRequested: true, mode: .on
         )
 
         let local = runtime.contextItems(
@@ -143,12 +132,12 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "I prefer concise answers.", type: .preference, scope: .global,
             sensitivity: .low, egress: .localOnly, sourceLocator: "call-1:turn-1",
-            explicitlyUserRequested: true, mode: .automatic
+            explicitlyUserRequested: true, mode: .on
         )
         _ = runtime.processProposal(
             statement: "I enjoy hiking on weekends.", type: .preference, scope: .global,
             sensitivity: .low, egress: .localOnly, sourceLocator: "call-1:turn-2",
-            explicitlyUserRequested: true, mode: .automatic
+            explicitlyUserRequested: true, mode: .on
         )
 
         let selected = runtime.contextItems(
@@ -172,9 +161,9 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             statement: "I prefer concise answers.", type: .preference,
             scope: .global, sensitivity: .low, egress: .localOnly,
             sourceLocator: "call-1:turn-1", explicitlyUserRequested: true,
-            mode: .automatic
+            mode: .on
         )
-        guard case .autoStored(let record) = disposition else {
+        guard case .saved(let record) = disposition else {
             return XCTFail("Expected a local memory")
         }
         runtime.publish(to: state)
@@ -201,7 +190,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "Use the cash method for tax planning.", type: .projectTopic,
             scope: .topic("tax"), sensitivity: .low, egress: .allowedRemote,
-            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true, mode: .automatic
+            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true, mode: .on
         )
 
         let wrongTopic = runtime.contextItems(
@@ -223,12 +212,12 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         _ = runtime.processProposal(
             statement: "Use the cash method for Maryland taxes.", type: .projectTopic,
             scope: .topic("Maryland taxes"), sensitivity: .low, egress: .allowedRemote,
-            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true, mode: .automatic
+            sourceLocator: "call-1:turn-1", explicitlyUserRequested: true, mode: .on
         )
         _ = runtime.processProposal(
             statement: "Keep the packing list short.", type: .projectTopic,
             scope: .topic("travel"), sensitivity: .low, egress: .allowedRemote,
-            sourceLocator: "call-1:turn-2", explicitlyUserRequested: true, mode: .automatic
+            sourceLocator: "call-1:turn-2", explicitlyUserRequested: true, mode: .on
         )
 
         XCTAssertNil(runtime.explicitTopic(matching: "What should we work on next?"))
@@ -261,7 +250,7 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         ))
     }
 
-    func testAutomaticMemorySupportRejectsModelOnlyAdditions() {
+    func testExplicitAskSupportRejectsModelOnlyAdditions() {
         XCTAssertTrue(AppModel.memoryStatement(
             "I prefer concise answers.",
             isSupportedBy: "I prefer concise answers."
@@ -302,9 +291,9 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             statement: "I prefer concise answers.", type: .preference,
             scope: .global, sensitivity: .low, egress: .localOnly,
             sourceLocator: "call-1:turn-1", explicitlyUserRequested: true,
-            mode: .automatic
+            mode: .on
         )
-        guard case .autoStored(let record) = disposition else {
+        guard case .saved(let record) = disposition else {
             return XCTFail("Expected a stored memory")
         }
         runtime.publish(to: state)
@@ -320,37 +309,11 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
     }
 
     @MainActor
-    func testRejectedReviewEditsRemainVisibleAndNeverBecomePhantomRecords() throws {
+    func testSecretEditIsRejectedAndNeverBecomesAPhantomRecord() throws {
         let (runtime, root, defaults) = try makeRuntime()
         defer { try? FileManager.default.removeItem(at: root) }
         let state = AttacheContextUIState(defaults: defaults)
         runtime.bind(to: state)
-
-        XCTAssertEqual(
-            runtime.processProposal(
-                statement: "I prefer concise answers.",
-                type: .preference,
-                scope: .global,
-                sensitivity: .low,
-                egress: .localOnly,
-                sourceLocator: "call-1:turn-1",
-                explicitlyUserRequested: false,
-                mode: .suggest
-            ),
-            .queuedForReview
-        )
-        runtime.publish(to: state)
-        let proposalID = try XCTUnwrap(state.memoryReviewItems.first?.proposal.id)
-
-        state.acceptMemoryProposal(
-            id: proposalID,
-            editedStatement: "api_key = do-not-save"
-        )
-
-        XCTAssertTrue(runtime.activeRecords.isEmpty)
-        XCTAssertEqual(state.memoryReviewItems.map(\.proposal.id), [proposalID])
-        XCTAssertTrue(state.memoryRecords.isEmpty)
-        XCTAssertTrue(state.memoryStatusMessage?.contains("not saved") == true)
 
         let stored = runtime.processProposal(
             statement: "I prefer outcome-first answers.",
@@ -360,9 +323,9 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
             egress: .localOnly,
             sourceLocator: "call-1:turn-2",
             explicitlyUserRequested: true,
-            mode: .automatic
+            mode: .on
         )
-        guard case .autoStored(let record) = stored else {
+        guard case .saved(let record) = stored else {
             return XCTFail("Expected the safe explicit memory to be stored")
         }
         runtime.publish(to: state)

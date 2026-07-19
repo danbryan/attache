@@ -411,6 +411,12 @@ final class AppModel: ObservableObject {
     /// duration, cleared the moment the delayed retry actually starts.
     @Published private(set) var conversationFallbackAnnouncement: String?
 
+    /// True while the quiet transient "Memory saved" chip is visible in the
+    /// call/chat surface. The chip is the app's save confirmation channel,
+    /// separate from the spoken reply; it auto-fades and never plays a sound.
+    @Published private(set) var memorySavedChipVisible = false
+    private var memorySavedChipTimer: Timer?
+
     @Published var voiceInputMode: AttacheVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -3532,6 +3538,8 @@ final class AppModel: ObservableObject {
         isConversing = false
         silenceTimer?.invalidate(); silenceTimer = nil
         revealTimer?.invalidate(); revealTimer = nil
+        memorySavedChipTimer?.invalidate(); memorySavedChipTimer = nil
+        memorySavedChipVisible = false
         endConversationWait()
         conversationFallbackRetryTimer?.invalidate()
         conversationFallbackRetryTimer = nil
@@ -5546,15 +5554,41 @@ final class AppModel: ObservableObject {
         memoryRuntime.publish(to: .shared)
 
         switch disposition {
-        case .autoStored:
-            return "The locally validated memory was saved on this Mac."
-        case .queuedForReview:
-            return "The memory suggestion is waiting for the user to review in Settings."
+        case .saved:
+            showMemorySavedChip()
+            return "The memory was saved on this Mac. Attaché's own UI shows the confirmation, so keep replying naturally without narrating the save."
+        case .rejected(.notExplicitlyRequested):
+            return "Nothing was saved: Attaché saves only when the user explicitly asked this turn and the statement is in the user's own words. If the user did ask, tell them briefly it couldn't be saved this time."
         case .rejected(let reason):
-            return "Local memory policy rejected that suggestion (\(reason.rawValue))."
+            return "Local memory policy declined that (\(reason.rawValue)). Nothing was saved; if the user explicitly asked, tell them briefly it can't be saved and why."
         case .ignored:
-            return "Remembering is off, so nothing was saved or queued."
+            return "Remembering is off, so nothing was saved."
         }
+    }
+
+    /// Shows the quiet transient "Memory saved" chip in the call/chat surface.
+    /// The chip is the save confirmation channel; the spoken reply stays
+    /// natural and never narrates the mechanics. No sound, no spoken line.
+    @MainActor
+    private func showMemorySavedChip() {
+        memorySavedChipTimer?.invalidate()
+        memorySavedChipVisible = true
+        memorySavedChipTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.memorySavedChipTimer = nil
+                self.memorySavedChipVisible = false
+            }
+        }
+    }
+
+    /// The chip is clickable: it opens the Memory settings pane.
+    @MainActor
+    func openMemorySettingsFromChip() {
+        memorySavedChipTimer?.invalidate()
+        memorySavedChipTimer = nil
+        memorySavedChipVisible = false
+        AttacheNavigation.openSettings(.memory)
     }
 
     static func memoryProposalArguments(

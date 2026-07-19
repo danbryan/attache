@@ -1,18 +1,27 @@
 import Foundation
 
-/// The opt-in memory proposal mode (INF-324). Existing users upgrade to Off;
-/// fresh users choose during onboarding; skipping leaves it Off.
+/// The opt-in memory capture mode. Capture is explicit-only: On means Attaché
+/// saves a memory only when the user explicitly asks to remember something in
+/// their own words; nothing is noticed or suggested automatically. Fresh users
+/// choose during onboarding; skipping leaves it Off.
 public enum AttacheMemoryProposalMode: String, Equatable, Sendable, Codable {
     case off
-    case suggest
-    case automatic
+    case on
 
-    /// True when any proposals or writes are allowed (INF-324).
+    /// True when explicit remember requests may save (Off blocks everything).
     public var allowsProposals: Bool { self != .off }
 
-    /// True when low-sensitivity high-confidence facts may auto-persist
-    /// (INF-324). Sensitive or ambiguous items still require confirmation.
-    public var allowsAutomaticWrite: Bool { self == .automatic }
+    /// Maps a persisted raw value onto the current two-state mode. The retired
+    /// Suggest and Automatic modes both allowed capture, so they map to On;
+    /// anything unknown fails closed to Off.
+    public static func fromPersisted(_ raw: String?) -> AttacheMemoryProposalMode {
+        switch raw {
+        case "on": return .on
+        case "off": return .off
+        case "suggest", "automatic": return .on
+        default: return .off
+        }
+    }
 }
 
 /// A proposed memory record before acceptance (INF-324). The model proposes;
@@ -66,26 +75,16 @@ public enum AttacheMemoryProposalRejection: String, Equatable, Sendable {
     case sessionContentNotRestated
     case duplicate
     case modeOff
+    case notExplicitlyRequested
 }
 
-/// The disposition of a proposal (INF-324).
+/// The disposition of a proposal. Capture is explicit-only, so a proposal
+/// either saves immediately, is rejected with a typed reason, or is ignored
+/// because remembering is off.
 public enum AttacheMemoryProposalDisposition: Equatable, Sendable {
-    case queuedForReview
-    case autoStored(record: AttacheMemoryRecord)
+    case saved(record: AttacheMemoryRecord)
     case rejected(reason: AttacheMemoryProposalRejection)
     case ignored
-}
-
-/// A review queue item (INF-324). The user can edit, accept, reject, forget,
-/// or undo.
-public struct AttacheMemoryReviewItem: Equatable, Sendable {
-    public let proposal: AttacheMemoryProposal
-    public let disposition: AttacheMemoryProposalDisposition
-
-    public init(proposal: AttacheMemoryProposal, disposition: AttacheMemoryProposalDisposition) {
-        self.proposal = proposal
-        self.disposition = disposition
-    }
 }
 
 /// The pure proposal validator (INF-324). Rejects secrets, credentials,
@@ -144,13 +143,12 @@ public enum AttacheMemoryProposalValidator {
     }
 }
 
-/// The pure proposal processor (INF-324). Decides what happens to a proposal
-/// based on the mode and validation. Off mode: nothing. Suggest mode: queue
-/// for review. Automatic mode: persist low-sensitivity high-confidence,
-/// sensitive/ambiguous still require confirmation.
+/// The pure proposal processor. Capture is explicit-only: Off does nothing;
+/// On saves a validator-passing proposal immediately when the user's explicit
+/// ask authorized it, and rejects everything else with a typed reason.
 public enum AttacheMemoryProposalProcessor {
 
-    /// Process a proposal according to the mode (INF-324).
+    /// Process a proposal according to the mode.
     public static func process(
         _ proposal: AttacheMemoryProposal,
         mode: AttacheMemoryProposalMode,
@@ -169,36 +167,24 @@ public enum AttacheMemoryProposalProcessor {
             return .rejected(reason: .duplicate)
         }
 
-        // Suggest: always queue for review.
-        if mode == .suggest {
-            return .queuedForReview
+        // The user's explicit ask is the consent, established deterministically
+        // upstream: the statement must match the user's own clause in the
+        // current turn, which is what marks the proposal user-authored. A model
+        // can never authorize its own durable write, even if it marks the
+        // proposal authoritative or clears the confirmation flag.
+        guard proposal.sourceKind == .userAuthored,
+              !proposal.requiresConfirmation,
+              proposal.confidence == .authoritative else {
+            return .rejected(reason: .notExplicitlyRequested)
         }
-
-        // Automatic: persist low-sensitivity high-confidence.
-        // Sensitive or ambiguous still require confirmation.
-        if mode == .automatic {
-            // A model can propose a memory but can never authorize its own
-            // durable write, even if it marks the proposal authoritative or
-            // clears a confirmation flag. Automatic writes are limited to
-            // explicit user-originated records that do not require review.
-            if !proposal.requiresConfirmation,
-               proposal.sourceKind != .modelProposed,
-               proposal.sensitivity == .low,
-               proposal.confidence == .authoritative {
-                let record = AttacheMemoryRecord(
-                    id: proposal.id, statement: proposal.statement,
-                    type: proposal.type, scope: proposal.scope,
-                    sourceKind: proposal.sourceKind, sourceLocator: proposal.sourceLocator,
-                    confidence: proposal.confidence, sensitivity: proposal.sensitivity,
-                    egress: proposal.egress
-                )
-                return .autoStored(record: record)
-            }
-            // Sensitive or ambiguous: still needs confirmation.
-            return .queuedForReview
-        }
-
-        return .queuedForReview
+        let record = AttacheMemoryRecord(
+            id: proposal.id, statement: proposal.statement,
+            type: proposal.type, scope: proposal.scope,
+            sourceKind: proposal.sourceKind, sourceLocator: proposal.sourceLocator,
+            confidence: proposal.confidence, sensitivity: proposal.sensitivity,
+            egress: proposal.egress
+        )
+        return .saved(record: record)
     }
 
     /// True when the proposal duplicates an existing active record (INF-324).

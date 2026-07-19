@@ -331,7 +331,8 @@ final class AttachePersonalityTests: XCTestCase {
 
     /// The prompt must name propose_memory in every branch where the tool is
     /// offered, including the context-free no-focused-session branch, and must
-    /// carry the behavioral rule that an acknowledgment alone saves nothing.
+    /// carry the explicit-only capture rule plus the no-narration rule: the
+    /// app's UI confirms saves, so the reply stays natural and in character.
     func testConversationPromptNamesMemoryToolInEveryBranchWhenAvailable() {
         let focusedWithStaging = AttachePersonality.conversationSystemPrompt(
             memoryContext: nil,
@@ -361,12 +362,20 @@ final class AttachePersonalityTests: XCTestCase {
         )
 
         for prompt in [focusedWithStaging, focusedReadOnly, contextFree] {
-            XCTAssertTrue(prompt.contains("propose_memory"))
-            XCTAssertTrue(prompt.contains("you MUST call propose_memory"))
-            XCTAssertTrue(prompt.contains("restate the fact in the user's own words"))
+            // Explicit-only capture: only an explicit ask triggers the tool,
+            // and nothing is volunteered for facts shared in passing.
+            XCTAssertTrue(prompt.contains("Call propose_memory ONLY when the user explicitly asks"))
+            XCTAssertTrue(prompt.contains("you MUST call it then"))
+            XCTAssertTrue(prompt.contains("Never volunteer it for details shared in passing"))
+            XCTAssertTrue(prompt.contains("is not a request to remember it"))
+            XCTAssertTrue(prompt.contains("Restate the fact in the user's own words as the statement"))
             XCTAssertTrue(prompt.contains("A spoken acknowledgment alone saves nothing"))
-            XCTAssertTrue(prompt.contains("Never claim a memory was saved or queued unless the tool reported it"))
-            XCTAssertTrue(prompt.contains("Respond to the person and the moment first"))
+            // No narration: the UI chip confirms saves, the reply stays natural.
+            XCTAssertTrue(prompt.contains("Do not narrate the save mechanics"))
+            XCTAssertTrue(prompt.contains("Attaché's own UI confirms every save"))
+            XCTAssertTrue(prompt.contains("greet a new name, react to their news, answer what they asked"))
+            XCTAssertTrue(prompt.contains("Never claim a memory was saved unless the tool reported it"))
+            XCTAssertTrue(prompt.contains("that it can't be saved and why"))
             XCTAssertFalse(prompt.contains("You cannot save memories in this conversation"))
         }
 

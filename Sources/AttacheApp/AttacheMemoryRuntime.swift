@@ -6,17 +6,11 @@ import Foundation
 /// input only. Once migration is verified, requests select a bounded set from
 /// this ledger rather than injecting the entire file.
 final class AttacheMemoryRuntime: @unchecked Sendable {
-    private enum Key {
-        static let suppressedTypes = "attache.memory.suppressedTypes.v1"
-    }
-
     private let ledger: AttacheMemoryLedger
     private let defaults: UserDefaults
     private let legacyFileURL: URL
     private let legacyBackupURL: URL
-    private let reviewQueueURL: URL
     private let lock = NSRecursiveLock()
-    private var reviewItems: [AttacheMemoryReviewItem] = []
     private var forgottenByID: [String: AttacheMemoryRecord] = [:]
 
     init(
@@ -29,8 +23,6 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         self.legacyFileURL = legacySnapshot.fileURL
         self.legacyBackupURL = legacySnapshot.fileURL
             .appendingPathExtension("pre-structured-memory-backup")
-        self.reviewQueueURL = databaseURL.deletingLastPathComponent()
-            .appendingPathComponent("memory-review-queue.json")
         let legacySourceIsSecure = Self.hardenLegacySource(at: legacyFileURL)
         if !ledger.isMigrated {
             // The original Markdown remains untouched. A byte-for-byte,
@@ -41,8 +33,12 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
                 _ = ledger.migrate(fromMarkdown: legacySnapshot.rawText)
             }
         }
-        self.reviewItems = Self.loadReviewItems(from: reviewQueueURL)
-        _ = persistReviewItemsLocked()
+        // Capture is explicit-only now; the retired suggestion review queue is
+        // gone, so remove any stale queue file from the earlier contract.
+        try? FileManager.default.removeItem(
+            at: databaseURL.deletingLastPathComponent()
+                .appendingPathComponent("memory-review-queue.json")
+        )
     }
 
     var activeRecords: [AttacheMemoryRecord] { ledger.list(activeOnly: true) }
@@ -121,10 +117,11 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         )
     }
 
-    /// Applies local policy to a proposal. Model-originated suggestions can
-    /// never authorize their own durable write. An explicit user "remember"
-    /// request is represented as user-authored and may use Automatic mode when
-    /// it is low-sensitivity and passes every validator.
+    /// Applies local policy to a proposal. Capture is explicit-only: the user's
+    /// explicit "remember" request in their own words is the consent, and it is
+    /// established deterministically upstream (`explicitlyUserRequested`).
+    /// A model-originated statement the user did not say can never authorize
+    /// its own durable write.
     @discardableResult
     func processProposal(
         statement: String,
@@ -137,9 +134,6 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         mode: AttacheMemoryProposalMode
     ) -> AttacheMemoryProposalDisposition {
         _ = egress
-        guard !suppressedTypes.contains(type) else {
-            return .rejected(reason: .modeOff)
-        }
         let proposal = AttacheMemoryProposal(
             id: "memory.\(UUID().uuidString)",
             statement: statement.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -163,15 +157,7 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         var finalDisposition = disposition
         lock.lock()
         switch disposition {
-        case .queuedForReview:
-            if !reviewItems.contains(where: { $0.proposal.statement == proposal.statement }) {
-                reviewItems.append(AttacheMemoryReviewItem(proposal: proposal, disposition: disposition))
-                if !persistReviewItemsLocked() {
-                    reviewItems.removeAll { $0.proposal.id == proposal.id }
-                    finalDisposition = .ignored
-                }
-            }
-        case .autoStored(let record):
+        case .saved(let record):
             if !ledger.add(record) {
                 // The ledger is the final safety boundary. Never tell the UI or
                 // model that a memory was saved if that boundary rejected it or
@@ -191,20 +177,6 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
     @MainActor
     func bind(to state: AttacheContextUIState) {
         state.onMemoryModeChange = { [weak self] _ in self?.publish(to: state) }
-        state.onAcceptMemoryProposal = { [weak self] proposal, editedStatement in
-            guard let self else { return nil }
-            let accepted = self.accept(proposal: proposal, statement: editedStatement)
-            self.publish(to: state)
-            return accepted
-        }
-        state.onRejectMemoryProposal = { [weak self] proposal in
-            self?.removeProposal(id: proposal.id)
-            self?.publish(to: state)
-        }
-        state.onNeverRememberMemoryType = { [weak self] type in
-            self?.suppress(type)
-            self?.publish(to: state)
-        }
         state.onEditMemory = { [weak self] record, statement in
             guard let self else { return nil }
             let replaced = self.replace(record: record, statement: statement)
@@ -241,19 +213,10 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
 
     @MainActor
     func publish(to state: AttacheContextUIState, status: String? = nil) {
-        lock.lock()
-        let pending = reviewItems
-        lock.unlock()
         state.publishMemorySnapshot(
             records: ledger.list(activeOnly: true),
-            reviewItems: pending,
             status: status
         )
-    }
-
-    private var suppressedTypes: Set<AttacheMemoryType> {
-        let raw = defaults.array(forKey: Key.suppressedTypes) as? [String] ?? []
-        return Set(raw.compactMap(AttacheMemoryType.init(rawValue:)))
     }
 
     private static func normalizedTopicTokens(_ text: String) -> [String] {
@@ -270,46 +233,6 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
             if Array(tokens[start..<(start + phrase.count)]) == phrase { return true }
         }
         return false
-    }
-
-    private func suppress(_ type: AttacheMemoryType) {
-        var values = suppressedTypes
-        values.insert(type)
-        defaults.set(values.map(\.rawValue).sorted(), forKey: Key.suppressedTypes)
-        lock.lock()
-        reviewItems.removeAll { $0.proposal.type == type }
-        _ = persistReviewItemsLocked()
-        lock.unlock()
-    }
-
-    @discardableResult
-    private func accept(
-        proposal: AttacheMemoryProposal,
-        statement: String
-    ) -> AttacheMemoryRecord? {
-        let record = AttacheMemoryRecord(
-            id: proposal.id,
-            statement: statement,
-            type: proposal.type,
-            scope: proposal.scope,
-            sourceKind: .userConfirmed,
-            sourceLocator: proposal.sourceLocator,
-            confidence: .authoritative,
-            sensitivity: proposal.sensitivity,
-            egress: proposal.egress,
-            createdAt: Date(),
-            updatedAt: Date()
-        )
-        guard ledger.add(record) else { return nil }
-        removeProposal(id: proposal.id)
-        return record
-    }
-
-    private func removeProposal(id: String) {
-        lock.lock()
-        reviewItems.removeAll { $0.proposal.id == id }
-        _ = persistReviewItemsLocked()
-        lock.unlock()
     }
 
     @discardableResult
@@ -365,55 +288,9 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
             return false
         }
         lock.lock()
-        reviewItems.removeAll()
         forgottenByID.removeAll()
-        let clearedQueue = persistReviewItemsLocked()
         lock.unlock()
-        return clearedQueue
-    }
-
-    private static func loadReviewItems(from url: URL) -> [AttacheMemoryReviewItem] {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else { return [] }
-        guard chmod(url.path, 0o600) == 0,
-              let data = try? Data(contentsOf: url),
-              let proposals = try? JSONDecoder().decode([AttacheMemoryProposal].self, from: data) else {
-            return []
-        }
-        return proposals.compactMap { proposal in
-            guard proposal.egress == .localOnly,
-                  AttacheMemoryProposalValidator.validate(proposal) == nil else { return nil }
-            return AttacheMemoryReviewItem(proposal: proposal, disposition: .queuedForReview)
-        }
-    }
-
-    /// The review queue contains user data, so persist it beside the private
-    /// ledger with restrictive permissions. Call only while `lock` is held.
-    private func persistReviewItemsLocked() -> Bool {
-        let fm = FileManager.default
-        if reviewItems.isEmpty {
-            do {
-                if fm.fileExists(atPath: reviewQueueURL.path) {
-                    try fm.removeItem(at: reviewQueueURL)
-                }
-                return true
-            } catch {
-                return false
-            }
-        }
-        do {
-            try fm.createDirectory(
-                at: reviewQueueURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let data = try JSONEncoder().encode(reviewItems.map(\.proposal))
-            try data.write(to: reviewQueueURL, options: .atomic)
-            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: reviewQueueURL.path)
-            let permissions = try fm.attributesOfItem(atPath: reviewQueueURL.path)[.posixPermissions] as? NSNumber
-            return ((permissions?.intValue ?? 0) & 0o777) == 0o600
-        } catch {
-            return false
-        }
+        return true
     }
 
     private static func createAndVerifyLegacyBackup(

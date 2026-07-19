@@ -21,7 +21,7 @@ enum AttacheContextSmokeFixtures {
         let state = AttacheContextUIState.shared
 
         if !omissions.contains("memory") {
-            state.setMemoryMode(.suggest)
+            state.setMemoryMode(.on)
             let saved = AttacheMemoryRecord(
                 id: "context-smoke-saved",
                 statement: "Synthetic saved memory for the accessibility smoke.",
@@ -33,25 +33,7 @@ enum AttacheContextSmokeFixtures {
                 sensitivity: .low,
                 egress: .localOnly
             )
-            let proposal = AttacheMemoryProposal(
-                id: "context-smoke-pending",
-                statement: "Synthetic pending memory for the accessibility smoke.",
-                type: .standingInstruction,
-                scope: .global,
-                sourceKind: .modelProposed,
-                sourceLocator: "context-smoke:fixture",
-                confidence: .authoritative,
-                sensitivity: .low,
-                egress: .localOnly,
-                requiresConfirmation: true
-            )
-            state.publishMemorySnapshot(
-                records: [saved],
-                reviewItems: [AttacheMemoryReviewItem(
-                    proposal: proposal,
-                    disposition: .queuedForReview
-                )]
-            )
+            state.publishMemorySnapshot(records: [saved])
         }
 
         if !omissions.contains("receipt") {

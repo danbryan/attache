@@ -174,15 +174,17 @@ stages.
 
 ## Memory
 
-Attaché can notice durable, useful personal facts without requiring "remember
-this" every time. Three modes:
+Memory capture is explicit-only. Attaché saves a durable fact only when you
+ask it to remember something ("remember...", "save...", "note that...") in a
+call or direct chat. Nothing is noticed or suggested automatically, and there
+is no suggestion review queue. Two modes:
 
-- **Off** (default for existing users): no proposals or automatic writes.
-- **Suggest**: shows a quiet review queue. Nothing persists until you accept.
-- **Automatic**: persists low-sensitivity, high-confidence durable facts and
-  reports what changed. Automatic capture requires the durable statement to
-  appear in the user's own current turn, with negation preserved. Sensitive,
-  inferred, or ambiguous proposals still require confirmation.
+- **Off** (default for fresh users who skip onboarding): no writes at all.
+- **On**: an explicit ask saves immediately after the local validator passes.
+  The saved statement must appear in the user's own current turn, with
+  negation preserved; a statement the user did not say is rejected. A quiet
+  "Memory saved" chip in the call surface is the confirmation channel and
+  opens the Memory settings pane.
 
 ### What is never saved
 
@@ -337,8 +339,8 @@ engine.
   overflow recovery (INF-321).
 - **AttacheProjectFileTools**: inspect, search, readRange for project files
   (INF-323).
-- **AttacheMemoryProposals**: opt-in memory proposals, review, consolidation
-  (INF-324).
+- **AttacheMemoryProposals**: explicit-only memory capture policy, validation,
+  and consolidation (INF-324).
 - **AttacheContextReceiptView**: privacy-safe context receipts (INF-325).
 - **AttacheSessionMap**: incremental session maps with topic episodes (INF-326).
 - **AttacheHierarchicalCapsules**: pure provenance and validation primitives

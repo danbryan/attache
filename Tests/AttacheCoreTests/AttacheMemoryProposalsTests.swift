@@ -18,53 +18,54 @@ final class AttacheMemoryProposalsTests: XCTestCase {
         )
     }
 
-    // Criterion 1: upgrade defaults Off; onboarding records an explicit choice.
+    // Capture is explicit-only: Off blocks everything, On saves only an
+    // explicit user request.
     func testOffModeAllowsNoProposals() {
         XCTAssertEqual(AttacheMemoryProposalMode.off.allowsProposals, false)
-        XCTAssertEqual(AttacheMemoryProposalMode.off.allowsAutomaticWrite, false)
     }
 
-    func testSuggestModeAllowsProposalsButNotAutoWrite() {
-        XCTAssertTrue(AttacheMemoryProposalMode.suggest.allowsProposals)
-        XCTAssertFalse(AttacheMemoryProposalMode.suggest.allowsAutomaticWrite)
+    func testOnModeAllowsProposals() {
+        XCTAssertTrue(AttacheMemoryProposalMode.on.allowsProposals)
     }
 
-    func testAutomaticModeAllowsAutoWrite() {
-        XCTAssertTrue(AttacheMemoryProposalMode.automatic.allowsProposals)
-        XCTAssertTrue(AttacheMemoryProposalMode.automatic.allowsAutomaticWrite)
+    /// The retired Suggest and Automatic modes both allowed capture, so their
+    /// persisted values map to On; unknown values fail closed to Off.
+    func testLegacyPersistedModesMapOntoOnOff() {
+        XCTAssertEqual(AttacheMemoryProposalMode.fromPersisted("off"), .off)
+        XCTAssertEqual(AttacheMemoryProposalMode.fromPersisted("on"), .on)
+        XCTAssertEqual(AttacheMemoryProposalMode.fromPersisted("suggest"), .on)
+        XCTAssertEqual(AttacheMemoryProposalMode.fromPersisted("automatic"), .on)
+        XCTAssertEqual(AttacheMemoryProposalMode.fromPersisted("something-else"), .off)
+        XCTAssertEqual(AttacheMemoryProposalMode.fromPersisted(nil), .off)
     }
 
-    // Criterion 2: Suggest never writes before confirmation; Automatic still
-    // confirms sensitive/ambiguous items.
-    func testSuggestNeverWritesBeforeConfirmation() {
+    func testExplicitUserRequestSavesImmediately() {
         let p = proposal(statement: "User prefers terse summaries")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .suggest, existingRecords: [])
-        if case .queuedForReview = disposition { /* expected */ } else {
-            XCTFail("Suggest mode should queue, not write")
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
+        if case .saved = disposition { /* expected */ } else {
+            XCTFail("an explicit, validator-passing request should save immediately")
         }
     }
 
-    func testAutomaticStoresLowSensitivityHighConfidence() {
-        let p = proposal(statement: "User prefers terse summaries", confidence: .authoritative, sensitivity: .low)
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
-        if case .autoStored = disposition { /* expected */ } else {
-            XCTFail("Automatic should store low-sensitivity high-confidence")
-        }
-    }
-
-    func testAutomaticConfirmsSensitiveItems() {
+    /// The explicit ask is the consent, so a validator-passing fact saves even
+    /// when the model marks it above low sensitivity.
+    func testExplicitSaveAllowsNonLowSensitivityAfterValidation() {
         let p = proposal(statement: "User has a standing meeting on Fridays", sensitivity: .medium)
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
-        if case .queuedForReview = disposition { /* expected */ } else {
-            XCTFail("Automatic should confirm sensitive items")
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
+        if case .saved = disposition { /* expected */ } else {
+            XCTFail("an explicitly requested medium-sensitivity fact should save")
         }
     }
 
-    func testAutomaticConfirmsAmbiguousItems() {
+    /// Without the deterministic explicit-ask classification (authoritative,
+    /// user-authored) nothing saves; there is no queue to fall back to.
+    func testInferredConfidenceCannotSave() {
         let p = proposal(statement: "User prefers terse summaries", confidence: .inferred, sensitivity: .low)
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
-        if case .queuedForReview = disposition { /* expected */ } else {
-            XCTFail("Automatic should confirm ambiguous (inferred) items")
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
+        if case .rejected(let reason) = disposition {
+            XCTAssertEqual(reason, .notExplicitlyRequested)
+        } else {
+            XCTFail("an inferred fact must not save under explicit-only capture")
         }
     }
 
@@ -72,7 +73,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
     // content never saved.
     func testSecretsNeverSaved() {
         let p = proposal(statement: "The API key is sk-1234567890abcdef")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
         if case .rejected(let reason) = disposition {
             XCTAssertTrue(reason == .credential || reason == .secret, "secret rejected")
         } else {
@@ -82,7 +83,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
 
     func testInferredProtectedTraitsNeverSaved() {
         let p = proposal(statement: "The user seems autistic", confidence: .inferred)
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
         if case .rejected(let reason) = disposition {
             XCTAssertEqual(reason, .inferredProtectedTrait)
         } else {
@@ -92,7 +93,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
 
     func testTransientMoodsNeverSaved() {
         let p = proposal(statement: "Today I feel happy")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
         if case .rejected(let reason) = disposition {
             XCTAssertEqual(reason, .transientMood)
         } else {
@@ -102,7 +103,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
 
     func testSessionContentNotRestatedNeverSaved() {
         let p = proposal(statement: "The agent said the test failed")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
         if case .rejected(let reason) = disposition {
             XCTAssertEqual(reason, .sessionContentNotRestated)
         } else {
@@ -112,7 +113,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
 
     func testMedicalLegalNeverSaved() {
         let p = proposal(statement: "The user has a diagnosis of diabetes")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
         if case .rejected(let reason) = disposition {
             XCTAssertEqual(reason, .medicalLegal)
         } else {
@@ -122,7 +123,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
 
     func testFinancialAccountNeverSaved() {
         let p = proposal(statement: "My bank account number is 12345678")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
         if case .rejected(let reason) = disposition {
             XCTAssertEqual(reason, .financialAccount)
         } else {
@@ -153,7 +154,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
             status: .active
         )
         let p = proposal(id: "p1", statement: "User prefers terse summaries")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [existing])
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [existing])
         if case .rejected(let reason) = disposition {
             XCTAssertEqual(reason, .duplicate)
         } else {
@@ -165,26 +166,29 @@ final class AttacheMemoryProposalsTests: XCTestCase {
     // sensitivity, and egress policy.
     func testStoredRecordHasAllFields() {
         let p = proposal(statement: "User prefers terse summaries")
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
-        if case .autoStored(let record) = disposition {
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
+        if case .saved(let record) = disposition {
             XCTAssertEqual(record.sourceKind, .userAuthored)
             XCTAssertEqual(record.scope, .global)
             XCTAssertEqual(record.confidence, .authoritative)
             XCTAssertEqual(record.sensitivity, .low)
             XCTAssertEqual(record.egress, .localOnly)
         } else {
-            XCTFail("should auto-store")
+            XCTFail("should save")
         }
     }
 
-    func testModelProposalAlwaysRequiresConfirmationEvenIfItClaimsAuthority() {
+    func testModelProposalCannotAuthorizeItsOwnWriteEvenIfItClaimsAuthority() {
         let p = proposal(
             statement: "User prefers terse summaries",
             sourceKind: .modelProposed,
             requiresConfirmation: false
         )
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
-        if case .queuedForReview = disposition { return }
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
+        if case .rejected(let reason) = disposition {
+            XCTAssertEqual(reason, .notExplicitlyRequested)
+            return
+        }
         XCTFail("A model cannot authorize its own durable write")
     }
 
@@ -225,7 +229,7 @@ final class AttacheMemoryProposalsTests: XCTestCase {
         // validates and decides based on the mode. There is no network
         // dependency in the processor.
         let p = proposal(statement: "User prefers terse summaries")
-        let _ = AttacheMemoryProposalProcessor.process(p, mode: .automatic, existingRecords: [])
+        let _ = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
         // If this test runs without hanging or erroring, the processor made
         // no hidden remote call.
         XCTAssertTrue(true, "processor is pure, no hidden call")
@@ -275,11 +279,9 @@ final class AttacheMemoryProposalsTests: XCTestCase {
     // User-stated protected trait is not rejected (only inferred ones are).
     func testUserStatedTraitNotRejected() {
         let p = proposal(statement: "I am autistic", confidence: .authoritative)
-        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .suggest, existingRecords: [])
-        if case .queuedForReview = disposition { /* expected: user-stated, not rejected */ } else {
-            if case .rejected = disposition {
-                XCTFail("user-stated trait should not be rejected")
-            }
+        let disposition = AttacheMemoryProposalProcessor.process(p, mode: .on, existingRecords: [])
+        if case .saved = disposition { /* expected: user-stated, explicitly asked */ } else {
+            XCTFail("user-stated trait should save when explicitly requested")
         }
     }
 }

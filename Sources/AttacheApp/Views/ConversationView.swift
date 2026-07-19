@@ -43,6 +43,9 @@ struct ConversationView: View {
                     .lineLimit(1)
             }
             Spacer()
+            if model.memorySavedChipVisible {
+                memorySavedChip
+            }
             if model.isPrivateConversation {
                 Label("Not saved", systemImage: "eye.slash.fill")
                     .typoCaption(.semibold)
@@ -66,6 +69,25 @@ struct ConversationView: View {
             .buttonStyle(.plain).foregroundStyle(.secondary).help("Close (Esc)")
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
+        .animation(.easeInOut(duration: 0.25), value: model.memorySavedChipVisible)
+    }
+
+    // The quiet save confirmation channel: a transient chip, no sound and no
+    // spoken line. Clicking it opens the Memory settings pane.
+    private var memorySavedChip: some View {
+        Button { model.openMemorySettingsFromChip() } label: {
+            Label("Memory saved", systemImage: SettingsSection.memory.symbol)
+                .typoCaption(.semibold)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+                .overlay(Capsule().stroke(Color.primary.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity)
+        .help("A memory was saved on this Mac. Click to review it in Memory settings.")
+        .accessibilityLabel("Memory saved. Open Memory settings.")
     }
 
     private var thread: some View {

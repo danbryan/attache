@@ -94,13 +94,34 @@ final class ContextManagementUIStateTests: XCTestCase {
         XCTAssertEqual(state.memoryMode, .off)
         XCTAssertFalse(state.memoryChoiceWasExplicit)
 
-        state.setMemoryMode(.suggest)
+        state.setMemoryMode(.on)
 
-        XCTAssertEqual(state.memoryMode, .suggest)
+        XCTAssertEqual(state.memoryMode, .on)
         XCTAssertTrue(state.memoryChoiceWasExplicit)
         let restored = AttacheContextUIState(defaults: defaults)
-        XCTAssertEqual(restored.memoryMode, .suggest)
+        XCTAssertEqual(restored.memoryMode, .on)
         XCTAssertTrue(restored.memoryChoiceWasExplicit)
+    }
+
+    /// The retired Suggest and Automatic persisted values both allowed capture,
+    /// so a state restored from them lands On; unknown values fail closed Off.
+    func testLegacyPersistedMemoryModeValuesMapOntoOnOff() {
+        for (raw, expected) in [
+            ("suggest", AttacheMemoryProposalMode.on),
+            ("automatic", .on),
+            ("on", .on),
+            ("off", .off),
+            ("garbage", .off)
+        ] {
+            defaults.set(raw, forKey: "attache.memory.proposalMode.v1")
+            let restored = AttacheContextUIState(defaults: defaults)
+            XCTAssertEqual(restored.memoryMode, expected, "raw value \(raw)")
+            XCTAssertEqual(
+                AttacheContextUIState.persistedMemoryMode(defaults: defaults),
+                expected,
+                "persisted lookup for raw value \(raw)"
+            )
+        }
     }
 
     func testSkippingOnboardingForcesOffWithoutPretendingUserChose() {
@@ -113,52 +134,35 @@ final class ContextManagementUIStateTests: XCTestCase {
 
     func testSkippingRerunWelcomePreservesExistingExplicitMemoryChoice() {
         let state = AttacheContextUIState(defaults: defaults)
-        state.setMemoryMode(.suggest)
+        state.setMemoryMode(.on)
 
         state.leaveMemoryOffForSkippedOnboarding()
 
-        XCTAssertEqual(state.memoryMode, .suggest)
+        XCTAssertEqual(state.memoryMode, .on)
         XCTAssertTrue(state.memoryChoiceWasExplicit)
         let restored = AttacheContextUIState(defaults: defaults)
-        XCTAssertEqual(restored.memoryMode, .suggest)
+        XCTAssertEqual(restored.memoryMode, .on)
         XCTAssertTrue(restored.memoryChoiceWasExplicit)
     }
 
-    func testAcceptEditForgetAndUndoUseInjectableMemoryCallbacks() {
+    func testEditForgetAndUndoUseInjectableMemoryCallbacks() {
         let state = AttacheContextUIState(defaults: defaults)
-        let proposal = AttacheMemoryProposal(
+        let saved = AttacheMemoryRecord(
             id: "memory.one",
-            statement: "Dan prefers concise status updates.",
+            statement: "Dan prefers outcome-first status updates.",
             type: .preference,
-            sourceKind: .modelProposed,
+            scope: .global,
+            sourceKind: .userAuthored,
             sourceLocator: "direct-chat:turn-1",
             confidence: .authoritative,
             sensitivity: .low,
             egress: .localOnly
         )
-        state.publishMemorySnapshot(
-            records: [],
-            reviewItems: [AttacheMemoryReviewItem(proposal: proposal, disposition: .queuedForReview)]
-        )
+        state.publishMemorySnapshot(records: [saved])
 
-        var acceptedStatement: String?
         var editedStatement: String?
         var forgottenID: String?
         var restoredID: String?
-        state.onAcceptMemoryProposal = { proposal, statement in
-            acceptedStatement = statement
-            return AttacheMemoryRecord(
-                id: proposal.id,
-                statement: statement,
-                type: proposal.type,
-                scope: proposal.scope,
-                sourceKind: .userConfirmed,
-                sourceLocator: proposal.sourceLocator,
-                confidence: .authoritative,
-                sensitivity: proposal.sensitivity,
-                egress: proposal.egress
-            )
-        }
         state.onEditMemory = { record, statement in
             editedStatement = statement
             var replacement = record
@@ -174,30 +178,21 @@ final class ContextManagementUIStateTests: XCTestCase {
             return true
         }
 
-        state.acceptMemoryProposal(
-            id: proposal.id,
-            editedStatement: "Dan prefers outcome-first status updates."
-        )
-        XCTAssertEqual(acceptedStatement, "Dan prefers outcome-first status updates.")
-        XCTAssertEqual(state.memoryRecords.map(\.id), [proposal.id])
-        XCTAssertTrue(state.memoryReviewItems.isEmpty)
-
-        state.editMemory(id: proposal.id, statement: "Dan prefers short outcome-first updates.")
+        state.editMemory(id: saved.id, statement: "Dan prefers short outcome-first updates.")
         XCTAssertEqual(editedStatement, "Dan prefers short outcome-first updates.")
         XCTAssertEqual(state.memoryRecords.first?.statement, "Dan prefers short outcome-first updates.")
 
-        state.forgetMemory(id: proposal.id)
-        XCTAssertEqual(forgottenID, proposal.id)
+        state.forgetMemory(id: saved.id)
+        XCTAssertEqual(forgottenID, saved.id)
         XCTAssertTrue(state.memoryRecords.isEmpty)
 
         state.undoLastForget()
-        XCTAssertEqual(restoredID, proposal.id)
-        XCTAssertEqual(state.memoryRecords.map(\.id), [proposal.id])
+        XCTAssertEqual(restoredID, saved.id)
+        XCTAssertEqual(state.memoryRecords.map(\.id), [saved.id])
     }
 
-    func testRejectedAcceptAndEditLeavePublishedMemoryStateUnchanged() {
+    func testRejectedEditLeavesPublishedMemoryStateUnchanged() {
         let state = AttacheContextUIState(defaults: defaults)
-        let pending = proposal(id: "pending", type: .preference)
         let saved = AttacheMemoryRecord(
             id: "saved",
             statement: "Keep this statement.",
@@ -209,20 +204,8 @@ final class ContextManagementUIStateTests: XCTestCase {
             sensitivity: .low,
             egress: .localOnly
         )
-        state.publishMemorySnapshot(
-            records: [saved],
-            reviewItems: [AttacheMemoryReviewItem(
-                proposal: pending,
-                disposition: .queuedForReview
-            )]
-        )
-        state.onAcceptMemoryProposal = { _, _ in nil }
+        state.publishMemorySnapshot(records: [saved])
         state.onEditMemory = { _, _ in nil }
-
-        state.acceptMemoryProposal(id: pending.id, editedStatement: "api_key = do-not-save")
-        XCTAssertEqual(state.memoryReviewItems.map(\.proposal.id), [pending.id])
-        XCTAssertEqual(state.memoryRecords.map(\.id), [saved.id])
-        XCTAssertTrue(state.memoryStatusMessage?.contains("not saved") == true)
 
         state.editMemory(id: saved.id, statement: "api_key = do-not-save")
         XCTAssertEqual(state.memoryRecords.first?.statement, saved.statement)
@@ -236,7 +219,7 @@ final class ContextManagementUIStateTests: XCTestCase {
             statement: "Keep this statement.",
             type: .preference
         )
-        state.publishMemorySnapshot(records: [saved], reviewItems: [])
+        state.publishMemorySnapshot(records: [saved])
         state.onForgetMemory = { _ in false }
 
         state.forgetMemory(id: saved.id)
@@ -253,46 +236,17 @@ final class ContextManagementUIStateTests: XCTestCase {
             statement: "Keep this visible on failure.",
             type: .userFact
         )
-        let pending = proposal(id: "pending", type: .preference)
-        state.publishMemorySnapshot(
-            records: [saved],
-            reviewItems: [AttacheMemoryReviewItem(
-                proposal: pending,
-                disposition: .queuedForReview
-            )]
-        )
+        state.publishMemorySnapshot(records: [saved])
 
         state.onDeleteAllMemory = { false }
         state.deleteAllMemory()
         XCTAssertEqual(state.memoryRecords.map(\.id), [saved.id])
-        XCTAssertEqual(state.memoryReviewItems.map(\.proposal.id), [pending.id])
         XCTAssertTrue(state.memoryStatusMessage?.contains("could not be fully deleted") == true)
 
         state.onDeleteAllMemory = { true }
         state.deleteAllMemory()
         XCTAssertTrue(state.memoryRecords.isEmpty)
-        XCTAssertTrue(state.memoryReviewItems.isEmpty)
         XCTAssertEqual(state.memoryStatusMessage, "All structured memory was deleted.")
-    }
-
-    func testRejectAndNeverRememberTypeAreDistinctActions() {
-        let state = AttacheContextUIState(defaults: defaults)
-        let first = proposal(id: "first", type: .reminder)
-        let second = proposal(id: "second", type: .reminder)
-        let other = proposal(id: "other", type: .preference)
-        state.publishMemorySnapshot(
-            records: [],
-            reviewItems: [first, second, other].map {
-                AttacheMemoryReviewItem(proposal: $0, disposition: .queuedForReview)
-            }
-        )
-
-        var neverType: AttacheMemoryType?
-        state.onNeverRememberMemoryType = { neverType = $0 }
-        state.rejectMemoryProposal(id: first.id, neverRememberType: true)
-
-        XCTAssertEqual(neverType, .reminder)
-        XCTAssertEqual(state.memoryReviewItems.map(\.proposal.id), [other.id])
     }
 
     func testReceiptLookupIsTiedToExactResponseID() {
@@ -398,13 +352,4 @@ final class ContextManagementUIStateTests: XCTestCase {
         XCTAssertEqual(state.exhaustiveReview, replacement, "A late prior run cannot overwrite a newer preview.")
     }
 
-    private func proposal(id: String, type: AttacheMemoryType) -> AttacheMemoryProposal {
-        AttacheMemoryProposal(
-            id: id,
-            statement: "A durable detail named \(id).",
-            type: type,
-            confidence: .authoritative,
-            sensitivity: .low
-        )
-    }
 }

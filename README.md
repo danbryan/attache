@@ -67,9 +67,9 @@ letting you reply to any of them:
   approvals, so nothing runs without your say-so. Import server definitions
   straight from your other agents' configs (Claude Code, Codex, Grok Build,
   opencode) instead of retyping them.
-- **Memory you control.** Attaché proposes durable memories you can accept or
-  decline, and every memory carries its own egress setting so nothing leaves your
-  Mac unless you allow it.
+- **Memory you control.** Attaché saves a memory only when you ask it to
+  remember something, and every memory carries its own egress setting so nothing
+  leaves your Mac unless you allow it.
 
 ## Download & run
 

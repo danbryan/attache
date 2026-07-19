@@ -691,8 +691,7 @@ struct OnboardingSheet: View {
             }
             Picker("Memory", selection: onboardingMemoryBinding) {
                 Text("Off").tag(Optional(AttacheMemoryProposalMode.off))
-                Text("Suggest").tag(Optional(AttacheMemoryProposalMode.suggest))
-                Text("Automatic").tag(Optional(AttacheMemoryProposalMode.automatic))
+                Text("On").tag(Optional(AttacheMemoryProposalMode.on))
             }
             .pickerStyle(.segmented)
             .accessibilityLabel("Choose memory mode")
@@ -812,23 +811,20 @@ struct OnboardingSheet: View {
 
     private var onboardingMemoryExplanation: String {
         guard contextUI.memoryChoiceWasExplicit else {
-            return "Choose whether Attaché may notice durable details you tell it directly. Skipping setup leaves memory Off."
+            return "Choose whether Attaché may save details you explicitly ask it to remember. Skipping setup leaves memory Off."
         }
         switch contextUI.memoryMode {
         case .off:
-            return "Nothing new is proposed or saved. You can turn memory on later in Settings."
-        case .suggest:
-            return "Attaché asks before saving every durable detail it notices."
-        case .automatic:
-            return "Low-sensitivity facts you state clearly may be saved; sensitive or uncertain details still require approval."
+            return "Nothing new is saved. You can turn memory on later in Settings."
+        case .on:
+            return "Attaché saves a memory only when you ask it to remember something. Saved memories stay on this Mac unless you say otherwise."
         }
     }
 
     private func onboardingMemoryLabel(_ mode: AttacheMemoryProposalMode) -> String {
         switch mode {
         case .off: return "Off"
-        case .suggest: return "Suggest"
-        case .automatic: return "Automatic"
+        case .on: return "On"
         }
     }
 

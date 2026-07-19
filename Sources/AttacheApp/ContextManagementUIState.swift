@@ -25,7 +25,6 @@ final class AttacheContextUIState: ObservableObject {
     @Published private(set) var memoryMode: AttacheMemoryProposalMode
     @Published private(set) var memoryChoiceWasExplicit: Bool
     @Published private(set) var memoryRecords: [AttacheMemoryRecord] = []
-    @Published private(set) var memoryReviewItems: [AttacheMemoryReviewItem] = []
     @Published private(set) var recentlyForgottenMemory: AttacheMemoryRecord?
     @Published private(set) var memoryStatusMessage: String?
     @Published private(set) var receiptsByResponseID: [String: AttacheContextReceiptView] = [:]
@@ -33,9 +32,6 @@ final class AttacheContextUIState: ObservableObject {
     @Published private(set) var exhaustiveReview: AttacheExhaustiveReviewUIState?
 
     var onMemoryModeChange: ((AttacheMemoryProposalMode) -> Void)?
-    var onAcceptMemoryProposal: ((AttacheMemoryProposal, String) -> AttacheMemoryRecord?)?
-    var onRejectMemoryProposal: ((AttacheMemoryProposal) -> Void)?
-    var onNeverRememberMemoryType: ((AttacheMemoryType) -> Void)?
     var onEditMemory: ((AttacheMemoryRecord, String) -> AttacheMemoryRecord?)?
     var onSetMemoryEgress: ((AttacheMemoryRecord, AttacheMemoryEgress) -> AttacheMemoryRecord?)?
     /// Returns true only after the active row was marked forgotten in storage.
@@ -61,8 +57,9 @@ final class AttacheContextUIState: ObservableObject {
         globalStrategy = validated.strategy
         strategyMigrationNotice = validated.notice
 
-        memoryMode = defaults.string(forKey: Key.memoryMode)
-            .flatMap(AttacheMemoryProposalMode.init(rawValue:)) ?? .off
+        memoryMode = AttacheMemoryProposalMode.fromPersisted(
+            defaults.string(forKey: Key.memoryMode)
+        )
         memoryChoiceWasExplicit = defaults.bool(forKey: Key.memoryChoiceExplicit)
     }
 
@@ -77,8 +74,7 @@ final class AttacheContextUIState: ObservableObject {
     nonisolated static func persistedMemoryMode(
         defaults: UserDefaults = .standard
     ) -> AttacheMemoryProposalMode {
-        defaults.string(forKey: Key.memoryMode)
-            .flatMap(AttacheMemoryProposalMode.init(rawValue:)) ?? .off
+        AttacheMemoryProposalMode.fromPersisted(defaults.string(forKey: Key.memoryMode))
     }
 
     nonisolated static func validatePersistedStrategy(
@@ -147,43 +143,10 @@ final class AttacheContextUIState: ObservableObject {
 
     func publishMemorySnapshot(
         records: [AttacheMemoryRecord],
-        reviewItems: [AttacheMemoryReviewItem],
         status: String? = nil
     ) {
         memoryRecords = records
-        memoryReviewItems = reviewItems
         memoryStatusMessage = status
-    }
-
-    func acceptMemoryProposal(id: String, editedStatement: String) {
-        guard let index = memoryReviewItems.firstIndex(where: { $0.proposal.id == id }) else { return }
-        let item = memoryReviewItems[index]
-        let statement = editedStatement.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !statement.isEmpty else {
-            memoryStatusMessage = "A memory needs some text before it can be saved."
-            return
-        }
-        guard let record = onAcceptMemoryProposal?(item.proposal, statement) else {
-            memoryStatusMessage = "Memory was not saved because local policy rejected it or storage was unavailable."
-            return
-        }
-        memoryReviewItems.removeAll { $0.proposal.id == id }
-        memoryRecords.removeAll { $0.id == record.id }
-        memoryRecords.insert(record, at: 0)
-        memoryStatusMessage = "Memory saved."
-    }
-
-    func rejectMemoryProposal(id: String, neverRememberType: Bool = false) {
-        guard let index = memoryReviewItems.firstIndex(where: { $0.proposal.id == id }) else { return }
-        let item = memoryReviewItems.remove(at: index)
-        onRejectMemoryProposal?(item.proposal)
-        if neverRememberType {
-            onNeverRememberMemoryType?(item.proposal.type)
-            memoryReviewItems.removeAll { $0.proposal.type == item.proposal.type }
-            memoryStatusMessage = "Attaché will not suggest that kind of memory."
-        } else {
-            memoryStatusMessage = "Suggestion dismissed."
-        }
     }
 
     func editMemory(id: String, statement: String) {
@@ -253,7 +216,6 @@ final class AttacheContextUIState: ObservableObject {
             return
         }
         memoryRecords = []
-        memoryReviewItems = []
         recentlyForgottenMemory = nil
         memoryStatusMessage = "All structured memory was deleted."
     }

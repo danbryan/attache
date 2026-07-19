@@ -3973,16 +3973,12 @@ if enabled("context") {
         )
     }
 
-    run.step("context-ui", "memory review, correction, privacy, and deletion controls are labeled") {
+    run.step("context-ui", "memory capture, correction, privacy, and deletion controls are labeled") {
         try selectSettingsSection("Memory", paneMarker: "Remembering")
         let window = try settingsWindow()
         _ = try waitForElement("memory mode", in: window, containing: "Memory mode")
+        _ = try waitForElement("explicit-only capture promise", in: window, containing: "only when you ask it to remember")
         _ = try waitForElement("memory privacy promise", in: window, containing: "Memory stays local by default")
-        _ = try waitForElement("pending memory", in: window, containing: "Pending Standing instruction memory")
-        _ = try waitForElement("edit pending memory", in: window, exactly: "Edit suggested memory")
-        _ = try waitForElement("save pending memory", in: window, role: kAXButtonRole as String, exactly: "Save suggested memory")
-        _ = try waitForElement("dismiss pending memory", in: window, role: kAXButtonRole as String, exactly: "Dismiss suggested memory")
-        _ = try waitForElement("never remember type", in: window, role: kAXButtonRole as String, containing: "Never suggest Standing instruction memories")
         _ = try waitForElement("saved memory", in: window, containing: "Saved Preference memory")
         _ = try waitForElement("forget saved memory", in: window, role: kAXButtonRole as String, exactly: "Forget saved memory")
         _ = try waitForElement("import structured memory", in: window, role: kAXButtonRole as String, exactly: "Import structured memory")

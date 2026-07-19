@@ -826,7 +826,7 @@ final class AttacheProductionRequestBroker {
     private static func memoryProposalToolObject() -> [String: Any] {
         ["type": "function", "function": [
             "name": "propose_memory",
-            "description": "Propose one durable user memory for this turn. Attaché's local validator and the user's memory mode decide whether it is rejected, queued, or stored, and fallback retries cannot repeat the local effect.",
+            "description": "Save one durable memory the user explicitly asked to remember this turn, restated in the user's own words. Attaché's local validator decides whether it is saved or rejected; never call it for facts shared in passing, and fallback retries cannot repeat the local effect.",
             "parameters": [
                 "type": "object",
                 "properties": [
