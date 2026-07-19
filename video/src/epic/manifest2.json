@@ -75,6 +75,11 @@
       "voice_id": "NOpBlnGInO9m6vDvFkFC",
       "seconds": 7.419,
       "text": "Well howdy, partner. Them five little clips is all branded up and corralled, ready to ride out at first light."
+    },
+    "va_azelma": {
+      "voice": "Azelma",
+      "seconds": 3.68,
+      "text": "Hi, I'm your Attaché, looking forward to working with you."
     }
   },
   "sfx": {

@@ -274,7 +274,7 @@ export const Ambient2: React.FC = () => {
       <AbsoluteFill style={{ opacity: charOpacity, alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 40 }}>
         <Aurora accent="blue" strength={0.6} />
         <div style={{ fontSize: 52, fontWeight: 700, color: T.text, letterSpacing: "-0.02em" }}>
-          Pick your <span style={{ color: T.gold }}>character</span>
+          Pick your <span style={{ color: T.gold }}>Attaché</span>
         </div>
         <div style={{ display: "flex", gap: 56, alignItems: "flex-end" }}>
           {[

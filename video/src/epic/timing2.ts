@@ -150,6 +150,27 @@ export const outro = (() => {
   return { narrStart, len };
 })();
 
+// ---- launch cut: two extra music-carried beats (no narration) ------------
+// Beat A — the agent lineup: "works with the agents you already run", four
+// name cards, then the two-way payoff line. Music-carried, on-screen copy only.
+export const lineup = (() => {
+  const headlineAt = 0.35;
+  const cardsAt = 1.15;   // first card in; the rest stagger after
+  const line2At = 4.7;    // "Watch them. Reply to them."
+  const len = 7.0;
+  return { headlineAt, cardsAt, line2At, len };
+})();
+
+// Beat B — the bundled voice: "a premium voice, included", runs on your Mac,
+// and Attaché speaks the Azelma preview line with caption-synced karaoke.
+export const voiceBeat = (() => {
+  const headlineAt = 0.35;
+  const sublineAt = 1.0;
+  const speakAt = 2.4;    // Azelma preview starts
+  const len = speakAt + ssec("va_azelma") + 2.9;
+  return { headlineAt, sublineAt, speakAt, len };
+})();
+
 export type SceneSpec = { key: string; lenSec: number };
 // Personalities ("it talks your way") runs BEFORE the conversational block
 // (live + two-way), per direction: establish how it speaks, then talk to it.
@@ -166,9 +187,27 @@ export const SCENES2: SceneSpec[] = [
   { key: "outro", lenSec: outro.len },
 ];
 
+// The launch cut: the baseline sequence with the lineup beat after the hook
+// (which establishes the wall of watched agents) and the bundled-voice beat
+// right after the personalities/voice scene.
+export const SCENES2_LAUNCH: SceneSpec[] = [
+  { key: "hook", lenSec: hook.len },
+  { key: "lineup", lenSec: lineup.len },
+  { key: "title", lenSec: title.len },
+  { key: "pin", lenSec: pin.len },
+  { key: "inbox", lenSec: inbox.len },
+  { key: "ambient", lenSec: ambient.len },
+  { key: "personalities", lenSec: personalities.len },
+  { key: "voice", lenSec: voiceBeat.len },
+  { key: "live", lenSec: live.len },
+  { key: "twoway", lenSec: twoway.len },
+  { key: "brain", lenSec: brain.len },
+  { key: "outro", lenSec: outro.len },
+];
+
 /** Start frame of each scene, with OVERLAP frames of crossfade between them. */
-export function sceneStarts(): { starts: number[]; frames: number[]; total: number } {
-  const frames = SCENES2.map((s) => f(s.lenSec));
+export function layoutScenes(scenes: SceneSpec[]): { starts: number[]; frames: number[]; total: number } {
+  const frames = scenes.map((s) => f(s.lenSec));
   const starts: number[] = [];
   let cursor = 0;
   for (let i = 0; i < frames.length; i++) {
@@ -176,6 +215,10 @@ export function sceneStarts(): { starts: number[]; frames: number[]; total: numb
     cursor += frames[i] - OVERLAP;
   }
   return { starts, frames, total: cursor + OVERLAP };
+}
+
+export function sceneStarts(): { starts: number[]; frames: number[]; total: number } {
+  return layoutScenes(SCENES2);
 }
 
 /** Karaoke should span only the actual speech, not trailing silence. */

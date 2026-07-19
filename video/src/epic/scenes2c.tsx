@@ -99,7 +99,7 @@ export const Personalities2: React.FC = () => {
       <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 22 }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: 52, fontWeight: 750, color: T.text, letterSpacing: "-0.025em" }}>
-            Build the character <span style={{ color: T.gold }}>you want to hear</span>
+            Build the Attaché <span style={{ color: T.gold }}>you want to hear</span>
           </div>
           <div style={{ marginTop: 7, color: T.dim, fontSize: 21 }}>One loadout. Presence, personality, voice, and brain.</div>
         </div>
@@ -136,10 +136,10 @@ export const Personalities2: React.FC = () => {
           <div style={{ padding: "24px 28px", display: "flex", flexDirection: "column", gap: 15 }}>
             <div style={{ display: "flex", alignItems: "center" }}>
               <div>
-                <div style={{ color: T.text, fontSize: 27, fontWeight: 750 }}>Create a character</div>
+                <div style={{ color: T.text, fontSize: 27, fontWeight: 750 }}>Create your Attaché</div>
                 <div style={{ color: T.dim, fontSize: 16 }}>Choose a preset, then make every slot yours.</div>
               </div>
-              <div style={{ marginLeft: "auto", color: T.gold, fontSize: 15, fontWeight: 800, letterSpacing: "0.08em" }}>CHARACTER LOADOUT</div>
+              <div style={{ marginLeft: "auto", color: T.gold, fontSize: 15, fontWeight: 800, letterSpacing: "0.08em" }}>ATTACHÉ LOADOUT</div>
             </div>
 
             <div>
@@ -289,7 +289,7 @@ export const Brain2: React.FC = () => {
               {fallbackSettled ? "Continuing on Ollama (local)" : "Falling back to Ollama…"}
             </span>
             <span style={{ marginLeft: 10, padding: "5px 14px", borderRadius: 999, background: "rgba(255,255,255,0.06)", border: `1px solid ${T.stroke}`, color: T.dim, fontSize: 18, fontWeight: 600 }}>
-              Character Studio → Fallbacks
+              Attaché Studio → Fallbacks
             </span>
           </div>
         )}
