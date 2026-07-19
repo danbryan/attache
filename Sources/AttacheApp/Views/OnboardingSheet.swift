@@ -740,6 +740,7 @@ struct OnboardingSheet: View {
             if step != .welcome {
                 Button("Back") { move(-1) }
                     .typoLabel()
+                    .accessibilityLabel("Back")
             }
             if step != .finish {
                 Button(step == .welcome ? "Get started" : "Continue") { move(1) }

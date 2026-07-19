@@ -1,3 +1,4 @@
+import AppKit
 import AttacheCore
 import SwiftUI
 
@@ -22,6 +23,16 @@ struct AboutPane: View {
                 Text(AttacheAppSupport.buildVersion)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
+            }
+            settingRow("Support") {
+                Button("Report an Issue") {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/danbryan/attache/issues")!)
+                }
+                .accessibilityIdentifier("About Report Issue")
+                .accessibilityLabel("Report an Issue")
+                Text("Open the issue tracker on GitHub to file a bug or request.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Divider().padding(.vertical, 2)
             settingRow("Welcome") {

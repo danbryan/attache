@@ -195,20 +195,34 @@ final class AttacheFleetTests: XCTestCase {
         let motor = AttacheCharacterMotor()
         var fleet = [session("c0", focused: true), session("c1")]
         let start = Date(timeIntervalSinceReferenceDate: 50_000)
-        var before = CGPoint.zero
+        // Let c1 orbit to a real, non-seed angle with explicit timestamps.
         for tick in 0..<60 {
             let state = AttacheActivityState(phase: .idle, fleet: fleet)
             _ = motor.pose(at: start.addingTimeInterval(Double(tick) * 0.05),
                            activity: state, reduceMotion: false)
-            let motes = motor.fleet(activity: state, reduceMotion: false)
-            before = motes.first { $0.sessionID == "c1" }!.position
+            _ = motor.fleet(activity: state, reduceMotion: false)
         }
+        // Read `before` from a reduced-motion frame so it is c1's exact orbit
+        // angle, which is the same value the pin is derived from. The eased
+        // render lags the true orbit angle by a fraction of a radian, and near
+        // the crown dead zone's midpoint that lag flips which edge `before` and
+        // the pin each clamp to, producing the intermittent ~1-radian miss (the
+        // per-process orbit seed decided whether a run straddled the midpoint,
+        // which is why parallel/loaded runs surfaced it). Reduced motion snaps
+        // the ease to its target, removing the lag; timestamps stay explicit and
+        // deterministic, never the wall clock.
+        let settleState = AttacheActivityState(phase: .idle, fleet: fleet)
+        _ = motor.pose(at: start.addingTimeInterval(3.0), activity: settleState, reduceMotion: true)
+        let before = motor.fleet(activity: settleState, reduceMotion: true)
+            .first { $0.sessionID == "c1" }!.position
+
         fleet[0].isFocused = false
         fleet[1].isFocused = true
-        let state = AttacheActivityState(phase: .idle, fleet: fleet)
-        _ = motor.pose(at: start.addingTimeInterval(3.05), activity: state, reduceMotion: false)
-        let motes = motor.fleet(activity: state, reduceMotion: false)
-        let pinned = motes.first { $0.sessionID == "c1" }!
+        let flipState = AttacheActivityState(phase: .idle, fleet: fleet)
+        _ = motor.pose(at: start.addingTimeInterval(3.05), activity: flipState, reduceMotion: true)
+        let pinned = motor.fleet(activity: flipState, reduceMotion: true)
+            .first { $0.sessionID == "c1" }!
+
         XCTAssertTrue(pinned.draggable)
         let center = AttacheCharacterChoreography.ringCenter
         let angleBefore = atan2(Double(before.y - center.y), Double(before.x - center.x))

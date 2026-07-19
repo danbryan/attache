@@ -31,6 +31,13 @@ struct InboxOverlay: View {
         return model.scopedUnreadCards.filter { $0.sourceKind == sourceFilter.rawValue }
     }
 
+    /// Sources that actually have cards waiting in the current scope, in a
+    /// stable order, so the filter only ever offers a real chip (INF-361/362:
+    /// all four live-agent sources, not just Codex/Claude Code).
+    private var availableSources: [SourceKind] {
+        InboxSourceFilter.availableSources(fromCardSourceKinds: model.scopedUnreadCards.map(\.sourceKind))
+    }
+
     /// The visible, searchable list.
     private var waiting: [VoicemailCard] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -131,7 +138,7 @@ struct InboxOverlay: View {
                     Button { sourceFilter = nil } label: {
                         Label("All sources", systemImage: sourceFilter == nil ? "checkmark" : "tray.2")
                     }
-                    ForEach([SourceKind.codex, .claudeCode], id: \.rawValue) { kind in
+                    ForEach(availableSources, id: \.rawValue) { kind in
                         Button { sourceFilter = kind } label: {
                             Label(kind.displayName, systemImage: sourceFilter == kind ? "checkmark" : "terminal")
                         }
