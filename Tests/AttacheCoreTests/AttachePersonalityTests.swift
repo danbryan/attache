@@ -365,7 +365,8 @@ final class AttachePersonalityTests: XCTestCase {
             XCTAssertTrue(prompt.contains("you MUST call propose_memory"))
             XCTAssertTrue(prompt.contains("restate the fact in the user's own words"))
             XCTAssertTrue(prompt.contains("A spoken acknowledgment alone saves nothing"))
-            XCTAssertTrue(prompt.contains("never claim a memory was saved or queued unless the tool reported it"))
+            XCTAssertTrue(prompt.contains("Never claim a memory was saved or queued unless the tool reported it"))
+            XCTAssertTrue(prompt.contains("Respond to the person and the moment first"))
             XCTAssertFalse(prompt.contains("You cannot save memories in this conversation"))
         }
 
