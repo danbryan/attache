@@ -104,6 +104,26 @@ final class AttachePresentationServiceTests: XCTestCase {
         XCTAssertNil(AttachePresentationService.reasoningEffortPayloadValue("none", provider: .codexCLI))
     }
 
+    /// The plain/verbatim readback path speaks the raw event text with no model
+    /// in the loop, so it must sanitize the SPOKEN string (also what captions
+    /// render) while leaving the card's underlying raw text fully intact.
+    func testPlainReadbackSanitizesSpokenTextButKeepsRawURL() {
+        let url = "https://notion.so/really/long/link/that/should/not/be/spelled/out"
+        let event = NormalizedEvent(
+            source: SourceKind.codex.rawValue,
+            eventType: "assistant.completed",
+            title: "Update",
+            text: "Docs live at \(url) for reference."
+        )
+        let presented = AttachePresentationService.eventWithPlainReadbackPresentation(event)
+        let spoken = EventNormalizer.storedSpokenText(for: presented)
+        XCTAssertFalse(spoken.contains("http"))
+        XCTAssertFalse(spoken.contains("notion"))
+        XCTAssertTrue(spoken.contains("a link"))
+        // The card's underlying raw text keeps the full URL untouched.
+        XCTAssertTrue(presented.text.contains(url))
+    }
+
     private func testCard(externalSessionID: String) -> VoicemailCard {
         VoicemailCard(
             id: "card", sourceID: "source", sourceKind: SourceKind.codex.rawValue,

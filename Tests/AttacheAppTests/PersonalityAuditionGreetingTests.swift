@@ -78,18 +78,18 @@ final class PersonalityAuditionGreetingTests: XCTestCase {
         XCTAssertEqual(switched, "Steady cached hello from the test rig.")
     }
 
-    /// A brain change misses the cache and, with no model configured, the
-    /// deterministic offline fallback speaks instead of the stale words. An
-    /// explicit New take also bypasses a valid cache.
-    func testBrainChangeAndNewTakeBypassTheCache() throws {
+    /// A brain change misses the cache. With no model reachable, nothing is
+    /// spoken (no canned line ever stands in for the personality): the completion
+    /// returns empty and a plain reason is surfaced at the click site. An
+    /// explicit New take likewise cannot generate without a live model.
+    func testBrainChangeWithNoModelSpeaksNothingAndSurfacesReason() throws {
         _ = NSApplication.shared
         let model = AppModel(store: try CardStore.inMemory())
         let id = model.createPersonality(name: "Echoline", prompt: "Warm, brief, encouraging.")
         let index = try XCTUnwrap(model.personalities.firstIndex { $0.id == id })
         model.personalities[index].cacheAuditionGreeting("Steady cached hello from the test rig.")
         // Pin the brain to a provider that is never connected in tests, so a
-        // cache miss deterministically takes the offline fallback path instead
-        // of dialing a local model server.
+        // cache miss deterministically hits the no-model path.
         model.personalities[index].modelRef = PersonalityModelRef(
             provider: .codexCLI,
             model: "codex-test"
@@ -97,12 +97,51 @@ final class PersonalityAuditionGreetingTests: XCTestCase {
 
         var promptChanged = model.personalities[index]
         promptChanged.prompt = "Dry, terse, sardonic."
+        // No live model can generate a take for the changed brain.
+        XCTAssertFalse(model.canGeneratePersonalityPreview(for: promptChanged))
         var afterPromptChange: String?
         model.previewPersonality(promptChanged) { afterPromptChange = $0 }
-        XCTAssertEqual(afterPromptChange, "Hi, I'm Echoline. Ready when you are.")
+        XCTAssertEqual(afterPromptChange, "")
+        XCTAssertEqual(
+            model.personalityPreviewFailure,
+            AppModel.previewUnavailableReason(for: promptChanged)
+        )
+        XCTAssertTrue(model.personalityPreviewFailure?.contains("Echoline") == true)
 
-        var newTake: String?
+        var newTake: String? = "unset"
         model.regeneratePersonalityPreview(model.personalities[index]) { newTake = $0 }
-        XCTAssertEqual(newTake, "Hi, I'm Echoline. Ready when you are.")
+        XCTAssertEqual(newTake, "")
+    }
+
+    /// The disabled-state reason names the personality and points at Integrations
+    /// when no model is reachable to generate a take.
+    func testPreviewUnavailableReasonNamesPersonalityAndIntegrations() {
+        let personality = Personality(id: "p", name: "Colt", prompt: "Weathered cowboy.")
+        let reason = AppModel.previewUnavailableReason(for: personality)
+        XCTAssertTrue(reason.contains("Colt"))
+        XCTAssertTrue(reason.contains("Integrations"))
+    }
+
+    /// A cached take is a real take of the personality, so it replays even while
+    /// the live model is unreachable (only generation needs the model).
+    func testCachedTakePlaysWhileModelUnreachable() throws {
+        _ = NSApplication.shared
+        let model = AppModel(store: try CardStore.inMemory())
+        let id = model.createPersonality(name: "Echoline", prompt: "Warm, brief, encouraging.")
+        let index = try XCTUnwrap(model.personalities.firstIndex { $0.id == id })
+        model.personalities[index].cacheAuditionGreeting("Steady cached hello from the test rig.")
+        model.personalities[index].modelRef = PersonalityModelRef(
+            provider: .codexCLI,
+            model: "codex-test"
+        )
+
+        let personality = model.personalities[index]
+        XCTAssertFalse(model.canGeneratePersonalityPreview(for: personality))
+        XCTAssertTrue(model.hasCachedAuditionGreeting(for: personality))
+
+        var spoken: String?
+        model.previewPersonality(personality) { spoken = $0 }
+        XCTAssertEqual(spoken, "Steady cached hello from the test rig.")
+        XCTAssertNil(model.personalityPreviewFailure)
     }
 }

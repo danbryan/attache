@@ -419,6 +419,12 @@ final class AppModel: ObservableObject {
     /// chosen one, nil when the chosen voice actually speaks.
     @Published private(set) var personalityPreviewFallbackNote: String?
 
+    /// A runtime preview-generation failure surfaced at the click site, e.g. the
+    /// model was configured but the call errored. Never a canned greeting: no
+    /// line is ever spoken in the personality's stead. Nil when the last preview
+    /// attempt spoke a real (or cached) take.
+    @Published private(set) var personalityPreviewFailure: String?
+
     @Published var voiceInputMode: AttacheVoiceInputMode = .pushToTalk {
         didSet {
             guard voiceInputMode != oldValue else { return }
@@ -3125,7 +3131,7 @@ final class AppModel: ObservableObject {
                         user: instruction
                     )
                     lastInference = completion.inference
-                    let trimmed = AttachePersonality.stripDashes(
+                    let trimmed = AttachePersonality.sanitizeSpokenText(
                         completion.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     )
                     if !trimmed.isEmpty {
@@ -3214,7 +3220,7 @@ final class AppModel: ObservableObject {
                         system: synthesisSystem,
                         user: synthesisUser
                     )
-                    let trimmed = AttachePersonality.stripDashes(
+                    let trimmed = AttachePersonality.sanitizeSpokenText(
                         synthesisCompletion.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     )
                     if !trimmed.isEmpty {
@@ -7261,11 +7267,12 @@ final class AppModel: ObservableObject {
         )
     }
 
-    /// Explicit creator audition. The greeting is generated once per brain
+    /// Explicit creator audition. The introduction is generated once per brain
     /// (name plus prompt) and cached on the personality, so every click speaks
     /// the exact same words in the personality's own voice; a voice or engine
-    /// switch keeps the words. If no model is available, the visible fallback
-    /// still lets the user audition the voice.
+    /// switch keeps the words. No canned line ever speaks in the personality's
+    /// stead: when no model is reachable the editor disables Preview (a cached
+    /// take may still replay), and a runtime failure is surfaced as status.
     func previewPersonality(_ personality: Personality, completion: @escaping (String) -> Void = { _ in }) {
         previewPersonality(personality, ignoringCachedGreeting: false, completion: completion)
     }
@@ -7282,8 +7289,11 @@ final class AppModel: ObservableObject {
         completion: @escaping (String) -> Void
     ) {
         personalityPreviewFallbackNote = speakTimeFallbackNote(for: personality.voiceRef)
+        personalityPreviewFailure = nil
         let voice = speechConfiguration(for: personality.voiceRef)
         if !ignoringCachedGreeting, let cached = cachedAuditionGreeting(for: personality) {
+            // A cached take is a real take of this personality: playing it while
+            // the live model is unreachable is fine. Only generation needs it.
             personalityPreviewRequestID = nil
             voiceProviderStatus = "Previewing \(personality.name)."
             playback.preview(cached, configuration: voice)
@@ -7293,25 +7303,21 @@ final class AppModel: ObservableObject {
 
         let requestID = UUID()
         personalityPreviewRequestID = requestID
-        let fallback = "Hi, I'm \(personality.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Attaché" : personality.name). Ready when you are."
-        let system = """
-        \(personality.prompt)
-
-        This is a character-creator audition. Say one casual first-person hello in
-        this personality, between five and twelve words. Output only the greeting.
-        Do not use stage directions, quotation marks, or em dashes.
-        """
+        let system = AttachePersonality.auditionIntroductionPrompt(personalityPrompt: personality.prompt)
+        let introRequest = "Give me your quick introduction now."
         let settings = personalityPreviewSettings(for: personality)
         guard let settings else {
+            // No canned line ever speaks in the personality's stead. The editor
+            // disables Preview and explains why when no model is reachable, so
+            // this defensive branch just reports the same reason and stays quiet.
             personalityPreviewRequestID = nil
-            voiceProviderStatus = "Previewing \(personality.name) with its configured voice."
-            playback.preview(fallback, configuration: voice)
-            completion(fallback)
+            personalityPreviewFailure = Self.previewUnavailableReason(for: personality)
+            completion("")
             return
         }
         let snapshot = captureRequestSnapshot(
             role: .preview,
-            userInput: "Give me the quick hello now.",
+            userInput: introRequest,
             personalityOverride: personality,
             settingsOverride: settings
         )
@@ -7319,36 +7325,69 @@ final class AppModel: ObservableObject {
 
         Task {
             let generated: String
-            var generationSucceeded = false
+            var failureMessage: String?
             do {
                 let result = try await presentationService.complete(
                     snapshot: snapshot,
                     system: system,
-                    user: "Give me the quick hello now.",
+                    user: introRequest,
                     settingsOverride: settings
                 )
-                generated = Self.shortPersonalityGreeting(result.text, fallback: fallback)
-                generationSucceeded = true
+                generated = Self.shortPersonalityGreeting(result.text)
+                if generated.isEmpty {
+                    failureMessage = "Couldn't preview \(self.previewName(personality)) right now. The model returned nothing usable."
+                }
                 await MainActor.run {
                     AttacheContextUIState.shared.publishReceipt(result.inference.receiptView)
                 }
             } catch {
-                generated = fallback
+                generated = ""
+                failureMessage = "Couldn't reach the model to preview \(self.previewName(personality)). \(error.localizedDescription)"
             }
             await MainActor.run {
                 guard self.personalityPreviewRequestID == requestID else { return }
                 self.personalityPreviewRequestID = nil
-                if generationSucceeded {
-                    // Only a real model take is cached. The offline fallback
-                    // line is already deterministic and must not freeze out a
-                    // later configured model.
+                if !generated.isEmpty {
+                    // Only a real model take is cached; a failure never speaks
+                    // and never freezes out a later configured model.
                     self.storeAuditionGreeting(generated, for: personality)
+                    self.personalityPreviewFailure = nil
+                    self.voiceProviderStatus = "Previewing \(personality.name)."
+                    self.playback.preview(generated, configuration: voice)
+                    completion(generated)
+                } else {
+                    self.personalityPreviewFailure = failureMessage
+                        ?? "Preview couldn't be generated right now."
+                    completion("")
                 }
-                self.voiceProviderStatus = "Previewing \(personality.name)."
-                self.playback.preview(generated, configuration: voice)
-                completion(generated)
             }
         }
+    }
+
+    /// Whether a live in-character preview can be generated for this personality
+    /// right now: its model provider is connected and (for cloud) consented.
+    func canGeneratePersonalityPreview(for personality: Personality) -> Bool {
+        personalityPreviewSettings(for: personality) != nil
+    }
+
+    /// Whether a real cached take exists for this personality's current brain,
+    /// so Preview can replay it even while the live model is unreachable.
+    func hasCachedAuditionGreeting(for personality: Personality) -> Bool {
+        cachedAuditionGreeting(for: personality) != nil
+    }
+
+    /// The editor's inline reason when no model is reachable to generate a take.
+    static func previewUnavailableReason(for personality: Personality) -> String {
+        "Connect a model in Integrations to hear \(previewName(personality)) introduce themselves."
+    }
+
+    private static func previewName(_ personality: Personality) -> String {
+        let name = personality.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "your Attaché" : name
+    }
+
+    private func previewName(_ personality: Personality) -> String {
+        Self.previewName(personality)
     }
 
     /// The cached audition line valid for the personality's CURRENT brain:
@@ -7485,13 +7524,16 @@ final class AppModel: ObservableObject {
         return configuration.resolvedForPlayback(systemVoiceIdentifier: speechVoiceIdentifier)
     }
 
-    private static func shortPersonalityGreeting(_ text: String?, fallback: String) -> String {
-        let cleaned = AttachePersonality.stripDashes(text ?? "")
+    /// Clean a generated audition introduction for speaking: sanitize the
+    /// spoken text (dashes, links, checksums, IDs), strip stray quoting, and
+    /// deterministically trim any overrun to the ~8s spoken budget on a sentence
+    /// boundary. Returns "" for an empty take so the caller reports a failure
+    /// rather than speaking a canned line.
+    private static func shortPersonalityGreeting(_ text: String?) -> String {
+        let cleaned = AttachePersonality.sanitizeSpokenText(text ?? "")
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”")))
-        guard !cleaned.isEmpty else { return fallback }
-        let words = cleaned.split(whereSeparator: \.isWhitespace)
-        guard words.count > 12 else { return cleaned }
-        return words.prefix(12).joined(separator: " ") + "."
+        guard !cleaned.isEmpty else { return "" }
+        return AttachePersonality.trimSpokenIntroduction(cleaned, wordBudget: 22)
     }
 
     /// Apply the character as one unit. Persistence migration has already filled

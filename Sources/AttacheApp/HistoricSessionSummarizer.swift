@@ -259,7 +259,7 @@ final class HistoricSessionSummarizer {
             spokenLanguageName: options.spokenLanguageName
         )
         let rawSpokenText = try await synthesize(prompt)
-        let spokenText = AttachePersonality.stripDashes(rawSpokenText)
+        let spokenText = AttachePersonality.sanitizeSpokenText(rawSpokenText)
 
         guard options.persistCard else {
             return .ephemeral(spokenText: spokenText)

@@ -296,7 +296,7 @@ final class AppModelPersonalitySwitchTests: XCTestCase {
             model.presentationReasoningEffort = "high"
             let target = Personality(
                 id: "custom.onboarding", name: "Onboarding", prompt: "p",
-                voiceRef: .systemVoice(Personality.cowboyPreferredVoiceID),
+                voiceRef: .systemVoice("com.apple.speech.synthesis.voice.Fred"),
                 character: .cowboy,
                 modelRef: PersonalityModelRef(provider: .xai, model: "grok-4.5", reasoningEffort: "low")
             )

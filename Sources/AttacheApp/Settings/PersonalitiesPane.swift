@@ -327,29 +327,44 @@ struct PersonalityStudioSheet: View {
         self.request = request
         self.onClose = onClose
 
-        let initial: Personality
+        let initial = Self.initialDraft(
+            for: request,
+            voiceRef: model.currentPersonalityVoiceRef,
+            modelRef: model.currentPersonalityModelRef,
+            playbackSpeed: model.playbackSpeed
+        )
+        _selectedTemplateID = State(initialValue: request.source?.id ?? Personality.defaultActiveID)
+        _draft = State(initialValue: initial)
+    }
+
+    /// The starting draft for the studio. Create and customize modes open with
+    /// an EMPTY name so the user must name it (Save stays disabled until they
+    /// do); edit mode keeps the existing personality's real name. A customized
+    /// built-in also becomes an owned, editable copy.
+    static func initialDraft(
+        for request: PersonalityStudioRequest,
+        voiceRef: PersonalityVoiceRef?,
+        modelRef: PersonalityModelRef?,
+        playbackSpeed: Double
+    ) -> Personality {
         if var source = request.source {
             if request.mode == .customize {
-                source.name = "My \(source.name)"
+                source.name = ""
                 source.isBuiltIn = false
             }
-            initial = source
-            _selectedTemplateID = State(initialValue: source.id)
-        } else {
-            let starter = Personality.builtIns.first { $0.id == Personality.defaultActiveID } ?? Personality.builtIns[0]
-            initial = Personality(
-                id: "draft",
-                name: "My Personality",
-                prompt: starter.prompt,
-                voiceRef: model.currentPersonalityVoiceRef,
-                character: .robot,
-                visualMode: .character,
-                modelRef: model.currentPersonalityModelRef,
-                playbackSpeed: model.playbackSpeed
-            )
-            _selectedTemplateID = State(initialValue: starter.id)
+            return source
         }
-        _draft = State(initialValue: initial)
+        let starter = Personality.builtIns.first { $0.id == Personality.defaultActiveID } ?? Personality.builtIns[0]
+        return Personality(
+            id: "draft",
+            name: "",
+            prompt: starter.prompt,
+            voiceRef: voiceRef,
+            character: .robot,
+            visualMode: .character,
+            modelRef: modelRef,
+            playbackSpeed: playbackSpeed
+        )
     }
 
     var body: some View {
@@ -491,15 +506,34 @@ struct PersonalityStudioSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(previewPreparing || !canSave)
+                .disabled(previewPreparing || !canSave || !(canGeneratePreview || hasCachedPreview))
 
                 Button(action: { requestPersonalityPreview(newTake: true) }) {
                     Label("New take", systemImage: "arrow.clockwise")
                 }
                 .controlSize(.large)
-                .disabled(previewPreparing || !canSave)
-                .help("Generate a fresh greeting. Preview otherwise repeats the same words every time.")
+                .disabled(previewPreparing || !canSave || !canGeneratePreview)
+                .help("Generate a fresh introduction. Preview otherwise repeats the same words every time.")
                 .accessibilityLabel("New preview take")
+            }
+
+            if !canGeneratePreview {
+                let reason = AppModel.previewUnavailableReason(for: draft)
+                Label(reason, systemImage: "exclamationmark.circle")
+                    .typoCaption()
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(reason)
+            }
+
+            if let failure = model.personalityPreviewFailure {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .typoCaption()
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Preview failed: \(failure)")
             }
 
             if !previewText.isEmpty {
@@ -545,7 +579,7 @@ struct PersonalityStudioSheet: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            TextField("Name", text: $draft.name)
+            TextField("Name your Attaché", text: $draft.name)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 300)
                 .accessibilityLabel("Attaché name")
@@ -1164,6 +1198,19 @@ struct PersonalityStudioSheet: View {
             && draftModelIsValid
             && draftReasoningIsValid
             && (draft.contextStrategy?.isValidForSaving ?? true)
+    }
+
+    /// A live in-character take can be generated: the draft's model provider is
+    /// connected (and consented for cloud). New take requires this; Preview also
+    /// accepts a cached take when it is false.
+    private var canGeneratePreview: Bool {
+        model.canGeneratePersonalityPreview(for: draft)
+    }
+
+    /// A real cached take already exists for this brain, so Preview can replay it
+    /// even while the live model is unreachable.
+    private var hasCachedPreview: Bool {
+        model.hasCachedAuditionGreeting(for: draft)
     }
 
     /// A nil modelRef is the first-class "uses your connected model" state

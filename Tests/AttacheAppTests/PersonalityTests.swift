@@ -181,11 +181,12 @@ final class PersonalityTests: XCTestCase {
     }
 
     func testResolvedDropsUnavailableSystemVoice() {
-        let ref = PersonalityVoiceRef.systemVoice(Personality.cowboyPreferredVoiceID)
+        let voiceID = "com.apple.speech.synthesis.voice.Fred"
+        let ref = PersonalityVoiceRef.systemVoice(voiceID)
         let missing = ref.resolved(availableSystemVoiceIDs: ["com.apple.voice.compact.en-US.Samantha"])
         XCTAssertNil(missing.systemVoiceIdentifier)
-        let present = ref.resolved(availableSystemVoiceIDs: [Personality.cowboyPreferredVoiceID])
-        XCTAssertEqual(present.systemVoiceIdentifier, Personality.cowboyPreferredVoiceID)
+        let present = ref.resolved(availableSystemVoiceIDs: [voiceID])
+        XCTAssertEqual(present.systemVoiceIdentifier, voiceID)
     }
 
     func testApplyWritesProviderAndClearsSystemVoiceWhenDefault() {
@@ -660,5 +661,43 @@ final class PersonalityTests: XCTestCase {
         store.recordDeletedBuiltIn("custom.mine")
         XCTAssertFalse(store.hasDeletedBuiltIns)
         XCTAssertTrue(store.deletedBuiltInIDs().isEmpty)
+    }
+
+    /// Create and customize modes open the studio with an EMPTY name so the user
+    /// must type one; edit mode keeps the existing personality's real name.
+    func testStudioCreateAndCustomizeStartEmptyEditKeepsName() {
+        let source = Personality(id: "builtin.cowboy", name: "Colt", prompt: "Weathered cowboy.", isBuiltIn: true)
+
+        let create = PersonalityStudioSheet.initialDraft(
+            for: .create, voiceRef: nil, modelRef: nil, playbackSpeed: 1.0
+        )
+        XCTAssertTrue(create.name.isEmpty, "create mode must start with an empty name field")
+
+        let customize = PersonalityStudioSheet.initialDraft(
+            for: .customize(source), voiceRef: nil, modelRef: nil, playbackSpeed: 1.0
+        )
+        XCTAssertTrue(customize.name.isEmpty, "customize mode must start with an empty name field")
+        XCTAssertFalse(customize.isBuiltIn, "a customized built-in becomes an owned copy")
+
+        let edit = PersonalityStudioSheet.initialDraft(
+            for: .edit(source), voiceRef: nil, modelRef: nil, playbackSpeed: 1.0
+        )
+        XCTAssertEqual(edit.name, "Colt", "edit mode keeps the real name")
+    }
+
+    /// The empty starting name means Save is disabled until the user types one:
+    /// no code path auto-fills "My ..." into the field for create or customize.
+    func testStudioCreateAndCustomizeDoNotAutofillName() {
+        let source = Personality(id: "builtin.cowboy", name: "Colt", prompt: "Weathered cowboy.", isBuiltIn: true)
+        for request in [PersonalityStudioRequest.create, .customize(source)] {
+            let draft = PersonalityStudioSheet.initialDraft(
+                for: request, voiceRef: nil, modelRef: nil, playbackSpeed: 1.0
+            )
+            XCTAssertFalse(draft.name.contains("My "), "no 'My ...' should be prefilled")
+            XCTAssertTrue(
+                draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                "an empty name keeps Save disabled (canSave requires a non-empty name)"
+            )
+        }
     }
 }

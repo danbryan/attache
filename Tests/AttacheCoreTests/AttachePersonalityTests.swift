@@ -223,6 +223,124 @@ final class AttachePersonalityTests: XCTestCase {
         XCTAssertFalse(AttachePersonality.stripDashes("a — b — c").contains("—"))
     }
 
+    func testSanitizeSpokenTextReplacesURLsMidSentence() {
+        let input = "The notes are at https://notion.so/a/really/long/path and the rest is fine."
+        let out = AttachePersonality.sanitizeSpokenText(input)
+        XCTAssertEqual(out, "The notes are at a link and the rest is fine.")
+        XCTAssertFalse(out.contains("http"))
+        XCTAssertFalse(out.contains("notion"))
+    }
+
+    func testSanitizeSpokenTextHandlesURLInParensAndKeepsPunctuation() {
+        // A markdown-ish parenthesized link keeps its parens and the sentence
+        // keeps its closing period.
+        let input = "See the doc (https://example.com/x). Thanks."
+        let out = AttachePersonality.sanitizeSpokenText(input)
+        XCTAssertEqual(out, "See the doc (a link). Thanks.")
+
+        // An article the writer placed in front collapses cleanly.
+        XCTAssertEqual(
+            AttachePersonality.sanitizeSpokenText("open the https://example.com now"),
+            "open the link now"
+        )
+    }
+
+    func testSanitizeSpokenTextReplacesShaAndUUID() {
+        let sha = "d34db33fcafebabe0123456789abcdef01234567" // 40 hex chars
+        XCTAssertEqual(
+            AttachePersonality.sanitizeSpokenText("commit \(sha) landed"),
+            "commit a checksum landed"
+        )
+        let uuid = "550e8400-e29b-41d4-a716-446655440000"
+        XCTAssertEqual(
+            AttachePersonality.sanitizeSpokenText("session \(uuid) started"),
+            "session an ID started"
+        )
+    }
+
+    func testSanitizeSpokenTextIsIdempotentAndStripsDashes() {
+        let input = "Grab it at https://a.b/c — the sha is d34db33fcafebabe0123456789abcdef01234567."
+        let once = AttachePersonality.sanitizeSpokenText(input)
+        let twice = AttachePersonality.sanitizeSpokenText(once)
+        XCTAssertEqual(once, twice)
+        XCTAssertFalse(once.contains("—"))
+        XCTAssertFalse(once.contains("http"))
+        XCTAssertTrue(once.contains("a checksum"))
+    }
+
+    func testSanitizeSpokenTextLeavesOrdinaryTextAndShortIDsAlone() {
+        let plain = "Posted 25 transactions and left 7 pending for review."
+        XCTAssertEqual(AttachePersonality.sanitizeSpokenText(plain), plain)
+        // A short id and a file path are the prompt's job, not this pass.
+        let kept = "See file src/App.swift for ticket INF-347."
+        XCTAssertEqual(AttachePersonality.sanitizeSpokenText(kept), kept)
+    }
+
+    func testTrimSpokenIntroductionTrimsAtSentenceBoundaryWithinBudget() {
+        let long = "Howdy, my name's Colt and I ride point on your herd. " +
+            "I count the strays, mend the fences, and drive the whole outfit through the gate at first light every single day."
+        let trimmed = AttachePersonality.trimSpokenIntroduction(long, wordBudget: 22)
+        XCTAssertEqual(trimmed, "Howdy, my name's Colt and I ride point on your herd.")
+        XCTAssertLessThanOrEqual(trimmed.split(whereSeparator: { $0.isWhitespace }).count, 22)
+        // The trim never splits a word: the last kept token is whole.
+        XCTAssertTrue(trimmed.hasSuffix("herd."))
+    }
+
+    func testTrimSpokenIntroductionIsIdempotentAndLeavesShortTakes() {
+        let short = "Hi, I'm Echo, glad to help."
+        XCTAssertEqual(AttachePersonality.trimSpokenIntroduction(short, wordBudget: 22), short)
+        let long = "Howdy, my name's Colt and I ride point on your herd. And then some more words here entirely."
+        let once = AttachePersonality.trimSpokenIntroduction(long, wordBudget: 22)
+        XCTAssertEqual(AttachePersonality.trimSpokenIntroduction(once, wordBudget: 22), once)
+    }
+
+    func testTrimSpokenIntroductionClipsFirstOverlongSentenceOnWholeWords() {
+        let runOn = "My name is Colt and I ride point and mend fences and count the herd and drive them through the gate and tip my hat at sundown and ride out again"
+        let trimmed = AttachePersonality.trimSpokenIntroduction(runOn, wordBudget: 22)
+        XCTAssertLessThanOrEqual(trimmed.split(whereSeparator: { $0.isWhitespace }).count, 22)
+        XCTAssertTrue(trimmed.hasSuffix("."))
+        // Clipped on a whole-word boundary: no partial trailing token.
+        XCTAssertFalse(trimmed.dropLast().hasSuffix(" "))
+        XCTAssertTrue(runOn.hasPrefix(String(trimmed.dropLast())))
+    }
+
+    func testPresentationPromptForbidsSpeakingLinksEvenAsMainPoint() {
+        // The "unless they are the main point" escape hatch is gone: a link or
+        // hash is always described, never spoken, even when it is the point.
+        let event = NormalizedEvent(
+            source: "codex",
+            eventType: "assistant.completed",
+            title: "Link",
+            text: "Here is the URL."
+        )
+        let prompt = AttachePersonality.presentationPrompt(for: event, memoryContext: nil)
+        let system = prompt.messages[0].content
+        XCTAssertFalse(system.contains("unless they are the main point"))
+        XCTAssertTrue(system.contains("never speak it"))
+    }
+
+    func testDefaultProfilePromptNeverReadsLongTechnicalStrings() {
+        // The prompt is a wrapped multi-line literal, so assert on fragments that
+        // do not cross a line break.
+        let prompt = AttachePersonality.defaultProfilePrompt
+        XCTAssertTrue(prompt.contains("Long technical strings"))
+        XCTAssertTrue(prompt.contains("are never read out loud"))
+        XCTAssertTrue(prompt.contains("describe them at a high"))
+    }
+
+    func testAuditionIntroductionPromptAsksForNamedIntroductionWithinBudget() {
+        let prompt = AttachePersonality.auditionIntroductionPrompt(
+            personalityPrompt: "You're Colt, always open with howdy."
+        )
+        // The personality's own prompt leads the phrasing.
+        XCTAssertTrue(prompt.contains("You're Colt, always open with howdy."))
+        XCTAssertTrue(prompt.lowercased().contains("introduce yourself"))
+        XCTAssertTrue(prompt.contains("say your name"))
+        XCTAssertTrue(prompt.contains("this personality's own wording lead"))
+        // The word ceiling (spoken-duration budget) is instructed in the prompt.
+        XCTAssertTrue(prompt.contains("22 words"))
+    }
+
     func testFollowUpPromptHandlesEllipticalSessionQuestions() {
         let card = VoicemailCard(
             id: "card-1",

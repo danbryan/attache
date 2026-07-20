@@ -155,7 +155,9 @@ public enum AttachePersonality {
 
     For spoken responses, optimize for listenability: short sentences, clear
     transitions, and no giant lists. Give the headline first, then the key
-    points. The output will be read aloud and captioned.
+    points. The output will be read aloud and captioned. Long technical strings
+    like links and checksums are never read out loud; describe them at a high
+    level instead.
 
     Expression hygiene: do not output private stage directions, parenthetical
     acting notes, or asterisk-only process notes. Never use em-dashes; write
@@ -779,6 +781,142 @@ public enum AttachePersonality {
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// De-noise text that is about to be SPOKEN (and captioned). Applies
+    /// `stripDashes` first, then deterministically replaces the long technical
+    /// strings a voice should never read out letter by letter: full URLs become
+    /// "a link", UUIDs become "an ID", and long bare hex runs (checksums, SHAs)
+    /// become "a checksum". Short IDs and file paths are intentionally left
+    /// alone; the prompt handles those. Word-boundary safe, punctuation
+    /// preserving, and idempotent. Only the spoken/captioned string is passed
+    /// through this; a card's raw text keeps the full details (INF, the
+    /// Notion-URL letter-by-letter incident).
+    public static func sanitizeSpokenText(_ text: String) -> String {
+        var s = stripDashes(text)
+
+        // Full URLs -> "a link". Two forms: scheme://rest and www.-prefixed.
+        // The run stops at whitespace or a closing bracket/quote; trailing
+        // sentence punctuation is peeled back off so the sentence keeps its stop.
+        s = replacingURLs(in: s, replacement: "a link")
+
+        // Collapse an article the writer placed in front of the URL against the
+        // article the substitution introduced ("the a link" -> "the link",
+        // "a a link" -> "a link").
+        s = replacingRegex(#"(?i)\b(the|an|a)\s+a link\b"#, in: s, template: "$1 link")
+
+        // UUIDs (8-4-4-4-12 hex) -> "an ID". A UUID has no 16+ contiguous hex
+        // run, so this pass and the bare-hex pass do not collide.
+        s = replacingRegex(
+            #"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"#,
+            in: s,
+            template: "an ID"
+        )
+
+        // Bare hex runs of 16+ characters (checksums, SHAs) -> "a checksum".
+        s = replacingRegex(#"(?i)\b[0-9a-f]{16,}\b"#, in: s, template: "a checksum")
+
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func replacingRegex(_ pattern: String, in text: String, template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: template)
+    }
+
+    private static func replacingURLs(in text: String, replacement: String) -> String {
+        let pattern = #"(?i)(?:[a-z][a-z0-9+.\-]*://|www\.)[^\s<>()\[\]{}"'`]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        let matches = regex.matches(in: text, range: range)
+        guard !matches.isEmpty else { return text }
+        var result = text
+        let trailing: Set<Character> = [".", ",", ";", ":", "!", "?"]
+        // Rebuild from the end so earlier ranges stay valid as the string shrinks.
+        for match in matches.reversed() {
+            guard let matchedRange = Range(match.range, in: result) else { continue }
+            var matched = String(result[matchedRange])
+            var suffix = ""
+            while let last = matched.last, trailing.contains(last) {
+                suffix = String(last) + suffix
+                matched.removeLast()
+            }
+            result.replaceSubrange(matchedRange, with: replacement + suffix)
+        }
+        return result
+    }
+
+    /// The system prompt for the creator audition (INF): a short in-character
+    /// self-introduction that names the personality, phrased entirely by the
+    /// personality's own prompt (a cowboy prompt that says "always open with
+    /// howdy" should produce "Howdy, y'all, my name's Colt..." not "Hi, I'm
+    /// Colt"), and capped to a roughly eight-second spoken budget of about 22
+    /// words. The caller also trims any overrun deterministically with
+    /// `trimSpokenIntroduction`, so the budget is enforced twice.
+    public static func auditionIntroductionPrompt(personalityPrompt: String) -> String {
+        """
+        \(personalityPrompt)
+
+        This is a character-creator audition. Introduce yourself to the user in the
+        first person, staying fully in this personality, and say your name so they
+        hear who they are meeting. Let this personality's own wording lead: if the
+        prompt above tells you to open a certain way, open that way. Keep it to
+        about 22 words so it speaks in roughly eight seconds. Output only the
+        introduction. Do not use stage directions, quotation marks, or em dashes.
+        """
+    }
+
+    /// Trim a spoken self-introduction to a spoken-duration budget without ever
+    /// cutting a word in half. Prefers to end on a complete sentence that fits
+    /// the word budget; if even the first sentence is over budget, falls back to
+    /// the first `wordBudget` whole words and closes with a period. Idempotent:
+    /// a take already within budget comes back unchanged aside from whitespace
+    /// tidying.
+    public static func trimSpokenIntroduction(_ text: String, wordBudget: Int = 22) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard wordBudget > 0 else { return trimmed }
+        let totalWords = trimmed.split(whereSeparator: { $0.isWhitespace })
+        if totalWords.count <= wordBudget { return trimmed }
+
+        var kept: [String] = []
+        var wordCount = 0
+        for sentence in splitIntoSentences(trimmed) {
+            let words = sentence.split(whereSeparator: { $0.isWhitespace }).count
+            if wordCount + words > wordBudget { break }
+            kept.append(sentence)
+            wordCount += words
+        }
+        if !kept.isEmpty {
+            return kept.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        // The opening sentence alone overruns: keep whole words up to the budget.
+        return totalWords.prefix(wordBudget).joined(separator: " ") + "."
+    }
+
+    private static func splitIntoSentences(_ text: String) -> [String] {
+        let chars = Array(text)
+        var sentences: [String] = []
+        var current = ""
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            current.append(c)
+            if c == "." || c == "!" || c == "?" {
+                let nextIsTerminator = i + 1 < chars.count
+                    && (chars[i + 1] == "." || chars[i + 1] == "!" || chars[i + 1] == "?")
+                if !nextIsTerminator {
+                    let cut = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cut.isEmpty { sentences.append(cut) }
+                    current = ""
+                }
+            }
+            i += 1
+        }
+        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { sentences.append(tail) }
+        return sentences
+    }
+
     private static func systemPrompt(
         profilePrompt: String,
         memoryContext: String?,
@@ -800,7 +938,7 @@ public enum AttachePersonality {
         - Do not read the agent response verbatim unless the character prompt explicitly asks for that.
         - Do not talk to the agent. Speak directly to the user.
         - Default to 2-4 short sentences and stay under about 700 spoken characters unless the character prompt asks for more detail.
-        - Do not recite code blocks, logs, paths, hashes, URLs, IDs, or file lists unless they are the main point.
+        - Do not recite code blocks, logs, paths, hashes, URLs, IDs, or file lists. Even when a link or hash is the main point, describe it (the link is on the card) and never speak it.
         - If a link matters, say "I included the link" or describe where it is.
         - If markdown link syntax appears, speak only the label and never the URL.
         - Skip machine-only error codes unless they change what the user should do.

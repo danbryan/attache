@@ -57,7 +57,7 @@ enum ConversationFallbackChain {
     /// "xAI / Grok hit its usage limit; using Ollama for now." Never contains
     /// an em dash (AGENTS.md "Never emit em dashes in spoken output"); this is
     /// a fixed template over provider titles, which never contain one either,
-    /// but it still runs through `AttachePersonality.stripDashes` so the
+    /// but it still runs through `AttachePersonality.sanitizeSpokenText` so the
     /// guarantee is structural, not just "true today."
     static func announcement(
         category: ConversationFailureCategory,
@@ -80,7 +80,7 @@ enum ConversationFallbackChain {
             problem = "is unavailable"
         }
         let sentence = "\(failedProviderTitle) \(problem); using \(fallbackProviderTitle) for now."
-        return AttachePersonality.stripDashes(sentence)
+        return AttachePersonality.sanitizeSpokenText(sentence)
     }
 }
 

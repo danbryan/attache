@@ -325,10 +325,6 @@ extension Personality {
 
     static let defaultActiveID = "builtin.bigPicture"
 
-    /// Retained for migrating personalities that stored the old cowboy voice;
-    /// built-ins now default to the Attaché Premium voice (2026-07-18, INF-379
-    /// follow-up), falling back to the system voice until weights install.
-    static let cowboyPreferredVoiceID = "com.apple.speech.synthesis.voice.Fred"
     static let defaultPreferredVoiceID = "com.apple.speech.synthesis.voice.Alex"
 
     static let newTemplate = """

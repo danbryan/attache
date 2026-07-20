@@ -849,7 +849,11 @@ final class AttachePresentationService {
         if presented.metadata["attache_summary"] == nil {
             presented.metadata["attache_summary"] = EventNormalizer.summary(for: event)
         }
-        presented.metadata["attache_spoken_text"] = event.text
+        // Plain/verbatim readback speaks the raw event text with no model in the
+        // loop, so a Notion URL or a SHA would be read out character by
+        // character. Sanitize only the SPOKEN string (also what captions
+        // render); the card's rawText keeps the full untouched details.
+        presented.metadata["attache_spoken_text"] = AttachePersonality.sanitizeSpokenText(event.text)
         presented.metadata["attache_presentation_strategy"] = strategy
         return presented
     }
@@ -1062,7 +1066,7 @@ final class AttachePresentationService {
                 text: spokenText
             ), limit: 120)
         }
-        return (AttachePersonality.stripDashes(summary), AttachePersonality.stripDashes(spokenText), needsDecision)
+        return (AttachePersonality.stripDashes(summary), AttachePersonality.sanitizeSpokenText(spokenText), needsDecision)
     }
 
     private static func fallbackFollowUpAnswer(
@@ -1134,7 +1138,7 @@ final class AttachePresentationService {
         let cleaned = lines
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return AttachePersonality.stripDashes(cleaned)
+        return AttachePersonality.sanitizeSpokenText(cleaned)
     }
 
     private static func clipped(_ text: String, limit: Int) -> String {

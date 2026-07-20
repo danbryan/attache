@@ -735,12 +735,6 @@ struct OnboardingSheet: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Preview") {
-                model.previewPersonality(personality)
-            }
-            .typoCaption(.medium)
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Hear \(personality.name) sample")
         }
         .padding(9)
         .background(selected ? accent.opacity(0.12) : Color.primary.opacity(0.05),
