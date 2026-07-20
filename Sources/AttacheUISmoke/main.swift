@@ -127,6 +127,55 @@ func occurrenceCount(of needle: String, in haystack: String) -> Int {
     return count
 }
 
+/// Shared final assertion for the real two-way gates (f7/f21/f23/f24): the
+/// delivered pong arrives during a live call focused on the session, so the
+/// resulting card must file directly as HEARD history (never an unread inbox
+/// voicemail) per the 2026-07-19 live-call filing rule, and must be findable
+/// in the history palette. Dumps linkage evidence before the profile restore
+/// destroys it when the link wait times out.
+func assertPongFiledAsHeardHistory(sessionID: String) throws {
+    var resultingSummary = ""
+    var resultingStatus = ""
+    do {
+        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
+            let command = """
+            sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
+              "SELECT c.summary || '|' || c.status FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
+            """
+            guard let output = try? runShell(command) else { return false }
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let separator = trimmed.lastIndex(of: "|") else { return false }
+            resultingSummary = String(trimmed[..<separator])
+            resultingStatus = String(trimmed[trimmed.index(after: separator)...])
+            return !resultingSummary.isEmpty
+        }
+    } catch {
+        let dump = """
+        sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
+          "SELECT 'instruction', id, state, delivery_checkpoint, resulting_card_id FROM instructions WHERE session_id='\(sessionID)'; \
+           SELECT 'card', id, status, substr(raw_text,1,80) FROM cards WHERE session_id IN (SELECT id FROM sessions WHERE external_session_id='\(sessionID)');"
+        """
+        if let evidence = try? runShell(dump) {
+            print("        EVIDENCE (instruction + cards for session):\n\(evidence)")
+        }
+        throw error
+    }
+    guard resultingStatus == "heard" else {
+        throw SmokeError(message: "focused-call pong card filed as '\(resultingStatus)', expected 'heard' (live-call filing rule)")
+    }
+    app.activate()
+    app.key(Key.y, command: true)
+    let historyField = try waitForElement("history search field", in: try mainWindow(),
+                                          role: kAXTextFieldRole as String, containing: "Search history",
+                                          timeout: 15)
+    _ = historyField.setFocused()
+    if !historyField.setValue(resultingSummary) { app.type(resultingSummary) }
+    _ = try waitForHistoryCardRow(filteredBy: resultingSummary, timeout: 30)
+    app.key(Key.escape)
+    try? waitForElementGone("history search field", in: try mainWindow(),
+                            role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
+}
+
 @discardableResult
 func waitForInboxCardRow(containing token: String, timeout: TimeInterval = 120) throws -> AXElement {
     try waitForElement("inbox card row containing \(token)", in: try mainWindow(), timeout: timeout) { element in
@@ -1539,53 +1588,7 @@ if enabled("f7") {
     }
 
     run.step("f7-codex-two-way", "Attaché files the Codex pong as a heard card for the focused call target") {
-        // The delivery happens during a live call focused on this session, so
-        // the resulting card must file directly as HEARD history (never an
-        // unread inbox voicemail) per the 2026-07-19 live-call filing rule.
-        var resultingSummary = ""
-        var resultingStatus = ""
-        do {
-            try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
-                let command = """
-                sqlite3 "$HOME/Library/Application Support/Attache/attache.sqlite" \
-                  "SELECT c.summary || '|' || c.status FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
-                """
-                guard let output = try? runShell(command) else { return false }
-                let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard let separator = trimmed.lastIndex(of: "|") else { return false }
-                resultingSummary = String(trimmed[..<separator])
-                resultingStatus = String(trimmed[trimmed.index(after: separator)...])
-                return !resultingSummary.isEmpty
-            }
-        } catch {
-            // Evidence dump before the profile restore destroys it: was the
-            // card never filed (watcher miss) or filed but never linked
-            // (correlation miss)? One intermittent unlinked run seen inside
-            // the 2026-07-20 release-readiness suite; standalone runs pass.
-            let dump = """
-            sqlite3 "$HOME/Library/Application Support/Attache/attache.sqlite" \
-              "SELECT 'instruction', id, state, delivery_checkpoint, resulting_card_id FROM instructions WHERE session_id='\(sessionID)'; \
-               SELECT 'card', id, status, substr(raw_text,1,80) FROM cards WHERE session_id IN (SELECT id FROM sessions WHERE external_session_id='\(sessionID)');"
-            """
-            if let evidence = try? runShell(dump) {
-                print("        EVIDENCE (instruction + cards for session):\n\(evidence)")
-            }
-            throw error
-        }
-        guard resultingStatus == "heard" else {
-            throw SmokeError(message: "focused-call pong card filed as '\(resultingStatus)', expected 'heard' (live-call filing rule)")
-        }
-        app.activate()
-        app.key(Key.y, command: true)
-        let historyField = try waitForElement("history search field", in: try mainWindow(),
-                                              role: kAXTextFieldRole as String, containing: "Search history",
-                                              timeout: 15)
-        _ = historyField.setFocused()
-        if !historyField.setValue(resultingSummary) { app.type(resultingSummary) }
-        _ = try waitForHistoryCardRow(filteredBy: resultingSummary, timeout: 30)
-        app.key(Key.escape)
-        try? waitForElementGone("history search field", in: try mainWindow(),
-                                role: kAXTextFieldRole as String, containing: "Search history", timeout: 5)
+        try assertPongFiledAsHeardHistory(sessionID: sessionID)
     }
 }
 
@@ -3172,28 +3175,8 @@ if enabled("f21") {
         }
     }
 
-    run.step("f21-claude-two-way", "Attaché files the Claude Code pong as a watched-session card") {
-        var resultingSummary = ""
-        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
-            let command = """
-            sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
-              "SELECT c.summary FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
-            """
-            guard let output = try? runShell(command) else { return false }
-            resultingSummary = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !resultingSummary.isEmpty
-        }
-        app.activate()
-        app.key(Key.i, command: true)
-        let field = try waitForElement("inbox search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search inbox",
-                                       timeout: 15)
-        _ = field.setFocused()
-        if !field.setValue(resultingSummary) { app.type(resultingSummary) }
-        _ = try waitForInboxCardRow(containing: resultingSummary, timeout: 30)
-        app.key(Key.escape)
-        try? waitForElementGone("inbox search field", in: try mainWindow(),
-                                role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+    run.step("f21-claude-two-way", "Attaché files the Claude Code pong as a heard card for the focused call target") {
+        try assertPongFiledAsHeardHistory(sessionID: sessionID)
     }
 }
 
@@ -3278,28 +3261,8 @@ if enabled("f23") {
         }
     }
 
-    run.step("f23-grok-two-way", "Attaché files the Grok Build pong as a watched-session card") {
-        var resultingSummary = ""
-        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
-            let command = """
-            sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
-              "SELECT c.summary FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
-            """
-            guard let output = try? runShell(command) else { return false }
-            resultingSummary = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !resultingSummary.isEmpty
-        }
-        app.activate()
-        app.key(Key.i, command: true)
-        let field = try waitForElement("inbox search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search inbox",
-                                       timeout: 15)
-        _ = field.setFocused()
-        if !field.setValue(resultingSummary) { app.type(resultingSummary) }
-        _ = try waitForInboxCardRow(containing: resultingSummary, timeout: 30)
-        app.key(Key.escape)
-        try? waitForElementGone("inbox search field", in: try mainWindow(),
-                                role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+    run.step("f23-grok-two-way", "Attaché files the Grok Build pong as a heard card for the focused call target") {
+        try assertPongFiledAsHeardHistory(sessionID: sessionID)
     }
 }
 
@@ -3395,28 +3358,8 @@ if enabled("f24") {
         }
     }
 
-    run.step("f24-opencode-two-way", "Attaché files the opencode pong as a watched-session card") {
-        var resultingSummary = ""
-        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
-            let command = """
-            sqlite3 "$HOME/Library/Application Support/Attache/Attache.sqlite" \
-              "SELECT c.summary FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
-            """
-            guard let output = try? runShell(command) else { return false }
-            resultingSummary = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !resultingSummary.isEmpty
-        }
-        app.activate()
-        app.key(Key.i, command: true)
-        let field = try waitForElement("inbox search field", in: try mainWindow(),
-                                       role: kAXTextFieldRole as String, containing: "Search inbox",
-                                       timeout: 15)
-        _ = field.setFocused()
-        if !field.setValue(resultingSummary) { app.type(resultingSummary) }
-        _ = try waitForInboxCardRow(containing: resultingSummary, timeout: 30)
-        app.key(Key.escape)
-        try? waitForElementGone("inbox search field", in: try mainWindow(),
-                                role: kAXTextFieldRole as String, containing: "Search inbox", timeout: 5)
+    run.step("f24-opencode-two-way", "Attaché files the opencode pong as a heard card for the focused call target") {
+        try assertPongFiledAsHeardHistory(sessionID: sessionID)
     }
 }
 
