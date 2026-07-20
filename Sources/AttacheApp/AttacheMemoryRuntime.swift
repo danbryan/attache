@@ -182,6 +182,23 @@ final class AttacheMemoryRuntime: @unchecked Sendable {
         return finalDisposition
     }
 
+    /// Bounded diagnostics for every propose_memory attempt (Core idiom: a
+    /// `diagnostics()` snapshot per subsystem). One os_log line mirrors each
+    /// attempt under category "memory" with metadata only, never statement
+    /// content, so `log show` can reconstruct a session's memory behavior.
+    private let attemptLog = AttacheMemoryAttemptLog()
+
+    func recordAttempt(_ entry: AttacheMemoryAttemptRecord) {
+        attemptLog.record(entry)
+        AttacheLog.memory.info(
+            "propose_memory personality=\(entry.personalityID, privacy: .public) decode=\(entry.decodeOutcome, privacy: .public) disposition=\(entry.disposition, privacy: .public) egress=\(entry.egress ?? "-", privacy: .public) scope=\(entry.scope ?? "-", privacy: .public) statementChars=\(entry.statement?.count ?? 0, privacy: .public)"
+        )
+    }
+
+    func attemptDiagnostics() -> [AttacheMemoryAttemptRecord] {
+        attemptLog.diagnostics()
+    }
+
     /// Settings-authored global memory: the user types a statement in the
     /// Memory pane and it applies to every Attaché. This is the ONLY path that
     /// creates a global record; conversation captures are always scoped to one

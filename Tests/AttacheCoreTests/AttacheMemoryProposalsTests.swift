@@ -255,6 +255,27 @@ final class AttacheMemoryProposalsTests: XCTestCase {
         XCTAssertFalse(stale.contains("m2"), "fresh reminder is not stale")
     }
 
+    /// The propose_memory attempt log keeps only the newest entries, so a
+    /// long session cannot grow it unbounded.
+    func testMemoryAttemptLogBoundsRetention() {
+        let log = AttacheMemoryAttemptLog(capacity: 200)
+        for index in 0..<210 {
+            log.record(AttacheMemoryAttemptRecord(
+                timestamp: Date(timeIntervalSince1970: TimeInterval(index)),
+                personalityID: "p1",
+                decodeOutcome: "ok",
+                disposition: "saved",
+                statement: "entry \(index)",
+                egress: "allowedRemote",
+                scope: "personality:p1"
+            ))
+        }
+        let entries = log.diagnostics()
+        XCTAssertEqual(entries.count, 200)
+        XCTAssertEqual(entries.first?.statement, "entry 10", "oldest entries are dropped first")
+        XCTAssertEqual(entries.last?.statement, "entry 209")
+    }
+
     // User-stated protected trait is not rejected (only inferred ones are).
     func testUserStatedTraitNotRejected() {
         let p = proposal(statement: "I am autistic", confidence: .authoritative)

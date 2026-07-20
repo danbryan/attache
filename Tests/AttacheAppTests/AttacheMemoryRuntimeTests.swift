@@ -331,6 +331,84 @@ final class AttacheMemoryRuntimeTests: XCTestCase {
         XCTAssertEqual(decoded.egress, .allowedRemote)
     }
 
+    /// Lenient decoding for weak tool-callers: only the statement is required,
+    /// alternate statement keys are accepted, enums parse loosely, unknown
+    /// enum values fall back to defaults, and unknown extra fields are
+    /// ignored.
+    func testLenientDecodeDefaultsAndAlternateKeys() throws {
+        // Statement-only payload: everything else defaults.
+        let minimal = try XCTUnwrap(AppModel.memoryProposalDecode(
+            fromToolArguments: #"{"statement":"My third dog is named ORLI."}"#,
+            personalityID: "p1"
+        ))
+        XCTAssertEqual(minimal.statement, "My third dog is named ORLI.")
+        XCTAssertEqual(minimal.type, .userFact)
+        XCTAssertEqual(minimal.sensitivity, .low)
+        XCTAssertEqual(minimal.egress, .allowedRemote)
+        XCTAssertEqual(minimal.scope, .personality("p1"))
+        XCTAssertEqual(Set(minimal.defaultedFields), ["type", "sensitivity", "egress"])
+
+        // Sloppy enum spellings resolve case-, underscore-, hyphen-, and
+        // space-insensitively; extra unknown fields are ignored.
+        let sloppy = try XCTUnwrap(AppModel.memoryProposalDecode(
+            fromToolArguments: #"{"statement":"My dog is Bob.","type":"USER-FACT","sensitivity":"Low","egress":"allowed_remote","confidence":"high","why":"asked"}"#,
+            personalityID: "p1"
+        ))
+        XCTAssertEqual(sloppy.type, .userFact)
+        XCTAssertEqual(sloppy.sensitivity, .low)
+        XCTAssertEqual(sloppy.egress, .allowedRemote)
+        XCTAssertTrue(sloppy.defaultedFields.isEmpty)
+
+        let spaced = try XCTUnwrap(AppModel.memoryProposalDecode(
+            fromToolArguments: #"{"statement":"My dog is Bob.","type":"user fact","egress":"LocalOnly"}"#,
+            personalityID: "p1"
+        ))
+        XCTAssertEqual(spaced.type, .userFact)
+        XCTAssertEqual(spaced.egress, .localOnly)
+        XCTAssertEqual(spaced.defaultedFields, ["sensitivity"])
+
+        // Unknown enum values fall back to the default instead of nilling.
+        let unknownEnum = try XCTUnwrap(AppModel.memoryProposalDecode(
+            fromToolArguments: #"{"statement":"My dog is Bob.","type":"banana"}"#,
+            personalityID: "p1"
+        ))
+        XCTAssertEqual(unknownEnum.type, .userFact)
+        XCTAssertTrue(unknownEnum.defaultedFields.contains("type"))
+
+        // Alternate statement keys: first non-empty wins when statement is
+        // absent or empty.
+        for payload in [
+            #"{"fact":"My dog is Bob."}"#,
+            #"{"memory":"My dog is Bob."}"#,
+            #"{"text":"My dog is Bob."}"#,
+            #"{"content":"My dog is Bob."}"#,
+            #"{"statement":"  ","fact":"My dog is Bob."}"#
+        ] {
+            let decoded = try XCTUnwrap(
+                AppModel.memoryProposalDecode(fromToolArguments: payload, personalityID: "p1"),
+                payload
+            )
+            XCTAssertEqual(decoded.statement, "My dog is Bob.", payload)
+        }
+    }
+
+    /// Total garbage still fails cleanly rather than defaulting into a save.
+    func testGarbageArgumentsStillFailCleanly() {
+        for payload in [
+            "not json at all",
+            "[]",
+            #"{"type":"userFact"}"#,
+            #"{"statement":""}"#,
+            #"{"statement":"   "}"#,
+            #"{"statement":"\#(String(repeating: "x", count: 1_001))"}"#
+        ] {
+            XCTAssertNil(
+                AppModel.memoryProposalDecode(fromToolArguments: payload, personalityID: "p1"),
+                payload
+            )
+        }
+    }
+
     /// The tool exposes no scope. Even if a model still sends scope-like
     /// fields, they are ignored and the save binds to the active personality;
     /// a model can never create a global or topic row.

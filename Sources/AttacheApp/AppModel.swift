@@ -137,11 +137,15 @@ private struct AgentInstructionToolArguments: Decodable {
     }
 }
 
-private struct MemoryProposalToolArguments: Decodable {
+/// A leniently decoded propose_memory payload plus which fields fell back to
+/// defaults, for the attempt diagnostics.
+struct MemoryProposalDecode: Equatable {
     let statement: String
-    let type: String
-    let sensitivity: String
-    let egress: String
+    let type: AttacheMemoryType
+    let scope: AttacheMemoryScope
+    let sensitivity: AttacheMemorySensitivity
+    let egress: AttacheMemoryEgress
+    let defaultedFields: [String]
 }
 
 struct CardPersonalityMarker: Equatable {
@@ -5534,11 +5538,34 @@ final class AppModel: ObservableObject {
         if isPrivateConversation {
             return "Private calls cannot save or queue memories."
         }
-        guard let decoded = Self.memoryProposalArguments(
+        guard let decoded = Self.memoryProposalDecode(
             fromToolArguments: arguments,
             personalityID: personalityID
         ) else {
+            memoryRuntime.recordAttempt(AttacheMemoryAttemptRecord(
+                timestamp: Date(),
+                personalityID: personalityID,
+                decodeOutcome: "decode-failed rawLength=\(arguments.count)",
+                disposition: "invalid-arguments",
+                statement: nil,
+                egress: nil,
+                scope: nil
+            ))
             return "That memory proposal was invalid and was not saved."
+        }
+        let decodeOutcome = decoded.defaultedFields.isEmpty
+            ? "ok"
+            : "defaulted: \(decoded.defaultedFields.joined(separator: ","))"
+        func recordAttempt(disposition: String, includeStatement: Bool, egress: AttacheMemoryEgress?) {
+            memoryRuntime.recordAttempt(AttacheMemoryAttemptRecord(
+                timestamp: Date(),
+                personalityID: personalityID,
+                decodeOutcome: decodeOutcome,
+                disposition: disposition,
+                statement: includeStatement ? decoded.statement : nil,
+                egress: egress?.rawValue,
+                scope: Self.memoryScopeDescription(decoded.scope)
+            ))
         }
 
         // Trust-the-restatement design: the prompt's explicit-ask contract
@@ -5555,6 +5582,7 @@ final class AppModel: ObservableObject {
         // happens, so fallback retries cannot repeat a completed save while a
         // validator rejection consumes nothing.
         if let effectLedger, effectLedger.contains(.memoryProposal) {
+            recordAttempt(disposition: "refused-duplicate-turn", includeStatement: true, egress: egress)
             return "This turn already saved a memory. It was not saved again."
         }
         let disposition = memoryRuntime.processProposal(
@@ -5569,14 +5597,37 @@ final class AppModel: ObservableObject {
         memoryRuntime.publish(to: .shared)
 
         switch disposition {
-        case .saved:
+        case .saved(let record):
             effectLedger?.claim(.memoryProposal)
             showMemorySavedChip()
+            recordAttempt(disposition: "saved", includeStatement: true, egress: record.egress)
             return "The memory was saved on this Mac. Attaché's own UI shows the confirmation, so keep replying naturally without narrating the save."
         case .rejected(let reason):
+            // Secret-class rejections never carry statement content into the
+            // diagnostics.
+            let secretClass: Set<AttacheMemoryProposalRejection> = [.secret, .credential, .financialAccount]
+            recordAttempt(
+                disposition: "rejected(\(reason.rawValue))",
+                includeStatement: !secretClass.contains(reason),
+                egress: nil
+            )
             return "Local memory policy declined that (\(reason.rawValue)). Nothing was saved; briefly tell the user it can't be saved and why."
         case .ignored:
+            recordAttempt(disposition: "ignored-mode-off", includeStatement: true, egress: nil)
             return "Remembering is off, so nothing was saved."
+        }
+    }
+
+    /// Snapshot of the bounded propose_memory attempt diagnostics.
+    var memoryAttemptDiagnostics: [AttacheMemoryAttemptRecord] {
+        memoryRuntime.attemptDiagnostics()
+    }
+
+    private static func memoryScopeDescription(_ scope: AttacheMemoryScope) -> String {
+        switch scope {
+        case .global: return "global"
+        case .personality(let id): return "personality:\(id)"
+        case .topic(let topic): return "topic:\(topic)"
         }
     }
 
@@ -5620,17 +5671,69 @@ final class AppModel: ObservableObject {
         sensitivity: AttacheMemorySensitivity,
         egress: AttacheMemoryEgress
     )? {
-        guard let decoded = try? JSONDecoder().decode(
-            MemoryProposalToolArguments.self,
-            from: Data(arguments.utf8)
+        guard let decode = memoryProposalDecode(
+            fromToolArguments: arguments,
+            personalityID: personalityID
         ) else { return nil }
-        let statement = decoded.statement.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !statement.isEmpty,
-              statement.count <= 1_000,
-              let type = AttacheMemoryType(rawValue: decoded.type),
-              let sensitivity = AttacheMemorySensitivity(rawValue: decoded.sensitivity),
-              let egress = AttacheMemoryEgress(rawValue: decoded.egress) else { return nil }
-        return (statement, type, .personality(personalityID), sensitivity, egress)
+        return (decode.statement, decode.type, decode.scope, decode.sensitivity, decode.egress)
+    }
+
+    /// Lenient decode for weak tool-callers: only the statement is a hard
+    /// requirement (also accepted under fact/memory/text/content when
+    /// `statement` is absent; first non-empty wins). Everything else defaults
+    /// (type userFact, sensitivity low, egress allowedRemote) and enum values
+    /// parse case-, underscore-, hyphen-, and space-insensitively, with
+    /// unknown values falling back to the default instead of nilling the
+    /// call. Unknown extra fields are ignored. The schema still advertises
+    /// the canonical shape; leniency is decode-side only, and the egress
+    /// clamp and validator run unchanged after decode.
+    static func memoryProposalDecode(
+        fromToolArguments arguments: String,
+        personalityID: String
+    ) -> MemoryProposalDecode? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(arguments.utf8)),
+              let fields = object as? [String: Any] else { return nil }
+
+        var statement: String?
+        for key in ["statement", "fact", "memory", "text", "content"] {
+            guard let raw = fields[key] as? String else { continue }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                statement = trimmed
+                break
+            }
+        }
+        guard let statement, statement.count <= 1_000 else { return nil }
+
+        var defaultedFields: [String] = []
+        func lenientEnum<T: CaseIterable & RawRepresentable>(
+            _ key: String,
+            default defaultValue: T
+        ) -> T where T.RawValue == String {
+            guard let raw = fields[key] as? String,
+                  let match = T.allCases.first(where: {
+                      normalizedEnumToken($0.rawValue) == normalizedEnumToken(raw)
+                  }) else {
+                defaultedFields.append(key)
+                return defaultValue
+            }
+            return match
+        }
+        let type = lenientEnum("type", default: AttacheMemoryType.userFact)
+        let sensitivity = lenientEnum("sensitivity", default: AttacheMemorySensitivity.low)
+        let egress = lenientEnum("egress", default: AttacheMemoryEgress.allowedRemote)
+        return MemoryProposalDecode(
+            statement: statement,
+            type: type,
+            scope: .personality(personalityID),
+            sensitivity: sensitivity,
+            egress: egress,
+            defaultedFields: defaultedFields
+        )
+    }
+
+    private static func normalizedEnumToken(_ raw: String) -> String {
+        raw.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
     /// Deterministic egress clamp for tool-originated saves. Storage is always

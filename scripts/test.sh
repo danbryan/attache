@@ -6,12 +6,15 @@
 #   1. Single-flight: refuses to start while another AttachePackageTests
 #      xctest is running (a concurrent suite contends on shared fixtures and
 #      can deadlock both). Kill the stale one or pass KILL_STALE=1.
-#   2. Wall clock cap: the whole run (build + tests) is killed after
-#      ATTACHE_TEST_TIMEOUT seconds (default 900; a warm run is ~60s, and a
-#      cold rebuild after AppModel-chain edits measured ~9 minutes on
-#      2026-07-18, which is why the default is 900 and not lower). If the cap
-#      fires, INVESTIGATE the hang; raising the cap without understanding it
-#      just reintroduces the waste.
+#   2. Wall clock cap on the TEST phase: compilation runs first, uncapped,
+#      because a cold rebuild after wide Core edits legitimately takes 10+
+#      minutes (2026-07-19: a 13-minute rebuild consumed the old shared cap
+#      and killed a healthy run mid-suite, and the next ui-smoke packaged a
+#      corrupt app from the half-written build tree). Hang detection is for
+#      TESTS, so only the test phase is capped: ATTACHE_TEST_TIMEOUT seconds
+#      (default 900; a warm test phase is ~60s). If the cap fires,
+#      INVESTIGATE the hang; raising the cap without understanding it just
+#      reintroduces the waste.
 #
 # Usage: scripts/test.sh [swift test args...]
 set -u
@@ -30,7 +33,14 @@ if [[ -n "$stale" ]]; then
   fi
 fi
 
-swift test "$@" &
+# Build phase: uncapped, so a slow cold rebuild can never masquerade as a
+# test hang or leave a killed half-written build tree behind.
+if ! swift build --build-tests; then
+  echo "test.sh: build failed; not running tests." >&2
+  exit 1
+fi
+
+swift test --skip-build "$@" &
 test_pid=$!
 
 elapsed=0

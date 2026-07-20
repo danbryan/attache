@@ -381,11 +381,19 @@ final class AttachePersonalityTests: XCTestCase {
             XCTAssertTrue(prompt.contains("the fact to save is the one from the earlier turn"))
             XCTAssertTrue(prompt.contains("never offer and then refuse"))
             XCTAssertTrue(prompt.contains("never ask the user to repeat a fact you can already see in this conversation"))
+            // Gap-fill consent: supplying a fact you just said you lacked is
+            // an explicit ask.
+            XCTAssertTrue(prompt.contains("you do not know or lack a fact and they reply by supplying it"))
+            XCTAssertTrue(prompt.contains("treat it as an explicit ask and call propose_memory"))
             // No narration: the UI chip confirms saves, the reply stays natural.
             XCTAssertTrue(prompt.contains("Do not narrate the save mechanics"))
             XCTAssertTrue(prompt.contains("Attaché's own UI confirms every save"))
             XCTAssertTrue(prompt.contains("greet a new name, react to their news, answer what they asked"))
             XCTAssertTrue(prompt.contains("Never claim a memory was saved unless the tool reported it"))
+            // Banned implied-persistence phrases without a reported save.
+            XCTAssertTrue(prompt.contains("I'll keep that in mind"))
+            XCTAssertTrue(prompt.contains("any phrasing that implies persistence unless the tool reported a save this turn"))
+            XCTAssertTrue(prompt.contains("either save it or speak without implying memory"))
             // A validator decline is final and relayed briefly; the retired
             // retry-with-exact-words instruction is gone.
             XCTAssertTrue(prompt.contains("that it can't be saved and why"))

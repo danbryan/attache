@@ -429,6 +429,134 @@ final class AttacheRequestSnapshotTests: XCTestCase {
         XCTAssertFalse(model.memorySavedChipVisible)
     }
 
+    /// Regression for Dan's ORLI session shape: a weak local tool-caller sends
+    /// a sloppy payload (statement only, or an alternate key and shouty
+    /// sensitivity). Lenient decoding saves it, and the egress clamp still
+    /// applies to the defaulted egress.
+    func testSloppyMinimalArgsSaveWithClampedDefaults() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.on, explicit: false)
+        model.bindMemoryContextUI(to: memoryState)
+
+        model.startConversation()
+        defer { model.endConversation() }
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+        let personalityID = model.activePersonality?.id ?? "attache"
+
+        // Statement-only payload: defaults apply, low sensitivity keeps the
+        // defaulted allowedRemote egress.
+        let orliReply = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"I have a third dog named ORLI."}"#,
+            sourceUtterance: "Can you please also remember that I have a third dog named ORLI",
+            personalityID: personalityID,
+            sourceLocator: "test:sloppy-orli",
+            authorization: authorization
+        )
+        XCTAssertTrue(orliReply.contains("saved on this Mac"), orliReply)
+        let orli = memoryState.memoryRecords.first { $0.statement == "I have a third dog named ORLI." }
+        XCTAssertNotNil(orli)
+        XCTAssertEqual(orli?.egress, .allowedRemote)
+        XCTAssertEqual(orli?.scope, .personality(personalityID))
+
+        // Alternate statement key plus above-low sensitivity: the clamp
+        // forces the defaulted egress down to local-only.
+        let cactusReply = model.applyMemoryProposalTool(
+            arguments: #"{"fact":"My cactus is named Spike.","sensitivity":"HIGH"}"#,
+            sourceUtterance: "Remember my cactus is named Spike.",
+            personalityID: personalityID,
+            sourceLocator: "test:sloppy-cactus",
+            authorization: authorization
+        )
+        XCTAssertTrue(cactusReply.contains("saved on this Mac"), cactusReply)
+        let cactus = memoryState.memoryRecords.first { $0.statement == "My cactus is named Spike." }
+        XCTAssertEqual(cactus?.egress, .localOnly, "the clamp still applies to defaulted egress")
+        XCTAssertEqual(cactus?.sensitivity, .high)
+
+        for statement in ["I have a third dog named ORLI.", "My cactus is named Spike."] {
+            if let stored = memoryState.memoryRecords.first(where: { $0.statement == statement }) {
+                memoryState.forgetMemory(id: stored.id)
+            }
+            XCTAssertFalse(memoryState.memoryRecords.contains { $0.statement == statement })
+        }
+    }
+
+    /// Every propose_memory attempt lands in the bounded diagnostics with the
+    /// decode outcome and disposition; secret-class rejections and decode
+    /// failures never carry statement content.
+    func testMemoryAttemptDiagnosticsRecordedAndRedacted() throws {
+        let (model, defaults) = try makeModel()
+        defer { defaults.restore() }
+        let memoryState = AttacheContextUIState.shared
+        let priorMode = memoryState.memoryMode
+        defer { memoryState.setMemoryMode(priorMode, explicit: false) }
+        memoryState.setMemoryMode(.on, explicit: false)
+        model.bindMemoryContextUI(to: memoryState)
+
+        model.startConversation()
+        defer { model.endConversation() }
+        let authorization = try XCTUnwrap(model.issueConversationRequestAuthorization())
+        let personalityID = model.activePersonality?.id ?? "attache"
+
+        _ = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"My canary is named Piccolo."}"#,
+            sourceUtterance: "Remember my canary is named Piccolo.",
+            personalityID: personalityID,
+            sourceLocator: "test:diag-save",
+            authorization: authorization
+        )
+        _ = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"today I feel unstoppable about canaries"}"#,
+            sourceUtterance: "Remember today I feel unstoppable about canaries.",
+            personalityID: personalityID,
+            sourceLocator: "test:diag-mood",
+            authorization: authorization
+        )
+        _ = model.applyMemoryProposalTool(
+            arguments: #"{"statement":"My wifi password is tulip-motorcade"}"#,
+            sourceUtterance: "Remember my wifi password is tulip-motorcade.",
+            personalityID: personalityID,
+            sourceLocator: "test:diag-secret",
+            authorization: authorization
+        )
+        _ = model.applyMemoryProposalTool(
+            arguments: "not json at all",
+            sourceUtterance: "Remember something.",
+            personalityID: personalityID,
+            sourceLocator: "test:diag-garbage",
+            authorization: authorization
+        )
+
+        let attempts = model.memoryAttemptDiagnostics.suffix(4)
+        XCTAssertEqual(attempts.count, 4)
+        let saved = attempts[attempts.startIndex]
+        XCTAssertEqual(saved.disposition, "saved")
+        XCTAssertTrue(saved.decodeOutcome.contains("defaulted:"), saved.decodeOutcome)
+        XCTAssertEqual(saved.statement, "My canary is named Piccolo.")
+        XCTAssertEqual(saved.egress, "allowedRemote")
+        XCTAssertEqual(saved.scope, "personality:\(personalityID)")
+
+        let mood = attempts[attempts.index(attempts.startIndex, offsetBy: 1)]
+        XCTAssertEqual(mood.disposition, "rejected(transientMood)")
+        XCTAssertNotNil(mood.statement, "non-secret rejections keep content")
+
+        let secret = attempts[attempts.index(attempts.startIndex, offsetBy: 2)]
+        XCTAssertEqual(secret.disposition, "rejected(credential)")
+        XCTAssertNil(secret.statement, "secret-class rejections never carry content")
+
+        let garbage = attempts[attempts.index(attempts.startIndex, offsetBy: 3)]
+        XCTAssertEqual(garbage.disposition, "invalid-arguments")
+        XCTAssertTrue(garbage.decodeOutcome.contains("decode-failed"), garbage.decodeOutcome)
+        XCTAssertNil(garbage.statement)
+
+        if let stored = memoryState.memoryRecords.first(where: { $0.statement == "My canary is named Piccolo." }) {
+            memoryState.forgetMemory(id: stored.id)
+        }
+    }
+
     /// One save per turn is still enforced: a completed save claims the
     /// effect, and a second proposal in the same turn is refused unsaved.
     func testOneSavePerTurnStillEnforced() throws {
