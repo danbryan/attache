@@ -1581,6 +1581,12 @@ final class AppModel: ObservableObject {
                     : "Voice playback failed. Reply was filed."
             }
         }
+        playback.onVoiceFallbackDisclosure = { [weak self] message in
+            // The engine failed but playback recovered on the system voice: an
+            // informational disclosure, not a playback failure.
+            self?.voiceProviderStatus = message
+            self?.postHomeNotice(message, kind: .info, duration: 6)
+        }
         setupMediaRemote()
         setupConversationObservers()
         setupAttacheActivityObservers()

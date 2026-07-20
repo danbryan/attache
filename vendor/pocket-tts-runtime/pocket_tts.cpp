@@ -2012,21 +2012,45 @@ void PocketTTS::stream(const std::string& text, const Tensor& voice, StreamCallb
         std::deque<Tensor> queue;
         bool gen_done = false;
         bool aborted = false;
-        
+        // A throw on the internal generator thread must never escape it: an
+        // uncaught exception on a raw std::thread calls std::terminate and aborts
+        // the whole process. That was the shipped 0.6.0 crash (an ONNX Runtime
+        // error inside LatentGen::next on this worker). Capture it, wake the
+        // consumer, and re-raise it from stream()'s own thread once the worker is
+        // safely joined so the C API turns it into a failed stream, not a crash.
+        bool gen_failed = false;
+        std::string gen_error;
+
         std::thread gen_thread([&]() {
-            while (gen.has_next()) {
-                {
-                    std::lock_guard<std::mutex> lock(mtx);
-                    if (aborted) return;
+            try {
+                while (gen.has_next()) {
+                    {
+                        std::lock_guard<std::mutex> lock(mtx);
+                        if (aborted) return;
+                    }
+                    auto f = gen.next();
+                    if (f.numel() == 0) break;
+                    {
+                        std::lock_guard<std::mutex> lock(mtx);
+                        if (aborted) return;
+                        queue.push_back(std::move(f));
+                    }
+                    cv.notify_one();
                 }
-                auto f = gen.next();
-                if (f.numel() == 0) break;
-                {
-                    std::lock_guard<std::mutex> lock(mtx);
-                    if (aborted) return;
-                    queue.push_back(std::move(f));
-                }
+            } catch (const std::exception& e) {
+                std::lock_guard<std::mutex> lock(mtx);
+                gen_failed = true;
+                gen_error = e.what() ? e.what() : "unknown";
+                gen_done = true;
                 cv.notify_one();
+                return;
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(mtx);
+                gen_failed = true;
+                gen_error = "unknown";
+                gen_done = true;
+                cv.notify_one();
+                return;
             }
             {
                 std::lock_guard<std::mutex> lock(mtx);
@@ -2034,49 +2058,68 @@ void PocketTTS::stream(const std::string& text, const Tensor& voice, StreamCallb
             }
             cv.notify_one();
         });
-        
+
         bool first = true;
-        
-        while (true) {
-            int want = first ? cfg_.first_chunk_frames : cfg_.max_chunk_frames;
-            
-            std::vector<Tensor> batch;
+
+        try {
+            while (true) {
+                int want = first ? cfg_.first_chunk_frames : cfg_.max_chunk_frames;
+
+                std::vector<Tensor> batch;
+                {
+                    std::unique_lock<std::mutex> lock(mtx);
+                    cv.wait(lock, [&]{ return (int)queue.size() >= want || gen_done || aborted; });
+                    if (aborted) break;
+
+                    int take = gen_done ? (int)queue.size() : std::min((int)queue.size(), want);
+                    for (int i = 0; i < take; ++i) {
+                        batch.push_back(std::move(queue.front()));
+                        queue.pop_front();
+                    }
+                }
+
+                if (batch.empty() && gen_done) break;
+
+                if (!batch.empty()) {
+                    auto lat = Tensor::concat(batch, 1);
+                    std::vector<Ort::Value> inputs;
+                    inputs.push_back(Ort::Value::CreateTensor<float>(dec_runner_->mem(), lat.ptr(), lat.numel(),
+                                                                      lat.shape.data(), lat.shape.size()));
+
+                    auto outputs = dec_runner_->run(inputs);
+                    auto shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+                    size_t n = 1;
+                    for (auto d : shape) n *= d;
+
+                    if (!cb(outputs[0].GetTensorData<float>(), n)) {
+                        std::lock_guard<std::mutex> lock(mtx);
+                        aborted = true;
+                        break;
+                    }
+                    first = false;
+                }
+            }
+        } catch (...) {
+            // A decoder-side failure (e.g. an ORT error on this thread) must not
+            // leave gen_thread joinable when it is destroyed (that too would
+            // std::terminate). Stop the worker, join it, then re-raise to the
+            // stream owner (ptt_stream_start), which records a failed stream.
             {
-                std::unique_lock<std::mutex> lock(mtx);
-                cv.wait(lock, [&]{ return (int)queue.size() >= want || gen_done || aborted; });
-                if (aborted) break;
-                
-                int take = gen_done ? (int)queue.size() : std::min((int)queue.size(), want);
-                for (int i = 0; i < take; ++i) {
-                    batch.push_back(std::move(queue.front()));
-                    queue.pop_front();
-                }
+                std::lock_guard<std::mutex> lock(mtx);
+                aborted = true;
             }
-            
-            if (batch.empty() && gen_done) break;
-            
-            if (!batch.empty()) {
-                auto lat = Tensor::concat(batch, 1);
-                std::vector<Ort::Value> inputs;
-                inputs.push_back(Ort::Value::CreateTensor<float>(dec_runner_->mem(), lat.ptr(), lat.numel(),
-                                                                  lat.shape.data(), lat.shape.size()));
-                
-                auto outputs = dec_runner_->run(inputs);
-                auto shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-                size_t n = 1;
-                for (auto d : shape) n *= d;
-                
-                if (!cb(outputs[0].GetTensorData<float>(), n)) {
-                    std::lock_guard<std::mutex> lock(mtx);
-                    aborted = true;
-                    break;
-                }
-                first = false;
-            }
+            cv.notify_all();
+            if (gen_thread.joinable()) gen_thread.join();
+            throw;
         }
-        
+
         if (gen_thread.joinable()) {
             gen_thread.join();
+        }
+        // Surface a generator-thread failure now that the worker is joined, as an
+        // exception the stream owner converts into a failed stream + message.
+        if (gen_failed) {
+            throw std::runtime_error(gen_error);
         }
         if (aborted) return;
     }
@@ -2571,6 +2614,9 @@ void* ptt_create(const char* models_dir, const char* voices_dir,
     } catch (const std::exception& e) {
         std::cerr << "[pocket-tts] init error: " << e.what() << "\n";
         return nullptr;
+    } catch (...) {
+        std::cerr << "[pocket-tts] init error: unknown\n";
+        return nullptr;
     }
 }
 
@@ -2581,6 +2627,9 @@ double ptt_warmup(void* handle) {
     } catch (const std::exception& e) {
         std::cerr << "[pocket-tts] warmup error: " << e.what() << "\n";
         return -1;
+    } catch (...) {
+        std::cerr << "[pocket-tts] warmup error: unknown\n";
+        return -1;
     }
 }
 
@@ -2589,7 +2638,11 @@ void ptt_free_audio(float* samples) {
 }
 
 void ptt_destroy(void* handle) {
-    delete static_cast<pocket_tts::PocketTTS*>(handle);
+    try {
+        delete static_cast<pocket_tts::PocketTTS*>(handle);
+    } catch (...) {
+        // A destructor throwing must not cross the C ABI.
+    }
 }
 
 // ── Streaming API ───────────────────────────────────────────────────────────
@@ -2601,68 +2654,113 @@ struct ptt_stream_ctx {
     std::deque<std::pair<float*, size_t>> chunks;
     bool done = false;
     bool aborted = false;
+    // Set (with `error`) when the synthesis thread caught an exception. Read back
+    // through ptt_stream_read (-2) and ptt_stream_error_message so the host turns
+    // a runtime failure into a graceful fallback instead of a lost stream.
+    bool failed = false;
+    std::string error;
 };
 
 void* ptt_stream_start(void* handle, const char* text, const char* voice) {
     if (!handle || !text || !voice) return nullptr;
-    auto* tts = static_cast<pocket_tts::PocketTTS*>(handle);
-    auto* ctx = new ptt_stream_ctx();
+    try {
+        auto* tts = static_cast<pocket_tts::PocketTTS*>(handle);
+        auto* ctx = new ptt_stream_ctx();
 
-    ctx->thread = std::thread([tts, t = std::string(text), v = std::string(voice), ctx]() {
-        try {
-            tts->stream(t, v, [ctx](const float* samples, size_t n) -> bool {
-                float* copy = static_cast<float*>(malloc(n * sizeof(float)));
-                if (!copy) return false;
-                std::memcpy(copy, samples, n * sizeof(float));
-                {
-                    std::lock_guard<std::mutex> lock(ctx->mtx);
-                    if (ctx->aborted) { free(copy); return false; }
-                    ctx->chunks.push_back({copy, n});
-                }
-                ctx->cv.notify_one();
-                return true;
-            });
-        } catch (const std::exception& e) {
-            std::cerr << "[pocket-tts] stream error: " << e.what() << "\n";
-        }
-        {
-            std::lock_guard<std::mutex> lock(ctx->mtx);
-            ctx->done = true;
-        }
-        ctx->cv.notify_one();
-    });
+        ctx->thread = std::thread([tts, t = std::string(text), v = std::string(voice), ctx]() {
+            bool failed = false;
+            std::string error;
+            try {
+                tts->stream(t, v, [ctx](const float* samples, size_t n) -> bool {
+                    float* copy = static_cast<float*>(malloc(n * sizeof(float)));
+                    if (!copy) return false;
+                    std::memcpy(copy, samples, n * sizeof(float));
+                    {
+                        std::lock_guard<std::mutex> lock(ctx->mtx);
+                        if (ctx->aborted) { free(copy); return false; }
+                        ctx->chunks.push_back({copy, n});
+                    }
+                    ctx->cv.notify_one();
+                    return true;
+                });
+            } catch (const std::exception& e) {
+                failed = true;
+                error = e.what() ? e.what() : "unknown";
+                std::cerr << "[pocket-tts] stream error: " << error << "\n";
+            } catch (...) {
+                failed = true;
+                error = "unknown";
+                std::cerr << "[pocket-tts] stream error: unknown\n";
+            }
+            {
+                std::lock_guard<std::mutex> lock(ctx->mtx);
+                if (failed) { ctx->failed = true; ctx->error = std::move(error); }
+                ctx->done = true;
+            }
+            ctx->cv.notify_one();
+        });
 
-    return ctx;
+        return ctx;
+    } catch (...) {
+        // Allocation / thread-spawn failure: never let it escape the C ABI.
+        return nullptr;
+    }
 }
 
 int ptt_stream_read(void* stream_ctx, float** out_samples, int* out_len) {
     if (!stream_ctx || !out_samples || !out_len) return -1;
-    auto* ctx = static_cast<ptt_stream_ctx*>(stream_ctx);
+    try {
+        auto* ctx = static_cast<ptt_stream_ctx*>(stream_ctx);
 
-    std::unique_lock<std::mutex> lock(ctx->mtx);
-    ctx->cv.wait(lock, [ctx]{ return !ctx->chunks.empty() || ctx->done; });
+        std::unique_lock<std::mutex> lock(ctx->mtx);
+        ctx->cv.wait(lock, [ctx]{ return !ctx->chunks.empty() || ctx->done || ctx->failed; });
 
-    if (!ctx->chunks.empty()) {
-        auto [ptr, len] = ctx->chunks.front();
-        ctx->chunks.pop_front();
-        *out_samples = ptr;
-        *out_len = static_cast<int>(len);
-        return 1;
+        // Drain any audio produced before a failure first, so partial output is
+        // not discarded.
+        if (!ctx->chunks.empty()) {
+            auto [ptr, len] = ctx->chunks.front();
+            ctx->chunks.pop_front();
+            *out_samples = ptr;
+            *out_len = static_cast<int>(len);
+            return 1;
+        }
+        // Distinct code for a failed stream; message via ptt_stream_error_message.
+        if (ctx->failed) return -2;
+        return 0;
+    } catch (...) {
+        return -1;
     }
-    return 0;
+}
+
+// Additive, ABI-stable accessor: the captured failure message for a stream that
+// ptt_stream_read reported as failed (-2), or nullptr if it did not fail. The
+// returned pointer is owned by the stream and valid until ptt_stream_end.
+const char* ptt_stream_error_message(void* stream_ctx) {
+    if (!stream_ctx) return nullptr;
+    try {
+        auto* ctx = static_cast<ptt_stream_ctx*>(stream_ctx);
+        std::lock_guard<std::mutex> lock(ctx->mtx);
+        return ctx->failed ? ctx->error.c_str() : nullptr;
+    } catch (...) {
+        return nullptr;
+    }
 }
 
 void ptt_stream_end(void* stream_ctx) {
     if (!stream_ctx) return;
-    auto* ctx = static_cast<ptt_stream_ctx*>(stream_ctx);
-    {
-        std::lock_guard<std::mutex> lock(ctx->mtx);
-        ctx->aborted = true;
+    try {
+        auto* ctx = static_cast<ptt_stream_ctx*>(stream_ctx);
+        {
+            std::lock_guard<std::mutex> lock(ctx->mtx);
+            ctx->aborted = true;
+        }
+        ctx->cv.notify_all();
+        if (ctx->thread.joinable()) ctx->thread.join();
+        for (auto& [ptr, len] : ctx->chunks) free(ptr);
+        delete ctx;
+    } catch (...) {
+        // Never let cleanup throw across the C ABI.
     }
-    ctx->cv.notify_all();
-    if (ctx->thread.joinable()) ctx->thread.join();
-    for (auto& [ptr, len] : ctx->chunks) free(ptr);
-    delete ctx;
 }
 
 } // extern "C"

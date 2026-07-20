@@ -1417,10 +1417,16 @@ if enabled("f3") {
         guard captionFrame.width <= windowFrame.width, captionFrame.height <= windowFrame.height else {
             throw SmokeError(message: "checksum caption overflowed the window: caption \(captionFrame), window \(windowFrame)")
         }
+        // Spoken-text hygiene (2026-07-20): long checksums are never read
+        // aloud, so the spoken caption must say "a checksum" and must NOT
+        // carry the raw hex; the raw value stays on the card itself.
         let transcript = try waitForElement("caption transcript", in: try mainWindow(),
                                             containing: "Assistant speaking transcript")
-        guard transcript.matchText.contains("e3b0c44298") else {
-            throw SmokeError(message: "caption transcript did not expose the checksum text: \(transcript.summary)")
+        guard transcript.matchText.contains("a checksum") else {
+            throw SmokeError(message: "caption transcript lost the sanitized checksum phrase: \(transcript.summary)")
+        }
+        guard !transcript.matchText.contains("e3b0c44298") else {
+            throw SmokeError(message: "caption transcript spoke the raw checksum despite sanitization: \(transcript.summary)")
         }
     }
     run.step("f3-transport", "torture card pauses cleanly, leaving no stuck overlay") {
@@ -2713,6 +2719,18 @@ if enabled("f5") {
         guard onDevice.press() else { throw SmokeError(message: "AXPress failed on \(onDevice.summary)") }
         try waitUntil("On-device segment to be selected", timeout: 5) {
             onDevice.stringValue == "1"
+        }
+        // Customizing a built-in opens with an EMPTY name field by design
+        // (2026-07-20: names are typed, never prepopulated), so Save stays
+        // disabled until the harness names the copy like a real user would.
+        // Edit mode keeps the personality's real name, so the fill is
+        // conditional and the lookup tolerant.
+        if let nameField = try? waitForElement("studio name field", in: try personalityStudioWindow(),
+                                               role: kAXTextFieldRole as String,
+                                               containing: "Name your Attaché", timeout: 5),
+           (nameField.stringValue ?? "").isEmpty {
+            _ = nameField.setFocused()
+            if !nameField.setValue("Smoke Attaché") { app.type("Smoke Attaché") }
         }
         let save = try waitForElement("studio save button", in: try personalityStudioWindow()) { element in
             element.role == kAXButtonRole as String

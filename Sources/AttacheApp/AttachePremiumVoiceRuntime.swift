@@ -17,6 +17,11 @@ enum PremiumVoiceRuntimeError: Error, LocalizedError, Equatable {
     case engineInitializationFailed
     /// The stream produced no audio, or the read loop signaled an error.
     case synthesisFailed
+    /// The native stream signaled a failure (ptt_stream_read returned the failed
+    /// code) carrying the runtime's own diagnostic message, e.g. a transient
+    /// ONNX Runtime error on the internal generator thread. Distinct from
+    /// `synthesisFailed` so the message can be logged and surfaced.
+    case streamFailed(message: String)
     case emptyAudio
 
     var errorDescription: String? {
@@ -29,6 +34,8 @@ enum PremiumVoiceRuntimeError: Error, LocalizedError, Equatable {
             return "The Attaché Premium voice engine could not start."
         case .synthesisFailed:
             return "The Attaché Premium voice could not synthesize this audio."
+        case .streamFailed(let message):
+            return "The Attaché Premium voice could not synthesize this audio: \(message)"
         case .emptyAudio:
             return "The Attaché Premium voice produced an empty audio file."
         }
@@ -76,10 +83,11 @@ protocol PremiumVoiceRuntimeLibrary: AnyObject {
     ) -> OpaquePointer?
     func warmup(_ handle: OpaquePointer) -> Double
     func destroy(_ handle: OpaquePointer)
-    /// Runs a full synthesis, invoking `onChunk` with each float PCM chunk.
-    /// Returns false if the stream signaled an error. The library owns the
-    /// stream lifecycle and frees native chunk buffers.
-    func stream(handle: OpaquePointer, text: String, voice: String, onChunk: (UnsafePointer<Float>, Int) -> Void) -> Bool
+    /// Runs a full synthesis, invoking `onChunk` with each float PCM chunk. The
+    /// library owns the stream lifecycle and frees native chunk buffers. Throws a
+    /// `PremiumVoiceRuntimeError` if the stream signals a failure (carrying the
+    /// runtime's diagnostic message when one is available).
+    func stream(handle: OpaquePointer, text: String, voice: String, onChunk: (UnsafePointer<Float>, Int) -> Void) throws
 }
 
 /// dlopen/dlsym adapter over the real dylib.
@@ -94,6 +102,11 @@ final class DlopenPremiumVoiceRuntimeLibrary: PremiumVoiceRuntimeLibrary {
     private typealias StreamStartFn = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> OpaquePointer?
     private typealias StreamReadFn = @convention(c) (OpaquePointer?, UnsafeMutablePointer<UnsafeMutablePointer<Float>?>?, UnsafeMutablePointer<Int32>?) -> Int32
     private typealias StreamEndFn = @convention(c) (OpaquePointer?) -> Void
+    private typealias StreamErrorMessageFn = @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
+
+    /// ptt_stream_read returns this when the stream failed (mid-run runtime
+    /// error). Distinct from 0 (done) and -1 (bad arguments).
+    private static let streamFailedCode: Int32 = -2
 
     private let dylibHandle: UnsafeMutableRawPointer
     private let createFn: CreateFn
@@ -103,6 +116,9 @@ final class DlopenPremiumVoiceRuntimeLibrary: PremiumVoiceRuntimeLibrary {
     private let streamStartFn: StreamStartFn
     private let streamReadFn: StreamReadFn
     private let streamEndFn: StreamEndFn
+    /// Optional: absent in older dylibs built before the crash fix, so its lookup
+    /// is non-fatal and a missing symbol just yields a generic message.
+    private let streamErrorMessageFn: StreamErrorMessageFn?
 
     init(dylibURL: URL) throws {
         guard let handle = dlopen(dylibURL.path, RTLD_NOW | RTLD_LOCAL) else {
@@ -126,6 +142,12 @@ final class DlopenPremiumVoiceRuntimeLibrary: PremiumVoiceRuntimeLibrary {
         } catch {
             throw error
         }
+        // Additive symbol; older dylibs may lack it, so resolve it optionally.
+        if let raw = dlsym(handle, "ptt_stream_error_message") {
+            self.streamErrorMessageFn = unsafeBitCast(raw, to: StreamErrorMessageFn.self)
+        } else {
+            self.streamErrorMessageFn = nil
+        }
         self.dylibHandle = handle
     }
 
@@ -145,9 +167,9 @@ final class DlopenPremiumVoiceRuntimeLibrary: PremiumVoiceRuntimeLibrary {
     func warmup(_ handle: OpaquePointer) -> Double { warmupFn(handle) }
     func destroy(_ handle: OpaquePointer) { destroyFn(handle) }
 
-    func stream(handle: OpaquePointer, text: String, voice: String, onChunk: (UnsafePointer<Float>, Int) -> Void) -> Bool {
+    func stream(handle: OpaquePointer, text: String, voice: String, onChunk: (UnsafePointer<Float>, Int) -> Void) throws {
         let ctx: OpaquePointer? = text.withCString { t in voice.withCString { v in streamStartFn(handle, t, v) } }
-        guard let stream = ctx else { return false }
+        guard let stream = ctx else { throw PremiumVoiceRuntimeError.engineInitializationFailed }
         defer { streamEndFn(stream) }
         var samples: UnsafeMutablePointer<Float>?
         var length: Int32 = 0
@@ -162,8 +184,17 @@ final class DlopenPremiumVoiceRuntimeLibrary: PremiumVoiceRuntimeLibrary {
                 length = 0
                 continue
             }
-            // 0 = done, negative = error.
-            return r == 0
+            if r == 0 { return }  // done
+            // A failed stream (streamFailedCode) carries the runtime's own
+            // message; any other negative code is a generic synthesis failure.
+            if r == Self.streamFailedCode {
+                let message = streamErrorMessageFn
+                    .flatMap { $0(stream) }
+                    .map { String(cString: $0) }
+                    ?? "The premium voice runtime reported a synthesis failure."
+                throw PremiumVoiceRuntimeError.streamFailed(message: message)
+            }
+            throw PremiumVoiceRuntimeError.synthesisFailed
         }
     }
 }
@@ -268,11 +299,28 @@ final class AttachePremiumVoiceRuntime {
         guard let handle else { throw PremiumVoiceRuntimeError.engineInitializationFailed }
 
         var samples: [Float] = []
-        let ok = library!.stream(handle: handle, text: text, voice: paths.voiceFileName) { ptr, count in
-            samples.append(contentsOf: UnsafeBufferPointer(start: ptr, count: count))
+        do {
+            try library!.stream(handle: handle, text: text, voice: paths.voiceFileName) { ptr, count in
+                samples.append(contentsOf: UnsafeBufferPointer(start: ptr, count: count))
+            }
+        } catch {
+            // A mid-run native failure (e.g. a transient ONNX Runtime error on the
+            // generator thread) can leave the ONNX session state inconsistent.
+            // Drop the engine so the NEXT synthesize reloads a clean handle rather
+            // than reusing possibly-corrupt session state; the retry above then
+            // gets a fresh engine, and a persistent failure falls back to the
+            // system voice. Log the runtime's own message once (metadata only).
+            AttacheLog.speech.error(
+                "Premium voice synthesis failed; reloading engine: \(error.localizedDescription, privacy: .public)"
+            )
+            unloadLocked()
+            throw error
         }
-        guard ok else { throw PremiumVoiceRuntimeError.synthesisFailed }
-        guard !samples.isEmpty else { throw PremiumVoiceRuntimeError.emptyAudio }
+        guard !samples.isEmpty else {
+            // No thrown error but no audio: reload defensively and surface it.
+            unloadLocked()
+            throw PremiumVoiceRuntimeError.emptyAudio
+        }
 
         let wav = PremiumVoiceWav.encodeFloatPCM(samples, sampleRate: 24_000)
         try wav.write(to: outputURL, options: .atomic)

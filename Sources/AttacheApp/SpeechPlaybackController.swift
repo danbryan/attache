@@ -33,6 +33,33 @@ enum PlaybackCompletionValidator {
     }
 }
 
+/// Pure decision for the runtime voice fallback: when a non-system engine's
+/// synthesis fails after its retries are exhausted (a cloud outage, or the
+/// on-device premium runtime reporting a failed stream), degrade to the
+/// on-device system voice and disclose the switch. A `.system` configuration has
+/// nowhere to fall back to, so it yields no plan. Kept pure so the choice is unit
+/// tested without driving the whole controller.
+enum VoiceSynthesisFallback {
+    struct Plan {
+        var configuration: AttacheSpeechConfiguration
+        var disclosure: String
+    }
+
+    static func plan(
+        afterFailureOf configuration: AttacheSpeechConfiguration,
+        systemVoiceIdentifier: String?
+    ) -> Plan? {
+        guard configuration.provider != .system else { return nil }
+        var fallback = configuration
+        fallback.provider = .system
+        fallback.systemVoiceIdentifier = systemVoiceIdentifier
+        return Plan(
+            configuration: fallback,
+            disclosure: "\(configuration.provider.title) voice failed, so playback is using an on-device voice."
+        )
+    }
+}
+
 final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     @Published private(set) var isPlaying = false
     @Published private(set) var isPaused = false
@@ -79,6 +106,11 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     /// queue can resume after a reply preempted an update.
     var onPreviewFinished: (() -> Void)?
     var onPlaybackError: ((String) -> Void)?
+    /// Fires when a non-system voice engine failed and playback transparently
+    /// switched to the on-device system voice, so the UI can disclose the switch
+    /// (an informational note, not an error) instead of leaving the user with
+    /// silence or a raw failure.
+    var onVoiceFallbackDisclosure: ((String) -> Void)?
 
     /// Whether the in-flight generation is a preview (reply/sample) rather than a
     /// card, so the right completion hook fires.
@@ -784,10 +816,63 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             } catch {
                 await MainActor.run { [weak self] in
                     guard let self, self.generationID == generationID else { return }
-                    self.onPlaybackError?("Voice generation failed: \(error.localizedDescription)")
-                    self.generationCompletion?(false)
+                    // A non-system engine failed after its retries. Rather than
+                    // dropping the card to silence, degrade to the on-device
+                    // system voice and disclose the switch. `.system` itself has
+                    // nowhere to fall back to and keeps the existing error path.
+                    if let plan = VoiceSynthesisFallback.plan(
+                        afterFailureOf: configuration,
+                        systemVoiceIdentifier: self.voiceIdentifier
+                    ) {
+                        self.fallBackToSystemVoice(
+                            plan: plan,
+                            text: text,
+                            generationID: generationID,
+                            underlyingError: error
+                        )
+                    } else {
+                        self.onPlaybackError?("Voice generation failed: \(error.localizedDescription)")
+                        self.generationCompletion?(false)
+                    }
                 }
             }
+        }
+    }
+
+    /// Re-synthesize `text` with the on-device system voice after a non-system
+    /// engine failed, so a persistent failure degrades to audible speech with a
+    /// disclosure instead of silence or a crash. Writes to a fresh temp file,
+    /// never the failed engine's cache path (which would poison the cache with
+    /// audio from the wrong voice).
+    private func fallBackToSystemVoice(
+        plan: VoiceSynthesisFallback.Plan,
+        text: String,
+        generationID: UUID,
+        underlyingError: Error
+    ) {
+        guard self.generationID == generationID else { return }
+        applyVoiceConfiguration(plan.configuration)
+        onVoiceFallbackDisclosure?(plan.disclosure)
+
+        let fallbackURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-voice-fallback-\(generationID.uuidString).aiff")
+        generatedAudioURL = fallbackURL
+        generatedAudioIsCached = false
+        let wasPreview = activeIsPreview
+        generationCompletion = { [weak self] success in
+            guard let self, self.generationID == generationID else { return }
+            guard success else { self.finishWithoutPlayback(); return }
+            self.analyzeAndStart(
+                audioURL: fallbackURL,
+                alignmentText: text,
+                startTimeMs: 0,
+                finishingNormally: !wasPreview,
+                failureMessage: { "Playback failed: on-device voice audio was not readable (\($0.localizedDescription))." }
+            )
+        }
+        if !speechFileSynthesizer.startSpeaking(text, to: fallbackURL) {
+            onPlaybackError?("Voice generation failed: \(underlyingError.localizedDescription)")
+            generationCompletion?(false)
         }
     }
 

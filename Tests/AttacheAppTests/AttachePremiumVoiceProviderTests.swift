@@ -59,6 +59,29 @@ final class AttachePremiumVoiceProviderTests: XCTestCase {
         XCTAssertEqual(resolved.provider, .attachePremium, "available premium voice must not fall back")
     }
 
+    func testRuntimeFailureFallsBackToSystemVoiceWithDisclosure() {
+        // The playback layer's decision after a non-system engine fails at
+        // runtime (e.g. the premium runtime signaling a failed stream): degrade
+        // to the on-device system voice and disclose the switch.
+        let config = premiumConfiguration()
+        let plan = VoiceSynthesisFallback.plan(
+            afterFailureOf: config,
+            systemVoiceIdentifier: "com.apple.voice.test"
+        )
+        XCTAssertNotNil(plan, "a failed non-system engine must yield a system-voice fallback")
+        XCTAssertEqual(plan?.configuration.provider, .system)
+        XCTAssertEqual(plan?.configuration.systemVoiceIdentifier, "com.apple.voice.test")
+        XCTAssertEqual(plan?.disclosure, "Attaché Premium voice failed, so playback is using an on-device voice.")
+    }
+
+    func testSystemVoiceFailureHasNoFallbackPlan() {
+        // The system voice has nowhere to degrade to; its failure keeps the
+        // existing hard-error path instead of looping the fallback.
+        var config = AttacheSpeechConfiguration.systemDefault
+        config.provider = .system
+        XCTAssertNil(VoiceSynthesisFallback.plan(afterFailureOf: config, systemVoiceIdentifier: "x"))
+    }
+
     func testSynthesizeThrowsTypedErrorWhenWeightsMissing() async throws {
         // Point weights resolution at an empty temp dir so the missing-weights
         // path is exercised deterministically, whether or not this machine has

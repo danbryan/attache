@@ -6,7 +6,9 @@ import AttacheCore
 /// and correct WAV writing) with a fake native library, so no dylib is needed.
 final class AttachePremiumVoiceRuntimeTests: XCTestCase {
 
-    /// A stand-in for libpocket_tts.dylib that emits a fixed tone.
+    /// A stand-in for libpocket_tts.dylib that emits a fixed tone. Can be told to
+    /// throw on a number of leading `stream` calls to model a transient or
+    /// persistent runtime failure.
     final class FakeLibrary: PremiumVoiceRuntimeLibrary {
         var createdHandles = 0
         var destroyedHandles = 0
@@ -14,6 +16,11 @@ final class AttachePremiumVoiceRuntimeTests: XCTestCase {
         var chunkCount = 20
         var lastLsdSteps: Int32?
         var lastTemperature: Float?
+        /// When set, the next `failStreamCalls` calls to `stream` throw this error
+        /// (decrementing each time), then subsequent calls succeed.
+        var streamError: Error?
+        var failStreamCalls = 0
+        var streamCallCount = 0
         private let handle = OpaquePointer(bitPattern: 0xABCD)!
 
         func create(
@@ -27,12 +34,16 @@ final class AttachePremiumVoiceRuntimeTests: XCTestCase {
         }
         func warmup(_ handle: OpaquePointer) -> Double { 1.0 }
         func destroy(_ handle: OpaquePointer) { destroyedHandles += 1 }
-        func stream(handle: OpaquePointer, text: String, voice: String, onChunk: (UnsafePointer<Float>, Int) -> Void) -> Bool {
+        func stream(handle: OpaquePointer, text: String, voice: String, onChunk: (UnsafePointer<Float>, Int) -> Void) throws {
+            streamCallCount += 1
+            if failStreamCalls > 0, let error = streamError {
+                failStreamCalls -= 1
+                throw error
+            }
             for c in 0..<chunkCount {
                 var buffer = (0..<samplesPerChunk).map { i in sinf(Float(c * samplesPerChunk + i) * 0.03) * 0.6 }
                 buffer.withUnsafeBufferPointer { onChunk($0.baseAddress!, $0.count) }
             }
-            return true
         }
     }
 
@@ -115,5 +126,88 @@ final class AttachePremiumVoiceRuntimeTests: XCTestCase {
         XCTAssertThrowsError(try runtime.synthesize(text: "hi", paths: paths, outputURL: out)) { error in
             XCTAssertEqual(error as? PremiumVoiceRuntimeError, .runtimeUnavailable)
         }
+    }
+
+    /// A failed native stream must surface as the typed `.streamFailed` error and
+    /// carry the runtime's own diagnostic message, so the shipped 0.6.0 process
+    /// abort becomes a recoverable Swift error.
+    func testFailedStreamPropagatesTypedErrorWithMessage() throws {
+        let fake = FakeLibrary()
+        fake.streamError = PremiumVoiceRuntimeError.streamFailed(message: "ORT: non-zero status")
+        fake.failStreamCalls = 1
+        let runtime = AttachePremiumVoiceRuntime(idleUnloadInterval: 1000, libraryFactory: { fake })
+        let paths = try makeValidPaths()
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("out-\(UUID().uuidString).wav")
+
+        XCTAssertThrowsError(try runtime.synthesize(text: "boom", paths: paths, outputURL: out)) { error in
+            guard case .streamFailed(let message) = error as? PremiumVoiceRuntimeError else {
+                return XCTFail("expected .streamFailed, got \(error)")
+            }
+            XCTAssertEqual(message, "ORT: non-zero status")
+        }
+    }
+
+    /// After a stream failure the engine handle is torn down, so the NEXT
+    /// synthesize reloads a clean handle instead of reusing possibly-corrupt ONNX
+    /// session state. Models the retry path: attempt 1 fails, attempt 2 succeeds
+    /// on a freshly created engine.
+    func testEngineIsCleanlyReloadedAfterFailure() throws {
+        let fake = FakeLibrary()
+        fake.streamError = PremiumVoiceRuntimeError.streamFailed(message: "transient")
+        fake.failStreamCalls = 1
+        let runtime = AttachePremiumVoiceRuntime(idleUnloadInterval: 1000, libraryFactory: { fake })
+        let paths = try makeValidPaths()
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("out-\(UUID().uuidString).wav")
+
+        // Attempt 1: engine created, stream throws, engine destroyed.
+        XCTAssertThrowsError(try runtime.synthesize(text: "first", paths: paths, outputURL: out))
+        XCTAssertEqual(fake.createdHandles, 1)
+        XCTAssertEqual(fake.destroyedHandles, 1, "a failed synthesis must drop the engine")
+
+        // Attempt 2: a fresh engine is created and synthesis succeeds.
+        try runtime.synthesize(text: "second", paths: paths, outputURL: out)
+        XCTAssertEqual(fake.createdHandles, 2, "the next synthesis must reload a clean engine")
+        let parsed = try PremiumVoiceWav.parse(try Data(contentsOf: out))
+        XCTAssertEqual(parsed.frameCount, fake.samplesPerChunk * fake.chunkCount)
+    }
+
+    /// The retry helper the playback layer uses re-drives synthesis, so a
+    /// transient stream failure recovers on the second attempt with no fallback.
+    func testRetryRecoversFromTransientStreamFailure() async throws {
+        let fake = FakeLibrary()
+        fake.streamError = PremiumVoiceRuntimeError.streamFailed(message: "transient")
+        fake.failStreamCalls = 1
+        let runtime = AttachePremiumVoiceRuntime(idleUnloadInterval: 1000, libraryFactory: { fake })
+        let paths = try makeValidPaths()
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("out-\(UUID().uuidString).wav")
+
+        try await retrying(attempts: 2, backoff: 0) {
+            try runtime.synthesize(text: "recap", paths: paths, outputURL: out)
+        }
+        XCTAssertEqual(fake.streamCallCount, 2, "the first attempt fails, the second succeeds")
+        XCTAssertEqual(fake.createdHandles, 2, "the second attempt runs on a reloaded engine")
+    }
+
+    /// A persistent stream failure exhausts the retries and rethrows, which is the
+    /// signal the playback layer turns into a system-voice fallback.
+    func testRetryRethrowsAfterExhaustingAttempts() async throws {
+        let fake = FakeLibrary()
+        fake.streamError = PremiumVoiceRuntimeError.streamFailed(message: "persistent")
+        fake.failStreamCalls = 5
+        let runtime = AttachePremiumVoiceRuntime(idleUnloadInterval: 1000, libraryFactory: { fake })
+        let paths = try makeValidPaths()
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("out-\(UUID().uuidString).wav")
+
+        do {
+            try await retrying(attempts: 2, backoff: 0) {
+                try runtime.synthesize(text: "recap", paths: paths, outputURL: out)
+            }
+            XCTFail("expected the exhausted retry to rethrow")
+        } catch {
+            guard case .streamFailed = error as? PremiumVoiceRuntimeError else {
+                return XCTFail("expected .streamFailed after exhaustion, got \(error)")
+            }
+        }
+        XCTAssertEqual(fake.streamCallCount, 2, "both attempts ran")
     }
 }
