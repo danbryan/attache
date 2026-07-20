@@ -50,7 +50,7 @@ const PresenceFace: React.FC<{ kind: "attache" | "colt" | "echo"; size: number; 
   if (kind === "echo") return <WaveBars n={11} height={size * 0.52} barWidth={Math.max(5, size * 0.038)} color="#A75FFF" />;
   return (
     <div style={{ filter: talking ? "drop-shadow(0 0 20px rgba(255,159,10,0.55))" : undefined }}>
-      <Colt2 size={size} />
+      <Colt2 size={size} talking={talking} />
     </div>
   );
 };
@@ -356,7 +356,7 @@ export const Brain2: React.FC<{ t?: typeof brain; fourHarnesses?: boolean }> = (
               opacity: bannerIn, transform: `translateY(${(1 - bannerIn) * 30}px)`,
             }}
           >
-            <span style={{ color: "#FF9F0A", fontSize: 22, fontWeight: 700 }}>Grok: out of credits</span>
+            <span style={{ color: "#FF9F0A", fontSize: 22, fontWeight: 700 }}>Cloud model: out of credits</span>
             <span style={{ color: T.faint, fontSize: 22 }}>→</span>
             <span style={{ color: fallbackSettled ? "#30D158" : T.text, fontSize: 22, fontWeight: 700 }}>
               {fallbackSettled ? "Continuing on Ollama (local)" : "Falling back to Ollama…"}

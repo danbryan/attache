@@ -156,9 +156,11 @@ export const outro = (() => {
 export const lineup = (() => {
   const headlineAt = 0.35;
   const cardsAt = 1.15;   // first card in; the rest stagger after
-  const line2At = 4.7;    // "Watch them. Reply to them."
-  const len = 7.0;
-  return { headlineAt, cardsAt, line2At, len };
+  const narrStart = 0.3;  // the launch cut narrates this beat (n_lineup)
+  // "Watch them. Direct them." lands near the spoken "direct them".
+  const line2At = narrStart + nsec("n_lineup") - 1.1;
+  const len = narrStart + nsec("n_lineup") + 1.2;
+  return { headlineAt, cardsAt, narrStart, line2At, len };
 })();
 
 // Beat B — the bundled voice: "a premium voice, included", runs on your Mac,
@@ -185,12 +187,15 @@ export const twowayLaunch = (() => {
   const sendPressAt = confirmAt + 1.15;
   const bStart = sendPressAt + 0.55;
   const queuedAt = sendPressAt + 0.4;
-  const quietAt = queuedAt + 3.4;
+  // Tightened delivery/waiting mechanics so the post-narration stretch is not
+  // dead air (the flutter chime still lands mid-delivery, and the reply lands
+  // sooner). The two-way narration lines themselves are unchanged.
+  const quietAt = queuedAt + 2.2;
   const deliverTypeAt = quietAt + 0.5;
   const deliveredAt = deliverTypeAt + 1.5;
-  const waitingAt = deliveredAt + 2.4;
+  const waitingAt = deliveredAt + 1.8;
   const bEnd = bStart + nsec("n_two_b_launch");
-  const replyPrintAt = Math.max(waitingAt + 3.0, bEnd - 1.2);
+  const replyPrintAt = Math.max(waitingAt + 1.8, bEnd - 1.2);
   const replyCardAt = replyPrintAt + 1.0;
   const replySpeakAt = Math.max(replyCardAt + 0.6, bEnd + 0.3);
   const len = replySpeakAt + ssec("va_reply") + 1.3;
@@ -214,6 +219,11 @@ export const brainLaunch = (() => {
 // The launch ambient beat drops the "Pick your Attaché" picker tail (beat D),
 // ending just after the "it speaks up" caption completes.
 export const ambientLaunchLen = ambient.charactersAt + 0.4;
+
+// The launch inbox beat: after the voicemail/replay demo, a short tail houses
+// the hinge line ("Or, and most importantly, personalize it.") that bridges
+// directly into the personalization beat (which is reordered to follow inbox).
+export const inboxLaunchLen = inbox.memoStart + ssec("va_memo") + 2.85;
 
 export type SceneSpec = { key: string; lenSec: number };
 // Personalities ("it talks your way") runs BEFORE the conversational block
@@ -240,9 +250,9 @@ export const SCENES2_LAUNCH: SceneSpec[] = [
   { key: "lineup", lenSec: lineup.len },
   { key: "title", lenSec: title.len },
   { key: "pin", lenSec: pin.len },
-  { key: "inbox", lenSec: inbox.len },
-  { key: "ambient", lenSec: ambientLaunchLen },
+  { key: "inbox", lenSec: inboxLaunchLen },
   { key: "personalities", lenSec: personalities.len },
+  { key: "ambient", lenSec: ambientLaunchLen },
   { key: "live", lenSec: live.len },
   { key: "twoway", lenSec: twowayLaunch.len },
   { key: "brain", lenSec: brainLaunch.len },

@@ -10,7 +10,7 @@ import { Hook2, Title2, Pin2, Inbox2 } from "./scenes2a";
 import { Ambient2, Live2, TwoWay2 } from "./scenes2b";
 import { Personalities2, Brain2, Outro2 } from "./scenes2c";
 import {
-  SCENES2_LAUNCH, layoutScenes, OVERLAP, f,
+  SCENES2_LAUNCH, layoutScenes, OVERLAP, f, ssec,
   hook, title, pin, inbox, ambient, live, personalities, outro,
   lineup, twowayLaunch, brainLaunch,
 } from "./timing2";
@@ -130,6 +130,7 @@ const COMPS: Record<string, React.FC> = {
 // is intentionally absent: it is music-carried. Brain runs the recut clip.
 const NARRATION: Record<string, { clip: string; at: number }> = {
   hook: { clip: "n_hook", at: f(hook.narrStart) },
+  lineup: { clip: "n_lineup", at: f(lineup.narrStart) },
   title: { clip: "n_title", at: f(title.narrStart) },
   pin: { clip: "n_pin", at: f(pin.narrStart) },
   inbox: { clip: "n_inbox", at: f(inbox.narrStart) },
@@ -191,6 +192,11 @@ export const Promo2Launch: React.FC = () => {
       <Sequence from={inboxStart + f(inbox.memoStart)}>
         <Audio src={a2("va_memo")} />
       </Sequence>
+      {/* hinge line — bridges the voicemail demo directly into the
+          personalization beat, over the inbox tail / crossfade */}
+      <Sequence from={inboxStart + f(inbox.memoStart + ssec("va_memo") + 0.2)}>
+        <Audio src={a2("n_hinge")} />
+      </Sequence>
       <Sequence from={liveStart + f(live.speakAt)}>
         <Audio src={a2("va_live")} />
       </Sequence>
@@ -228,7 +234,7 @@ export const Promo2Launch: React.FC = () => {
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
       <Sequence from={twowayStart + f(twowayLaunch.deliveredAt)}>
-        <Audio src={a2("sfx_ding")} volume={0.6} />
+        <Audio src={a2("sfx_flutter")} volume={0.4} />
       </Sequence>
       <Sequence from={brainStart + f(brainLaunch.toggleAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />

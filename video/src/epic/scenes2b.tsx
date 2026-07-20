@@ -48,20 +48,40 @@ const AttacheRobot2: React.FC<{ size?: number; talking?: boolean }> = ({ size = 
   );
 };
 
-export const Colt2: React.FC<{ size?: number }> = ({ size = 120 }) => (
-  <svg width={size} height={size} viewBox="76 52 88 100" fill="none" style={{ display: "block" }}>
-    <circle cx="120" cy="112" r="33" fill="#FFF6E4" />
-    <circle cx="106" cy="106" r="7" fill="#fff" /><circle cx="106.5" cy="106.5" r="3.4" fill="#10243E" />
-    <circle cx="134" cy="106" r="7" fill="#fff" /><circle cx="134.5" cy="106.5" r="3.4" fill="#10243E" />
-    <path d="M110 122 C 113 133, 127 133, 130 122 Z" fill="#10243E" />
-    <path d="M104 114 C 109 111, 114 114, 120 116 C 126 114, 131 111, 136 114 C 132 120, 126 119, 120 120 C 114 119, 108 120, 104 114 Z" fill="#573823" />
-    <rect x="99" y="137" width="42" height="9" rx="3" fill="#D13B3B" />
-    <path d="M114 143 L 126 143 L 120 152 Z" fill="#D13B3B" />
-    <ellipse cx="120" cy="83.5" rx="42" ry="6.5" fill="#734F30" />
-    <rect x="101" y="55" width="38" height="27" rx="11" fill="#734F30" />
-    <rect x="101" y="73" width="38" height="6" rx="2" fill="#4D3320" />
-  </svg>
-);
+// Colt is the same robot wearing the cowboy hat, a droopy handlebar mustache,
+// and a bandana. The hat covers where the antenna would be; the mustache
+// halves fall downward beside the mouth, which blinks and talks exactly like
+// Attaché's.
+export const Colt2: React.FC<{ size?: number; talking?: boolean }> = ({ size = 120, talking = false }) => {
+  const frame = useCurrentFrame();
+  const blinkT = frame % 95;
+  const openness = blinkT < 3 ? 0.16 : blinkT < 7 ? 0.6 : 1;
+  const eyeH = 11 * openness;
+  const STEEL = "#C7D0DC", NAVY = "#10243E", LED = "#66E3FF", CORAL = "#FF9DA1";
+  return (
+    <svg width={size} height={size} viewBox="72 50 96 112" fill="none" style={{ display: "block" }}>
+      <rect x="88" y="82" width="64" height="60" rx="14" fill={STEEL} />
+      <rect x="94" y="92" width="52" height="34" rx="8" fill={NAVY} />
+      <rect x="99" y={106 - eyeH / 2} width="14" height={eyeH} rx="2.5" fill={LED} />
+      <rect x="127" y={106 - eyeH / 2} width="14" height={eyeH} rx="2.5" fill={LED} />
+      <circle cx="92.5" cy="119" r="2" fill={CORAL} />
+      <circle cx="143.5" cy="119" r="2" fill={CORAL} />
+      {talking
+        ? [0, 1, 2, 3, 4].map((i) => {
+            const h = 3 + 6.5 * (0.55 + 0.45 * Math.sin(frame / 2.2 + i * 1.3));
+            return <rect key={i} x={108 + i * 6 - 1.8} y={136 - h / 2} width="3.6" height={h} rx="1.8" fill={NAVY} />;
+          })
+        : <rect x="109.2" y="134.2" width="21.6" height="3.5" rx="1.75" fill={NAVY} />}
+      <path d="M120 129.5 C 116.5 127, 111 126.8, 107 129 C 104 130.7, 102.6 134.4, 103 138 C 105 135.2, 107.4 133.2, 110.4 132.2 C 113.4 131.3, 117 131.2, 120 131.8 Z" fill="#573823" />
+      <path d="M120 129.5 C 123.5 127, 129 126.8, 133 129 C 136 130.7, 137.4 134.4, 137 138 C 135 135.2, 132.6 133.2, 129.6 132.2 C 126.6 131.3, 123 131.2, 120 131.8 Z" fill="#573823" />
+      <ellipse cx="120" cy="84" rx="45" ry="7" fill="#734F30" />
+      <rect x="100" y="57" width="40" height="28" rx="11" fill="#734F30" />
+      <rect x="100" y="76" width="40" height="6" rx="2" fill="#4D3320" />
+      <rect x="97" y="141" width="46" height="9" rx="3" fill="#D13B3B" />
+      <path d="M113 148 L 127 148 L 120 158 Z" fill="#D13B3B" />
+    </svg>
+  );
+};
 
 // A macOS-style pointer for the hover and click demos.
 const Cursor: React.FC<{ x: number; y: number; clicking?: number }> = ({ x, y, clicking = 0 }) => (

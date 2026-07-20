@@ -8,6 +8,14 @@
       "seconds": 2.976,
       "text": "This is atta-shay. It gives your agents a voice."
     },
+    "n_lineup": {
+      "seconds": 8.652,
+      "text": "Attashay works with the agents you already run. Claude Code, Codex, Grok, and opencode. Watch them all, and direct them."
+    },
+    "n_hinge": {
+      "seconds": 2.309,
+      "text": "Or, and most importantly, personalize it."
+    },
     "n_pin": {
       "seconds": 7.725,
       "text": "Press Command K, and pin the sessions you care about. Attashay only ever speaks about what you pin."

@@ -11,6 +11,21 @@ import { T } from "../theme";
  * base (text and UI chrome still pop) but kills the flat, vanilla look —
  * every scene sits on moving color instead of plain near-black.
  */
+const GRAIN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240"><filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect width="240" height="240" filter="url(#g)"/></svg>`;
+const GRAIN_URL = `url("data:image/svg+xml;utf8,${encodeURIComponent(GRAIN_SVG)}")`;
+
+// A dense eased falloff reads as one continuous glow. Sparse-stop CSS radials
+// interpolate linearly between stops, and at these low alphas over a dark
+// ground each linear segment quantizes into a visible ring.
+const glow = (rgb: string, peak: number) => {
+  const stops = Array.from({ length: 13 }, (_, i) => {
+    const t = i / 12;
+    const a = peak * Math.pow(1 - t, 2.2);
+    return `rgba(${rgb},${a.toFixed(4)}) ${(t * 82).toFixed(1)}%`;
+  });
+  return `radial-gradient(closest-side, ${stops.join(", ")}, transparent 86%)`;
+};
+
 export const Aurora: React.FC<{ accent?: "blue" | "violet" | "teal" | "ember"; strength?: number }> = ({ accent = "blue", strength = 1 }) => {
   const frame = useCurrentFrame();
   const drift = (speed: number, amp: number, phase: number) =>
@@ -36,30 +51,33 @@ export const Aurora: React.FC<{ accent?: "blue" | "violet" | "teal" | "ember"; s
         style={{
           position: "absolute", width: 1700, height: 1300, borderRadius: "50%",
           left: -420 + drift(210, 90, 0), top: -560 + drift(260, 70, 1.3),
-          background: `radial-gradient(closest-side, rgba(${a},${0.30 * strength}), transparent 70%)`,
+          background: glow(a, 0.30 * strength),
         }}
       />
       <div
         style={{
           position: "absolute", width: 1500, height: 1200, borderRadius: "50%",
           right: -460 + drift(240, 100, 2.1), bottom: -520 + drift(200, 80, 0.6),
-          background: `radial-gradient(closest-side, rgba(${b},${0.24 * strength}), transparent 70%)`,
+          background: glow(b, 0.24 * strength),
         }}
       />
       <div
         style={{
           position: "absolute", width: 1150, height: 950, borderRadius: "50%",
           right: 40 + drift(190, 120, 4.0), top: -430 + drift(230, 60, 2.8),
-          background: `radial-gradient(closest-side, rgba(${c},${0.20 * strength}), transparent 70%)`,
+          background: glow(c, 0.20 * strength),
         }}
       />
       <div
         style={{
           position: "absolute", width: 1000, height: 850, borderRadius: "50%",
           left: -260 + drift(230, 110, 5.2), bottom: -380 + drift(210, 90, 3.4),
-          background: `radial-gradient(closest-side, rgba(${d},${0.18 * strength}), transparent 70%)`,
+          background: glow(d, 0.18 * strength),
         }}
       />
+      {/* Fine static grain dithers the dark radial washes so the 8-bit
+          encode blends instead of banding into visible rings. */}
+      <AbsoluteFill style={{ backgroundImage: GRAIN_URL, backgroundRepeat: "repeat", opacity: 0.04 }} />
     </AbsoluteFill>
   );
 };

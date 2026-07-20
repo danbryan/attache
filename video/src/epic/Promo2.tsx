@@ -116,7 +116,7 @@ export const Promo2: React.FC = () => {
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>
       <Sequence from={twowayStart + f(twoway.deliveredAt)}>
-        <Audio src={a2("sfx_ding")} volume={0.6} />
+        <Audio src={a2("sfx_flutter")} volume={0.4} />
       </Sequence>
       <Sequence from={brainStart + f(brain.toggleAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
