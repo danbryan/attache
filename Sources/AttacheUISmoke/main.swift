@@ -1544,17 +1544,33 @@ if enabled("f7") {
         // unread inbox voicemail) per the 2026-07-19 live-call filing rule.
         var resultingSummary = ""
         var resultingStatus = ""
-        try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
-            let command = """
+        do {
+            try waitUntil("delivered instruction to link its resulting card", timeout: 120, interval: 2) {
+                let command = """
+                sqlite3 "$HOME/Library/Application Support/Attache/attache.sqlite" \
+                  "SELECT c.summary || '|' || c.status FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
+                """
+                guard let output = try? runShell(command) else { return false }
+                let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let separator = trimmed.lastIndex(of: "|") else { return false }
+                resultingSummary = String(trimmed[..<separator])
+                resultingStatus = String(trimmed[trimmed.index(after: separator)...])
+                return !resultingSummary.isEmpty
+            }
+        } catch {
+            // Evidence dump before the profile restore destroys it: was the
+            // card never filed (watcher miss) or filed but never linked
+            // (correlation miss)? One intermittent unlinked run seen inside
+            // the 2026-07-20 release-readiness suite; standalone runs pass.
+            let dump = """
             sqlite3 "$HOME/Library/Application Support/Attache/attache.sqlite" \
-              "SELECT c.summary || '|' || c.status FROM instructions i JOIN cards c ON c.id=i.resulting_card_id WHERE i.session_id='\(sessionID)' AND i.state='delivered' ORDER BY i.created_at DESC LIMIT 1;"
+              "SELECT 'instruction', id, state, delivery_checkpoint, resulting_card_id FROM instructions WHERE session_id='\(sessionID)'; \
+               SELECT 'card', id, status, substr(raw_text,1,80) FROM cards WHERE session_id IN (SELECT id FROM sessions WHERE external_session_id='\(sessionID)');"
             """
-            guard let output = try? runShell(command) else { return false }
-            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let separator = trimmed.lastIndex(of: "|") else { return false }
-            resultingSummary = String(trimmed[..<separator])
-            resultingStatus = String(trimmed[trimmed.index(after: separator)...])
-            return !resultingSummary.isEmpty
+            if let evidence = try? runShell(dump) {
+                print("        EVIDENCE (instruction + cards for session):\n\(evidence)")
+            }
+            throw error
         }
         guard resultingStatus == "heard" else {
             throw SmokeError(message: "focused-call pong card filed as '\(resultingStatus)', expected 'heard' (live-call filing rule)")
