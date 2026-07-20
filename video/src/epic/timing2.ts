@@ -184,18 +184,19 @@ export const twowayLaunch = (() => {
   const typedAt = 1.7;
   const typedDur = 1.9;
   const confirmAt = aStart + nsec("n_two_a_launch") + 0.35;
-  const sendPressAt = confirmAt + 1.15;
-  const bStart = sendPressAt + 0.55;
+  // ~1.5s send-animation pause between locked part A and the new part B.
+  const sendPressAt = confirmAt + 0.9;
+  const bStart = sendPressAt + 0.35;
   const queuedAt = sendPressAt + 0.4;
   // Tightened delivery/waiting mechanics so the post-narration stretch is not
   // dead air (the flutter chime still lands mid-delivery, and the reply lands
-  // sooner). The two-way narration lines themselves are unchanged.
+  // sooner). The two-way part-A line is locked; part B is n_two_b_launch_v2.
   const quietAt = queuedAt + 2.2;
   const deliverTypeAt = quietAt + 0.5;
   const deliveredAt = deliverTypeAt + 1.5;
   const waitingAt = deliveredAt + 1.8;
-  const bEnd = bStart + nsec("n_two_b_launch");
-  const replyPrintAt = Math.max(waitingAt + 1.8, bEnd - 1.2);
+  const bEnd = bStart + nsec("n_two_b_launch_v2");
+  const replyPrintAt = Math.max(waitingAt + 1.5, bEnd - 1.2);
   const replyCardAt = replyPrintAt + 1.0;
   const replySpeakAt = Math.max(replyCardAt + 0.6, bEnd + 0.3);
   const len = replySpeakAt + ssec("va_reply") + 1.3;
@@ -216,14 +217,44 @@ export const brainLaunch = (() => {
   return { narrStart, watchAt, brainAt, toggleAt, fallbackAt, len };
 })();
 
-// The launch ambient beat drops the "Pick your Attaché" picker tail (beat D),
-// ending just after the "it speaks up" caption completes.
-export const ambientLaunchLen = ambient.charactersAt + 0.4;
+// Launch title card: short spoken name ("This is Attashay.") with the tagline
+// as on-screen text; held on the music swell no more than ~2s.
+export const titleLaunch = (() => {
+  const barsAt = 0.15;
+  const nameAt = 0.45;
+  const narrStart = 0.5;
+  const tagAt = 1.5;   // tagline text appears once the name has landed
+  const len = Math.max(4.2, narrStart + nsec("n_title_launch") + 2.0);
+  return { barsAt, nameAt, narrStart, tagAt, len };
+})();
 
-// The launch inbox beat: after the voicemail/replay demo, a short tail houses
-// the hinge line ("Or, and most importantly, personalize it.") that bridges
-// directly into the personalization beat (which is reordered to follow inbox).
-export const inboxLaunchLen = inbox.memoStart + ssec("va_memo") + 2.85;
+// Launch inbox: the narration drives the demo, each imperative synced to a UI
+// action ("Spoken out loud" -> play, "Pause it" -> pause, "Speed it up" ->
+// 1.5x, "Replay it" -> replay), ending on "personalize it" with a hard cut into
+// the personalization beat. No separate memo voice; the narration IS the beat.
+export const inboxLaunch = (() => {
+  const narrStart = 0.35;
+  const cardsAt = [0.7, 1.05, 1.4];
+  const D = nsec("n_inbox_launch");
+  const playAt = narrStart + D * 0.325;      // "Spoken out loud."
+  const pauseAt = narrStart + D * 0.452;     // "Pause it."
+  const speedAt = narrStart + D * 0.524;     // "Speed it up."
+  const replayAt = narrStart + D * 0.619;    // "Replay it."
+  const personalizeAt = narrStart + D * 0.698; // "personalize it." -> hard cut
+  const len = narrStart + D + 0.25;
+  return { narrStart, cardsAt, playAt, pauseAt, speedAt, replayAt, personalizeAt, len };
+})();
+
+// Launch ambient: opens already docked in the corner with the fleet ring
+// visible; the needs-you ping fires on "it speaks up". Tightened toward ~7s.
+export const ambientLaunch = (() => {
+  const narrStart = 0.4;
+  const D = nsec("n_ambient_launch");
+  const glanceAt = narrStart;                 // "See what your agents are up to"
+  const speaksUpAt = narrStart + D - 1.1;      // "it speaks up" -> needs-you ping
+  const len = narrStart + D + 1.6;
+  return { narrStart, glanceAt, speaksUpAt, len };
+})();
 
 export type SceneSpec = { key: string; lenSec: number };
 // Personalities ("it talks your way") runs BEFORE the conversational block
@@ -247,12 +278,12 @@ export const SCENES2: SceneSpec[] = [
 // harness beats run on their recut narration lengths.
 export const SCENES2_LAUNCH: SceneSpec[] = [
   { key: "hook", lenSec: hook.len },
+  { key: "title", lenSec: titleLaunch.len },
   { key: "lineup", lenSec: lineup.len },
-  { key: "title", lenSec: title.len },
   { key: "pin", lenSec: pin.len },
-  { key: "inbox", lenSec: inboxLaunchLen },
+  { key: "inbox", lenSec: inboxLaunch.len },
   { key: "personalities", lenSec: personalities.len },
-  { key: "ambient", lenSec: ambientLaunchLen },
+  { key: "ambient", lenSec: ambientLaunch.len },
   { key: "live", lenSec: live.len },
   { key: "twoway", lenSec: twowayLaunch.len },
   { key: "brain", lenSec: brainLaunch.len },

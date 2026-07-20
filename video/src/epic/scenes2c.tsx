@@ -376,7 +376,7 @@ export const Brain2: React.FC<{ t?: typeof brain; fourHarnesses?: boolean }> = (
 /* 10 — OUTRO: rays, the mark, the new tagline, where to get it.       */
 /* ------------------------------------------------------------------ */
 
-export const Outro2: React.FC = () => {
+export const Outro2: React.FC<{ showTagline?: boolean }> = ({ showTagline = true }) => {
   const frame = useCurrentFrame();
   const breathe = 0.94 + 0.05 * Math.sin(frame / 20);
   const raysIn = interpolate(frame, [0, 40], [0, 0.5], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -398,9 +398,11 @@ export const Outro2: React.FC = () => {
         <div style={{ transform: `scale(${breathe})` }}>
           <Mark2 size={290} talking />
         </div>
-        <div style={{ fontSize: 70, fontWeight: 700, color: T.text, letterSpacing: "-0.02em", textAlign: "center" }}>
-          Give your agents <span style={{ color: T.gold }}>a voice.</span>
-        </div>
+        {showTagline && (
+          <div style={{ fontSize: 70, fontWeight: 700, color: T.text, letterSpacing: "-0.02em", textAlign: "center" }}>
+            Give your agents <span style={{ color: T.gold }}>a voice.</span>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 18, alignItems: "center" }}>
           <Capsule active fontSize={30}>attache.fm</Capsule>
           <Capsule fontSize={30}>github.com/danbryan/attache</Capsule>

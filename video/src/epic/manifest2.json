@@ -16,6 +16,26 @@
       "seconds": 2.309,
       "text": "Or, and most importantly, personalize it."
     },
+    "n_title_launch": {
+      "seconds": 1.382,
+      "text": "This is Attashay."
+    },
+    "n_inbox_launch": {
+      "seconds": 10.551,
+      "text": "Every finished turn lands like voicemail. Spoken out loud. Pause it. Speed it up. Replay it. And, most importantly, personalize it."
+    },
+    "n_personalities_launch": {
+      "seconds": 7.89,
+      "text": "Pick a preset, write your own, or just have fun with it. Updates from your agents don't have to be boring."
+    },
+    "n_ambient_launch": {
+      "seconds": 5.066,
+      "text": "See what your agents are up to at a glance. And when something matters, it speaks up."
+    },
+    "n_two_b_launch_v2": {
+      "seconds": 4.684,
+      "text": "While you're focused on a session, you can give your agent updated instructions."
+    },
     "n_pin": {
       "seconds": 7.725,
       "text": "Press Command K, and pin the sessions you care about. Attashay only ever speaks about what you pin."

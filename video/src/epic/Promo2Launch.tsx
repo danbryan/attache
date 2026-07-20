@@ -6,13 +6,13 @@ import {
 import { T } from "../theme";
 import { Stage } from "../components";
 import { Aurora, Particles, LightSweep, Shell } from "./components2";
-import { Hook2, Title2, Pin2, Inbox2 } from "./scenes2a";
+import { Hook2, Title2, Pin2, InboxLaunch2 } from "./scenes2a";
 import { Ambient2, Live2, TwoWay2 } from "./scenes2b";
 import { Personalities2, Brain2, Outro2 } from "./scenes2c";
 import {
-  SCENES2_LAUNCH, layoutScenes, OVERLAP, f, ssec,
-  hook, title, pin, inbox, ambient, live, personalities, outro,
-  lineup, twowayLaunch, brainLaunch,
+  SCENES2_LAUNCH, layoutScenes, OVERLAP, f,
+  hook, pin, live, personalities, outro,
+  lineup, titleLaunch, inboxLaunch, ambientLaunch, twowayLaunch, brainLaunch,
 } from "./timing2";
 
 const clampBoth = { extrapolateLeft: "clamp" as const, extrapolateRight: "clamp" as const };
@@ -102,7 +102,8 @@ export const AgentLineup: React.FC = () => {
 /* ------------------------------------------------------------------ */
 
 const HookLaunch: React.FC = () => <Hook2 manager />;
-const AmbientLaunch: React.FC = () => <Ambient2 showPicker={false} />;
+const TitleLaunch: React.FC = () => <Title2 t={titleLaunch} tagline="Give your agents a voice." />;
+const AmbientLaunch: React.FC = () => <Ambient2 launch pingAt={f(ambientLaunch.speaksUpAt)} />;
 const PersonalitiesLaunch: React.FC = () => <Personalities2 deliveryFraming />;
 const TwoWayLaunch: React.FC = () => (
   <TwoWay2
@@ -113,6 +114,7 @@ const TwoWayLaunch: React.FC = () => (
   />
 );
 const BrainLaunch: React.FC = () => <Brain2 t={brainLaunch} fourHarnesses />;
+const OutroLaunch: React.FC = () => <Outro2 showTagline={false} />;
 
 /* ------------------------------------------------------------------ */
 /* PROMO2LAUNCH — the baseline sequence plus the agent-lineup beat, with */
@@ -121,22 +123,23 @@ const BrainLaunch: React.FC = () => <Brain2 t={brainLaunch} fourHarnesses />;
 /* ------------------------------------------------------------------ */
 
 const COMPS: Record<string, React.FC> = {
-  hook: HookLaunch, lineup: AgentLineup, title: Title2, pin: Pin2, inbox: Inbox2,
-  ambient: AmbientLaunch, personalities: PersonalitiesLaunch,
-  live: Live2, twoway: TwoWayLaunch, brain: BrainLaunch, outro: Outro2,
+  hook: HookLaunch, title: TitleLaunch, lineup: AgentLineup, pin: Pin2, inbox: InboxLaunch2,
+  personalities: PersonalitiesLaunch, ambient: AmbientLaunch,
+  live: Live2, twoway: TwoWayLaunch, brain: BrainLaunch, outro: OutroLaunch,
 };
 
-// Narration clip per scene, at that scene's narrStart offset. The lineup beat
-// is intentionally absent: it is music-carried. Brain runs the recut clip.
+// Narration clip per scene, at that scene's narrStart offset. Title, inbox,
+// personalities, and ambient run recut launch clips; hook, lineup, pin, live,
+// brain, outro are locked. (Two-way narration is wired separately below.)
 const NARRATION: Record<string, { clip: string; at: number }> = {
   hook: { clip: "n_hook", at: f(hook.narrStart) },
+  title: { clip: "n_title_launch", at: f(titleLaunch.narrStart) },
   lineup: { clip: "n_lineup", at: f(lineup.narrStart) },
-  title: { clip: "n_title", at: f(title.narrStart) },
   pin: { clip: "n_pin", at: f(pin.narrStart) },
-  inbox: { clip: "n_inbox", at: f(inbox.narrStart) },
-  ambient: { clip: "n_ambient", at: f(ambient.narrStart) },
+  inbox: { clip: "n_inbox_launch", at: f(inboxLaunch.narrStart) },
+  personalities: { clip: "n_personalities_launch", at: f(personalities.narrStart) },
+  ambient: { clip: "n_ambient_launch", at: f(ambientLaunch.narrStart) },
   live: { clip: "n_live", at: f(live.narrStart) },
-  personalities: { clip: "n_personalities", at: f(personalities.narrStart) },
   brain: { clip: "n_brain_launch", at: f(brainLaunch.narrStart) },
   outro: { clip: "n_outro", at: f(outro.narrStart) },
 };
@@ -185,18 +188,11 @@ export const Promo2Launch: React.FC = () => {
         <Audio src={a2("n_two_a_launch")} />
       </Sequence>
       <Sequence from={twowayStart + f(twowayLaunch.bStart)}>
-        <Audio src={a2("n_two_b_launch")} />
+        <Audio src={a2("n_two_b_launch_v2")} />
       </Sequence>
 
-      {/* ---- in-app voices ---- */}
-      <Sequence from={inboxStart + f(inbox.memoStart)}>
-        <Audio src={a2("va_memo")} />
-      </Sequence>
-      {/* hinge line — bridges the voicemail demo directly into the
-          personalization beat, over the inbox tail / crossfade */}
-      <Sequence from={inboxStart + f(inbox.memoStart + ssec("va_memo") + 0.2)}>
-        <Audio src={a2("n_hinge")} />
-      </Sequence>
+      {/* ---- in-app voices (the launch inbox is narration-driven; no memo
+             voice) ---- */}
       <Sequence from={liveStart + f(live.speakAt)}>
         <Audio src={a2("va_live")} />
       </Sequence>
@@ -216,14 +212,18 @@ export const Promo2Launch: React.FC = () => {
           <Audio src={a2("sfx_whoosh")} volume={0.38} />
         </Sequence>
       ))}
-      <Sequence from={startOf("title") + f(title.barsAt)}>
+      <Sequence from={startOf("title") + f(titleLaunch.barsAt)}>
         <Audio src={a2("sfx_hit")} volume={0.8} />
       </Sequence>
-      {inbox.cardsAt.map((at, i) => (
+      {inboxLaunch.cardsAt.map((at, i) => (
         <Sequence key={`pop-${i}`} from={inboxStart + f(at)}>
           <Audio src={a2("sfx_pop")} volume={0.5} />
         </Sequence>
       ))}
+      {/* the speed-toggle tap in the voicemail demo */}
+      <Sequence from={inboxStart + f(inboxLaunch.speedAt)}>
+        <Audio src={a2("sfx_pop")} volume={0.45} />
+      </Sequence>
       <Sequence from={pinStart + f(pin.pinAt)}>
         <Audio src={a2("sfx_pop")} volume={0.5} />
       </Sequence>

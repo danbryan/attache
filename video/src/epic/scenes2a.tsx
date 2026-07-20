@@ -6,7 +6,7 @@ import {
   Aurora, Particles, LightSweep, Camera, Terminal, TermLine, MiniSession,
   AppWindow, SourceChip, WaveBars, MediaControls, WordSweep, Mark2,
 } from "./components2";
-import { hook, title, pin, inbox, f, karaokeEnd, ssec, stext } from "./timing2";
+import { hook, title, pin, inbox, inboxLaunch, f, karaokeEnd, ssec, stext } from "./timing2";
 
 /* ------------------------------------------------------------------ */
 /* 1 — HOOK: one agent finishes something… then the wall floods in.    */
@@ -248,12 +248,12 @@ export const Hook2: React.FC<{ manager?: boolean }> = ({ manager = false }) => {
 /* 2 — TITLE: bars burst, the name blooms, the new tagline lands.      */
 /* ------------------------------------------------------------------ */
 
-export const Title2: React.FC = () => {
+export const Title2: React.FC<{ t?: typeof title; tagline?: string }> = ({ t = title, tagline = "Gives your agents a voice." }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  const barsF = f(title.barsAt);
-  const nameF = f(title.nameAt);
-  const tagF = f(title.tagAt);
+  const barsF = f(t.barsAt);
+  const nameF = f(t.nameAt);
+  const tagF = f(t.tagAt);
   const nameP = spring({ frame: frame - nameF, fps, config: { damping: 15, mass: 1.1 } });
   const tagIn = interpolate(frame, [tagF, tagF + 16], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const glow = interpolate(frame, [nameF, nameF + 24, nameF + 70], [0, 1, 0.55], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -276,7 +276,7 @@ export const Title2: React.FC = () => {
           Attaché
         </div>
         <div style={{ opacity: tagIn, transform: `translateY(${(1 - tagIn) * 18}px)`, fontSize: 44, color: T.gold, fontWeight: 600 }}>
-          Gives your agents a voice.
+          {tagline}
         </div>
       </AbsoluteFill>
       <LightSweep start={nameF + 6} dur={34} opacity={0.14} />
@@ -446,6 +446,106 @@ export const Inbox2: React.FC = () => {
         </AppWindow>
       </AbsoluteFill>
       <LightSweep start={f(inbox.cardsAt[0])} dur={50} opacity={0.06} />
+    </Stage>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* 4 (launch) — VOICEMAIL, narration-driven: each imperative in the     */
+/* line ("Spoken out loud. Pause it. Speed it up. Replay it.") syncs to  */
+/* a UI action; ends on "personalize it" with a hard cut. Generic        */
+/* coding-agent card content; no separate memo voice.                    */
+/* ------------------------------------------------------------------ */
+
+const MEMOS2_LAUNCH = [
+  { title: "Refactor complete. All 214 tests passing.", sub: "claude — auth refactor", time: "just now", chip: "Claude Code", color: "#D97757" },
+  { title: "Migration applied, three tables updated", sub: "codex — db migration", time: "9m", chip: "Codex", color: "#8E8E93" },
+  { title: "Dependency audit: two advisories fixed", sub: "codex — dep audit", time: "24m", chip: "Codex", color: "#8E8E93" },
+];
+
+export const InboxLaunch2: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const clamp = { extrapolateLeft: "clamp" as const, extrapolateRight: "clamp" as const };
+  const playF = f(inboxLaunch.playAt);
+  const pauseF = f(inboxLaunch.pauseAt);
+  const speedF = f(inboxLaunch.speedAt);
+  const replayF = f(inboxLaunch.replayAt);
+  const cardText = MEMOS2_LAUNCH[0].title;
+
+  const playing = frame >= playF;
+  const paused = frame >= pauseF && frame < speedF;
+  const isPlaying = playing && !paused;
+  const speedActive = frame >= speedF && frame < replayF;
+
+  let progress: number;
+  if (frame >= replayF) progress = interpolate(frame, [replayF, replayF + f(1.4)], [0, 62], clamp);
+  else if (frame >= speedF) progress = interpolate(frame, [speedF, replayF], [45, 92], clamp);
+  else if (frame >= pauseF) progress = 45;
+  else if (frame >= playF) progress = interpolate(frame, [playF, pauseF], [0, 45], clamp);
+  else progress = 0;
+
+  return (
+    <Stage>
+      <Aurora accent="teal" />
+      <Particles count={26} />
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+        <AppWindow width={1220}>
+          <div style={{ padding: "24px 30px 30px" }}>
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 20 }}>
+              <span style={{ color: T.text, fontSize: 30, fontWeight: 700 }}>Inbox</span>
+              <span style={{ marginLeft: 14, padding: "3px 13px", borderRadius: 999, background: T.goldSoft, border: `1px solid ${T.gold}`, color: T.gold, fontSize: 19, fontWeight: 700 }}>3 new</span>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+                <span style={{ padding: "7px 18px", borderRadius: 11, background: "rgba(255,255,255,0.07)", color: T.text, fontSize: 21, fontWeight: 600 }}>▶ Play all</span>
+              </div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {MEMOS2_LAUNCH.map((mm, i) => {
+                const inP = spring({ frame: frame - f(inboxLaunch.cardsAt[i]), fps, config: { damping: 17, mass: 0.8 } });
+                const activeCard = i === 0 && playing;
+                return (
+                  <div
+                    key={mm.title}
+                    style={{
+                      padding: "20px 24px", borderRadius: 16,
+                      background: activeCard ? "rgba(10,132,255,0.10)" : "rgba(255,255,255,0.035)",
+                      border: `1px solid ${activeCard ? T.gold : T.stroke}`,
+                      boxShadow: activeCard ? "0 0 44px rgba(10,132,255,0.16)" : "none",
+                      opacity: inP,
+                      transform: `translateX(${(1 - inP) * 90}px)`,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                      <div style={{ width: 11, height: 11, borderRadius: 6, background: activeCard ? T.gold : "rgba(10,132,255,0.85)", flexShrink: 0 }} />
+                      <span style={{ color: T.text, fontSize: 26, fontWeight: 650 }}>{mm.title}</span>
+                      <SourceChip label={mm.chip} color={mm.color} />
+                      <span style={{ marginLeft: "auto", color: T.faint, fontSize: 20 }}>{mm.time}</span>
+                    </div>
+                    {!activeCard && <div style={{ color: T.faint, fontSize: 20, marginTop: 6, marginLeft: 25, fontFamily: T.mono }}>{mm.sub}</div>}
+                    {activeCard && (
+                      <div style={{ marginTop: 16 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                          <div style={{ flex: 1, height: 6, borderRadius: 4, background: "rgba(255,255,255,0.1)" }}>
+                            <div style={{ width: `${progress}%`, height: "100%", borderRadius: 4, background: T.gold }} />
+                          </div>
+                          <WaveBars n={12} height={22} barWidth={4} />
+                        </div>
+                        <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 20 }}>
+                          <MediaControls playing={isPlaying} speed={speedActive ? "1.5×" : "1.0×"} speedActive={speedActive} />
+                        </div>
+                        <div style={{ marginTop: 14 }}>
+                          <WordSweep text={cardText} startFrame={playF + 2} endFrame={replayF} fontSize={25} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </AppWindow>
+      </AbsoluteFill>
+      <LightSweep start={f(inboxLaunch.cardsAt[0])} dur={50} opacity={0.06} />
     </Stage>
   );
 };

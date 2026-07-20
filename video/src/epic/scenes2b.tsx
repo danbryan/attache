@@ -220,8 +220,38 @@ const cursorPath = (frame: number, pts: { f: number; x: number; y: number }[]) =
   return pts[pts.length - 1];
 };
 
-export const Ambient2: React.FC<{ showPicker?: boolean }> = ({ showPicker = true }) => {
+export const Ambient2: React.FC<{ showPicker?: boolean; launch?: boolean; pingAt?: number }> = ({ showPicker = true, launch = false, pingAt = 0 }) => {
   const frame = useCurrentFrame();
+
+  // Launch cut: open already on the fleet ring (agents at a glance), with the
+  // needs-you ping firing on "it speaks up". Tightened, corner-docked idea
+  // carried by the ring itself. No desktop-widget intro, no picker tail.
+  if (launch) {
+    const breathe = 0.98 + 0.02 * Math.sin(frame / 22);
+    const glanceCap = interpolate(frame, [8, 22, pingAt - 10, pingAt], [0, 1, 1, 0], clampBoth);
+    const speakCap = interpolate(frame, [pingAt - 6, pingAt + 8], [0, 1], clampBoth);
+    return (
+      <Stage>
+        <Aurora accent="blue" strength={0.7} />
+        <Particles count={20} />
+        <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+          <AppWindow width={980} style={{ height: 690 }}>
+            <div style={{ position: "relative", height: 640, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ transform: `scale(${breathe})` }}>
+                <CharacterRing size={540} labels doneAt={Math.max(0, pingAt - 46)} blockAt={pingAt} />
+              </div>
+              <div style={{ position: "absolute", left: 0, right: 0, top: 18, textAlign: "center", color: T.text, fontSize: 26, fontWeight: 600, height: 34 }}>
+                <span style={{ position: "absolute", left: 0, right: 0, opacity: glanceCap }}>See what your agents are up to at a glance.</span>
+                <span style={{ position: "absolute", left: 0, right: 0, opacity: speakCap }}>And when something matters, it speaks up.</span>
+              </div>
+            </div>
+          </AppWindow>
+        </AbsoluteFill>
+        <LightSweep start={10} dur={60} opacity={0.05} />
+      </Stage>
+    );
+  }
+
   const charStart = f(ambient.charactersAt);
   const deskOut = interpolate(frame, [82, 102], [1, 0], clampBoth);
   const deskOpacity = Math.min(interpolate(frame, [0, 14], [0, 1], clampBoth), deskOut);
