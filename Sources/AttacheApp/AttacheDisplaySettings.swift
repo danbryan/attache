@@ -376,6 +376,10 @@ enum AttachePreferenceKey {
     static let characterShinySeed = "attache.petShinySeed"
     static let installClaudeHooks = "attache.installClaudeHooks"
     static let installCodexNotify = "attache.installCodexNotify"
+    /// One-shot marker: set once the opinionated-hooks migration has rederived
+    /// hook installation from source enablement (retiring the standalone
+    /// Precise-status toggles).
+    static let hooksSourceDerivedMigrated = "attache.hooksSourceDerivedMigrated"
     static let visualSymmetry = "attache.visualSymmetry"
     static let idleBrand = "attache.idleBrand"
     static let idleCustomText = "attache.idleCustomText"

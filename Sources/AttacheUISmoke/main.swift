@@ -2408,8 +2408,18 @@ if enabled("f10") {
         _ = try waitForElement("memory export action", in: window, role: kAXButtonRole as String, exactly: "Export structured memory")
     }
 
+    run.step("f10-no-key-first-run", "the Agents pane owns the local agent sources") {
+        // The four local agent sources moved out of Integrations into the new
+        // Agents pane (INF). Verify they land there.
+        try selectSettingsSection("Agents", paneMarker: "Local agent sources")
+        _ = try waitForElement("Codex source row", in: try settingsWindow(), containing: "Codex sessions")
+        _ = try waitForElement("Claude Code source row", in: try settingsWindow(), containing: "Claude Code sessions")
+    }
+
     run.step("f10-no-key-first-run", "cloud integration rows are present and no secret account is seeded") {
-        try selectSettingsSection("Integrations", paneMarker: "Local agent sources")
+        // Integrations is now credentialed services only; the agent-source and
+        // Precise-status rows are gone.
+        try selectSettingsSection("Integrations", paneMarker: "External services Attaché connects to")
         _ = try waitForElement("xAI integration row", in: try settingsWindow(), containing: "xAI / Grok")
         _ = try waitForElement("OpenAI-compatible integration row", in: try settingsWindow(), containing: "OpenAI-compatible")
         _ = try runShell("""
@@ -3733,7 +3743,7 @@ if enabled("dock-menus") {
                                                  role: kAXButtonRole as String, containing: "Open settings")
         let menu = try openContextMenu(settingsButton)
         let titles = contextMenuItemTitles(menu)
-        for expected in ["Appearance", "Voice & Captions", "Personalities", "Context", "Integrations", "Memory"] {
+        for expected in ["Appearance", "Voice & Captions", "Personalities", "Agents", "Context", "Integrations", "Memory"] {
             guard titles.contains(where: { $0.contains(expected) }) else {
                 throw SmokeError(message: "Settings context menu missing \"\(expected)\"; saw \(titles)")
             }

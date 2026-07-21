@@ -62,11 +62,11 @@ final class AppModelDockContextMenuTests: XCTestCase {
     }
 
     /// Every section the dock's Settings context menu exposes (Appearance,
-    /// Voice and Captions, Personalities, Context, Integrations, Memory, in
-    /// that order, `.about` excluded) must round-trip through
+    /// Voice and Captions, Personalities, Agents, Context, Integrations, Memory,
+    /// in that order, `.about` and `.mcp` excluded) must round-trip through
     /// `openSettings(pane:)`.
     func testDockSettingsSectionsMatchTicketList() {
-        let expected: [SettingsSection] = [.appearance, .voice, .personalities, .context, .integrations, .memory]
+        let expected: [SettingsSection] = [.appearance, .voice, .personalities, .agents, .context, .integrations, .memory]
         XCTAssertEqual(AttacheRootView.dockSettingsSections, expected)
     }
 

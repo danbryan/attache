@@ -6,6 +6,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case appearance
     case voice
     case personalities
+    case agents
     case context
     case integrations
     case mcp
@@ -19,6 +20,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "Appearance"
         case .voice: return "Voice & Captions"
         case .personalities: return "Personalities"
+        case .agents: return "Agents"
         case .context: return "Context"
         case .integrations: return "Integrations"
         case .mcp: return "MCP Servers"
@@ -32,6 +34,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "circle.lefthalf.filled"
         case .voice: return "speaker.wave.2.fill"
         case .personalities: return "theatermasks.fill"
+        case .agents: return "cpu"
         case .context: return "rectangle.stack.badge.person.crop"
         case .integrations: return "puzzlepiece.extension.fill"
         case .mcp: return "wrench.and.screwdriver.fill"
@@ -59,6 +62,7 @@ struct SettingsPaneView: View {
         case .appearance: appearancePane
         case .voice: VoicePane(model: model)
         case .personalities: PersonalitiesPane(model: model)
+        case .agents: AgentsPane(model: model)
         case .context: ContextSettingsPane(paneState: model.settingsPaneState, state: .shared)
         case .integrations: IntegrationsPane(model: model)
         case .mcp: MCPServersPane(model: model, registry: model.mcpRegistry)

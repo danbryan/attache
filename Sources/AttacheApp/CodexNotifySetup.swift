@@ -24,9 +24,13 @@ enum CodexNotifySetup {
     /// Apply the user's preference. On enable, ensure the notify script exists
     /// and Attaché's chained entry is present in `config.toml`; on disable,
     /// restore the recorded previous notify (or delete the key). Best-effort:
-    /// never throws into the caller, and it fails closed on a malformed config
-    /// (leaves the file untouched) so transcript tailing simply continues.
-    static func apply(enabled: Bool) {
+    /// never throws into the caller (so it can never block a source toggle),
+    /// and it fails closed on a malformed config (leaves the file untouched) so
+    /// transcript tailing simply continues. Returns a short user-facing message
+    /// when it fails, or nil on success, so the Agents pane can surface a row
+    /// caption.
+    @discardableResult
+    static func apply(enabled: Bool) -> String? {
         do {
             if enabled {
                 try writeScript()
@@ -42,8 +46,12 @@ enum CodexNotifySetup {
                     return cleaned == current ? nil : cleaned
                 }
             }
+            return nil
         } catch {
             AttacheLog.watcher.error("codex notify setup (enabled=\(enabled, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+            return enabled
+                ? "Couldn't install the Codex notify program. Attaché will follow this agent through its session files instead."
+                : "Couldn't restore the Codex notify program. Check ~/.codex/config.toml if turn status looks off."
         }
     }
 

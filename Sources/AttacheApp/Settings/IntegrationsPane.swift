@@ -7,7 +7,7 @@ struct IntegrationsPane: View {
     @ObservedObject var model: AppModel
     @State private var expanded: String?
 
-    private struct Provider {
+    struct Provider {
         let id: String
         let name: String
         let powers: String
@@ -16,28 +16,32 @@ struct IntegrationsPane: View {
         let guide: AttacheDocumentationLinks.ModelIntegrationGuide
     }
 
-    private let providers: [Provider] = [
+    /// The external services Attaché connects to with the user's own
+    /// credentials: the models it thinks with and the cloud voices it speaks
+    /// with. Local agent sources (the agents Attaché watches) live in the
+    /// Agents pane, not here. Every entry has a key and/or endpoint to enter;
+    /// providers with nothing to configure (a Claude Code subscription, the
+    /// on-device Apple voice) are not credentialed connections and do not
+    /// appear.
+    static let providers: [Provider] = [
         Provider(id: "xai", name: "xAI / Grok", powers: "Model + Voice", hasKey: true, hasEndpoint: false, guide: .xai),
         Provider(id: "elevenlabs", name: "ElevenLabs", powers: "Voice", hasKey: true, hasEndpoint: false, guide: .elevenLabs),
         Provider(id: "openai", name: "OpenAI", powers: "Voice", hasKey: true, hasEndpoint: false, guide: .openAIVoice),
         Provider(id: "ollama", name: "Ollama", powers: "Model · local", hasKey: false, hasEndpoint: true, guide: .ollama),
-        Provider(id: "custom", name: "OpenAI-compatible", powers: "Model", hasKey: true, hasEndpoint: true, guide: .openAICompatible),
-        Provider(id: "claude", name: "Claude Code", powers: "Model · subscription", hasKey: false, hasEndpoint: false, guide: .claudeCode),
-        Provider(id: "ondevice", name: "On-device (Apple)", powers: "Voice", hasKey: false, hasEndpoint: false, guide: .onDeviceVoice)
+        Provider(id: "custom", name: "OpenAI-compatible", powers: "Model", hasKey: true, hasEndpoint: true, guide: .openAICompatible)
     ]
+
+    private var providers: [Provider] { Self.providers }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Integrations").typoTitle()
-            Text("Attaché files agent updates as voicemail in your Inbox. Go live on a session when you want it narrated in real time.")
+            Text("External services Attaché connects to with your credentials: the models it thinks with and the cloud voices it speaks with.")
                 .typoLabel()
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Connect a provider to use it in an Attaché's Model or Voice. Each row includes a short setup guide and a real readiness check.")
+            Text("Connect a provider to use it in an Attaché's Model or Voice. Each row includes a short setup guide and a real readiness check. The agents Attaché watches are configured under Agents.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-
-            localSources
-            agentInstructions
 
             VStack(spacing: 5) {
                 ForEach(providers, id: \.id) { provider in
@@ -50,71 +54,6 @@ struct IntegrationsPane: View {
         .onChange(of: model.integrationFocusProviderID) { providerID in
             if let providerID { expanded = providerID }
         }
-    }
-
-    private var localSources: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Local agent sources")
-                .typoBody(.semibold)
-            Text("Enable a local source before Attaché indexes or shows its session transcripts. Data stays on this Mac.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Toggle("Codex sessions", isOn: Binding(
-                get: { model.codexSourceEnabled },
-                set: { model.setCodexSourceEnabled($0) }
-            ))
-            Toggle("Claude Code sessions", isOn: Binding(
-                get: { model.claudeCodeSourceEnabled },
-                set: { model.setClaudeCodeSourceEnabled($0) }
-            ))
-            Toggle("Grok Build sessions", isOn: Binding(
-                get: { model.grokBuildSourceEnabled },
-                set: { model.setGrokBuildSourceEnabled($0) }
-            ))
-            Toggle("opencode sessions", isOn: Binding(
-                get: { model.opencodeSourceEnabled },
-                set: { model.setOpencodeSourceEnabled($0) }
-            ))
-            Toggle("Precise Claude Code status", isOn: $model.installClaudeHooks)
-            Text("Adds Attaché's Notification and Stop hooks so Attaché reactions update immediately. Turning it off removes only Attaché's hooks.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Toggle("Precise Codex status", isOn: $model.installCodexNotify)
-            Text("Adds Attaché's notify program to Codex so turn completion updates immediately. It chains any notify program you already have, and turning it off restores exactly what was there before.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("Claude Code hooks and the Codex notify program report status the instant it changes; other agents are followed through their session files, which is close but less immediate.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
-    }
-
-    private var agentInstructions: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Agent instructions")
-                .typoBody(.semibold)
-            Text("Reverse-send writes into the focused agent session with your own agent permissions.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Toggle("Skip final send confirmation", isOn: Binding(
-                get: { model.directAgentSendEnabled },
-                set: { model.directAgentSendEnabled = $0 }
-            ))
-            .accessibilityLabel("Skip final send confirmation")
-            Text("After you enable send-to-agent for a session, explicit Tell Agent turns can send directly. Ask Attaché handoffs always show the exact message and frozen target for confirmation because model tool calls can be influenced by session evidence.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
     }
 
     private func row(_ provider: Provider) -> some View {

@@ -100,6 +100,68 @@ final class ClaudeHookScriptTests: XCTestCase {
                        "the guard must not prevent the real script from running when present")
     }
 
+    // MARK: - No-op safety when Attaché is not running (INF)
+    //
+    // The installed hook must be a silent, fast no-op when the Attaché app is
+    // not listening: it must never emit user-visible output or a delay into the
+    // host Claude turn. This runs the ACTUAL generated script against a
+    // throwaway HOME (so the real token/app-support is never read) and a dead
+    // event port, and asserts exit 0, zero stdout, and completion well inside
+    // the script's own 2s curl cap.
+
+    /// Runs an executable with `HOME`/`ATTACHE_EVENT_PORT` overridden, returning
+    /// output, exit status, and wall-clock duration.
+    private func runScript(
+        _ path: String, stdin: String, home: URL, port: String
+    ) throws -> (out: String, status: Int32, seconds: Double) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        var env = ProcessInfo.processInfo.environment
+        env["HOME"] = home.path
+        env["ATTACHE_EVENT_PORT"] = port
+        process.environment = env
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = Pipe()
+        let inPipe = Pipe()
+        process.standardInput = inPipe
+        let start = Date()
+        try process.run()
+        inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+        try? inPipe.fileHandleForWriting.close()
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (String(data: data, encoding: .utf8) ?? "", process.terminationStatus, Date().timeIntervalSince(start))
+    }
+
+    func testGeneratedHookIsSilentFastNoOpWhenAttacheNotRunning() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-hook-home-\(UUID().uuidString)")
+        // Token present, so the script proceeds to the POST and hits the dead
+        // port (the "app installed the hook but is not running" case).
+        let tokenDir = home.appendingPathComponent("Library/Application Support/Attache")
+        try FileManager.default.createDirectory(at: tokenDir, withIntermediateDirectories: true)
+        try "not-a-real-token".write(to: tokenDir.appendingPathComponent("event-token"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("attache-hook-\(UUID().uuidString).sh")
+        try ClaudeHookSetup.scriptBody.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        defer { try? FileManager.default.removeItem(at: script) }
+
+        let (out, status, seconds) = try runScript(
+            script.path, stdin: #"{"session_id":"abc","cwd":"/tmp"}"#, home: home, port: "59991")
+        XCTAssertEqual(status, 0, "the hook must never fail the Claude turn when Attaché is down")
+        XCTAssertEqual(out, "", "the hook must be silent when Attaché is down")
+        // The hang this guards against is curl waiting out a 30-60s default
+        // timeout; the script's curl is capped at 2s. Wall clock also carries
+        // python interpreter cold-start, which measured 9s under a fully
+        // loaded parallel suite (2026-07-21), so the bound is sized for load
+        // while still failing on any real timeout hang.
+        XCTAssertLessThan(seconds, 15.0, "the hook must return fast (its curl is capped at 2s)")
+    }
+
     func testInstalledEntriesUseGuardedForm() {
         // ClaudeHookSetup.entries is what actually ships; assert every managed
         // event's command carries the missing-script guard, not the bare form.

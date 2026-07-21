@@ -499,6 +499,12 @@ final class AppModel: ObservableObject {
             applyCodexNotify()
         }
     }
+    /// A short caption shown on the Claude Code / Codex rows of the Agents pane
+    /// when installing or removing the immediacy hook failed. A failure never
+    /// blocks the source toggle (the file IO is best-effort and off the main
+    /// thread); Attaché falls back to session files and tells the user so here.
+    @Published var claudeHookWarning: String?
+    @Published var codexNotifyWarning: String?
     /// Where the user last parked the focused mote on the session ring
     /// (INF-280); only dragging it writes a new angle.
     @Published var characterFocusAngle: Double = AttacheCharacterChoreography.defaultFocusAngle {
@@ -2183,27 +2189,41 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Real hook file IO is suppressed under the UI smoke harness
+    /// (`ATTACHE_UI_TEST`) and under unit tests (xctest sets
+    /// `XCTestConfigurationFilePath`), so a headless or test run never edits the
+    /// real `~/.claude/settings.json` or `~/.codex/config.toml`. The hook
+    /// install/remove behavior itself is covered against temp fixture homes in
+    /// `ClaudeHookSetupTests` / `CodexNotifySetupTests` and the pure installers.
+    static var suppressesRealHookIO: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return env["ATTACHE_UI_TEST"] == "1" || env["XCTestConfigurationFilePath"] != nil
+    }
+
     /// Install or remove Attaché's Claude Code hooks off the main thread (small
-    /// file IO). Idempotent, so calling it on launch and on every toggle is
-    /// cheap. Under UI tests, skip it so a headless run never edits real
-    /// Claude Code settings.
+    /// file IO). Idempotent, so calling it on launch and on every source toggle
+    /// is cheap. A failure surfaces as a caption on the Agents pane's Claude
+    /// Code row and never blocks the toggle.
     func applyClaudeHooks() {
-        guard ProcessInfo.processInfo.environment["ATTACHE_UI_TEST"] != "1" else { return }
+        guard !Self.suppressesRealHookIO else { return }
         let enabled = installClaudeHooks
-        DispatchQueue.global(qos: .utility).async {
-            ClaudeHookSetup.apply(enabled: enabled)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let warning = ClaudeHookSetup.apply(enabled: enabled)
+            DispatchQueue.main.async { self?.claudeHookWarning = warning }
         }
     }
 
     /// Install or remove Attaché's Codex `notify` program off the main thread
-    /// (small file IO). Idempotent, so calling it on launch and on every toggle
-    /// is cheap; when disabled and never installed, it makes no write. Under UI
-    /// tests, skip it so a headless run never edits the real Codex config.
+    /// (small file IO). Idempotent, so calling it on launch and on every source
+    /// toggle is cheap; when disabled and never installed, it makes no write. A
+    /// failure surfaces as a caption on the Agents pane's Codex row and never
+    /// blocks the toggle.
     func applyCodexNotify() {
-        guard ProcessInfo.processInfo.environment["ATTACHE_UI_TEST"] != "1" else { return }
+        guard !Self.suppressesRealHookIO else { return }
         let enabled = installCodexNotify
-        DispatchQueue.global(qos: .utility).async {
-            CodexNotifySetup.apply(enabled: enabled)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let warning = CodexNotifySetup.apply(enabled: enabled)
+            DispatchQueue.main.async { self?.codexNotifyWarning = warning }
         }
     }
 
@@ -8336,6 +8356,12 @@ final class AppModel: ObservableObject {
         codexSourceEnabled = enabled
         defaults.set(enabled, forKey: AttachePreferenceKey.codexSourceEnabled)
 
+        // Opinionated hooks (INF): enabling Codex installs its notify program so
+        // turn status is immediate; disabling removes it. The didSet on
+        // `installCodexNotify` does the (best-effort, off-main) file IO and
+        // surfaces any failure without blocking this toggle.
+        installCodexNotify = enabled
+
         if !enabled {
             codexSessions = []
             archivedCodexSessions = []
@@ -8357,6 +8383,13 @@ final class AppModel: ObservableObject {
         guard claudeCodeSourceEnabled != enabled else { return }
         claudeCodeSourceEnabled = enabled
         defaults.set(enabled, forKey: AttachePreferenceKey.claudeCodeSourceEnabled)
+
+        // Opinionated hooks (INF): enabling Claude Code installs its Notification
+        // and Stop hooks so status is immediate; disabling removes only Attaché's
+        // hooks. The didSet on `installClaudeHooks` does the (best-effort,
+        // off-main) file IO and surfaces any failure without blocking this toggle.
+        installClaudeHooks = enabled
+
         if !enabled {
             // Mirror the Codex disable path: stop watching Claude sessions now
             // instead of only rebuilding the index (they'd keep producing
@@ -10048,6 +10081,22 @@ final class AppModel: ObservableObject {
         if defaults.object(forKey: AttachePreferenceKey.installCodexNotify) != nil {
             installCodexNotify = defaults.bool(forKey: AttachePreferenceKey.installCodexNotify)
         }
+        // Opinionated-hooks migration (INF): the standalone "Precise Claude Code
+        // status" / "Precise Codex status" toggles are retired. Hook install now
+        // tracks source enablement. On the first launch after this upgrade,
+        // install hooks for whichever agent sources are already enabled and
+        // remove them for sources that are off, regardless of the retired
+        // toggle's persisted value. Dan wants opinionated defaults: an enabled
+        // Claude Code / Codex source should get immediate status, so a prior
+        // "toggle off" is intentionally not carried forward. Runs exactly once,
+        // guarded by its own marker. `installClaudeHooks`/`installCodexNotify`
+        // remain the persisted "is installed" mirror the reset flow and launch
+        // re-apply read; here they are (re)derived from the sources.
+        if defaults.object(forKey: AttachePreferenceKey.hooksSourceDerivedMigrated) == nil {
+            installClaudeHooks = claudeCodeSourceEnabled
+            installCodexNotify = codexSourceEnabled
+            defaults.set(true, forKey: AttachePreferenceKey.hooksSourceDerivedMigrated)
+        }
         if defaults.object(forKey: AttachePreferenceKey.showPersonalitySwitcher) != nil {
             showPersonalitySwitcher = defaults.bool(forKey: AttachePreferenceKey.showPersonalitySwitcher)
         }
@@ -10832,22 +10881,85 @@ extension AppModel {
         confirm.addButton(withTitle: "Reset")
         confirm.addButton(withTitle: "Cancel")
 
+        // Stack the opt-ins vertically in one accessory view: the premium-voice
+        // removal and, when hooks are installed, removal of Attaché's Claude Code
+        // hooks and Codex notify program. Hook removal defaults ON (opinionated:
+        // a reset should leave the host tools clean unless the user opts out).
+        let hooksInstalled = installClaudeHooks || installCodexNotify
         let removeVoice = NSButton(checkboxWithTitle: "Also remove the downloaded voice", target: nil, action: nil)
         removeVoice.state = .off
-        confirm.accessoryView = removeVoice
+        let removeHooks = NSButton(
+            checkboxWithTitle: "Also remove Attaché's hooks from Claude Code and Codex",
+            target: nil, action: nil)
+        removeHooks.state = .on
+        removeHooks.setAccessibilityIdentifier("Data Reset Remove Hooks")
+        confirm.accessoryView = Self.resetAccessoryView(
+            removeVoice: removeVoice, removeHooks: hooksInstalled ? removeHooks : nil)
 
         let response = confirm.runModal()
         switch response {
         case .alertFirstButtonReturn:   // Back Up First…
             backUpData()
         case .alertSecondButtonReturn:  // Reset
-            performReset(alsoRemovePremiumVoice: removeVoice.state == .on)
+            performReset(
+                alsoRemovePremiumVoice: removeVoice.state == .on,
+                alsoRemoveHooks: hooksInstalled && removeHooks.state == .on)
         default:
             return
         }
     }
 
-    private func performReset(alsoRemovePremiumVoice: Bool) {
+    /// Lays out the reset dialog's opt-in checkboxes in a single accessory
+    /// view. Pure view construction, split out so `resetData` stays readable.
+    private static func resetAccessoryView(removeVoice: NSButton, removeHooks: NSButton?) -> NSView {
+        let checkboxes = [removeVoice, removeHooks].compactMap { $0 }
+        let rowHeight: CGFloat = 22
+        let container = NSView(frame: NSRect(
+            x: 0, y: 0, width: 380, height: rowHeight * CGFloat(checkboxes.count) + 8))
+        for (index, checkbox) in checkboxes.enumerated() {
+            let y = container.frame.height - rowHeight * CGFloat(index + 1)
+            checkbox.frame = NSRect(x: 20, y: y, width: 350, height: 20)
+            container.addSubview(checkbox)
+        }
+        return container
+    }
+
+    /// Whether the reset dialog offers, and which hooks the reset removes, given
+    /// the user's checkbox and what is installed. Pure so the plumbing is
+    /// testable without the modal. Removal is clamped to what is actually
+    /// installed so a reset never edits a host tool Attaché never touched.
+    struct HookResetPlan: Equatable {
+        var removeClaudeHooks: Bool
+        var removeCodexNotify: Bool
+    }
+
+    static func offersHookRemovalOnReset(claudeInstalled: Bool, codexInstalled: Bool) -> Bool {
+        claudeInstalled || codexInstalled
+    }
+
+    static func hookResetPlan(
+        userChoseRemove: Bool, claudeInstalled: Bool, codexInstalled: Bool
+    ) -> HookResetPlan {
+        HookResetPlan(
+            removeClaudeHooks: userChoseRemove && claudeInstalled,
+            removeCodexNotify: userChoseRemove && codexInstalled)
+    }
+
+    private func performReset(alsoRemovePremiumVoice: Bool, alsoRemoveHooks: Bool) {
+        // Remove Attaché's hooks from the host tools first, through the same
+        // uninstall paths a source toggle uses, so the entries are gone before
+        // the app-support script they point at is cleared. Synchronous here (not
+        // the async apply on the source toggle) so removal completes before the
+        // relaunch. Suppressed under UI-smoke/xctest so a test never edits a real
+        // ~/.claude or ~/.codex.
+        if alsoRemoveHooks, !Self.suppressesRealHookIO {
+            let plan = Self.hookResetPlan(
+                userChoseRemove: true,
+                claudeInstalled: installClaudeHooks,
+                codexInstalled: installCodexNotify)
+            if plan.removeClaudeHooks { ClaudeHookSetup.apply(enabled: false) }
+            if plan.removeCodexNotify { CodexNotifySetup.apply(enabled: false) }
+        }
         do {
             try Self.resetSupportDirectory(
                 liveSupportDirectory, alsoRemovePremiumVoice: alsoRemovePremiumVoice)

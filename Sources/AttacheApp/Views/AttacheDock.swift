@@ -323,11 +323,11 @@ extension AttacheRootView {
     }
 
     /// Settings sections reachable from the dock's right-click menu, in the
-    /// same order as the sidebar (INF-354). `.about` is left out: the ticket's
-    /// list is Appearance, Voice and Captions, Personalities, Context,
-    /// Integrations, Memory.
+    /// same order as the sidebar (INF-354): Appearance, Voice and Captions,
+    /// Personalities, Agents, Context, Integrations, Memory. `.about` and
+    /// `.mcp` are left out.
     static let dockSettingsSections: [SettingsSection] = [
-        .appearance, .voice, .personalities, .context, .integrations, .memory
+        .appearance, .voice, .personalities, .agents, .context, .integrations, .memory
     ]
 
     var talkButton: some View {

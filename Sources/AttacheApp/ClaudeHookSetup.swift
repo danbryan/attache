@@ -47,9 +47,12 @@ enum ClaudeHookSetup {
 
     /// Apply the user's preference. On enable, ensure the script and the
     /// settings entries exist; on disable, remove only Attaché's entries.
-    /// Best-effort: never throws into the caller, and never blocks a real user
-    /// prompt (the script is fire-and-forget and silent).
-    static func apply(enabled: Bool) {
+    /// Best-effort: never throws into the caller (so it can never block a
+    /// source toggle), and never blocks a real user prompt (the script is
+    /// fire-and-forget and silent). Returns a short user-facing message when it
+    /// fails, or nil on success, so the Agents pane can surface a row caption.
+    @discardableResult
+    static func apply(enabled: Bool) -> String? {
         do {
             if enabled {
                 try writeScript()
@@ -65,8 +68,12 @@ enum ClaudeHookSetup {
                     return cleaned == current ? nil : cleaned
                 }
             }
+            return nil
         } catch {
             AttacheLog.watcher.error("claude hook setup (enabled=\(enabled, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+            return enabled
+                ? "Couldn't install Claude Code status hooks. Attaché will follow this agent through its session files instead."
+                : "Couldn't remove Claude Code status hooks. You can remove them by hand in ~/.claude/settings.json."
         }
     }
 
