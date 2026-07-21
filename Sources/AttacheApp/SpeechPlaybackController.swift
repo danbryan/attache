@@ -641,6 +641,10 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         generationCompletion = nil
         if !finishedSpeaking {
             onPlaybackError?("Voice generation failed: the system speech synthesizer stopped before producing audio.")
+        } else if let url = generatedAudioURL {
+            // Level the just-written system-voice file to the standard loudness so
+            // the on-device voice is not quieter than the premium/cloud engines.
+            SystemVoiceLoudnessNormalizer.normalizeFileInPlace(at: url)
         }
         completion?(finishedSpeaking)
     }
@@ -1095,7 +1099,9 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         let raw: String
         switch config.provider {
         case .system:
-            raw = "system|\(voiceIdentifier ?? config.systemVoiceIdentifier ?? "default")"
+            // The system-voice file is loudness-normalized after export, so a
+            // loudness version bump must re-render clips cached at the old level.
+            raw = "system|\(voiceIdentifier ?? config.systemVoiceIdentifier ?? "default")|loudnessV1"
         case .attachePremium:
             // The flow-integration step count changes synthesis quality, so it
             // is part of the identity: raising it must invalidate cached audio
@@ -1155,6 +1161,11 @@ private final class SpeechFileExportJob: NSObject, NSSpeechSynthesizerDelegate {
     }
 
     func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
+        if finishedSpeaking {
+            // Level the exported system-voice file before it is cached, matching the
+            // premium path so cached system audio is normalized once.
+            SystemVoiceLoudnessNormalizer.normalizeFileInPlace(at: outputURL)
+        }
         completion(finishedSpeaking)
     }
 
