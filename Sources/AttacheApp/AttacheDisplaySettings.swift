@@ -374,6 +374,7 @@ enum AttachePreferenceKey {
     static let characterFocusAngle = "attache.petFocusAngle"
     static let character = "attache.character"
     static let characterShinySeed = "attache.petShinySeed"
+    static let promptUpdateChecks = "attache.promptUpdateChecks"
     static let installClaudeHooks = "attache.installClaudeHooks"
     static let installCodexNotify = "attache.installCodexNotify"
     /// One-shot marker: set once the opinionated-hooks migration has rederived

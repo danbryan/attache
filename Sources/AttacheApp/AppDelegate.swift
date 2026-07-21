@@ -33,6 +33,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
+    /// Polls our own appcast every few minutes and asks Sparkle for a background
+    /// check the moment the feed changes, so a new release surfaces within minutes
+    /// instead of on Sparkle's hourly baseline. Runs for the app lifetime while the
+    /// `promptUpdateChecks` preference is on; the toggle starts/stops it live.
+    private var appcastWatcher: AppcastChangeWatcher?
+
     /// Marketing version (CFBundleShortVersionString) shown in the menu and the
     /// About panel so users can see, at a glance, which build they are on.
     private static let shortVersionString: String =
@@ -297,6 +303,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.applyGlobalHotKey(spec)
             }
             .store(in: &cancellables)
+
+        model.$promptUpdateChecks
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                self?.applyPromptUpdateChecks(enabled)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Build the appcast watcher lazily from the Info.plist feed URL and the live
+    /// Sparkle updater, then start or stop it to match the preference. Honors the
+    /// two guards from the brief: no watcher when the feed URL is empty, and the
+    /// trigger is skipped whenever the updater cannot currently check.
+    private func applyPromptUpdateChecks(_ enabled: Bool) {
+        guard enabled else {
+            appcastWatcher?.stop()
+            return
+        }
+        if appcastWatcher == nil {
+            guard let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+                  !feed.isEmpty,
+                  let url = URL(string: feed) else { return }
+            let updater = updaterController.updater
+            appcastWatcher = AppcastChangeWatcher(
+                feedURL: url,
+                probe: URLSessionAppcastProbe(),
+                scheduler: MainQueueAppcastScheduler(),
+                store: UserDefaultsAppcastValidatorStore(),
+                canCheck: { updater.canCheckForUpdates },
+                triggerBackgroundCheck: { updater.checkForUpdatesInBackground() }
+            )
+        }
+        appcastWatcher?.start()
     }
 
     /// The state Attaché believes is currently registered with the OS

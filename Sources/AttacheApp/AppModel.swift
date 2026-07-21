@@ -884,6 +884,15 @@ final class AppModel: ObservableObject {
     @Published var autoHideDelaySeconds: Double = 2.5 {
         didSet { defaults.set(autoHideDelaySeconds, forKey: AttachePreferenceKey.autoHideDelaySeconds) }
     }
+    /// Prompt update checks: when on (the default), Attaché quietly polls its own
+    /// update feed every few minutes and asks Sparkle for a background check the
+    /// moment the feed changes, so a new release surfaces within minutes instead
+    /// of on Sparkle's hourly baseline. Turning it off stops the poller live and
+    /// leaves the standard hourly SUScheduledCheckInterval and manual Check for
+    /// Updates untouched. The AppDelegate observes this to start/stop the watcher.
+    @Published var promptUpdateChecks: Bool = true {
+        didSet { defaults.set(promptUpdateChecks, forKey: AttachePreferenceKey.promptUpdateChecks) }
+    }
     @Published var showPersonalitySwitcher: Bool = true {
         didSet { defaults.set(showPersonalitySwitcher, forKey: AttachePreferenceKey.showPersonalitySwitcher) }
     }
@@ -10074,6 +10083,9 @@ final class AppModel: ObservableObject {
         }
         if defaults.object(forKey: AttachePreferenceKey.showTips) != nil {
             showTips = defaults.bool(forKey: AttachePreferenceKey.showTips)
+        }
+        if defaults.object(forKey: AttachePreferenceKey.promptUpdateChecks) != nil {
+            promptUpdateChecks = defaults.bool(forKey: AttachePreferenceKey.promptUpdateChecks)
         }
         if defaults.object(forKey: AttachePreferenceKey.installClaudeHooks) != nil {
             installClaudeHooks = defaults.bool(forKey: AttachePreferenceKey.installClaudeHooks)

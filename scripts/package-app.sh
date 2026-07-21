@@ -8,7 +8,7 @@ LEGACY_APP_NAME="Codex Attache"
 PRODUCT_NAME="Attache"
 EXECUTABLE_NAME="Attache"
 ICON_NAME="Attache"
-APP_VERSION="${VERSION:-0.6.1}"
+APP_VERSION="${VERSION:-0.6.2}"
 # Monotonic build number for Sparkle's version comparison (CFBundleShortVersionString
 # is the marketing version users see). A timestamp always increases across releases.
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%s)}"
@@ -163,6 +163,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>4GS+Ug0iPkAeiQUOrSJZ3aUNMKcgRfknAzV1eZosKE4=</string>
   <key>SUEnableAutomaticChecks</key>
   <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>3600</integer>
 </dict>
 </plist>
 PLIST

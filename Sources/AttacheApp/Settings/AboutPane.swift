@@ -24,6 +24,15 @@ struct AboutPane: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
+            settingRow("Updates") {
+                Toggle("Check for new versions promptly", isOn: $model.promptUpdateChecks)
+                    .accessibilityIdentifier("About Prompt Update Checks")
+                    .accessibilityLabel("Check for new versions promptly")
+                Text("Attaché quietly checks its update feed about every ten minutes and tells you as soon as a new version ships. Turning this off leaves the standard hourly check.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             settingRow("Support") {
                 Button("Report an Issue") {
                     NSWorkspace.shared.open(URL(string: "https://github.com/danbryan/attache/issues")!)
