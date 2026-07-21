@@ -98,14 +98,20 @@ final class CodexSessionWatcher {
         for session in active where !startedSessionIDs.contains(session.id) {
             pendingFragments[session.id] = nil
             coalescers[session.id] = nil   // fresh buffer for this attach
-            if defaults.double(forKey: seenKey(sessionID: session.id)) > 0 {
-                // Seen before (re-attach): catch up to the current end instead of
-                // replaying the whole missed backlog as cards/speech. Nil offset +
-                // a prior lastSeen takes the skip-history path on the next poll.
-                fileOffsets[session.id] = nil
-            } else {
-                fileOffsets[session.id] = storedOffset(sessionID: session.id)
-            }
+            // A session FIRST becoming watched/focused checkpoints at the
+            // transcript's CURRENT END, so only turns appended AFTER registration
+            // are ever narrated or filed; a finished session focused later
+            // produces no voicemail for its past turns, matching
+            // OpencodeLiveWatcher (INF-397). The nil offset takes the
+            // registration-checkpoint (skip-history) path on the next poll, which
+            // seeds the offset at EOF and narrates nothing that already exists.
+            // This unifies three symptoms that all replayed backlog before:
+            // first focus of a finished session, enabling a source with existing
+            // sessions, and relaunch where a stale persisted offset lagged a file
+            // that grew while the app was closed. The persisted offset is
+            // deliberately NOT used to seed the initial read; it lives only for
+            // in-session truncation detection.
+            fileOffsets[session.id] = nil
         }
         poll()
         if timer == nil {
@@ -131,13 +137,12 @@ final class CodexSessionWatcher {
     private func poll() {
         pollTick &+= 1
         for session in sessions {
-            let emitLatest = !startedSessionIDs.contains(session.id)
             startedSessionIDs.insert(session.id)
-            pollSession(session, emitLatestOnFirstAttach: emitLatest)
+            pollSession(session)
         }
     }
 
-    private func pollSession(_ session: CodexSessionTarget, emitLatestOnFirstAttach: Bool) {
+    private func pollSession(_ session: CodexSessionTarget) {
         guard let fileURL = locateSessionFile(id: session.id) else {
             // No file this tick; still advance the coalescer so a buffered turn
             // eventually flushes on its quiet window.
@@ -161,21 +166,12 @@ final class CodexSessionWatcher {
         )
         if let cwd = parsed.cwd { currentWorkingDirectories[session.id] = cwd }
 
-        // On first attach, surface only the latest message as a single turn and do
-        // not replay history through the coalescer.
-        if read.mode == .firstFull, emitLatestOnFirstAttach {
-            if let latest = parsed.records.reversed().first(where: { $0.isProse }),
-               case let .assistantProse(text, _) = latest.kind {
-                emit(
-                    CoalescedTurn(text: text, interstitials: [], cwd: latest.cwd, timestamp: latest.timestamp),
-                    session: session, fileURL: fileURL, sourceKind: sourceKind
-                )
-            }
-            return
-        }
-
-        // After a restart with lost offset, skip the backlog (mode == .skipHistory
-        // gives no text); otherwise coalesce the appended records into turns.
+        // First registration and a lost-offset re-read both give no text
+        // (mode == .skipHistory): the checkpoint jumps to the current EOF and the
+        // existing backlog is never narrated. Every later poll is .appended, so
+        // only turns written after registration coalesce into turns and become
+        // cards. This is the file-watcher analog of OpencodeLiveWatcher's
+        // "no backlog narration" (INF-397).
         let turns = coalescer(for: session.id).poll(parsed.records)
         for turn in turns {
             emit(turn, session: session, fileURL: fileURL, sourceKind: sourceKind)
@@ -350,7 +346,12 @@ final class CodexSessionWatcher {
 
     private func emit(_ turn: CoalescedTurn, session: CodexSessionTarget, fileURL: URL, sourceKind: SourceKind) {
         let lastSeen = defaults.double(forKey: seenKey(sessionID: session.id))
-        guard turn.timestamp.timeIntervalSince1970 > lastSeen else { return }
+        guard turn.timestamp.timeIntervalSince1970 > lastSeen else {
+            AttacheLog.watcher.info(
+                "dropped stale turn for session \(session.id, privacy: .public) at \(turn.timestamp.timeIntervalSince1970, privacy: .public) <= lastSeen \(lastSeen, privacy: .public)"
+            )
+            return
+        }
 
         var event = NormalizedEvent(
             source: sourceKind.rawValue,
@@ -391,7 +392,7 @@ final class CodexSessionWatcher {
     }
 
     /// How the newly appended transcript text was obtained this poll.
-    private enum ReadMode { case appended, firstFull, skipHistory }
+    private enum ReadMode { case appended, skipHistory }
     private struct AppendedRead { let text: String; let mode: ReadMode }
 
     private func newAppendedText(in fileURL: URL, session: CodexSessionTarget) -> AppendedRead {
@@ -401,7 +402,8 @@ final class CodexSessionWatcher {
 
         if let offset = fileOffsets[session.id] {
             if fileSize < offset {
-                // File truncated or rotated: reset and re-read from scratch.
+                // File truncated or rotated: reset and re-checkpoint at the new
+                // end rather than replaying the rotated content as backlog.
                 fileOffsets[session.id] = nil
                 pendingFragments[session.id] = nil
                 defaults.removeObject(forKey: offsetKey(sessionID: session.id))
@@ -413,24 +415,22 @@ final class CodexSessionWatcher {
             return AppendedRead(text: text, mode: .appended)
         }
 
-        if defaults.double(forKey: seenKey(sessionID: session.id)) > 0 {
-            // Seen before but offset was lost (restart): seed the offset and skip
-            // replaying the backlog.
-            fileOffsets[session.id] = fileSize
-            storeOffset(fileSize, sessionID: session.id)
-            return AppendedRead(text: "", mode: .skipHistory)
+        // First read after registration (or after a truncation reset): checkpoint
+        // at the CURRENT END of the transcript and narrate nothing that already
+        // exists. Only turns appended after this point become cards, matching
+        // OpencodeLiveWatcher (INF-397). Seeking straight to EOF also avoids the
+        // whole-file read that once froze the UI on 100MB+ Claude sessions.
+        if fileSize > 0 {
+            AttacheLog.watcher.info(
+                "registration skipped \(fileSize, privacy: .public) pre-registration bytes for session \(session.id, privacy: .public) (no backlog narration)"
+            )
         }
-
-        // First attach: read only the tail, not the whole file. Real Claude Code
-        // sessions reach 100MB+, and a full `String(contentsOf:)` here froze the UI
-        // for seconds. We only surface the latest message on first attach, so the
-        // last chunk is enough; a truncated leading line is skipped by the parser.
-        let tailBytes: UInt64 = 256 * 1024
-        let start = fileSize > tailBytes ? fileSize - tailBytes : 0
-        let text = appendedText(in: fileURL, sessionID: session.id, from: start)
+        AttacheLog.watcher.info(
+            "registered session \(session.id, privacy: .public) initialOffset=\(fileSize, privacy: .public) eof=\(fileSize, privacy: .public)"
+        )
         fileOffsets[session.id] = fileSize
         storeOffset(fileSize, sessionID: session.id)
-        return AppendedRead(text: text, mode: .firstFull)
+        return AppendedRead(text: "", mode: .skipHistory)
     }
 
 
@@ -574,14 +574,6 @@ final class CodexSessionWatcher {
 
     private func offsetKey(sessionID: String) -> String {
         "attache.codexSessionWatcher.fileOffset.\(sessionID)"
-    }
-
-    private func storedOffset(sessionID: String) -> UInt64? {
-        guard let value = defaults.string(forKey: offsetKey(sessionID: sessionID)),
-              let offset = UInt64(value) else {
-            return nil
-        }
-        return offset
     }
 
     private func storeOffset(_ offset: UInt64, sessionID: String) {

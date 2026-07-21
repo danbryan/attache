@@ -20,6 +20,10 @@ public enum AttacheLog {
     public static let mcp = Logger(subsystem: subsystem, category: "mcp")
     public static let memory = Logger(subsystem: subsystem, category: "memory")
     public static let updates = Logger(subsystem: subsystem, category: "updates")
+    /// Personality-inference CLI subprocess spawns (Claude Code / Codex one-shot
+    /// runs). Log the executable path, exit code, and short error excerpts only,
+    /// never prompt or transcript content (INF-158).
+    public static let cli = Logger(subsystem: subsystem, category: "cli")
 
     /// Signpost intervals around UI actions that have been reported as slow
     /// (opening Settings, switching panes, expanding Advanced, opening a

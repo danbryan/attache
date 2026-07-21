@@ -322,7 +322,13 @@ final class AttachePremiumVoiceRuntime {
             throw PremiumVoiceRuntimeError.emptyAudio
         }
 
-        let wav = PremiumVoiceWav.encodeFloatPCM(samples, sampleRate: 24_000)
+        // Level the take to the standard spoken-audio loudness before it is cached,
+        // so the on-device voice sits at the same loudness as the cloud engines and
+        // the OS volume is the only volume control. Normalizing here (not at
+        // playback) means each recap's WAV is normalized once and every replay uses
+        // the leveled audio. See SpokenAudioLoudness.
+        let normalized = SpokenAudioLoudness.normalize(samples: samples, sampleRate: 24_000)
+        let wav = PremiumVoiceWav.encodeFloatPCM(normalized, sampleRate: 24_000)
         try wav.write(to: outputURL, options: .atomic)
         scheduleIdleUnloadLocked()
     }

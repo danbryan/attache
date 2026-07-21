@@ -107,7 +107,15 @@ struct CLILanguageModel {
             return trimmed
         }
         if let isError = object["is_error"] as? Bool, isError {
-            throw CLILanguageModelError.failed((object["result"] as? String) ?? "Claude returned an error.")
+            // Claude Code reports "Not logged in - Please run /login" and other
+            // recoverable failures here as a normal-exit JSON result. Surface its
+            // own short text plus the binary path so the user sees the actual
+            // cause and which CLI produced it, not a bare paraphrase (INF-347).
+            let detail = (object["result"] as? String) ?? "Claude returned an error."
+            AttacheLog.cli.error(
+                "Claude Code reported an error result: \(executable, privacy: .public) detail=\(Self.stderrExcerpt(detail), privacy: .public)"
+            )
+            throw CLILanguageModelError.failed("Claude Code error: \(detail) [\(executable)]")
         }
         guard let result = (object["result"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !result.isEmpty else {
@@ -288,6 +296,13 @@ struct CLILanguageModel {
                     let stdout = String(decoding: outCollector.snapshot(), as: UTF8.self)
                     let stderr = String(decoding: errCollector.snapshot(), as: UTF8.self)
                     if proc.terminationStatus != 0 {
+                        // The report that motivated this: a failed personality
+                        // inference spawn left NO trace in the log. Record one
+                        // metadata-safe line (path, exit code, short stderr
+                        // excerpt) per failure so a field report has a trail.
+                        AttacheLog.cli.error(
+                            "CLI spawn failed: \(executable, privacy: .public) exited \(proc.terminationStatus, privacy: .public) stderr=\(stderrExcerpt(stderr), privacy: .public)"
+                        )
                         finish(.failure(
                             CLILanguageModelError.failed(
                                 processFailureMessage(
@@ -330,6 +345,9 @@ struct CLILanguageModel {
                     if Task.isCancelled {
                         finish(.failure(CancellationError()))
                     } else {
+                        AttacheLog.cli.error(
+                            "CLI failed to launch: \(executable, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                        )
                         finish(.failure(CLILanguageModelError.notInstalled(executable)))
                     }
                     cancellation.clear(process: process)
@@ -346,6 +364,15 @@ struct CLILanguageModel {
     /// Claude subscription flow needs only its login home/config location plus
     /// ordinary locale and executable lookup state. Callers may add narrowly
     /// scoped values explicitly through `extraEnv`.
+    ///
+    /// USER/LOGNAME/SHELL are passed through when present. These are identity
+    /// basics, not secrets, and Claude Code 2.1.x's macOS Keychain credential
+    /// discovery FAILS without `USER`: a scrubbed `env -i` carrying only
+    /// HOME/PATH/TMPDIR reproduces "Not logged in - Please run /login" even
+    /// with the Keychain item present and no credentials file, while adding
+    /// `USER` alone fixes it (proven on a second machine). LOGNAME and SHELL
+    /// travel with it as the other ordinary identity basics a login session
+    /// carries.
     static func subprocessEnvironment(
         processEnvironment: [String: String],
         home: String,
@@ -356,7 +383,7 @@ struct CLILanguageModel {
             "PATH": mergedPATH(existing: processEnvironment["PATH"], home: home),
             "TMPDIR": processEnvironment["TMPDIR"] ?? FileManager.default.temporaryDirectory.path
         ]
-        for key in ["LANG", "LC_ALL", "LC_CTYPE", "CLAUDE_CONFIG_DIR"] {
+        for key in ["LANG", "LC_ALL", "LC_CTYPE", "CLAUDE_CONFIG_DIR", "USER", "LOGNAME", "SHELL"] {
             if let value = processEnvironment[key], !value.isEmpty {
                 environment[key] = value
             }
@@ -377,10 +404,22 @@ struct CLILanguageModel {
         let detail = candidates
             .map { trimmedProcessOutput($0) }
             .first(where: { !$0.isEmpty })
+        // Include the binary path so a "just doesn't work" report names the exact
+        // executable that ran (a wrong/old CLI on PATH is a common cause), not a
+        // bare paraphrase (INF-347).
         if let detail {
-            return "\(executableName) exited with code \(code): \(detail)"
+            return "\(executableName) exited with code \(code): \(detail) [\(executable)]"
         }
-        return "\(executableName) exited with code \(code)."
+        return "\(executableName) exited with code \(code) [\(executable)]."
+    }
+
+    /// A short, metadata-safe excerpt of a failed CLI's stderr for diagnostics:
+    /// the first `limit` characters, whitespace-trimmed. Error strings only,
+    /// never prompt or transcript content (INF-158).
+    static func stderrExcerpt(_ stderr: String, limit: Int = 200) -> String {
+        let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        return String(trimmed.prefix(limit))
     }
 
     private static func codexErrorMessage(in output: String) -> String? {

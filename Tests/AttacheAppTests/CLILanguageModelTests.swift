@@ -44,6 +44,68 @@ final class CLILanguageModelTests: XCTestCase {
         XCTAssertNil(environment["ANTHROPIC_API_KEY"])
         XCTAssertNil(environment["OPENAI_API_KEY"])
         XCTAssertNil(environment["AWS_SECRET_ACCESS_KEY"])
+        // The identity basics are absent from this input, so they must not be
+        // fabricated into the scrubbed environment.
+        XCTAssertNil(environment["USER"])
+        XCTAssertNil(environment["LOGNAME"])
+        XCTAssertNil(environment["SHELL"])
+    }
+
+    func testSubprocessEnvironmentPassesThroughUserIdentityBasics() {
+        // Claude Code 2.1.x Keychain credential discovery FAILS without USER
+        // (reproduced with env -i HOME/PATH/TMPDIR: "Not logged in - Please run
+        // /login" until USER is added). USER/LOGNAME/SHELL are identity basics,
+        // not secrets, so they pass through while API keys stay excluded.
+        let environment = CLILanguageModel.subprocessEnvironment(
+            processEnvironment: [
+                "PATH": "/custom/bin",
+                "USER": "danb",
+                "LOGNAME": "danb",
+                "SHELL": "/bin/zsh",
+                "ANTHROPIC_API_KEY": "secret-anthropic"
+            ],
+            home: "/Users/danb",
+            extraEnv: [:]
+        )
+
+        XCTAssertEqual(environment["USER"], "danb")
+        XCTAssertEqual(environment["LOGNAME"], "danb")
+        XCTAssertEqual(environment["SHELL"], "/bin/zsh")
+        XCTAssertNil(environment["ANTHROPIC_API_KEY"])
+    }
+
+    func testSubprocessEnvironmentOmitsEmptyUserIdentityValues() {
+        // An empty USER must not be forwarded as an empty string; treat it as
+        // absent so the subprocess falls back to its own resolution.
+        let environment = CLILanguageModel.subprocessEnvironment(
+            processEnvironment: ["PATH": "/custom/bin", "USER": "", "SHELL": ""],
+            home: "/Users/danb",
+            extraEnv: [:]
+        )
+        XCTAssertNil(environment["USER"])
+        XCTAssertNil(environment["SHELL"])
+    }
+
+    func testFailureMessageIncludesBinaryPathAndStderrExcerpt() {
+        let message = CLILanguageModel.processFailureMessage(
+            executable: "/Users/danb/.local/bin/claude",
+            code: 1,
+            stdout: "",
+            stderr: "Not logged in - Please run /login"
+        )
+        // The user-facing failure must name the actual short error text and the
+        // exact binary that produced it, not a bare paraphrase (INF-347).
+        XCTAssertTrue(message.contains("Not logged in - Please run /login"), message)
+        XCTAssertTrue(message.contains("/Users/danb/.local/bin/claude"), message)
+        XCTAssertTrue(message.contains("code 1"), message)
+    }
+
+    func testStderrExcerptTrimsAndTruncates() {
+        XCTAssertEqual(CLILanguageModel.stderrExcerpt("  short error  "), "short error")
+        let long = String(repeating: "x", count: 500)
+        let excerpt = CLILanguageModel.stderrExcerpt(long, limit: 200)
+        XCTAssertEqual(excerpt.count, 200)
+        XCTAssertTrue(long.hasPrefix(excerpt))
     }
 
     func testClaudeArgumentsDenyToolsAndUserConfig() {
@@ -138,7 +200,7 @@ final class CLILanguageModelTests: XCTestCase {
 
         XCTAssertEqual(
             message,
-            "codex exited with code 1: The 'gpt-5.6-luna' model requires a newer version of Codex. Please upgrade and try again."
+            "codex exited with code 1: The 'gpt-5.6-luna' model requires a newer version of Codex. Please upgrade and try again. [/opt/homebrew/bin/codex]"
         )
         XCTAssertFalse(message.contains(#"{"type""#))
     }

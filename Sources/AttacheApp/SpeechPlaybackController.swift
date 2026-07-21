@@ -1101,7 +1101,10 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             // is part of the identity: raising it must invalidate cached audio
             // rendered with the old setting, or a frozen bad realization would
             // replay forever (the 2026-07-19 robotic-recap incident).
-            raw = "attache-premium|\(AttacheSpeechProvider.attachePremiumVoiceID)|steps\(AttachePremiumVoiceRuntime.flowIntegrationSteps)"
+            // Loudness normalization is applied to the cached WAV before it is
+            // stored, so bumping the loudness version must invalidate clips
+            // rendered at the old (quiet) level and re-render them normalized.
+            raw = "attache-premium|\(AttacheSpeechProvider.attachePremiumVoiceID)|steps\(AttachePremiumVoiceRuntime.flowIntegrationSteps)|loudnessV1"
         case .elevenLabs:
             raw = "eleven|\(config.elevenLabsVoiceID)|\(config.elevenLabsModelID)|\(config.elevenLabsOutputFormat)"
         case .xai:
