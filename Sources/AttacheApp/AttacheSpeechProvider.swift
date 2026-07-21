@@ -301,12 +301,17 @@ enum AttacheRemoteVoiceService {
         return mergeRemoteVoices(builtIn + custom)
     }
 
+    /// Synthesizes `text` to `outputURL`. Returns an exact-from-engine
+    /// `CaptionAlignment` when the engine supplies real per-character timing
+    /// (ElevenLabs with-timestamps); nil for engines that supply none, whose
+    /// captions instead get on-device forced alignment in the playback path.
+    @discardableResult
     static func synthesize(
         text: String,
         configuration: AttacheSpeechConfiguration,
         outputURL: URL,
         environment: [String: String] = ProcessInfo.processInfo.environment
-    ) async throws {
+    ) async throws -> CaptionAlignment? {
         if configuration.provider.sendsToCloud, !configuration.hasRemoteEgressConsent {
             throw VoiceProviderError.cloudConsentRequired(configuration.provider.title)
         }
@@ -323,12 +328,15 @@ enum AttacheRemoteVoiceService {
                 outputURL: outputURL,
                 environment: environment
             )
+            return nil
         case .elevenLabs:
-            try await synthesizeElevenLabs(text: text, configuration: configuration, outputURL: outputURL)
+            return try await synthesizeElevenLabs(text: text, configuration: configuration, outputURL: outputURL)
         case .xai:
             try await synthesizeXAI(text: text, configuration: configuration, outputURL: outputURL)
+            return nil
         case .openai:
             try await synthesizeOpenAI(text: text, configuration: configuration, outputURL: outputURL)
+            return nil
         }
     }
 
@@ -359,12 +367,16 @@ enum AttacheRemoteVoiceService {
         try writeAudio(data, to: outputURL)
     }
 
-    private static func synthesizeElevenLabs(text: String, configuration: AttacheSpeechConfiguration, outputURL: URL) async throws {
+    @discardableResult
+    private static func synthesizeElevenLabs(text: String, configuration: AttacheSpeechConfiguration, outputURL: URL) async throws -> CaptionAlignment? {
         let apiKey = configuration.elevenLabsAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !apiKey.isEmpty else { throw VoiceProviderError.missingAPIKey("ElevenLabs") }
         guard !configuration.elevenLabsVoiceID.isEmpty else { throw VoiceProviderError.missingVoice("ElevenLabs") }
 
-        var components = URLComponents(string: "https://api.elevenlabs.io/v1/text-to-speech/\(configuration.elevenLabsVoiceID)")!
+        // The with-timestamps endpoint returns base64 audio plus real
+        // per-character timing, which is exact-from-engine karaoke timing (so
+        // ElevenLabs is excluded from the forced-alignment pass).
+        var components = URLComponents(string: "https://api.elevenlabs.io/v1/text-to-speech/\(configuration.elevenLabsVoiceID)/with-timestamps")!
         components.queryItems = [
             URLQueryItem(name: "output_format", value: configuration.elevenLabsOutputFormat)
         ]
@@ -387,7 +399,19 @@ enum AttacheRemoteVoiceService {
         )
 
         let data = try await validatedData(for: request, provider: "ElevenLabs")
-        try writeAudio(data, to: outputURL)
+        let payload = try JSONDecoder().decode(ElevenLabsTimestampedResponse.self, from: data)
+        guard let audio = Data(base64Encoded: payload.audioBase64) else {
+            throw VoiceProviderError.emptyAudio
+        }
+        try writeAudio(audio, to: outputURL)
+        return payload.alignment.flatMap { alignment in
+            CaptionAlignmentBuilder.fromCharacterTimings(
+                text: text,
+                characters: alignment.characters,
+                startTimesSec: alignment.characterStartTimesSeconds,
+                endTimesSec: alignment.characterEndTimesSeconds
+            )
+        }
     }
 
     private static func synthesizeXAI(text: String, configuration: AttacheSpeechConfiguration, outputURL: URL) async throws {
@@ -536,6 +560,29 @@ enum VoiceProviderError: Error, LocalizedError {
         case .unsupportedProvider:
             return "This voice provider is handled by the local speech engine."
         }
+    }
+}
+
+/// The `/with-timestamps` response: base64 audio plus per-character timing.
+private struct ElevenLabsTimestampedResponse: Decodable {
+    var audioBase64: String
+    var alignment: ElevenLabsCharacterAlignment?
+
+    enum CodingKeys: String, CodingKey {
+        case audioBase64 = "audio_base64"
+        case alignment
+    }
+}
+
+private struct ElevenLabsCharacterAlignment: Decodable {
+    var characters: [String]
+    var characterStartTimesSeconds: [Double]
+    var characterEndTimesSeconds: [Double]
+
+    enum CodingKeys: String, CodingKey {
+        case characters
+        case characterStartTimesSeconds = "character_start_times_seconds"
+        case characterEndTimesSeconds = "character_end_times_seconds"
     }
 }
 

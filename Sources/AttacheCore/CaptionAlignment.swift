@@ -26,21 +26,61 @@ public struct WordTiming: Codable, Equatable, Identifiable {
     }
 }
 
+/// Where a caption's word timings came from, so the renderer can decide whether
+/// karaoke word-highlighting is honest for this clip. `estimated` timing drifts
+/// against the spoken audio and must not drive a per-word bounce; exact timing
+/// (either supplied by the TTS engine or recovered by on-device forced
+/// alignment) may. See `CaptionRenderDecision`.
+public enum CaptionTimingProvenance: String, Codable, Equatable, Sendable {
+    /// Real per-character/word timing the synthesis engine returned (ElevenLabs
+    /// with-timestamps). Exact.
+    case exactFromEngine = "exact_from_engine"
+    /// Timing recovered by running on-device speech recognition over the
+    /// synthesized clip and mapping recognized words back onto the known script.
+    /// Exact.
+    case exactFromAlignment = "exact_from_alignment"
+    /// Heuristic timing derived from the text alone (`CaptionAlignmentBuilder`).
+    /// Not exact; karaoke degrades to plain until an exact timeline is available.
+    case estimated
+
+    /// True when the timing is trustworthy enough to karaoke word by word.
+    public var isExact: Bool { self != .estimated }
+}
+
 public struct CaptionAlignment: Codable, Equatable {
     public var text: String
     public var words: [WordTiming]
     public var totalDurationMs: Int
+    /// How this alignment's word timings were produced. Defaults to `estimated`
+    /// and is decoded leniently so alignments persisted before this field
+    /// existed load as estimated rather than failing to decode.
+    public var provenance: CaptionTimingProvenance
 
-    public init(text: String, words: [WordTiming], totalDurationMs: Int) {
+    public init(
+        text: String,
+        words: [WordTiming],
+        totalDurationMs: Int,
+        provenance: CaptionTimingProvenance = .estimated
+    ) {
         self.text = text
         self.words = words
         self.totalDurationMs = totalDurationMs
+        self.provenance = provenance
     }
 
     enum CodingKeys: String, CodingKey {
         case text
         case words
         case totalDurationMs = "total_duration_ms"
+        case provenance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decode(String.self, forKey: .text)
+        words = try container.decode([WordTiming].self, forKey: .words)
+        totalDurationMs = try container.decode(Int.self, forKey: .totalDurationMs)
+        provenance = try container.decodeIfPresent(CaptionTimingProvenance.self, forKey: .provenance) ?? .estimated
     }
 
     public func activeWordIndex(at currentTimeMs: Int) -> Int? {
@@ -296,8 +336,81 @@ public enum CaptionTimestampFormatter {
     }
 }
 
+/// User choice for how captions render (INF caption controls). `karaoke`
+/// highlights each word as it is spoken when the timing is exact; `plain` never
+/// highlights individual words. Persisted app-side.
+public enum CaptionStyle: String, Codable, CaseIterable, Sendable, Identifiable {
+    case karaoke
+    case plain
+
+    public var id: String { rawValue }
+
+    /// Menu label shown in Settings.
+    public var title: String {
+        switch self {
+        case .karaoke: return "Karaoke (highlight each word)"
+        case .plain: return "Plain (no word highlight)"
+        }
+    }
+}
+
+/// How the caption surface should render for the current clip, given the user's
+/// on/off and style choices and the active timeline's timing provenance. Kept a
+/// pure decision so the honest-degrade rule is unit-tested without a view.
+public enum CaptionRenderMode: Equatable, Sendable {
+    /// Captions are off: render nothing during playback.
+    case hidden
+    /// Show the caption text without per-word highlighting.
+    case plain
+    /// Highlight each word as it is spoken (karaoke).
+    case karaoke
+}
+
+public enum CaptionRenderDecision {
+    /// The renderer's decision. Captions off hides everything. Plain style always
+    /// renders plain. Karaoke style renders karaoke ONLY when the timeline's
+    /// timing is exact; estimated timing degrades to plain (no misleading bounce)
+    /// until an exact timeline arrives, at which point the same call upgrades to
+    /// karaoke live.
+    public static func mode(
+        captionsEnabled: Bool,
+        style: CaptionStyle,
+        provenance: CaptionTimingProvenance
+    ) -> CaptionRenderMode {
+        guard captionsEnabled else { return .hidden }
+        switch style {
+        case .plain:
+            return .plain
+        case .karaoke:
+            return provenance.isExact ? .karaoke : .plain
+        }
+    }
+}
+
 public enum CaptionAlignmentBuilder {
     public static let minimumWordDurationMs = 90
+
+    /// One tokenized word of a caption script: its text plus its character range
+    /// in the source text. This is the exact tokenization the estimated fallback
+    /// and forced-alignment mapper both build on, so their character ranges line
+    /// up with what the caption view renders.
+    public struct WordUnit: Equatable {
+        public let word: String
+        public let charStart: Int
+        public let charEnd: Int
+
+        public init(word: String, charStart: Int, charEnd: Int) {
+            self.word = word
+            self.charStart = charStart
+            self.charEnd = charEnd
+        }
+    }
+
+    /// Public tokenization used by both the estimated fallback and the forced
+    /// aligner so their word units (and thus char ranges) are identical.
+    public static func wordUnits(in text: String) -> [WordUnit] {
+        wordRanges(in: text).map { WordUnit(word: $0.word, charStart: $0.charStart, charEnd: $0.charEnd) }
+    }
 
     public static func estimatedDurationMs(for text: String) -> Int {
         let words = wordRanges(in: text)
@@ -316,7 +429,7 @@ public enum CaptionAlignmentBuilder {
         let ranges = wordRanges(in: text)
         let totalDuration = max(durationMs ?? estimatedDurationMs(for: text), 1)
         guard !ranges.isEmpty else {
-            return CaptionAlignment(text: text, words: [], totalDurationMs: totalDuration)
+            return CaptionAlignment(text: text, words: [], totalDurationMs: totalDuration, provenance: .estimated)
         }
 
         let weights = ranges.map { speechWeight(for: $0.word) }
@@ -338,7 +451,80 @@ public enum CaptionAlignmentBuilder {
             )
         }
 
-        return CaptionAlignment(text: text, words: timings, totalDurationMs: totalDuration)
+        return CaptionAlignment(text: text, words: timings, totalDurationMs: totalDuration, provenance: .estimated)
+    }
+
+    /// Builds an exact-from-engine alignment from per-character timestamps a TTS
+    /// engine returns (ElevenLabs with-timestamps). `characters`,
+    /// `startTimesSec`, and `endTimesSec` are parallel arrays over the spoken
+    /// text. Characters are grouped into the caption's own word units so the
+    /// rendered char ranges match; each word takes the start of its first
+    /// character and the end of its last. Returns nil if the arrays disagree in
+    /// length or are empty, so the caller falls back to the estimated timeline.
+    public static func fromCharacterTimings(
+        text: String,
+        characters: [String],
+        startTimesSec: [Double],
+        endTimesSec: [Double]
+    ) -> CaptionAlignment? {
+        guard !characters.isEmpty,
+              characters.count == startTimesSec.count,
+              characters.count == endTimesSec.count else {
+            return nil
+        }
+        // Reconstruct the engine's spoken string from its own characters so the
+        // per-character indices line up regardless of how it split them.
+        let joined = characters.joined()
+        let units = wordUnits(in: joined)
+        guard !units.isEmpty else { return nil }
+
+        // Cumulative character offsets so a word's char range maps to indices in
+        // the parallel timing arrays.
+        var charCount = 0
+        var offsets: [Int] = []
+        offsets.reserveCapacity(characters.count)
+        for character in characters {
+            offsets.append(charCount)
+            charCount += character.count
+        }
+        func timingIndex(forCharacterOffset offset: Int) -> Int? {
+            // Largest character whose start offset is <= the requested offset.
+            var low = 0
+            var high = offsets.count - 1
+            var picked: Int?
+            while low <= high {
+                let mid = (low + high) / 2
+                if offsets[mid] <= offset {
+                    picked = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+            return picked
+        }
+
+        let totalEndSec = endTimesSec.max() ?? 0
+        let totalDurationMs = max(1, Int((totalEndSec * 1000).rounded()))
+        let words: [WordTiming] = units.map { unit in
+            let firstIndex = timingIndex(forCharacterOffset: unit.charStart) ?? 0
+            let lastIndex = timingIndex(forCharacterOffset: max(unit.charStart, unit.charEnd - 1)) ?? firstIndex
+            let startMs = Int((startTimesSec[firstIndex] * 1000).rounded())
+            let endMs = Int((endTimesSec[max(firstIndex, lastIndex)] * 1000).rounded())
+            return WordTiming(
+                word: unit.word,
+                startMs: max(0, startMs),
+                durationMs: max(minimumWordDurationMs, endMs - startMs),
+                charStart: unit.charStart,
+                charEnd: unit.charEnd
+            )
+        }
+        return CaptionAlignment(
+            text: joined,
+            words: words,
+            totalDurationMs: totalDurationMs,
+            provenance: .exactFromEngine
+        )
     }
 
     /// Whitespace tokens longer than this get locale-aware sub-segmentation so

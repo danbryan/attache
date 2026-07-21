@@ -176,6 +176,26 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     // back) then found no file and silently no-opped (INF-387b).
     private var generatedAudioIsProtectedResource = false
 
+    /// Whether captions are currently on (mirrored from the app model). Forced
+    /// alignment only runs while captions are enabled: with captions off there is
+    /// no karaoke to make exact, so the recognizer never spins up.
+    var isCaptioningEnabled = true
+
+    /// Exact per-word timing an engine supplied for the in-flight synthesis
+    /// (ElevenLabs with-timestamps), applied when playback starts instead of the
+    /// estimated fallback. Cleared as soon as it is consumed.
+    private var pendingEngineAlignment: CaptionAlignment?
+
+    /// Test seam for the on-device aligner. When nil, `SpeechForcedAligner.shared`
+    /// is used. A test injects a fake (optionally slow) aligner to prove playback
+    /// starts on the estimated timeline and upgrades when alignment completes.
+    var runForcedAlignment: ((
+        _ audioURL: URL,
+        _ scriptText: String,
+        _ totalDurationMs: Int,
+        _ completion: @escaping (CaptionAlignment?) -> Void
+    ) -> Void)?
+
     /// Persistent home for synthesized recap audio, so replaying a card reuses the
     /// clip instead of re-running the voice (no credits, no network wait).
     private lazy var audioCacheDirectory: URL? = {
@@ -271,12 +291,14 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             }
             if retention <= 0 {
                 try? FileManager.default.removeItem(at: file)
+                removeAlignmentSidecar(for: file)
                 continue
             }
             let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
                 ?? .distantPast
             if now.timeIntervalSince(modified) > retention {
                 try? FileManager.default.removeItem(at: file)
+                removeAlignmentSidecar(for: file)
             }
         }
     }
@@ -443,7 +465,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         default:
             Task(priority: .utility) { [configuration, temporaryURL, cacheURL, cachePath, text = card.spokenText] in
                 do {
-                    try await AttacheRemoteVoiceService.synthesize(
+                    let engineAlignment = try await AttacheRemoteVoiceService.synthesize(
                         text: text,
                         configuration: configuration,
                         outputURL: temporaryURL
@@ -455,6 +477,12 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                             temporaryURL: temporaryURL,
                             cachePath: cachePath
                         )
+                        // Persist any engine-supplied exact timing (ElevenLabs)
+                        // next to the freshly cached audio so a later Play starts
+                        // exact without a network round trip.
+                        if let engineAlignment, self?.isUsableAudioFile(cacheURL) == true {
+                            self?.writeCachedAlignment(engineAlignment, for: cacheURL)
+                        }
                     }
                 } catch {
                     await MainActor.run { [weak self] in
@@ -617,6 +645,9 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         player?.stop()
         player = nil
         cleanupGeneratedAudio()
+        // Never let an engine alignment from a superseded synthesis carry into the
+        // next clip (a cache hit skips synthesis and would otherwise consume it).
+        pendingEngineAlignment = nil
         finishingNormally = false
         isPlaying = false
         isPaused = false
@@ -752,7 +783,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                 self.timeline = .empty
                 self.player = audioPlayer
                 self.durationMs = max(1, Int((audioPlayer.duration * 1000).rounded()))
-                self.currentAlignment = CaptionAlignmentBuilder.fallback(text: alignmentText, durationMs: self.durationMs)
+                self.currentAlignment = self.resolveStartAlignment(text: alignmentText, audioURL: audioURL, durationMs: self.durationMs)
                 self.currentTimeMs = min(self.durationMs, max(0, startTimeMs))
                 audioPlayer.currentTime = Double(self.currentTimeMs) / 1000.0
                 self.activeWordIndex = nil
@@ -771,6 +802,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                 self.reanchorClock()
                 self.updateClock()
                 self.startTimer()
+                self.scheduleForcedAlignmentIfNeeded(audioURL: audioURL, alignmentText: alignmentText, generation: generation)
                 return true
             }
             guard started else { return }
@@ -792,6 +824,105 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         }
     }
 
+    /// The alignment to start playback with: an engine-supplied exact timeline
+    /// (ElevenLabs) when the synthesis produced one, a cached exact timeline from
+    /// a prior forced-alignment pass when replaying, else the estimated fallback.
+    /// Audio never waits on any of this; it is a pure pick from already-available
+    /// data.
+    private func resolveStartAlignment(text: String, audioURL: URL, durationMs: Int) -> CaptionAlignment {
+        if let engine = pendingEngineAlignment {
+            pendingEngineAlignment = nil
+            return engine
+        }
+        if generatedAudioIsCached, let cached = loadCachedAlignment(for: audioURL, text: text) {
+            return cached
+        }
+        return CaptionAlignmentBuilder.fallback(text: text, durationMs: durationMs)
+    }
+
+    /// Kicks off on-device forced alignment for the clip that just started, when
+    /// captions are on, the audio is cached (not an ephemeral preview), the engine
+    /// is not ElevenLabs (which already ships exact timing), and the active
+    /// timeline is still estimated. Never blocks: playback already started on the
+    /// estimated timeline; when alignment completes the live timeline upgrades and
+    /// the result is cached next to the audio so replays start exact. A late
+    /// completion (after playback ended) still caches.
+    private func scheduleForcedAlignmentIfNeeded(audioURL: URL, alignmentText: String, generation: UUID?) {
+        guard isCaptioningEnabled else { return }
+        // Never spin up speech recognition under UI automation: it would trigger
+        // the one-time recognition permission prompt and interrupt the headless
+        // smoke run. The smoke harness therefore always sees estimated timing (so
+        // karaoke honestly degrades to plain), matching the torture-card contract.
+        guard ProcessInfo.processInfo.environment["ATTACHE_UI_TEST"] != "1" else { return }
+        guard generatedAudioIsCached else { return }
+        guard speechConfiguration.provider != .elevenLabs else { return }
+        guard let alignment = currentAlignment, !alignment.provenance.isExact else { return }
+        let total = durationMs
+        let run = runForcedAlignment ?? { url, text, duration, completion in
+            SpeechForcedAligner.shared.align(
+                audioURL: url,
+                scriptText: text,
+                totalDurationMs: duration,
+                completion: completion
+            )
+        }
+        run(audioURL, alignmentText, total) { [weak self] aligned in
+            guard let aligned else { return }
+            DispatchQueue.main.async {
+                self?.applyForcedAlignmentResult(aligned, audioURL: audioURL, generation: generation)
+            }
+        }
+    }
+
+    /// Applies a completed forced alignment exactly as the live pipeline does.
+    /// The result is cached next to the audio regardless of whether the clip is
+    /// still playing (so a late completion still makes the next replay start
+    /// exact); the live timeline upgrades only when this is still the active
+    /// clip. Internal so the upgrade/late-cache behavior is unit-tested without
+    /// driving a real `AVAudioPlayer` (which would require the real audio cache).
+    func applyForcedAlignmentResult(_ aligned: CaptionAlignment, audioURL: URL, generation: UUID?) {
+        writeCachedAlignment(aligned, for: audioURL)
+        if generationID == generation {
+            currentAlignment = aligned
+            activeWordIndex = aligned.activeWordIndex(at: currentTimeMs)
+        }
+    }
+
+    /// Sidecar path for a cached clip's forced alignment: `<audio>.alignment.json`,
+    /// so it is keyed by the same cache token as the audio and is removed
+    /// together with it.
+    func alignmentSidecarURL(for audioURL: URL) -> URL {
+        audioURL.appendingPathExtension("alignment.json")
+    }
+
+    func loadCachedAlignment(for audioURL: URL, text: String) -> CaptionAlignment? {
+        let url = alignmentSidecarURL(for: audioURL)
+        guard let data = try? Data(contentsOf: url),
+              let alignment = try? JSONDecoder().decode(CaptionAlignment.self, from: data),
+              alignment.provenance.isExact,
+              alignment.text == text else {
+            return nil
+        }
+        return alignment
+    }
+
+    func writeCachedAlignment(_ alignment: CaptionAlignment, for audioURL: URL) {
+        let url = alignmentSidecarURL(for: audioURL)
+        guard let data = try? JSONEncoder().encode(alignment) else { return }
+        do {
+            try data.write(to: url, options: .atomic)
+            // The alignment carries the spoken script, which may be private, so
+            // the sidecar is user-only like the audio it sits beside.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            logger.debug("Could not persist forced alignment sidecar: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func removeAlignmentSidecar(for audioURL: URL) {
+        try? FileManager.default.removeItem(at: alignmentSidecarURL(for: audioURL))
+    }
+
     private func synthesizeCurrentVoice(text: String, audioURL: URL, generationID: UUID) {
         if speechConfiguration.provider == .system {
             if !speechFileSynthesizer.startSpeaking(text, to: audioURL) {
@@ -806,7 +937,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             do {
                 // One retry on a transient synthesis failure so a single flaky
                 // request doesn't drop the recap to the plain fallback (INF-157).
-                try await retrying(attempts: 2) {
+                let engineAlignment = try await retrying(attempts: 2) {
                     try await AttacheRemoteVoiceService.synthesize(
                         text: text,
                         configuration: configuration,
@@ -815,6 +946,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                 }
                 await MainActor.run { [weak self] in
                     guard let self, self.generationID == generationID else { return }
+                    self.pendingEngineAlignment = engineAlignment
                     self.generationCompletion?(true)
                 }
             } catch {

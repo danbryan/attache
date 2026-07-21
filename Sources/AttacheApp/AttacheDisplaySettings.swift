@@ -402,6 +402,7 @@ enum AttachePreferenceKey {
     static let watchedSessions = "attache.watchedSessions"
     static let sessionRenames = "attache.sessionRenames"
     static let captionsEnabled = "attache.captionsEnabled"
+    static let captionStyle = "attache.captionStyle"
     static let lowLatencyCaptions = "attache.lowLatencyCaptions"
     static let spokenLanguage = "attache.spokenLanguage"
     static let microphoneDeviceID = "attache.microphoneDeviceID"

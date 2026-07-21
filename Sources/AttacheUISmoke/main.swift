@@ -1381,6 +1381,23 @@ if enabled("f3") {
             throw SmokeError(message: "caption transcript did not expose the spoken text: \(transcript.summary)")
         }
     }
+    run.step("f3-transport", "CC transport button toggles captions off and back on") {
+        // The YouTube-style CC control lives in the transport beside speed. One
+        // press hides the whole caption overlay (its "Assistant speaking" label
+        // and transcript both disappear) while the CC control itself stays in the
+        // transport; a second press brings captions back. This leaves captions ON
+        // for the later torture-card steps.
+        let cc = try waitForElement("captions CC toggle", in: try mainWindow(),
+                                    role: kAXButtonRole as String, containing: "Captions on/off")
+        guard cc.press() else { throw SmokeError(message: "AXPress failed on \(cc.summary)") }
+        try waitForElementGone("caption overlay while captions are off", in: try mainWindow(),
+                               containing: "Assistant speaking", timeout: 5)
+        let ccBack = try waitForElement("captions CC toggle after hiding", in: try mainWindow(),
+                                        role: kAXButtonRole as String, containing: "Captions on/off")
+        guard ccBack.press() else { throw SmokeError(message: "AXPress failed on \(ccBack.summary)") }
+        _ = try waitForElement("caption returns after re-enabling", in: try mainWindow(),
+                               containing: "Assistant speaking", timeout: 5)
+    }
     run.step("f3-transport", "muted smoke playback still drives the audio visualizer") {
         let visualizer = try waitForElement("audio visualizer", in: try mainWindow(),
                                             containing: "Audio visualizer", timeout: 15)

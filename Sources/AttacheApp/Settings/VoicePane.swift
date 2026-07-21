@@ -1,3 +1,4 @@
+import AttacheCore
 import SwiftUI
 
 /// Caption and voice-input settings. The voice a character speaks with is now
@@ -12,6 +13,19 @@ struct VoicePane: View {
 
             Text("Captions").typoBody(.semibold)
             Toggle("Show captions", isOn: $model.captionsEnabled)
+            settingRow("Caption style") {
+                Picker("", selection: $model.captionStyle) {
+                    ForEach(CaptionStyle.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 240)
+                .disabled(!model.captionsEnabled)
+                .accessibilityLabel("Caption style")
+            }
+            Text("Karaoke highlights each word as it is spoken when the timing is exact. On voices without exact timing, Attaché recovers it on device; until it does, karaoke shows as plain text rather than guessing.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             settingRow("Caption size") {
                 Slider(value: $model.captionFontSize, in: AppModel.captionFontRange, step: 1)
                     .frame(width: 200)

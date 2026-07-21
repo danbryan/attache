@@ -267,8 +267,6 @@ struct AttacheRootView: View {
             conversationOverlay
                 .allowsHitTesting(false)
 
-            captionsToggle
-
             if surfaceMode == .live {
                 liveModeOverlay
                     .transition(.opacity)
@@ -820,6 +818,11 @@ struct AttacheRootView: View {
                     alignment: playback.currentAlignment,
                     highlightColor: model.theme.captionHighlightColor,
                     syncOffsetMs: model.captionSyncOffsetMs,
+                    mode: CaptionRenderDecision.mode(
+                        captionsEnabled: model.captionsEnabled,
+                        style: model.captionStyle,
+                        provenance: playback.currentAlignment?.provenance ?? .estimated
+                    ),
                     fontSize: CGFloat(model.captionFontSize),
                     lineCount: model.captionLineCount,
                     onSeek: seekToCaptionTime,
@@ -850,35 +853,6 @@ struct AttacheRootView: View {
                     .allowsHitTesting(false)
             }
             .frame(maxWidth: .infinity, alignment: .bottom)
-        }
-    }
-
-    // A captions on/off toggle on the main screen, so distracting karaoke can be
-    // dismissed instantly (and brought back) without opening Settings. Hover-to-
-    // seek on individual words still works while captions are shown.
-    @ViewBuilder
-    private var captionsToggle: some View {
-        if playback.isPlaying || playback.isPaused {
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Button { model.captionsEnabled.toggle() } label: {
-                        Image(systemName: model.captionsEnabled ? "captions.bubble.fill" : "captions.bubble")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(model.captionsEnabled ? model.theme.signatureColor : Color.secondary)
-                            .frame(width: 36, height: 30)
-                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9))
-                            .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.white.opacity(0.12), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .help(model.captionsEnabled ? "Hide captions" : "Show captions")
-                    .accessibilityLabel(model.captionsEnabled ? "Hide captions" : "Show captions")
-                }
-            }
-            .padding(.trailing, 22)
-            .padding(.bottom, 100)
-            .animation(.easeInOut(duration: 0.18), value: model.captionsEnabled)
         }
     }
 
@@ -1013,9 +987,35 @@ struct AttacheRootView: View {
                     help: "Forward \(model.seekStepSeconds)s"
                 ) { skipPreviewPlayback(forward: true) }
 
+                captionsBadge
                 speedBadge
             }
         }
+    }
+
+    /// YouTube-style CC toggle in the transport, beside speed. Filled and
+    /// theme-tinted when captions are on, hollow and dim when off; one press
+    /// toggles and persists the global preference. When off, the caption view
+    /// hides during playback (the transcript stays on the card).
+    private var captionsBadge: some View {
+        Button { model.captionsEnabled.toggle() } label: {
+            Image(systemName: model.captionsEnabled ? "captions.bubble.fill" : "captions.bubble")
+                .typoIcon(size: 16, .bold)
+                .foregroundStyle(model.captionsEnabled ? accent : Color.primary.opacity(0.55))
+                .frame(width: 38, height: 30)
+                .background(
+                    model.captionsEnabled
+                        ? AnyShapeStyle(accent.opacity(0.16))
+                        : AnyShapeStyle(.ultraThinMaterial.opacity(0.5)),
+                    in: Capsule()
+                )
+                .overlay(Capsule().stroke(model.captionsEnabled ? accent.opacity(0.55) : Color.primary.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
+        .help(model.captionsEnabled ? "Captions on. Click to turn off." : "Captions off. Click to turn on.")
+        .accessibilityLabel("Captions on/off")
+        .accessibilityValue(model.captionsEnabled ? "On" : "Off")
+        .accessibilityAddTraits(model.captionsEnabled ? [.isSelected] : [])
     }
 
     /// The rate readout that rides under the transport: click cycles presets,
@@ -1115,6 +1115,7 @@ struct AttacheRootView: View {
                     help: "Forward \(model.seekStepSeconds)s"
                 ) { model.skipForward() }
 
+                captionsBadge
                 speedBadge
             }
         }

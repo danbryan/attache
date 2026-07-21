@@ -64,6 +64,10 @@ private struct KaraokeCaptionView: View {
     var alignment: CaptionAlignment?
     var currentTimeMs: Int
     var highlightColor: Color
+    /// Whether to highlight each word (karaoke) or show the caption as plain
+    /// text. Plain is used when the user picked plain, or when karaoke would be
+    /// dishonest because the active timeline is only estimated.
+    var mode: CaptionRenderMode = .karaoke
     var fontSize: CGFloat = 24
     var lineCount: Int = 2
     var onSeek: ((Int) -> Void)?
@@ -120,7 +124,7 @@ private struct KaraokeCaptionView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let alignment, !alignment.words.isEmpty {
+        if mode == .karaoke, let alignment, !alignment.words.isEmpty {
             let count = alignment.words.count
             let start = min(max(0, windowStart), max(0, count - 1))
             let end = min(count, start + windowSize)
@@ -261,6 +265,7 @@ struct ResponseCaptionLayer: View {
     var alignment: CaptionAlignment?
     var highlightColor: Color
     var syncOffsetMs: Int
+    var mode: CaptionRenderMode = .karaoke
     var fontSize: CGFloat = 24
     var lineCount: Int = 2
     var onSeek: ((Int) -> Void)?
@@ -272,6 +277,7 @@ struct ResponseCaptionLayer: View {
             alignment: alignment,
             currentTimeMs: timeline.currentTimeMs + syncOffsetMs,
             highlightColor: highlightColor,
+            mode: mode,
             fontSize: fontSize,
             lineCount: lineCount,
             onSeek: onSeek,

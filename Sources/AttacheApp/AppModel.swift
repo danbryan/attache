@@ -573,7 +573,17 @@ final class AppModel: ObservableObject {
         }
     }
     @Published var captionsEnabled: Bool = true {
-        didSet { defaults.set(captionsEnabled, forKey: AttachePreferenceKey.captionsEnabled) }
+        didSet {
+            defaults.set(captionsEnabled, forKey: AttachePreferenceKey.captionsEnabled)
+            playback.isCaptioningEnabled = captionsEnabled
+        }
+    }
+    /// Karaoke (per-word highlight) vs plain captions. Persisted; applies live
+    /// mid-playback because the caption view reads it directly. Karaoke degrades
+    /// to plain automatically while the active clip's timing is only estimated
+    /// (see `CaptionRenderDecision`).
+    @Published var captionStyle: CaptionStyle = .karaoke {
+        didSet { defaults.set(captionStyle.rawValue, forKey: AttachePreferenceKey.captionStyle) }
     }
     static let captionLineRange = 1...5
     static let captionFontRange: ClosedRange<Double> = 18...34
@@ -10036,6 +10046,11 @@ final class AppModel: ObservableObject {
         loadWatchedSessions()
         if defaults.object(forKey: AttachePreferenceKey.captionsEnabled) != nil {
             captionsEnabled = defaults.bool(forKey: AttachePreferenceKey.captionsEnabled)
+        }
+        playback.isCaptioningEnabled = captionsEnabled
+        if let raw = defaults.string(forKey: AttachePreferenceKey.captionStyle),
+           let style = CaptionStyle(rawValue: raw) {
+            captionStyle = style
         }
         if defaults.object(forKey: AttachePreferenceKey.uiTextScale) != nil {
             uiTextScale = AttacheTypeScale.clamp(defaults.double(forKey: AttachePreferenceKey.uiTextScale))
