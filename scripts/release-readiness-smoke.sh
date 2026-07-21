@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Propagate background mode (never take the user's focus) to every gate that
+# drives the packaged app, so a single SMOKE_BACKGROUND=1 covers the whole
+# readiness run. Default stays headed (0).
+export SMOKE_BACKGROUND="${SMOKE_BACKGROUND:-0}"
+
 usage() {
   cat <<EOF
 Usage:
@@ -25,6 +30,8 @@ suite:
   11. two-way negative-path smoke (delivery failure, expiry, restart fails closed)
 
 Environment:
+  SMOKE_BACKGROUND=1 runs every app-driving gate without taking system focus
+  from the user's frontmost app (default 0, headed). Propagated to all gates.
   ATTACHE_RELEASE_READINESS_WITH_CODEX=1 also runs the real Codex f7/f8
   round-trip smokes after the eleven gates.
   ATTACHE_RELEASE_READINESS_WITH_CLAUDE=1 also runs the real Claude Code f21

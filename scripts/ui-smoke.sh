@@ -9,6 +9,9 @@ set -euo pipefail
 #   scripts/ui-smoke.sh                      run the default free/local flows
 #   SMOKE_ONLY=f1,f4 scripts/ui-smoke.sh     run a subset while iterating
 #   SMOKE_KEEP_STATE=1 scripts/ui-smoke.sh   skip fresh/restore (developer loop)
+#   SMOKE_BACKGROUND=1 scripts/ui-smoke.sh   run without stealing system focus
+#                                            (app launches un-activated; keyboard
+#                                            is posted to its pid; default 0)
 #
 # Opt-in release/network/load flows are intentionally excluded from the default
 # suite:
@@ -24,6 +27,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# Background mode: the driver reads SMOKE_BACKGROUND from its environment. Export
+# it (default 0, headed) so the driver child inherits it explicitly.
+export SMOKE_BACKGROUND="${SMOKE_BACKGROUND:-0}"
 
 if [[ "${ATTACHE_UI_SMOKE_SKIP_BUILD_PACKAGE:-0}" == "1" ]]; then
   echo "==> Reusing prebuilt driver and packaged app"

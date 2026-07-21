@@ -39,8 +39,43 @@ func enabled(_ flow: String) -> Bool {
     return !["f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23", "f24", "context", "dock-menus"].contains(key)
 }
 
-let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath))
+/// Background mode (SMOKE_BACKGROUND=1): the whole run must leave the user's
+/// frontmost app untouched. The app launches without self-activation and the
+/// harness never steals focus; steps that genuinely need the app frontmost use
+/// `withForeground`, which briefly activates and then restores the app that was
+/// frontmost before.
+let backgroundMode = ProcessInfo.processInfo.environment["SMOKE_BACKGROUND"] == "1"
+
+let app = AppUnderTest(appURL: URL(fileURLWithPath: appPath), background: backgroundMode)
 let run = SmokeRun()
+
+/// Count of steps that had to briefly take the foreground in background mode,
+/// for the end-of-run report. Zero is the goal.
+var briefForegroundStepCount = 0
+
+/// Runs `body` with the app briefly frontmost, then restores whichever app was
+/// frontmost before. In headed mode this is a plain `forceActivate` with no
+/// restore (the app is meant to be frontmost anyway). Use this ONLY for steps
+/// that cannot work while another app stays frontmost; the keyboard, text, and
+/// AX-read paths all work in the background and must not use it.
+func withForeground(_ label: String, _ body: () throws -> Void) rethrows {
+    guard backgroundMode else {
+        app.forceActivate()
+        try body()
+        return
+    }
+    briefForegroundStepCount += 1
+    let previous = NSWorkspace.shared.frontmostApplication
+    app.forceActivate()
+    defer {
+        if let previous, previous.processIdentifier != app.pid {
+            previous.activate(options: [.activateIgnoringOtherApps])
+        } else {
+            print("        WARNING: could not resolve a prior frontmost app to restore after \"\(label)\"")
+        }
+    }
+    try body()
+}
 
 func mainWindow() throws -> AXElement {
     // The single main window carries the app display name. Settings is now an
@@ -4088,5 +4123,9 @@ if enabled("context") {
     }
 }
 
+if backgroundMode {
+    print("")
+    print("Background mode: ran without taking system focus; \(briefForegroundStepCount) step(s) needed a brief foreground activation.")
+}
 app.terminateAndWait()
 exit(Int32(run.summarize()))

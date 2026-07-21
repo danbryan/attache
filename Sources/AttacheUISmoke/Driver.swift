@@ -12,11 +12,17 @@ struct SmokeError: Error, CustomStringConvertible {
 /// Info.plist) because the executable path is inside it.
 final class AppUnderTest {
     let appURL: URL
+    /// Background mode (SMOKE_BACKGROUND=1): the run must never take focus away
+    /// from whatever app the user has frontmost. The app is launched without
+    /// self-activation, `activate()` becomes a no-op, and keyboard/text events
+    /// still reach the app because they are posted straight to its pid.
+    let background: Bool
     private var process: Process?
     private(set) var pid: pid_t = 0
 
-    init(appURL: URL) {
+    init(appURL: URL, background: Bool = false) {
         self.appURL = appURL
+        self.background = background
     }
 
     var axApp: AXElement { AXElement.application(pid: pid) }
@@ -38,6 +44,11 @@ final class AppUnderTest {
         // Keep headed smokes silent without changing the Mac's system volume.
         // Audio still decodes, plays, advances captions, and drives the bars.
         environment["ATTACHE_UI_TEST_MUTE_AUDIO"] = "1"
+        // Tell the app under test to suppress its own launch/overlay focus
+        // grabs (NSApp.activate(ignoringOtherApps:)) so it renders its window
+        // without pulling itself to the system foreground. Honored only
+        // alongside ATTACHE_UI_TEST=1 in the app; see AppActivation.
+        if background { environment["ATTACHE_UI_TEST_BACKGROUND"] = "1" }
         process.environment = environment
         try process.run()
         self.process = process
@@ -49,7 +60,20 @@ final class AppUnderTest {
         activate()
     }
 
+    /// Brings the app to the system foreground. In background mode this is a
+    /// deliberate no-op so the run never steals the user's focus; the keyboard
+    /// and text paths do not need it because they post directly to the app's
+    /// pid. Steps that genuinely require the app frontmost call
+    /// `withForeground` (which uses `forceActivate`) instead.
     func activate() {
+        guard !background else { return }
+        forceActivate()
+    }
+
+    /// Unconditionally brings the app to the system foreground, ignoring
+    /// background mode. Used only by the per-step foreground escape hatch,
+    /// which captures and restores the previously frontmost app around it.
+    func forceActivate() {
         NSRunningApplication(processIdentifier: pid)?
             .activate(options: [.activateIgnoringOtherApps])
         appWindows.first?.raiseWindow()

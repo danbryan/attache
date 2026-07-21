@@ -71,7 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: .attacheOpenSettings, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.windowController?.showAttache()
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.bringToForeground()
             self.model.showSettingsOverlay()
         }
         NotificationCenter.default.addObserver(forName: .attacheOpenSettingsSection, object: nil, queue: .main) { [weak self] note in
@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: .attacheOpenPersonalityStudio, object: nil, queue: .main) { [weak self] note in
             guard let self, let request = note.object as? PersonalityStudioRequest else { return }
             self.windowController?.showAttache()
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.bringToForeground()
             self.model.openCharacterStudio(request)
         }
         NotificationCenter.default.addObserver(forName: .attacheShowOnboarding, object: nil, queue: .main) { [weak self] _ in
@@ -522,7 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAbout() {
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.bringToForeground()
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: AttacheAppSupport.appDisplayName,
             .applicationVersion: Self.shortVersionString,
@@ -560,7 +560,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleSettings() {
         AttacheLog.uiLatency.withIntervalSignpost("toggleSettings") {
             windowController?.showAttache()
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.bringToForeground()
             model.toggleSettingsOverlay()
         }
     }

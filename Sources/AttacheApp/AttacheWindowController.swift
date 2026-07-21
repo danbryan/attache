@@ -42,7 +42,7 @@ final class AttacheWindowController: NSWindowController, NSWindowDelegate {
             window.center()
         }
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.bringToForeground()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
