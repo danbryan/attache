@@ -8,6 +8,7 @@ extension Notification.Name {
     static let attacheOpenSettings = Notification.Name("attache.openSettings")
     static let attacheShowOnboarding = Notification.Name("attache.showOnboarding")
     static let attacheOpenVoicemailSurface = Notification.Name("attache.openVoicemailSurface")
+    static let attacheShowLivePlaybackSurface = Notification.Name("attache.showLivePlaybackSurface")
     static let attacheOpenHistory = Notification.Name("attache.openHistory")
     static let attacheOpenTalk = Notification.Name("attache.openTalk")
     static let attacheOpenPalette = Notification.Name("attache.openPalette")

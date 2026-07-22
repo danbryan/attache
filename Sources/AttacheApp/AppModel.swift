@@ -3490,7 +3490,7 @@ final class AppModel: ObservableObject {
     /// Persist the generated recap as a replayable history card, archive the
     /// originals it summarized (they remain in history for replay), and play the
     /// recap card through normal playback. Main-actor only.
-    private func deliverRecap(
+    func deliverRecap(
         _ recapText: String,
         summarizing cards: [VoicemailCard],
         personality: Personality?,
@@ -3541,11 +3541,18 @@ final class AppModel: ObservableObject {
             // computed spoken text and caption alignment.
             let recapCard = selectedCard?.id == card.id ? (selectedCard ?? card) : card
             selectedStartProgress = 0
+            // Leave the voicemail preparation panel: a delivered recap plays on
+            // the standard live media surface so it gets the animated presence,
+            // the live transport bar, and captions, exactly like any other card
+            // or live turn rather than the bespoke voicemail split panel.
+            NotificationCenter.default.post(name: .attacheShowLivePlaybackSurface, object: nil)
             playCardRespectingEgress(recapCard)
             intakeStatus = "Playing your recap of \(cards.count) update\(cards.count == 1 ? "" : "s")."
         } catch {
             // Persisting failed: still give the user something by speaking the
-            // recap text, and leave the inbox untouched.
+            // recap text, and leave the inbox untouched. Speak it on the same
+            // standard live surface a saved recap would use.
+            NotificationCenter.default.post(name: .attacheShowLivePlaybackSurface, object: nil)
             playback.preview(recapText)
             intakeStatus = "Played the recap but could not save it: \(error.localizedDescription)"
         }

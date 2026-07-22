@@ -571,6 +571,20 @@ struct AttacheRootView: View {
                 surfaceMode = .voicemail
             }
         }
+        // A delivered recap plays through the standard live media surface (the
+        // animated Attaché presence, the live transport bar, and captions),
+        // not the voicemail split panel its preparation feedback used (INF-378).
+        // Preparation stays on the voicemail surface for the cost preview,
+        // progress chip, and any failure/recovery banner; only the successful
+        // playback switches here so the recap sounds and looks like any other
+        // card or live turn.
+        .onReceive(NotificationCenter.default.publisher(for: .attacheShowLivePlaybackSurface)) { _ in
+            withAnimation(.easeInOut(duration: 0.16)) {
+                inboxVisible = false
+                personalitySwitcherVisible = false
+                surfaceMode = .live
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .attacheOpenPalette)) { _ in
             AttacheLog.uiLatency.withIntervalSignpost("openCommandPalette") {
                 withAnimation(.easeInOut(duration: 0.16)) {

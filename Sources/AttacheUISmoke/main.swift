@@ -2359,8 +2359,13 @@ if enabled("f17") {
         // mock actually answers once the request names the switched model
         // (INF-254's ATTACHE_SMOKE_PROVIDER_RECOVERY_MODEL), so a real recap
         // card gets created and played: proof retry-after-switch succeeds,
-        // not just that it fired a second identical failing request.
-        _ = try waitForElement("recap success status", in: try mainWindow(), containing: "Playing your recap of 2 update", timeout: 20)
+        // not just that it fired a second identical failing request. A
+        // delivered recap now plays on the standard LIVE media surface (the
+        // animated presence + the live transport bar), not the voicemail
+        // preparation panel it failed on, so success shows as the live
+        // transport driving the recap rather than the voicemail intakeStatus.
+        _ = try waitForElement("recap plays on the live transport", in: try mainWindow(),
+                               containing: "Playback speed", timeout: 30)
         let logText = (try? String(contentsOfFile: providerLog, encoding: .utf8)) ?? ""
         guard logText.contains("\"model\": \"\(recoveryModel)\"") else {
             throw SmokeError(message: "retry did not use the selected recap model. Log:\n\(logText)")
