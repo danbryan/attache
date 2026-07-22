@@ -180,6 +180,13 @@ struct SettingsPaneView: View {
                 Text("Show ambient phrases from watched-session tools and results.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if model.showActivityInsights {
+                settingRow("Smart ranking") {
+                    Toggle("", isOn: $model.activitySmartRanking).labelsHidden()
+                    Text("When an agent does many things at once, a fast model picks the few most relevant to show. Turn off to always show the most recent. Only tool names are sent to the model, never arguments or results.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             settingRow("Notifications") {
                 Picker("", selection: $model.notifyScope) {
                     ForEach(AttacheNotifyScope.allCases) { Text(LocalizedStringKey($0.title)).tag($0) }

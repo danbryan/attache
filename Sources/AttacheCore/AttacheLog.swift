@@ -19,6 +19,10 @@ public enum AttacheLog {
     public static let twoWay = Logger(subsystem: subsystem, category: "two-way")
     public static let mcp = Logger(subsystem: subsystem, category: "mcp")
     public static let memory = Logger(subsystem: subsystem, category: "memory")
+    /// Watched-session activity insights (the orbiting verbs) and the optional
+    /// smart-ranking pass. Log only candidate/chosen counts, never the labels'
+    /// underlying tool arguments or results (INF-158).
+    public static let activity = Logger(subsystem: subsystem, category: "activity")
     public static let updates = Logger(subsystem: subsystem, category: "updates")
     /// Personality-inference CLI subprocess spawns (Claude Code / Codex one-shot
     /// runs). Log the executable path, exit code, and short error excerpts only,

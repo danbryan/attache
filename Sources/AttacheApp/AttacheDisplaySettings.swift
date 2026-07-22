@@ -421,6 +421,7 @@ enum AttachePreferenceKey {
     static let playbackSpeed = "attache.playbackSpeed"
     static let showTips = "attache.showTips"
     static let showActivityInsights = "attache.showActivityInsights"
+    static let activitySmartRanking = "attache.activitySmartRanking"
     static let captionSyncOffsetMs = "attache.captionSyncOffsetMs"
     static let attachedCodexSessionID = "attache.attachedCodexSessionID"
     static let codexSourceEnabled = "attache.codexSourceEnabled"

@@ -14,6 +14,10 @@ struct AgentActivityPhrase: Identifiable, Equatable {
     var weight: Double
     var source: Source
     var lastSeen: Date
+    /// How many raw signals collapsed into this phrase, used only as the count
+    /// hint for the optional smart-ranking pass (distinct-by-identity means
+    /// "50 Coinbase calls" is one phrase with occurrences 50, not 50 phrases).
+    var occurrences: Int = 1
     /// Whose transcript produced the phrase, for bubble identity in
     /// agent-aware renderers.
     var agentKind: SourceKind = .codex
@@ -40,6 +44,7 @@ final class SessionActivityWatcher {
         var source: AgentActivityPhrase.Source
         var score: Double
         var lastSeen: Date
+        var occurrences: Int = 0
         var agentKind: SourceKind = .codex
     }
 
@@ -348,7 +353,11 @@ final class SessionActivityWatcher {
             case "web_search_end":
                 return [Signal(text: "searching web", source: .externalTool, weight: 1.0, timestamp: timestamp)]
             case "mcp_tool_call_end":
-                return [Signal(text: externalPhrase(from: compactText(payload)) ?? "using connector", source: .externalTool, weight: 1.0, timestamp: timestamp)]
+                // Structured server identity from the payload, never a substring
+                // of its arguments/results.
+                let label = MCPToolIdentity.serverLabel(fromCodexPayload: payload)
+                    .map { "checking \($0)" } ?? "using connector"
+                return [Signal(text: label, source: .externalTool, weight: 1.0, timestamp: timestamp)]
             default:
                 return []
             }
@@ -428,12 +437,20 @@ final class SessionActivityWatcher {
         let name = (payload["name"] as? String)
             ?? (payload["tool_name"] as? String)
             ?? payloadType
+
+        // A service label comes ONLY from the tool's structured namespaced
+        // identity (mcp__server__tool), never from a substring of the call's
+        // arguments. A Slack search whose query contains "coinbase" resolves to
+        // its server (slack-*) and reads "checking Slack", never Coinbase.
+        if let serviceLabel = MCPToolIdentity.serverLabel(fromToolName: name) {
+            return [Signal(text: "checking \(serviceLabel)", source: .externalTool, weight: 1.0, timestamp: timestamp)]
+        }
+
+        // Built-in tools keep their small stable verb map. Shell command verbs
+        // may read the argument text, but they never emit a service name.
         let argumentText = compactText(payload["arguments"] ?? payload["input"])
         let combined = "\(name) \(argumentText)".lowercased()
 
-        if let external = externalPhrase(from: combined) {
-            return [Signal(text: external, source: .externalTool, weight: 1.0, timestamp: timestamp)]
-        }
         if payloadType == "custom_tool_call" || name == "apply_patch" {
             return [Signal(text: "editing files", source: .editEvent, weight: 0.65, timestamp: timestamp)]
         }
@@ -467,41 +484,6 @@ final class SessionActivityWatcher {
         if text.contains("curl ") { return "calling endpoint" }
         if text.contains("jq ") { return "parsing logs" }
         if text.contains("xcrun ") { return "checking tools" }
-        return nil
-    }
-
-    private func externalPhrase(from text: String) -> String? {
-        let lower = text.lowercased()
-        if lower.contains("linear") || lower.contains("_list_issues") || lower.contains("_get_issue") || lower.contains("_save_issue") || lower.contains("_list_comments") {
-            return "checking Linear"
-        }
-        if lower.contains("email") || lower.contains("gmail") || lower.contains("outlook") || lower.contains("_list_messages") || lower.contains("_move_email") || lower.contains("_create_draft") {
-            return "checking email"
-        }
-        if lower.contains("qbo") || lower.contains("quickbooks") {
-            return "checking QBO"
-        }
-        if lower.contains("coinbase") {
-            return "checking Coinbase"
-        }
-        if lower.contains("drive") || lower.contains("docs") || lower.contains("sheets") || lower.contains("slides") {
-            return "checking Drive"
-        }
-        if lower.contains("calendar") {
-            return "checking calendar"
-        }
-        if lower.contains("slack") {
-            return "checking Slack"
-        }
-        if lower.contains("zoom") {
-            return "checking Zoom"
-        }
-        if lower.contains("web_search") || lower.contains("search_query") {
-            return "searching web"
-        }
-        if lower.contains("tool_search") {
-            return "finding tools"
-        }
         return nil
     }
 
@@ -560,6 +542,7 @@ final class SessionActivityWatcher {
         current.source = signal.source
         current.score = min(6, current.score + signal.weight)
         current.lastSeen = max(current.lastSeen, signal.timestamp)
+        current.occurrences += 1
         current.agentKind = signal.agentKind
         signalsByText[text] = current
     }
@@ -580,6 +563,7 @@ final class SessionActivityWatcher {
                 weight: min(1.0, max(0.25, (signal.score / 4.0) * decay)),
                 source: signal.source,
                 lastSeen: signal.lastSeen,
+                occurrences: max(1, signal.occurrences),
                 agentKind: signal.agentKind
             )
         }

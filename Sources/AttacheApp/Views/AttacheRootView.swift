@@ -255,9 +255,9 @@ struct AttacheRootView: View {
 
             if surfaceMode == .live,
                model.showActivityInsights,
-               !model.activityPhrases.isEmpty,
+               !model.displayedActivityPhrases.isEmpty,
                !playbackSurfaceActive {
-                ActivityInsightHeatMap(phrases: model.activityPhrases, theme: model.theme)
+                ActivityInsightHeatMap(phrases: model.displayedActivityPhrases, theme: model.theme)
                     .opacity(model.surfaceOpacity)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)

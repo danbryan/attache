@@ -967,9 +967,133 @@ final class AppModel: ObservableObject {
         didSet {
             defaults.set(showActivityInsights, forKey: AttachePreferenceKey.showActivityInsights)
             updateCodexWatcher()
+            if !showActivityInsights { clearRankedActivity() }
+        }
+    }
+    /// Sub-setting of activity insights: let a fast model pick the few most
+    /// significant activity labels when there are more than the ring can show.
+    /// Off, or with no model configured, the ring falls back to the
+    /// deterministic top-N. Only tool NAMES (never arguments or results) are
+    /// ever sent to the model.
+    @Published var activitySmartRanking: Bool = true {
+        didSet {
+            defaults.set(activitySmartRanking, forKey: AttachePreferenceKey.activitySmartRanking)
+            if !activitySmartRanking { clearRankedActivity() }
         }
     }
     @Published private(set) var activityPhrases: [AgentActivityPhrase] = []
+    /// The smart-ranked overlay: a small ordered subset chosen by the ranking
+    /// model, or nil when ranking is off/unconfigured or has not returned yet.
+    /// The deterministic `activityPhrases` always render immediately; this
+    /// replaces them non-blockingly when (and only when) the model answers.
+    @Published private(set) var rankedActivityPhrases: [AgentActivityPhrase]?
+    private var activityRankingTask: Task<Void, Never>?
+    private var lastActivityRankAt: Date = .distantPast
+    private let activityRankingInterval: TimeInterval = 10
+
+    /// What the activity ring actually shows: the ranked overlay (filtered to
+    /// labels still live) when present, else the deterministic top-N. Never
+    /// blank while `activityPhrases` is non-empty.
+    var displayedActivityPhrases: [AgentActivityPhrase] {
+        if let ranked = rankedActivityPhrases {
+            let live = ranked.compactMap { r in activityPhrases.first { $0.id == r.id } }
+            if !live.isEmpty { return live }
+        }
+        return Self.deterministicActivitySelection(activityPhrases, limit: ActivityInsightRanking.maxDisplay)
+    }
+
+    /// Deterministic fallback selection: the ring's own ranking (weight then
+    /// recency, as the watcher already sorts) capped at `limit`. Pure and
+    /// model-free so it is always available and never blocks.
+    static func deterministicActivitySelection(
+        _ phrases: [AgentActivityPhrase],
+        limit: Int
+    ) -> [AgentActivityPhrase] {
+        Array(
+            phrases
+                .sorted { lhs, rhs in
+                    if lhs.weight != rhs.weight { return lhs.weight > rhs.weight }
+                    return lhs.lastSeen > rhs.lastSeen
+                }
+                .prefix(limit)
+        )
+    }
+
+    private func clearRankedActivity() {
+        activityRankingTask?.cancel()
+        activityRankingTask = nil
+        rankedActivityPhrases = nil
+    }
+
+    #if DEBUG
+    /// Inject deterministic phrases as if the watcher had published them, so the
+    /// ranking gate and fallback selection are testable without a live watcher.
+    func setActivityPhrasesForTesting(_ phrases: [AgentActivityPhrase]) {
+        activityPhrases = phrases
+    }
+    #endif
+
+    /// Non-blocking smart-ranking pass (INF). Runs at most once per interval,
+    /// only when smart ranking is on, a model is configured, and there are more
+    /// distinct labels than the ring shows. Sends ONLY humanized labels and
+    /// their counts to the model; cancels any in-flight pass on a new interval.
+    func maybeRankActivity() {
+        guard showActivityInsights, activitySmartRanking else {
+            clearRankedActivity()
+            return
+        }
+        let candidates = ActivityInsightRanking.distinctCandidates(
+            from: activityPhrases.map {
+                ActivityRankingCandidate(label: $0.text, count: $0.occurrences)
+            }
+        )
+        guard ActivityInsightRanking.shouldRank(candidateCount: candidates.count) else {
+            // At or below the display cap the deterministic ring already shows
+            // everything; drop any stale overlay.
+            clearRankedActivity()
+            return
+        }
+        guard presentationService.isPresentationConfigured(for: .tagging) else {
+            // No model reachable: deterministic top-N, never blank, never blocked.
+            clearRankedActivity()
+            return
+        }
+        let now = Date()
+        guard now.timeIntervalSince(lastActivityRankAt) >= activityRankingInterval else { return }
+        lastActivityRankAt = now
+
+        let prompt = ActivityInsightRanking.prompt(for: candidates)
+        let snapshot = captureRequestSnapshot(role: .topicTagging, userInput: "")
+        let phrasesAtDispatch = activityPhrases
+        let candidateLabels = candidates.map(\.label)
+
+        activityRankingTask?.cancel()
+        activityRankingTask = Task { [weak self] in
+            guard let self else { return }
+            let result = try? await self.presentationService.complete(
+                snapshot: snapshot, system: prompt.system, user: prompt.user
+            )
+            if Task.isCancelled { return }
+            let text = result?.text ?? ""
+            let orderedLabels = ActivityInsightRanking.parseRankedLabels(text)
+            let chosen = ActivityInsightRanking.selectRanked(
+                orderedLabels: orderedLabels,
+                from: candidateLabels,
+                limit: ActivityInsightRanking.maxDisplay
+            )
+            await MainActor.run {
+                guard self.showActivityInsights, self.activitySmartRanking, !chosen.isEmpty else { return }
+                let ordered = chosen.compactMap { label in
+                    phrasesAtDispatch.first { $0.text == label }
+                }
+                guard !ordered.isEmpty else { return }
+                self.rankedActivityPhrases = ordered
+                AttacheLog.activity.info(
+                    "activity smart ranking candidates=\(candidateLabels.count, privacy: .public) chosen=\(ordered.count, privacy: .public)"
+                )
+            }
+        }
+    }
     /// A transient chip that pokes through the ambient glow when news arrives.
     @Published var homeNotice: HomeNotice?
     private var homeNoticeClearItem: DispatchWorkItem?
@@ -1680,7 +1804,11 @@ final class AppModel: ObservableObject {
         }
         sessionActivityWatcher.onPhrases = { [weak self] phrases in
             DispatchQueue.main.async {
-                self?.activityPhrases = phrases
+                guard let self else { return }
+                // Deterministic labels render immediately; the optional ranking
+                // pass replaces them later, non-blockingly.
+                self.activityPhrases = phrases
+                self.maybeRankActivity()
             }
         }
         // opencode live narration (INF-397): the SQLite analog of
@@ -10143,6 +10271,9 @@ final class AppModel: ObservableObject {
         }
         if defaults.object(forKey: AttachePreferenceKey.showActivityInsights) != nil {
             showActivityInsights = defaults.bool(forKey: AttachePreferenceKey.showActivityInsights)
+        }
+        if defaults.object(forKey: AttachePreferenceKey.activitySmartRanking) != nil {
+            activitySmartRanking = defaults.bool(forKey: AttachePreferenceKey.activitySmartRanking)
         }
         if defaults.object(forKey: AttachePreferenceKey.captionSyncOffsetMs) != nil {
             captionSyncOffsetMs = min(10_000, max(-2_000, defaults.integer(forKey: AttachePreferenceKey.captionSyncOffsetMs)))
