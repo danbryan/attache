@@ -30,7 +30,7 @@ cd "$ROOT"
 
 # Background mode: the driver reads SMOKE_BACKGROUND from its environment. Export
 # it (default 0, headed) so the driver child inherits it explicitly.
-export SMOKE_BACKGROUND="${SMOKE_BACKGROUND:-0}"
+export SMOKE_BACKGROUND="${SMOKE_BACKGROUND:-1}"
 
 if [[ "${ATTACHE_UI_SMOKE_SKIP_BUILD_PACKAGE:-0}" == "1" ]]; then
   echo "==> Reusing prebuilt driver and packaged app"

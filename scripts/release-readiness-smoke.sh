@@ -7,7 +7,7 @@ cd "$ROOT"
 # Propagate background mode (never take the user's focus) to every gate that
 # drives the packaged app, so a single SMOKE_BACKGROUND=1 covers the whole
 # readiness run. Default stays headed (0).
-export SMOKE_BACKGROUND="${SMOKE_BACKGROUND:-0}"
+export SMOKE_BACKGROUND="${SMOKE_BACKGROUND:-1}"
 
 usage() {
   cat <<EOF
