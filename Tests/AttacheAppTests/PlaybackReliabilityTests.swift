@@ -156,4 +156,56 @@ final class PlaybackReliabilityTests: XCTestCase {
             seekCount: 0
         ))
     }
+
+    // MARK: - HeardThreshold (partial-listen -> History)
+
+    func testHeardThresholdJustBelowHalfStaysUnread() {
+        XCTAssertFalse(HeardThreshold.reached(maxFraction: 0.49, durationMs: 60_000, seekCount: 0))
+    }
+
+    func testHeardThresholdAtHalfMarksHeard() {
+        XCTAssertTrue(HeardThreshold.reached(maxFraction: 0.50, durationMs: 60_000, seekCount: 0))
+    }
+
+    func testHeardThresholdJustAboveHalfMarksHeard() {
+        XCTAssertTrue(HeardThreshold.reached(maxFraction: 0.51, durationMs: 60_000, seekCount: 0))
+    }
+
+    func testHeardThresholdFullCompletionStillMarksHeard() {
+        XCTAssertTrue(HeardThreshold.reached(maxFraction: 1.0, durationMs: 60_000, seekCount: 0))
+    }
+
+    func testHeardThresholdSixtyPercentThenStoppedMarksHeard() {
+        // A card played to 60% then stopped: past the threshold -> History.
+        XCTAssertTrue(HeardThreshold.reached(maxFraction: 0.60, durationMs: 180_000, seekCount: 1))
+    }
+
+    func testHeardThresholdTwentyPercentThenStoppedStaysUnread() {
+        // A barely-started card (20%) stopped early is not lost; it stays unread.
+        XCTAssertFalse(HeardThreshold.reached(maxFraction: 0.20, durationMs: 180_000, seekCount: 0))
+    }
+
+    func testHeardThresholdSeekStormNearEndIsGuarded() {
+        // A seek storm can push the high-water mark near the end without the user
+        // listening; an implausible seek count must not mark a 3-minute card heard.
+        XCTAssertFalse(HeardThreshold.reached(maxFraction: 0.98, durationMs: 180_000, seekCount: 12))
+    }
+
+    func testHeardThresholdAllowsAFewExplicitSeeks() {
+        // A handful of seeks while genuinely listening past 50% still counts.
+        XCTAssertTrue(HeardThreshold.reached(maxFraction: 0.72, durationMs: 180_000, seekCount: 4))
+    }
+
+    func testHeardThresholdMutedBlipStaysUnread() {
+        // A ~2s muted blip on a 3-minute card: the genuine fraction stays tiny, so
+        // it never qualifies even though a spurious finish flag might fire.
+        XCTAssertFalse(HeardThreshold.reached(maxFraction: 2.0 / 180.0, durationMs: 180_000, seekCount: 0))
+    }
+
+    func testHeardThresholdTinyDurationGuard() {
+        // A sub-second clip is too short to infer intent from a 50% high-water mark;
+        // a genuine full play still files heard through the credible-finish path.
+        XCTAssertFalse(HeardThreshold.reached(maxFraction: 1.0, durationMs: 500, seekCount: 0))
+        XCTAssertFalse(HeardThreshold.reached(maxFraction: 1.0, durationMs: 0, seekCount: 0))
+    }
 }

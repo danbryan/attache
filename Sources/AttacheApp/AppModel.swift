@@ -1586,6 +1586,9 @@ final class AppModel: ObservableObject {
         playback.onFinished = { [weak self] cardID, success in
             self?.finishPlayback(cardID: cardID, success: success)
         }
+        playback.onCardReachedHeardThreshold = { [weak self] cardID in
+            self?.markHeardFromPartialListen(cardID: cardID)
+        }
         playback.onPreviewFinished = { [weak self] in
             if self?.expectingReplyAudio == true {
                 if self?.pendingAssistantReply != nil {
@@ -9794,6 +9797,17 @@ final class AppModel: ObservableObject {
         } catch {
             intakeStatus = "Mark heard failed: \(error.localizedDescription)"
         }
+    }
+
+    /// A card the user listened to past the heard threshold moves to History even
+    /// when playback ended early (Escape, starting another card, hang-up), not
+    /// only on a full finish. Pure inbox -> History move: the live-queue and
+    /// catch-up drains stay owned by `finishPlayback`. Only acts on an unread
+    /// card, so a focused-call card already filed heard is left untouched and no
+    /// redundant reload fires.
+    private func markHeardFromPartialListen(cardID: String) {
+        guard cards.first(where: { $0.id == cardID })?.status == .unread else { return }
+        markHeard(cardID: cardID)
     }
 
     private func finishPlayback(cardID: String, success: Bool) {

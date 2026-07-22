@@ -33,6 +33,35 @@ enum PlaybackCompletionValidator {
     }
 }
 
+/// How much of a voicemail a listener must actually reach before it counts as
+/// heard and moves from the inbox to History. Full completion is handled by
+/// `PlaybackCompletionValidator`; this covers the partial-listen case: stopping,
+/// pausing then leaving, starting another card, or hanging up after listening to
+/// enough of a card still files it heard. `maxFraction` is a genuine high-water
+/// playhead position, so a muted blip or a decode-early false finish (a tiny
+/// fraction) never qualifies, and an implausible seek count (a seek storm that
+/// jumps the playhead near the end without listening) is rejected the same way
+/// the credible-finish validator rejects it. Kept pure so the threshold is unit
+/// tested without driving the whole controller.
+enum HeardThreshold {
+    /// Fraction of the audio the playhead must reach to count as heard.
+    static let fraction = 0.5
+    /// Below this the clip is too short to infer intent from a 50% high-water
+    /// mark; a genuine full play still files heard through the credible-finish
+    /// path, so this only rejects degenerate or near-zero durations.
+    static let minimumDurationMs = 1000
+    /// A storm of seeks can push the high-water mark to the end without the user
+    /// listening, so reject an implausible seek count (mirrors
+    /// `PlaybackCompletionValidator`'s cap).
+    static let maximumCredibleSeekCount = 8
+
+    static func reached(maxFraction: Double, durationMs: Int, seekCount: Int) -> Bool {
+        guard durationMs >= minimumDurationMs else { return false }
+        guard seekCount <= maximumCredibleSeekCount else { return false }
+        return maxFraction >= fraction
+    }
+}
+
 /// Pure decision for the runtime voice fallback: when a non-system engine's
 /// synthesis fails after its retries are exhausted (a cloud outage, or the
 /// on-device premium runtime reporting a failed stream), degrade to the
@@ -102,6 +131,13 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     /// played to the end, false when synthesis/decode/analysis failed. Never fires
     /// on an explicit `stop()` (a preemption, not a finish).
     var onFinished: ((_ cardID: String, _ success: Bool) -> Void)?
+    /// Fires when a real (non-preview) card reaches the listen-enough threshold on
+    /// an exit path that isn't a credible full finish: an explicit `stop()`, a
+    /// preemption by another `play()`, pausing then leaving, or hang-up. Lets the
+    /// inbox -> History move happen from a partial listen, not only full
+    /// completion. Distinct from `onFinished` so these paths mark heard without
+    /// driving the live-queue / catch-up drains, which stay owned by `onFinished`.
+    var onCardReachedHeardThreshold: ((_ cardID: String) -> Void)?
     /// Fires when a preview (voice sample or conversation reply) ends, so the live
     /// queue can resume after a reply preempted an update.
     var onPreviewFinished: (() -> Void)?
@@ -158,6 +194,13 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
     private var playbackStartedAt: TimeInterval = 0
     private var playbackStartOffset: TimeInterval = 0
     private var playbackSeekCount = 0
+    /// High-water mark of the playhead (ms) reached during the current playback,
+    /// reset per card/preview start. Drives the 50%-listened heard decision and,
+    /// being the genuine furthest position, guards against a false-finish blip.
+    private var playbackMaxTimeMs = 0
+    /// Set once the active card has been reported heard (credible finish or
+    /// threshold), so a later `stop()` during teardown does not report it twice.
+    private var activeCardHeardReported = false
     private var preparedAudioPaths: Set<String> = []
     private var failedAudioPreparationAttempts: [String: Date] = [:]
     private var audioPreparationWaiters: [String: [(Bool) -> Void]] = [:]
@@ -368,6 +411,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         currentAlignment = card.alignment ?? CaptionAlignmentBuilder.fallback(text: card.spokenText, durationMs: card.durationMs)
         durationMs = max(card.durationMs, currentAlignment?.totalDurationMs ?? 1800)
         currentTimeMs = 0
+        playbackMaxTimeMs = 0
+        activeCardHeardReported = false
         activeWordIndex = nil
         envelope = 0
         renderState.reset()
@@ -534,6 +579,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         currentAlignment = CaptionAlignmentBuilder.fallback(text: text, durationMs: duration)
         durationMs = duration
         currentTimeMs = 0
+        playbackMaxTimeMs = 0
+        activeCardHeardReported = false
         activeWordIndex = nil
         envelope = 0
         renderState.reset()
@@ -564,6 +611,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         currentAlignment = CaptionAlignmentBuilder.fallback(text: text, durationMs: duration)
         durationMs = duration
         currentTimeMs = 0
+        playbackMaxTimeMs = 0
+        activeCardHeardReported = false
         activeWordIndex = nil
         envelope = 0
         renderState.reset()
@@ -597,6 +646,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         }
         player?.currentTime = Double(clamped) / 1000.0
         currentTimeMs = clamped
+        if currentTimeMs > playbackMaxTimeMs { playbackMaxTimeMs = currentTimeMs }
         reanchorClock()
         if isPlaying {
             updateClock()
@@ -630,7 +680,35 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         startTimer()
     }
 
+    /// The furthest fraction of the current clip the playhead genuinely reached.
+    private var playbackMaxFraction: Double {
+        guard durationMs > 0 else { return 0 }
+        return min(1, max(0, Double(playbackMaxTimeMs) / Double(durationMs)))
+    }
+
+    /// Whether the active card has been listened to past the heard threshold.
+    private func currentCardReachedHeardThreshold() -> Bool {
+        HeardThreshold.reached(
+            maxFraction: playbackMaxFraction,
+            durationMs: durationMs,
+            seekCount: playbackSeekCount
+        )
+    }
+
+    /// File the active card heard when it reached the threshold on a non-finish
+    /// exit path (stop / preemption / hang-up). Guarded so a preview, an
+    /// already-reported card, or a below-threshold listen is left untouched.
+    private func reportHeardThresholdIfReached() {
+        guard !activeIsPreview,
+              !activeCardHeardReported,
+              let cardID = currentCardID,
+              currentCardReachedHeardThreshold() else { return }
+        activeCardHeardReported = true
+        onCardReachedHeardThreshold?(cardID)
+    }
+
     func stop() {
+        reportHeardThresholdIfReached()
         timer?.invalidate()
         timer = nil
         generationCompletion = nil
@@ -664,6 +742,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         playbackStartedAt = 0
         playbackStartOffset = 0
         playbackSeekCount = 0
+        playbackMaxTimeMs = 0
+        activeCardHeardReported = false
         restoreVoiceAfterPreviewIfNeeded()
     }
 
@@ -710,10 +790,18 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
         timeline = .empty
         cleanupGeneratedAudio()
 
+        // A finish that isn't credible (a decode-early blip, or a seek-storm
+        // false positive) can still count as heard when the genuine high-water
+        // playhead passed the threshold. The high-water mark guards the blip (its
+        // fraction stays tiny) and the seek-count guard rejects the storm, so this
+        // never marks a barely-played card heard.
+        let heardByThreshold = !wasPreview && currentCardReachedHeardThreshold()
+        let markHeard = credibleCardFinish || heardByThreshold
         restoreVoiceAfterPreviewIfNeeded()
         if wasPreview {
             onPreviewFinished?()
-        } else if credibleCardFinish, let cardID {
+        } else if markHeard, let cardID {
+            activeCardHeardReported = true
             onFinished?(cardID, true)
         } else if let cardID {
             onPlaybackError?("Playback stopped before the voice message finished. The card remains unread.")
@@ -793,6 +881,8 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
                 self.playbackStartedAt = ProcessInfo.processInfo.systemUptime
                 self.playbackStartOffset = audioPlayer.currentTime
                 self.playbackSeekCount = 0
+                self.playbackMaxTimeMs = self.currentTimeMs
+                self.activeCardHeardReported = false
                 audioPlayer.volume = self.muteAudioOutput ? 0 : 1
                 audioPlayer.rate = self.playbackRate
                 audioPlayer.play()
@@ -1084,6 +1174,7 @@ final class SpeechPlaybackController: NSObject, ObservableObject, NSSpeechSynthe
             }
         }
         currentTimeMs = forceEnd ? durationMs : min(durationMs, max(0, smoothTimeMs))
+        if currentTimeMs > playbackMaxTimeMs { playbackMaxTimeMs = currentTimeMs }
         activeWordIndex = currentAlignment?.activeWordIndex(at: currentTimeMs)
 
         var nextState = renderState

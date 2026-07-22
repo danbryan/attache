@@ -80,4 +80,16 @@ final class LivePlaybackQueueTests: XCTestCase {
         q.reconcile(isBusy: true)   // still playing A
         XCTAssertEqual(q.inFlight, "A")
     }
+
+    func testSecondCardArrivingMidPlayQueuesBehindAndDoesNotInterrupt() {
+        // A new live update arriving while one is playing must queue to play next,
+        // never preempt the card currently speaking.
+        let q = LivePlaybackQueue()
+        XCTAssertEqual(q.enqueue("A", isBusy: false), "A")   // A is playing
+        XCTAssertNil(q.enqueue("B", isBusy: true), "B must not start while A plays")
+        XCTAssertEqual(q.inFlight, "A", "the playing card is never interrupted by a new arrival")
+        XCTAssertEqual(q.pending, "B", "the new arrival waits to play next")
+        XCTAssertEqual(q.finished(), "B", "B plays only after A finishes")
+        XCTAssertEqual(q.inFlight, "B")
+    }
 }
