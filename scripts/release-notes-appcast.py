@@ -85,14 +85,22 @@ def rolling_notes(notes_dir: str, current: str, count: int) -> str:
     if not files:
         raise SystemExit(f"error: no release notes at or below v{current} in {notes_dir}")
 
+    # A single version shows its notes plainly (Sparkle's standard: the offered
+    # version's notes, no version headers). Only a multi-version window (count
+    # > 1) labels each with a header, and even then Sparkle shows this for the
+    # offered version only, so a not-behind user is not misled into thinking an
+    # older version's notes are new. Default is single-version; the GitHub
+    # full-notes link is the cumulative changelog for anyone far behind.
+    if len(files) == 1:
+        with open(os.path.join(notes_dir, files[0][1]), encoding="utf-8") as handle:
+            return convert_notes(handle.read())
     sections = []
     for v, name in files:
         with open(os.path.join(notes_dir, name), encoding="utf-8") as handle:
             body = convert_notes(handle.read())
         label = ".".join(str(x) for x in v)
         sections.append(f'<h3>Version {label}</h3>\n{body}')
-    lead = "" if len(sections) == 1 else "<p><em>Recent updates, newest first:</em></p>\n"
-    return lead + "\n".join(sections)
+    return "<p><em>Recent updates, newest first:</em></p>\n" + "\n".join(sections)
 
 
 def main() -> int:

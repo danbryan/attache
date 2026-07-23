@@ -21,11 +21,12 @@ NOTES_DIR="$ROOT/docs/releases"
 NOTES_MD="$NOTES_DIR/v$VERSION.md"
 GEN="$ROOT/.build/artifacts/sparkle/Sparkle/bin/generate_appcast"
 FULL_NOTES_LINK="${FULL_NOTES_LINK:-https://github.com/danbryan/attache/releases}"
-# How many recent versions' notes to inline, newest first. Sparkle shows only
-# the offered version's notes and does not concatenate skipped versions, so a
-# rolling window lets a user several versions behind still read the recent span
-# in the update prompt. The GitHub link remains the full cumulative changelog.
-ROLLING_NOTES_COUNT="${ROLLING_NOTES_COUNT:-6}"
+# How many recent versions' notes to inline, newest first. Default 1: show only
+# the offered version's notes, the standard Sparkle behavior, so a user who is
+# not behind is never shown older versions' notes as if they were new. The
+# GitHub full-notes link is the cumulative changelog for anyone several versions
+# behind. Raise this only if you deliberately want a multi-version window.
+ROLLING_NOTES_COUNT="${ROLLING_NOTES_COUNT:-1}"
 DL_PREFIX="https://github.com/danbryan/attache/releases/download/v$VERSION/"
 OUT="$ROOT/dist/appcast.xml"
 

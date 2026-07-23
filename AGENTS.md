@@ -328,7 +328,7 @@ all three paths.
      implementation. Keep it clear and concise, not exhaustive; this is a
      changelog for humans, not a commit log.
   2. Generate the appcast with `VERSION=X.Y.Z scripts/generate-appcast.sh`. It
-     signs with `generate_appcast`, embeds a ROLLING WINDOW of the last
+     signs with `generate_appcast`, embeds the offered version's notes inline (default), or a rolling window of the last
      `ROLLING_NOTES_COUNT` versions' notes inline as the item `<description>`
      (default 6, newest first, Install boilerplate dropped), and adds a
      `<sparkle:fullReleaseNotesLink>` to `github.com/danbryan/attache/releases`.
