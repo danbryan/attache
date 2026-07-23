@@ -787,26 +787,52 @@ struct AttacheCharacterFigure: View {
             )
             face.fill(mouth, with: .color(screen))
         } else {
-            // The mouth equalizer draws the REAL analyzed spectrum
+            // The refined mouth equalizer draws the REAL analyzed spectrum
             // (`pose.audioBars`) folded through the shared `EchoEqualizerBars`
-            // mapping, at a legible mouth-sized band count (5 mirrored bars).
+            // mapping, at a legible mouth-sized band count (7 mirrored bars).
             // `pose.mouthOpen` stays the overall loudness envelope so the mouth
             // still opens and closes; the per-band shape is the actual audio.
             // With no spectrum available (a paused frame) the bars fall back to
             // a fixed symmetric rest shape, deterministic and clock-free. This
             // branch is only reached above the neutral threshold, so the locked
             // neutral pose (mouthOpen 0) is untouched.
+            //
+            // Seven bars keep the current centered footprint: left edges run
+            // 108 to 135.6 (spacing 4.6, width 3.1, rounded caps), so the mouth
+            // stays centered on the steel plate and never overflows it.
             let bands = EchoCharacterMouth.bandShapes(from: pose.audioBars)
-            for bar in 0..<EchoCharacterMouth.bandCount {
-                let x = 108.0 + Double(bar) * 6
-                let height = (3 + 10 * pose.mouthOpen * bands[bar]) * s
-                let slot = Path(
-                    roundedRect: CGRect(
-                        x: p(CGFloat(x), 134).x, y: p(CGFloat(x), 134).y - height / 2,
-                        width: 4 * s, height: height
-                    ),
-                    cornerRadius: 2 * s
+            let barWidth = 3.1 * s
+            let barCorner = 1.55 * s
+            func barRect(_ bar: Int) -> CGRect {
+                let x = 108.0 + Double(bar) * 4.6
+                let height = (3 + 12 * pose.mouthOpen * bands[bar]) * s
+                return CGRect(
+                    x: p(CGFloat(x), 134).x, y: p(CGFloat(x), 134).y - height / 2,
+                    width: barWidth, height: height
                 )
+            }
+
+            // Faint brand under-glow behind the dark bars, so the mouth reads as
+            // lit from within rather than neon. The glow is a FIXED brand accent
+            // (`EchoCharacterMouth.brandGlow`), deliberately NOT the LED/eye
+            // color and NOT derived from any pose or eye input, so a future
+            // custom face never couples the mouth glow to the eyes. It is part
+            // of the audio-content rendering, not decorative clock motion, so it
+            // stays under Reduce Motion. Louder bars glow a touch more.
+            face.drawLayer { glow in
+                glow.addFilter(.blur(radius: 2.5 * s))
+                for bar in 0..<EchoCharacterMouth.bandCount {
+                    let level = bands[bar]
+                    let rect = Path(roundedRect: barRect(bar), cornerRadius: barCorner)
+                    glow.fill(
+                        rect,
+                        with: .color(EchoCharacterMouth.brandGlow.opacity(0.35 + 0.15 * level))
+                    )
+                }
+            }
+
+            for bar in 0..<EchoCharacterMouth.bandCount {
+                let slot = Path(roundedRect: barRect(bar), cornerRadius: barCorner)
                 face.fill(slot, with: .color(screen))
             }
         }

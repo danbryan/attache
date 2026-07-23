@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Pure, deterministic mapping from analyzed per-band audio energy to the
 /// mirrored equalizer bar heights the full Echo visualizer draws.
@@ -117,15 +118,26 @@ public enum EchoEqualizerBars {
 /// does. Pure and deterministic; the draw site multiplies these shapes by the
 /// mouth's loudness envelope (`mouthOpen`).
 public enum EchoCharacterMouth {
-    /// Five mirrored bands read cleanly in the mouth slot: enough to show a
-    /// real spectrum shape, few enough not to blur at mouth size.
-    public static let bandCount = 5
+    /// Seven mirrored bands read cleanly in the mouth slot (the "refined"
+    /// treatment): enough to show a finer real spectrum shape, few enough not
+    /// to blur at mouth size.
+    public static let bandCount = 7
 
     /// The fixed symmetric rest shape used when no analyzed spectrum is
     /// available (for example a paused frame that carries no live bands),
     /// scaled by the loudness envelope at the draw site. Deterministic and
-    /// clock-free, so a held mouth never animates on its own.
-    public static let restShape: [Double] = [0.6, 0.85, 1.0, 0.85, 0.6]
+    /// clock-free, so a held mouth never animates on its own. Length tracks
+    /// `bandCount` and is mirrored around the center band.
+    public static let restShape: [Double] = [0.6, 0.72, 0.88, 1.0, 0.88, 0.72, 0.6]
+
+    /// The faint under-glow color drawn behind the dark mouth bars so the
+    /// refined mouth reads as "lit from within". This is a FIXED brand accent,
+    /// intentionally independent of the LED/eye color and of any pose or
+    /// character color: it is never derived from `led`, `pose`, or an eye
+    /// input, so a future custom face (for example one with brown eyes) can
+    /// never couple the mouth glow to the eyes. Draw sites must use this
+    /// constant, never `ledColor`.
+    public static let brandGlow = Color(red: 102 / 255, green: 227 / 255, blue: 1)
 
     /// Per-band multipliers (0...1) shaping the mouth bars: the real mirrored
     /// spectrum when audio is present, else the fixed rest shape. A quiet floor

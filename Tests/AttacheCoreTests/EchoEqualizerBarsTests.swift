@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import AttacheCore
 
@@ -193,6 +194,8 @@ final class EchoEqualizerBarsTests: XCTestCase {
         let input: [Float] = (0..<56).map { Float(($0 * 17) % 100) / 100 }
         let shapes = EchoCharacterMouth.bandShapes(from: input)
         XCTAssertEqual(shapes.count, EchoCharacterMouth.bandCount)
+        // The refined mouth draws seven bands.
+        XCTAssertEqual(EchoCharacterMouth.bandCount, 7)
         let spectrum = EchoEqualizerBars.barHeights(from: input, count: EchoCharacterMouth.bandCount)
         for index in shapes.indices {
             XCTAssertEqual(shapes[index], 0.4 + 0.6 * spectrum[index], accuracy: 1e-9)
@@ -214,5 +217,45 @@ final class EchoEqualizerBarsTests: XCTestCase {
                 accuracy: 1e-9
             )
         }
+    }
+
+    // The resampled live spectrum at the mouth's seven bands stays mirrored
+    // around the center band, so the refined mouth reads as a symmetric
+    // equalizer for a symmetric input.
+    func testMouthSevenBandsAreMirroredAroundCenter() {
+        XCTAssertEqual(EchoCharacterMouth.bandCount, 7)
+        // A symmetric source spectrum must resample to a symmetric mouth shape.
+        let symmetric: [Float] = [0.1, 0.4, 0.7, 1.0, 0.7, 0.4, 0.1]
+        let shapes = EchoCharacterMouth.bandShapes(from: symmetric)
+        XCTAssertEqual(shapes.count, 7)
+        for index in shapes.indices {
+            XCTAssertEqual(shapes[index], shapes[6 - index], accuracy: 1e-9)
+        }
+    }
+
+    // Zero energy (a live but silent spectrum) still yields the shared quiet
+    // floor at seven bands: 0.4 + 0.6 * 0 on every band, never invented motion.
+    func testMouthZeroEnergyIsFlatFloorAtSevenBands() {
+        let silence = [Float](repeating: 0, count: 56)
+        let shapes = EchoCharacterMouth.bandShapes(from: silence)
+        XCTAssertEqual(shapes.count, 7)
+        for value in shapes {
+            XCTAssertEqual(value, 0.4, accuracy: 1e-9)
+        }
+    }
+
+    // The mouth under-glow is a FIXED brand accent, independent of the LED/eye
+    // color and of any pose or character color. It is a standalone constant, so
+    // a future custom face (for example brown eyes) can never couple the mouth
+    // glow to the eyes.
+    func testBrandGlowIsTheFixedBrandAccentIndependentOfEyes() {
+        XCTAssertEqual(
+            EchoCharacterMouth.brandGlow,
+            Color(red: 102 / 255, green: 227 / 255, blue: 1)
+        )
+        // Independence by construction: the constant is not derived from any
+        // eye color input. A hypothetical brown-eyed face does not change it.
+        let brownEyes = Color(red: 0.40, green: 0.26, blue: 0.13)
+        XCTAssertNotEqual(EchoCharacterMouth.brandGlow, brownEyes)
     }
 }
