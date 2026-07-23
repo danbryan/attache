@@ -403,6 +403,9 @@ enum AttachePreferenceKey {
     static let sessionRenames = "attache.sessionRenames"
     static let captionsEnabled = "attache.captionsEnabled"
     static let captionStyle = "attache.captionStyle"
+    /// Running-transcript side panel pinned open. Persists across turns and
+    /// calls; default off (the panel is an on-demand peek otherwise).
+    static let transcriptPanelPinned = "attache.transcriptPanelPinned"
     static let lowLatencyCaptions = "attache.lowLatencyCaptions"
     static let spokenLanguage = "attache.spokenLanguage"
     static let microphoneDeviceID = "attache.microphoneDeviceID"

@@ -21,19 +21,25 @@ struct ConversationTurn: Identifiable, Equatable {
     /// User-authored turns default to allowedRemote because sending a later
     /// turn is the user's explicit disclosure, not an inferred declassification.
     let egress: AttacheContextItemEgress
+    /// The saved History card id for an assistant turn, so the running-transcript
+    /// panel can replay this exact turn through the standard playback path. Nil
+    /// for user turns and for any turn on a private call (which writes no cards).
+    let replayCardID: String?
 
     init(
         id: String,
         role: Role,
         text: String,
         createdAt: Date,
-        egress: AttacheContextItemEgress = .allowedRemote
+        egress: AttacheContextItemEgress = .allowedRemote,
+        replayCardID: String? = nil
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.createdAt = createdAt
         self.egress = egress
+        self.replayCardID = replayCardID
     }
 }
 
@@ -247,6 +253,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var pendingAssistantReply: String?
     private var pendingAssistantInference: AttacheInferenceMetadata?
     private var pendingAssistantReplyEgress: AttacheContextItemEgress = .allowedRemote
+    /// The saved card id for the reply currently being prepared, moved onto the
+    /// assistant turn when it is revealed so the transcript panel can replay it.
+    private var pendingAssistantReplyCardID: String?
     /// The live-call phase, derived from `isConversing`, playback state,
     /// mic state, `conversationRecovery`, and the two-way send log by the
     /// pure `CallPhase.derive(from:)` reducer (see `refreshCallPhase()`).
@@ -585,6 +594,21 @@ final class AppModel: ObservableObject {
     @Published var captionStyle: CaptionStyle = .karaoke {
         didSet { defaults.set(captionStyle.rawValue, forKey: AttachePreferenceKey.captionStyle) }
     }
+    /// Running-transcript side panel state (INF live-call transcript). `pinned`
+    /// is the persisted preference (default off); `peeking` is a transient,
+    /// this-call-only open. The panel is open when either is set. Mutated only
+    /// through the transcript panel API below so the pin persists and the peek
+    /// never outlives a call.
+    @Published private(set) var transcriptPanel = TranscriptPanelPresentation() {
+        didSet {
+            if transcriptPanel.pinned != oldValue.pinned {
+                defaults.set(transcriptPanel.pinned, forKey: AttachePreferenceKey.transcriptPanelPinned)
+            }
+        }
+    }
+    /// A brief post-hang-up note: "Saved to History" for a normal call,
+    /// "Not recorded" for a private call. Cleared automatically after a moment.
+    @Published private(set) var callHangUpNote: String?
     static let captionLineRange = 1...5
     static let captionFontRange: ClosedRange<Double> = 18...34
     @Published var captionFontSize: Double = 24 {
@@ -1339,6 +1363,7 @@ final class AppModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var silenceTimer: Timer?
     private var revealTimer: Timer?
+    private var callHangUpNoteTimer: Timer?
     private var conversationWaitTimer: Timer?
     private var conversationWaitStartedAt: Date?
     /// One hard deadline and identity per live personality request. Hanging up
@@ -3679,6 +3704,11 @@ final class AppModel: ObservableObject {
             // transcript turns from a prior call that may have had a different
             // focused session, even though replayable replies remain in History.
             conversationMessages = []
+            // A fresh call starts with no transient peek and no lingering
+            // hang-up note; a pinned panel stays pinned across calls.
+            transcriptPanel.callEnded()
+            callHangUpNoteTimer?.invalidate(); callHangUpNoteTimer = nil
+            callHangUpNote = nil
             conversationTargetSnapshot = captureConversationTargetSnapshot()
             // The auto-fallback chain is sticky for a call, never across
             // calls (INF-258/D5 spec item 3): a fresh call always starts back
@@ -3752,6 +3782,7 @@ final class AppModel: ObservableObject {
         pendingAssistantReply = nil
         pendingAssistantInference = nil
         pendingAssistantReplyEgress = .allowedRemote
+        pendingAssistantReplyCardID = nil
         expectingReplyAudio = false
         conversationRecovery = nil
         conversationRecoveryConfirmation = nil
@@ -3776,7 +3807,17 @@ final class AppModel: ObservableObject {
         // inbox as unread (INF-163).
         playback.stop()
         livePlaybackQueue.reset()
+        // Hang-up is a context boundary: clear the in-view transcript so the
+        // panel and the pinned last-turn card cannot leak this call's turns into
+        // the next one. A private call kept them in memory only; they are gone
+        // now with nothing written to History. The transient peek closes; a
+        // pinned panel stays pinned.
+        let hadTurns = !conversationMessages.isEmpty
         conversationMessages = []
+        transcriptPanel.callEnded()
+        if hadTurns {
+            showCallHangUpNote(wasPrivate ? "Not recorded" : "Saved to History")
+        }
         if wasPrivate {
             AccessibilityAnnouncer.announce(PrivateModeIndicator.exitedAnnouncement)
         }
@@ -3959,6 +4000,80 @@ final class AppModel: ObservableObject {
         conversationStatus = ""
         conversationRecovery = nil
     }
+
+    // MARK: - Live-call running transcript (combination "B + A")
+
+    /// The pure, ordered projection the running-transcript panel and the pinned
+    /// last-turn card render. Derived from the in-memory conversation turns (the
+    /// single source of truth); it is never a parallel store. A hang-up clears
+    /// `conversationMessages`, so this returns empty for a new call and never
+    /// leaks a prior call's turns.
+    var liveCallTranscript: LiveCallTranscript {
+        LiveCallTranscript(entries: conversationMessages.map { turn in
+            LiveCallTranscriptEntry(
+                id: turn.id,
+                speaker: turn.role == .user ? .user : .attache,
+                text: turn.text,
+                replayCardID: turn.replayCardID
+            )
+        })
+    }
+
+    var transcriptPanelOpen: Bool { transcriptPanel.isOpen }
+    var transcriptPanelPinned: Bool { transcriptPanel.pinned }
+
+    /// Chevron / context menu / "Show conversation": open the panel as a peek.
+    func showTranscriptPanel() {
+        transcriptPanel.openPeek()
+    }
+
+    /// Keyboard shortcut (Command-\\): flip the panel open or closed. Closing a
+    /// pinned panel this way also unpins it.
+    func toggleTranscriptPanel() {
+        transcriptPanel.toggleShortcut()
+    }
+
+    /// Header thumbtack: pin or unpin. Pinning persists across turns and calls.
+    func setTranscriptPanelPinned(_ pinned: Bool) {
+        transcriptPanel.setPinned(pinned)
+    }
+
+    /// Replay one Attaché transcript turn through the standard History playback
+    /// path, honoring the same egress/private rules card replay already applies.
+    /// A private call's turns carry no card id, so nothing to replay.
+    func replayTranscriptEntry(_ entry: LiveCallTranscriptEntry) {
+        guard let cardID = entry.replayCardID,
+              let card = cards.first(where: { $0.id == cardID }) else { return }
+        playHistoryCard(card)
+    }
+
+    private func showCallHangUpNote(_ note: String) {
+        callHangUpNote = note
+        callHangUpNoteTimer?.invalidate()
+        callHangUpNoteTimer = Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
+            self?.callHangUpNote = nil
+            self?.callHangUpNoteTimer = nil
+        }
+    }
+
+    #if DEBUG
+    /// Append a user turn as if it had been dictated, so the running transcript
+    /// and its clearing at hang-up are testable without a live mic or model.
+    @discardableResult
+    func appendUserTurnForTesting(_ text: String) -> String {
+        appendConversationTurn(role: .user, text: text)
+    }
+
+    /// Drive the assistant-reply delivery path deterministically: persist a
+    /// History card exactly when a saved call would (never on a private call),
+    /// then append the assistant turn carrying the saved card id. Mirrors
+    /// `surfaceConversationReply`'s saved/private branching without a model call.
+    @discardableResult
+    func deliverAssistantReplyForTesting(_ text: String) -> String {
+        let cardID = conversationSavesHistory ? persistConversationReply(text)?.id : nil
+        return appendConversationTurn(role: .assistant, text: text, replayCardID: cardID)
+    }
+    #endif
 
     func cycleVoiceInputMode() {
         voiceInputMode = voiceInputMode.next
@@ -4923,12 +5038,18 @@ final class AppModel: ObservableObject {
         // playback/caption path as other immediate voice responses.
         livePlaybackQueue.replyStarted()
         if conversationSavesHistory {
-            _ = persistConversationReply(
+            let card = persistConversationReply(
                 trimmed,
                 toolCallLost: toolCallLost,
                 inference: inference,
                 egress: replyEgress
             )
+            // Carry the saved card id onto the appended assistant turn so the
+            // running-transcript panel can replay this exact turn. A private
+            // call skips this whole branch, so its turns stay non-replayable.
+            pendingAssistantReplyCardID = card?.id
+        } else {
+            pendingAssistantReplyCardID = nil
         }
         if replyEgress == .localOnly {
             playback.preview(trimmed, configuration: localOnlySpeechConfiguration)
@@ -5073,7 +5194,9 @@ final class AppModel: ObservableObject {
         pendingAssistantInference = nil
         let egress = pendingAssistantReplyEgress
         pendingAssistantReplyEgress = .allowedRemote
-        let turnID = appendConversationTurn(role: .assistant, text: reply, egress: egress)
+        let replayCardID = pendingAssistantReplyCardID
+        pendingAssistantReplyCardID = nil
+        let turnID = appendConversationTurn(role: .assistant, text: reply, egress: egress, replayCardID: replayCardID)
         if let inference {
             conversationReceiptResponseIDs.insert(turnID)
             Task { @MainActor in
@@ -5166,7 +5289,8 @@ final class AppModel: ObservableObject {
     private func appendConversationTurn(
         role: ConversationTurn.Role,
         text: String,
-        egress: AttacheContextItemEgress = .allowedRemote
+        egress: AttacheContextItemEgress = .allowedRemote,
+        replayCardID: String? = nil
     ) -> String {
         let id = UUID().uuidString
         conversationMessages.append(ConversationTurn(
@@ -5174,7 +5298,8 @@ final class AppModel: ObservableObject {
             role: role,
             text: text,
             createdAt: Date(),
-            egress: egress
+            egress: egress,
+            replayCardID: replayCardID
         ))
         return id
     }
@@ -7264,6 +7389,7 @@ final class AppModel: ObservableObject {
         pendingAssistantReply = nil
         pendingAssistantInference = nil
         pendingAssistantReplyEgress = .allowedRemote
+        pendingAssistantReplyCardID = nil
         expectingReplyAudio = false
         conversationRecovery = nil
         conversationRecoveryConfirmation = nil
@@ -10234,6 +10360,11 @@ final class AppModel: ObservableObject {
         if let raw = defaults.string(forKey: AttachePreferenceKey.captionStyle),
            let style = CaptionStyle(rawValue: raw) {
             captionStyle = style
+        }
+        if defaults.object(forKey: AttachePreferenceKey.transcriptPanelPinned) != nil {
+            transcriptPanel = TranscriptPanelPresentation(
+                pinned: defaults.bool(forKey: AttachePreferenceKey.transcriptPanelPinned)
+            )
         }
         if defaults.object(forKey: AttachePreferenceKey.uiTextScale) != nil {
             uiTextScale = AttacheTypeScale.clamp(defaults.double(forKey: AttachePreferenceKey.uiTextScale))

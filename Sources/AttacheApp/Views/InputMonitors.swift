@@ -15,6 +15,8 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
     var onOpenShortcuts: () -> Bool
     /// -1 slower, +1 faster, 0 reset (S / D / R).
     var onSpeedKey: (Int) -> Bool
+    /// Command-\\ toggles the live-call running transcript panel.
+    var onToggleTranscript: () -> Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -28,7 +30,8 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
             onPreviousPersonality: onPreviousPersonality,
             onNextPersonality: onNextPersonality,
             onOpenShortcuts: onOpenShortcuts,
-            onSpeedKey: onSpeedKey
+            onSpeedKey: onSpeedKey,
+            onToggleTranscript: onToggleTranscript
         )
     }
 
@@ -50,6 +53,7 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
         context.coordinator.onPreviousPersonality = onPreviousPersonality
         context.coordinator.onNextPersonality = onNextPersonality
         context.coordinator.onOpenShortcuts = onOpenShortcuts
+        context.coordinator.onToggleTranscript = onToggleTranscript
         context.coordinator.view = nsView
     }
 
@@ -69,6 +73,7 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
         var onNextPersonality: () -> Bool
         var onOpenShortcuts: () -> Bool
         var onSpeedKey: (Int) -> Bool
+        var onToggleTranscript: () -> Bool
         weak var view: NSView?
         private var monitor: Any?
 
@@ -83,7 +88,8 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
             onPreviousPersonality: @escaping () -> Bool,
             onNextPersonality: @escaping () -> Bool,
             onOpenShortcuts: @escaping () -> Bool,
-            onSpeedKey: @escaping (Int) -> Bool
+            onSpeedKey: @escaping (Int) -> Bool,
+            onToggleTranscript: @escaping () -> Bool
         ) {
             self.onEscape = onEscape
             self.onDelete = onDelete
@@ -96,6 +102,7 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
             self.onNextPersonality = onNextPersonality
             self.onOpenShortcuts = onOpenShortcuts
             self.onSpeedKey = onSpeedKey
+            self.onToggleTranscript = onToggleTranscript
         }
 
         func attach(to view: NSView) {
@@ -124,6 +131,9 @@ struct KeyboardShortcutMonitor: NSViewRepresentable {
                         return self.onNextPersonality() ? nil : event
                     case 44:
                         return self.onOpenShortcuts() ? nil : event
+                    case 42:
+                        // Command-\\ toggles the live-call transcript panel.
+                        return self.onToggleTranscript() ? nil : event
                     default:
                         break
                     }

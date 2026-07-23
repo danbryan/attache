@@ -282,6 +282,14 @@ struct AttacheRootView: View {
             conversationOverlay
                 .allowsHitTesting(false)
 
+            if let note = model.callHangUpNote {
+                callHangUpNoteToast(note)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 30)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
             if surfaceMode == .live {
                 liveModeOverlay
                     .transition(.opacity)
@@ -304,12 +312,21 @@ struct AttacheRootView: View {
             }
 
             if surfaceMode == .live {
-                LyricsSidePanel(
-                    model: model,
-                    playback: playback,
-                    scrubberHoverExclusionEnabled: liveTransportVisible
-                )
-                    .transition(.opacity)
+                if model.onCall {
+                    // During a call the side panel is the full running
+                    // conversation, opened on demand (peek) or pinned. Ordinary
+                    // voicemail/history playback keeps the single-turn panel.
+                    if model.transcriptPanelOpen {
+                        LiveTranscriptPanel(model: model, playback: playback)
+                    }
+                } else {
+                    LyricsSidePanel(
+                        model: model,
+                        playback: playback,
+                        scrubberHoverExclusionEnabled: liveTransportVisible
+                    )
+                        .transition(.opacity)
+                }
             }
 
             if paletteVisible {
@@ -401,6 +418,8 @@ struct AttacheRootView: View {
         .animation(.easeInOut(duration: 0.18), value: shortcutsVisible)
         .animation(.easeInOut(duration: 0.18), value: model.settingsOverlayVisible)
         .animation(.easeInOut(duration: 0.18), value: model.activitySimulatorEnabled)
+        .animation(.easeInOut(duration: 0.2), value: model.transcriptPanelOpen)
+        .animation(.easeInOut(duration: 0.2), value: model.callHangUpNote)
         .background(
             KeyboardShortcutMonitor(
                 onEscape: handleEscapeKey,
@@ -413,7 +432,8 @@ struct AttacheRootView: View {
                 onPreviousPersonality: handlePreviousPersonalityKey,
                 onNextPersonality: handleNextPersonalityKey,
                 onOpenShortcuts: handleOpenShortcutsKey,
-                onSpeedKey: handleSpeedKey
+                onSpeedKey: handleSpeedKey,
+                onToggleTranscript: handleToggleTranscriptKey
             )
         )
         .onContinuousHover { phase in
@@ -784,6 +804,16 @@ struct AttacheRootView: View {
         return true
     }
 
+    // Command-\\ toggles the live-call running transcript panel. Only meaningful
+    // during a call; off-call it is a no-op so the event passes through.
+    private func handleToggleTranscriptKey() -> Bool {
+        guard model.onCall else { return false }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            model.toggleTranscriptPanel()
+        }
+        return true
+    }
+
     // +/- resize the caption while it's on screen.
     private func handleCaptionResize(_ delta: Int) -> Bool {
         guard captionOverlayVisible else { return false }
@@ -941,6 +971,15 @@ struct AttacheRootView: View {
                         .transition(.opacity)
                 }
 
+                // PART B: the most recent turn never vanishes. When nothing is
+                // actively narrating, the latest Attaché turn stays visible as a
+                // compact card in the caption's own position.
+                if pinnedLastTurnVisible {
+                    pinnedLastTurnCard
+                        .padding(.horizontal, 10)
+                        .transition(.opacity)
+                }
+
                 if liveBottomHUDVisible {
                     liveBottomHUDContent
                 }
@@ -956,8 +995,13 @@ struct AttacheRootView: View {
     private var liveBottomHUDContent: some View {
         VStack(spacing: 14) {
             if captionOverlayVisible {
-                bottomResponseOverlay
-                    .padding(.horizontal, 10)
+                // Right-click is free (single/double-click on a word are seek/play,
+                // scroll adjusts line count), so the caption carries the transcript
+                // actions during a call.
+                withTranscriptContextMenu(
+                    bottomResponseOverlay
+                        .padding(.horizontal, 10)
+                )
             }
             if liveTransportVisible {
                 liveTransportBar
@@ -968,6 +1012,77 @@ struct AttacheRootView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// The persistent bottom card is shown during a call whenever the live
+    /// caption is not up and Attaché has spoken at least one turn.
+    // A brief post-hang-up confirmation: "Saved to History" for a normal call,
+    // "Not recorded" for a private call.
+    private func callHangUpNoteToast(_ note: String) -> some View {
+        let isPrivate = note == "Not recorded"
+        return Label(note, systemImage: isPrivate ? "eye.slash.fill" : "checkmark.circle.fill")
+            .typoCaption(.semibold)
+            .foregroundStyle(isPrivate ? Color.primary.opacity(0.85) : accent)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(Color.primary.opacity(0.12)))
+            .accessibilityLabel(isPrivate ? "Call not recorded" : "Call saved to History")
+    }
+
+    private var pinnedLastTurnVisible: Bool {
+        model.onCall && !captionOverlayVisible && model.liveCallTranscript.pinnedText != nil
+    }
+
+    private var pinnedLastTurnCard: some View {
+        let transcript = model.liveCallTranscript
+        let text = transcript.pinnedText ?? ""
+        let earlier = transcript.earlierTurnCount
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Attaché")
+                    .typoCaption(.semibold)
+                    .foregroundStyle(accent)
+                Spacer(minLength: 8)
+                Button { model.showTranscriptPanel() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.up")
+                            .typoIcon(size: 10, .bold)
+                        Text(earlier > 0 ? "\(earlier) earlier" : "Show conversation")
+                            .typoCaption(.semibold)
+                    }
+                    .foregroundStyle(accent)
+                }
+                .buttonStyle(.plain)
+                .help("Show the full conversation")
+                .accessibilityLabel(earlier > 0 ? "Show conversation, \(earlier) earlier turns" : "Show conversation")
+            }
+            Text(text)
+                .typoBody()
+                .foregroundStyle(.primary.opacity(0.92))
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: 760, alignment: .leading)
+        .background(.ultraThinMaterial.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+        .readingPlate(theme: model.theme, cornerRadius: 12, minimumOpacity: 0.65)
+        .frame(maxWidth: .infinity, alignment: .bottom)
+        .modifier(TranscriptContextMenu(model: model, currentText: text))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Latest turn from Attaché. \(text)")
+    }
+
+    /// Transcript context-menu actions attached to the caption/last-turn card.
+    @ViewBuilder
+    private func withTranscriptContextMenu(_ content: some View) -> some View {
+        if model.onCall {
+            content.modifier(TranscriptContextMenu(model: model, currentText: playback.currentText))
+        } else {
+            content
+        }
     }
 
     // True whenever a recap is actively playing or paused in live mode, so the
