@@ -328,17 +328,22 @@ all three paths.
      implementation. Keep it clear and concise, not exhaustive; this is a
      changelog for humans, not a commit log.
   2. Generate the appcast with `VERSION=X.Y.Z scripts/generate-appcast.sh`. It
-     signs with `generate_appcast`, embeds that version's notes inline as the
-     item `<description>` (dropping the Install boilerplate), and adds a
+     signs with `generate_appcast`, embeds a ROLLING WINDOW of the last
+     `ROLLING_NOTES_COUNT` versions' notes inline as the item `<description>`
+     (default 6, newest first, Install boilerplate dropped), and adds a
      `<sparkle:fullReleaseNotesLink>` to `github.com/danbryan/attache/releases`.
      Output is `dist/appcast.xml`; publish it via the ConfigMap step in Landing
      Page.
-  - Why the GitHub link matters: a user may be several versions behind, and
-    Sparkle shows only the OFFERED version's notes inline, not the notes of the
-    versions they skipped. The GitHub releases page is the cumulative,
-    newest-first changelog (every `docs/releases/vX.Y.Z.md` is posted there by
-    `create-github-release.sh`), so it covers "everything since you last
-    updated." Keep each release's notes self-contained so that page reads well.
+  - Why the rolling window: Sparkle shows only the OFFERED version's notes and
+    does NOT concatenate the versions a user skipped, and the feed carries one
+    item. So the description inlines the recent span, letting a user several
+    versions behind read what changed since they last updated without leaving
+    the prompt. A static appcast still cannot tailor to the exact installed
+    version (notes are baked at publish time), so the window is a fixed recent
+    span, not a per-client delta; the GitHub releases page (every
+    `docs/releases/vX.Y.Z.md` is posted there by `create-github-release.sh`) is
+    the complete cumulative changelog behind the full-notes link. Keep each
+    release's notes self-contained so both the window and that page read well.
   - This repo is PUBLIC (see Repository History). Release notes, and everything
     in this file, are world-readable: never put secrets, credentials, private
     infrastructure detail, or internal-only ticket specifics in them.
