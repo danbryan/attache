@@ -9418,12 +9418,20 @@ final class AppModel: ObservableObject {
     }
 
     func toggleWatchSearchHit(_ hit: SessionSearchHit) {
+        let id = hit.record.id
+        // Unwatch is index-independent: an already-watched session must always
+        // be detachable, even when its record has aged out of the live index
+        // (an orphaned watch whose synthetic row cannot be resolved). Detach by
+        // id directly rather than gating on resolveCommandKSelection.
+        if attachedTargets[id] != nil {
+            detachCodexSession(id)
+            return
+        }
         guard let record = try? sessionContextRuntime.resolveCommandKSelection(hit) else {
             intakeStatus = "That search result changed. Search again before watching it."
             return
         }
-        if attachedTargets[record.id] != nil { detachCodexSession(record.id) }
-        else { watchSession(target(for: record), focus: false) }
+        watchSession(target(for: record), focus: false)
     }
 
     func watchSearchHit(_ hit: SessionSearchHit, focus: Bool) {
@@ -10682,6 +10690,17 @@ final class AppModel: ObservableObject {
     func detachCodexSession(_ id: String) {
         attachedTargets.removeValue(forKey: id)
         if attachedCodexSessionID == id { attachedCodexSessionID = attachedSessionList.first?.id }
+        synchronizeSessionContextFocus()
+        updateCodexWatcher()
+    }
+
+    /// Clear the entire watch list at once (the dock's "Stop watching all").
+    /// Empties `attachedTargets` (which persists via its didSet), clears focus,
+    /// resyncs context, and stops every live watcher in one pass.
+    func stopWatchingAll() {
+        guard !attachedTargets.isEmpty else { return }
+        attachedTargets.removeAll()
+        attachedCodexSessionID = nil
         synchronizeSessionContextFocus()
         updateCodexWatcher()
     }

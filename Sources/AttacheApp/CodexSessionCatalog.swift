@@ -53,6 +53,31 @@ struct CodexSessionTarget: Identifiable, Codable, Equatable {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+
+    /// A stand-in search record built purely from the stored watch target, for
+    /// a watched session whose real record is not in the live index (archived
+    /// with Archived off, aged out of the transcript index, or its files
+    /// removed). Lets Command-K always surface a watched session so it can be
+    /// unwatched even when search would produce no row for it. Carries no
+    /// transcript content, so it never matches a content query and focusing it
+    /// stays unsupported; only its id, title, recency, source, and archived
+    /// flag are meaningful.
+    func syntheticSessionRecord() -> SessionRecord {
+        SessionRecord(
+            id: id,
+            title: title,
+            project: nil,
+            threadName: nil,
+            updatedAt: updatedAt,
+            archived: category == .archivedSession,
+            filePath: filePath ?? "",
+            fileMtime: 0,
+            content: "",
+            topicTag: nil,
+            sourceKind: sourceKind,
+            localModelHint: nil
+        )
+    }
 }
 
 struct CodexSessionCatalogSnapshot {

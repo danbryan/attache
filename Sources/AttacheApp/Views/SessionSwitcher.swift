@@ -247,6 +247,14 @@ struct SessionCommandPalette: View {
             hits = model.searchSessions(query, includeArchived: includeArchived)
                 .filter { sourceFilter == nil || $0.record.sourceKind == sourceFilter }
         }
+        // A watched session must never become undetachable: always surface it,
+        // even when it is not in the current search results (archived with
+        // Archived off, aged out of the index, or its files removed).
+        hits = SessionCommandPalette.injectingOrphanWatchedRows(
+            into: hits,
+            watched: model.attachedSessionList,
+            sourceFilter: sourceFilter
+        )
         groups = buildGroups(from: hits)
         if selectedID == nil || !flatHits.contains(where: { $0.record.id == selectedID }) {
             selectedID = flatHits.first?.record.id
@@ -585,6 +593,35 @@ struct SessionCommandPalette: View {
             model.attachToSearchHit(hit)
             isVisible = false
         }
+    }
+}
+
+extension SessionCommandPalette {
+    /// Guarantee every watched session is represented as a row. A watched
+    /// session whose record is not already among `hits` (archived with the
+    /// Archived toggle off, aged out of the transcript index, or its files
+    /// removed) is injected as a synthetic row so Command-K can always surface
+    /// it, pin it to WATCHING, and offer Stop watching. Injected rows ignore the
+    /// query and the archived filter (a watched session is always shown) but
+    /// honor an active source filter. Rows already present are left untouched.
+    static func injectingOrphanWatchedRows(
+        into hits: [SessionSearchHit],
+        watched: [CodexSessionTarget],
+        sourceFilter: SourceKind?
+    ) -> [SessionSearchHit] {
+        let present = Set(hits.map(\.record.id))
+        let orphans = watched
+            .filter { !present.contains($0.id) }
+            .filter { sourceFilter == nil || $0.sourceKind == sourceFilter }
+            .map { target in
+                SessionSearchHit(
+                    record: target.syntheticSessionRecord(),
+                    score: 0,
+                    matchedContent: false,
+                    snippet: nil
+                )
+            }
+        return hits + orphans
     }
 }
 

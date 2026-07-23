@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.6.5}"
+VERSION="${VERSION:-0.6.6}"
 TAG="${TAG:-v$VERSION}"
 TITLE="${TITLE:-Attaché $VERSION}"
 ASSET="$ROOT/dist/Attache.zip"

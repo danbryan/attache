@@ -51,6 +51,33 @@ extension AttacheRootView {
         .help(focusDockHelpText)
         .accessibilityLabel("Focus status")
         .onHover { setDockHover(.focus, $0) }
+        .contextMenu { watchingMenu }
+    }
+
+    /// The discoverable home for the watch list: every watched session by its
+    /// stored title with a per-session Stop watching, plus Stop watching all.
+    /// This is the reliable way to detach a session even when its record has
+    /// aged out of the Command-K index (an orphaned watch).
+    @ViewBuilder
+    var watchingMenu: some View {
+        if model.attachedTargets.isEmpty {
+            Button("No sessions watched") {}
+                .disabled(true)
+        } else {
+            Text("Watching \(model.attachedTargets.count)")
+            Divider()
+            ForEach(model.attachedSessionList) { target in
+                Button("Stop watching \(target.displayTitle)") {
+                    model.detachCodexSession(target.id)
+                }
+                .accessibilityLabel("Stop watching \(target.displayTitle)")
+            }
+            Divider()
+            Button("Stop watching all") {
+                model.stopWatchingAll()
+            }
+            .accessibilityLabel("Stop watching all sessions")
+        }
     }
 
     private var focusDockIconName: String {
