@@ -231,6 +231,7 @@ struct AttacheRootView: View {
                 onCharacterFocusAngleChanged: { model.characterFocusAngle = $0 },
                 character: model.character,
                 compactBars: model.visualMode == .bars && !echoExpanded,
+                fullScreenEqualizer: model.visualMode == .bars && echoExpanded,
                 onToggleBarsExpansion: {
                     guard let window = NSApp.keyWindow else { return }
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) {

@@ -90,6 +90,18 @@ public struct CaptionAlignment: Codable, Equatable {
         }
     }
 
+    /// The word the karaoke caption window should track at `currentTimeMs`: the
+    /// active word, else the last word already started (so the window still
+    /// tracks in the silent gaps between words), else the first word. Pure so the
+    /// bottom caption can derive its window straight from the clock the same way
+    /// the full-message transcript derives its highlight, rather than accumulating
+    /// a window position through view side effects that can be stranded.
+    public func captionAnchorIndex(at currentTimeMs: Int) -> Int {
+        activeWordIndex(at: currentTimeMs)
+            ?? words.lastIndex { currentTimeMs >= $0.startMs }
+            ?? 0
+    }
+
     public func captionSegments(fallbackText: String, currentTimeMs: Int) -> [CaptionSegment] {
         let sourceText = text.isEmpty ? fallbackText : text
         guard !words.isEmpty else {
@@ -384,6 +396,45 @@ public enum CaptionRenderDecision {
         case .karaoke:
             return provenance.isExact ? .karaoke : .plain
         }
+    }
+}
+
+/// Pure, stateless windowing for the bottom karaoke caption. The caption shows a
+/// fixed-size window of words; this decides which word index that window starts
+/// on, given the total word count, the window size, and the anchor word (from
+/// `CaptionAlignment.captionAnchorIndex(at:)`).
+///
+/// It is deterministic and depends only on its inputs, so the window is a pure
+/// function of the clock exactly like the full-message transcript's highlight.
+/// The previous design kept the start in view `@State` and only nudged it from an
+/// `onChange(currentTimeMs)` side effect; when that update was skipped (the
+/// karaoke view first appearing mid-message, captions toggled off then on, or the
+/// estimated->exact alignment swap) the window stranded at word 0 while the clock
+/// and the full-message panel kept advancing. Deriving it here removes that whole
+/// class of stranding.
+///
+/// Behavior: the window holds on the first page until the active word reaches the
+/// trailing `trigger` zone, then pages forward in steady strides (keeping
+/// `backfill` words of leading context) so the caption does not scroll on every
+/// word, and the anchor is always inside the returned window.
+public enum CaptionWindow {
+    public static func start(
+        wordCount: Int,
+        windowSize: Int,
+        anchor: Int,
+        backfill: Int = 2,
+        trigger: Int = 2
+    ) -> Int {
+        guard windowSize > 0, wordCount > windowSize else { return 0 }
+        let maxStart = wordCount - windowSize
+        let clampedAnchor = min(max(0, anchor), wordCount - 1)
+        // Still comfortably inside the first window: hold at the start.
+        if clampedAnchor < windowSize - trigger { return 0 }
+        // Page forward in fixed strides so the window jumps rather than scrolls,
+        // keeping the anchor visible with `backfill` words of leading context.
+        let stride = max(1, windowSize - backfill - trigger)
+        let page = ((clampedAnchor - (windowSize - trigger)) / stride) + 1
+        return min(maxStart, page * stride)
     }
 }
 

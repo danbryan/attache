@@ -73,32 +73,14 @@ private struct KaraokeCaptionView: View {
     var onSeek: ((Int) -> Void)?
     var onSeekAndResume: ((Int) -> Void)?
 
-    // The first word index shown. Held steady while the spoken word moves through
-    // the window, and only advanced once the active word nears the trailing edge,
-    // so the caption stays put and readable instead of scrolling on every word.
-    @State private var windowStart = 0
-
+    // The first word index shown, derived purely from the clock each render (see
+    // `CaptionWindow`). It holds steady while the spoken word moves through the
+    // window and pages forward once the active word nears the trailing edge, so
+    // the caption stays put and readable instead of scrolling on every word.
+    // Deriving it (rather than accumulating it in @State via onChange) is what
+    // keeps it from stranding at word 0 across a fresh appearance, a captions
+    // off/on toggle, or the estimated->exact alignment upgrade.
     private var windowSize: Int { max(6, lineCount * 6 + 3) }
-
-    // Word to position the window on: the active word, or the last one already
-    // started (so the window still tracks during the gaps between words).
-    private func anchorIndex(_ a: CaptionAlignment) -> Int {
-        a.activeWordIndex(at: currentTimeMs)
-            ?? a.words.lastIndex { currentTimeMs >= $0.startMs }
-            ?? 0
-    }
-
-    private func advanceWindowIfNeeded() {
-        guard let alignment, !alignment.words.isEmpty else { return }
-        let count = alignment.words.count
-        let anchor = anchorIndex(alignment)
-        let backfill = 2   // words of context kept before the anchor after a jump
-        let trigger = 2    // advance once the anchor is within this many of the edge
-        let maxStart = max(0, count - windowSize)
-        if anchor < windowStart || anchor >= windowStart + windowSize - trigger {
-            windowStart = min(maxStart, max(0, anchor - backfill))
-        }
-    }
 
     var body: some View {
         // No backing box: a tight dark outline plus a soft glow keeps the words
@@ -110,8 +92,6 @@ private struct KaraokeCaptionView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 8)
             .animation(.easeInOut(duration: 0.075), value: alignment?.activeWordIndex(at: currentTimeMs))
-            .onChange(of: currentTimeMs) { _ in advanceWindowIfNeeded() }
-            .onChange(of: text) { _ in windowStart = 0 }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Captions")
             .accessibilityValue(text)
@@ -126,7 +106,8 @@ private struct KaraokeCaptionView: View {
     private var content: some View {
         if mode == .karaoke, let alignment, !alignment.words.isEmpty {
             let count = alignment.words.count
-            let start = min(max(0, windowStart), max(0, count - 1))
+            let anchor = alignment.captionAnchorIndex(at: currentTimeMs)
+            let start = CaptionWindow.start(wordCount: count, windowSize: windowSize, anchor: anchor)
             let end = min(count, start + windowSize)
             let slice = Array(alignment.words[start..<end])
             let activeID = alignment.activeWordIndex(at: currentTimeMs).map { alignment.words[$0].id }

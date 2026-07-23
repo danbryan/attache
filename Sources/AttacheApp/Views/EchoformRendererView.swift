@@ -44,6 +44,12 @@ struct EchoformRendererView: View {
     /// macOS full-screen space on double-click, then this same shared character
     /// renderer grows to the immersive size.
     var compactBars = false
+    /// The in-app Echo presence has been expanded into a real full-screen space
+    /// (double-click / "Enter Full Screen"). Only then does Echo swap its
+    /// character-sized voice bars for the immersive deterministic equalizer that
+    /// draws the actual analyzed audio spectrum. The desktop mini window never
+    /// sets this, so it keeps the compact presence.
+    var fullScreenEqualizer = false
     var onToggleBarsExpansion: (() -> Void)?
     /// Incognito identity (INF-356): true while the active conversation is
     /// private, so the shared character renderer draws its crown band
@@ -57,6 +63,7 @@ struct EchoformRendererView: View {
     var overlayVisible = false
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var breathing = false
     @State private var sonar = false
     /// The session id of the fleet mote under the cursor (INF-375), tracked so
@@ -95,7 +102,14 @@ struct EchoformRendererView: View {
                     moteOrDefaultMenu
                 }
             } else if visualMode == .bars {
-                sharedEchoPresence
+                if fullScreenEqualizer {
+                    // The immersive Echo presentation: the original deterministic
+                    // audio-reactive equalizer, drawing the real analyzed audio
+                    // spectrum (mirrored bars) plus the waveform and pulse rings.
+                    fullEqualizer
+                } else {
+                    sharedEchoPresence
+                }
             }
 
             if playback.isPlaying || playback.isPaused {
@@ -152,6 +166,38 @@ struct EchoformRendererView: View {
                 Button("Preview expressions…") {
                     AttacheNavigation.openActivitySimulator()
                 }
+            }
+        }
+    }
+
+    /// The immersive Echo equalizer: the pre-unification full-screen voice-bars
+    /// presence, restored. It draws the real analyzed audio the playback path
+    /// publishes on `timeline.renderState` (deterministic per-band spectrum,
+    /// mirrored), shimmers when paused, and rests on the branded idle glow.
+    /// No illustrated character, fleet, or crown here: this is the classic
+    /// equalizer surface, so the robot and cowboy presences are untouched.
+    private var fullEqualizer: some View {
+        Group {
+            if shouldAnimateContinuously {
+                rendererCanvas(date: Date())
+            } else if isPausedOnCard {
+                pausedShimmer
+            } else {
+                ambientGlow
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Echo voice bars, \(activity.phase.accessibilityTitle)")
+        .accessibilityHint("Double-click to exit full screen")
+        .contextMenu {
+            Button("Exit Full Screen") {
+                onToggleBarsExpansion?()
+            }
+            Button("Edit personalities…") {
+                AttacheNavigation.openPersonalityManager()
+            }
+            Button("Preview expressions…") {
+                AttacheNavigation.openActivitySimulator()
             }
         }
     }
@@ -226,6 +272,7 @@ struct EchoformRendererView: View {
         }
         .onAppear {
             breathing = false
+            guard !reduceMotion else { breathing = true; return }
             withAnimation(.easeInOut(duration: 2.8).repeatForever(autoreverses: true)) {
                 breathing = true
             }
@@ -325,6 +372,7 @@ struct EchoformRendererView: View {
         .onAppear {
             breathing = false
             sonar = false
+            guard !reduceMotion else { breathing = true; return }
             withAnimation(.easeInOut(duration: activity.unreadCount > 0 ? 3.4 : 5.0).repeatForever(autoreverses: true)) {
                 breathing = true
             }
@@ -400,7 +448,12 @@ struct EchoformRendererView: View {
     private func drawMode(context: GraphicsContext, size: CGSize, band: CGRect, date: Date) {
         switch visualMode {
         case .bars:
-            drawPulse(context: context, size: size, date: date, restrained: true)
+            // The bars and waveform are the audio content itself, so they stay
+            // under Reduce Motion; the clock-driven pulse rings are decorative
+            // and are dropped when the user asks for reduced motion.
+            if !reduceMotion {
+                drawPulse(context: context, size: size, date: date, restrained: true)
+            }
             drawWaveform(context: context, size: size, band: band)
             drawBars(context: context, size: size, band: band)
         case .character:
@@ -419,10 +472,18 @@ struct EchoformRendererView: View {
     }
 
     private func drawBars(context: GraphicsContext, size: CGSize, band: CGRect) {
-        let bars = visualSymmetry == .mirrored ? centeredVisualBars(from: state.bars) : state.bars
-        guard !bars.isEmpty else { return }
+        // The mirroring and the per-band response curve are the pure,
+        // deterministic mapping in AttacheCore (EchoEqualizerBars), so the same
+        // analyzed audio always draws the same equalizer and the mapping is
+        // unit-tested independently of the view.
+        let heights = EchoEqualizerBars.barHeights(
+            from: state.bars,
+            intensity: intensity,
+            mirrored: visualSymmetry == .mirrored
+        )
+        guard !heights.isEmpty else { return }
 
-        let count = bars.count
+        let count = heights.count
         let gap: CGFloat = 3
         let stageWidth = min(size.width * 0.86, max(320, min(size.width, size.height * 1.35)))
         let stageX = (size.width - stageWidth) / 2
@@ -431,8 +492,7 @@ struct EchoformRendererView: View {
         let center = band.midY
 
         for index in 0..<count {
-            let raw = Double(bars[index])
-            let energy = min(1, pow(raw, 0.55) * 2.4 * intensity)
+            let energy = heights[index]
             guard energy > 0.01 else { continue }
 
             let height = max(2, CGFloat(energy) * maxHeight)
@@ -444,27 +504,6 @@ struct EchoformRendererView: View {
                 with: .color(energyColor(energy, opacity: 0.35 + 0.6 * energy))
             )
         }
-    }
-
-    private func centeredVisualBars(from bars: [Float]) -> [Float] {
-        guard bars.count > 2 else { return bars }
-
-        let lastSourceIndex = CGFloat(bars.count - 1)
-        let visualCenter = CGFloat(bars.count - 1) / 2
-        let maxDistance = max(1, visualCenter - 0.5)
-
-        return bars.indices.map { index in
-            let distance = abs(CGFloat(index) - visualCenter)
-            let normalizedDistance = min(1, max(0, (distance - 0.5) / maxDistance))
-            return interpolatedBar(in: bars, at: normalizedDistance * lastSourceIndex)
-        }
-    }
-
-    private func interpolatedBar(in bars: [Float], at position: CGFloat) -> Float {
-        let lower = max(0, min(bars.count - 1, Int(position.rounded(.down))))
-        let upper = max(0, min(bars.count - 1, lower + 1))
-        let fraction = Float(position - CGFloat(lower))
-        return bars[lower] + (bars[upper] - bars[lower]) * fraction
     }
 
     private func drawPulse(context: GraphicsContext, size: CGSize, date: Date, restrained: Bool) {
