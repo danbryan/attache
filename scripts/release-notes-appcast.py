@@ -1,44 +1,34 @@
 #!/usr/bin/env python3
-"""Inject release notes into a Sparkle appcast item.
+"""Inject rolling release notes into a Sparkle appcast item.
 
-Reads a generated appcast.xml and a release-notes markdown file, converts the
-notes to a small HTML fragment (dropping the Install boilerplate), and writes a
-new appcast that carries:
+Sparkle shows the offered version's notes in the update prompt and does not
+concatenate the notes of versions a user skipped, and our feed carries a single
+item. A static appcast also cannot be tailored to the exact installed version.
+So the inline notes are a ROLLING WINDOW: the current version's notes plus the
+few before it, newest first, so someone several versions behind still sees the
+recent span inline. A <sparkle:fullReleaseNotesLink> to the public GitHub
+releases page remains the complete cumulative changelog.
 
-  - an inline <description> with that fragment, so the Sparkle update prompt
-    shows what changed in the offered version, and
-  - a <sparkle:fullReleaseNotesLink> to the public GitHub releases page, the
-    cumulative changelog for anyone several versions behind.
+The appcast's EdDSA signature lives on the <enclosure> and is untouched.
 
-The appcast's EdDSA signature lives on the <enclosure> element and is left
-untouched, so editing the surrounding XML is safe.
-
-Usage: release-notes-appcast.py <appcast.xml> <notes.md> <full-notes-url> <out.xml>
+Usage:
+  release-notes-appcast.py <appcast.xml> <notesDir> <currentVersion> <full-url> <out.xml> [count]
 """
 import html
+import os
 import re
 import sys
 
 
 def convert_notes(markdown: str) -> str:
-    """Minimal, format-specific markdown to HTML for our release notes.
-
-    Handles the shapes our notes actually use: a lead paragraph, `##` section
-    headers, `-` bullets, `**bold**`, and inline `code`. The Install section is
-    dropped because it is boilerplate that does not belong in an in-app update
-    prompt.
-    """
+    """Format-specific markdown to HTML for our notes; drops the Install section."""
     def inline(text: str) -> str:
         text = html.escape(text)
         text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
         text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
         return text
 
-    lines = markdown.splitlines()
-    out: list[str] = []
-    in_list = False
-    in_code = False
-    skip_section = False
+    out, in_list, in_code, skip = [], False, False, False
 
     def close_list():
         nonlocal in_list
@@ -46,7 +36,7 @@ def convert_notes(markdown: str) -> str:
             out.append("</ul>")
             in_list = False
 
-    for raw in lines:
+    for raw in markdown.splitlines():
         line = raw.rstrip()
         if line.strip().startswith("```"):
             in_code = not in_code
@@ -56,11 +46,11 @@ def convert_notes(markdown: str) -> str:
         if line.startswith("## "):
             close_list()
             title = line[3:].strip()
-            skip_section = title.lower() == "install"
-            if not skip_section:
+            skip = title.lower() == "install"
+            if not skip:
                 out.append(f"<h4>{inline(title)}</h4>")
             continue
-        if skip_section:
+        if skip:
             continue
         if line.startswith("- "):
             if not in_list:
@@ -78,16 +68,43 @@ def convert_notes(markdown: str) -> str:
     return "\n".join(out).strip()
 
 
+def version_tuple(name: str):
+    m = re.match(r"v(\d+)\.(\d+)\.(\d+)\.md$", name)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def rolling_notes(notes_dir: str, current: str, count: int) -> str:
+    cur = tuple(int(x) for x in current.split("."))
+    files = []
+    for name in os.listdir(notes_dir):
+        v = version_tuple(name)
+        if v and v <= cur:
+            files.append((v, name))
+    files.sort(reverse=True)
+    files = files[:count]
+    if not files:
+        raise SystemExit(f"error: no release notes at or below v{current} in {notes_dir}")
+
+    sections = []
+    for v, name in files:
+        with open(os.path.join(notes_dir, name), encoding="utf-8") as handle:
+            body = convert_notes(handle.read())
+        label = ".".join(str(x) for x in v)
+        sections.append(f'<h3>Version {label}</h3>\n{body}')
+    lead = "" if len(sections) == 1 else "<p><em>Recent updates, newest first:</em></p>\n"
+    return lead + "\n".join(sections)
+
+
 def main() -> int:
-    if len(sys.argv) != 5:
+    if len(sys.argv) not in (6, 7):
         print(__doc__, file=sys.stderr)
         return 2
-    appcast_path, notes_path, full_url, out_path = sys.argv[1:5]
+    appcast_path, notes_dir, current, full_url, out_path = sys.argv[1:6]
+    count = int(sys.argv[6]) if len(sys.argv) == 7 else 6
 
     with open(appcast_path, encoding="utf-8") as handle:
         appcast = handle.read()
-    with open(notes_path, encoding="utf-8") as handle:
-        notes_html = convert_notes(handle.read())
+    notes_html = rolling_notes(notes_dir, current, count)
 
     if "<description>" in appcast:
         print("appcast already has a description; not double-injecting", file=sys.stderr)
@@ -106,7 +123,6 @@ def main() -> int:
         f"\n{indent}<sparkle:fullReleaseNotesLink>{html.escape(full_url)}</sparkle:fullReleaseNotesLink>"
     )
     injected = appcast[: anchor.end()] + injection + appcast[anchor.end():]
-
     with open(out_path, "w", encoding="utf-8") as handle:
         handle.write(injected)
     return 0

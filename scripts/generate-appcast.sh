@@ -17,9 +17,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${VERSION:?set VERSION=X.Y.Z}"
 DMG="$ROOT/dist/Attache.dmg"
-NOTES_MD="$ROOT/docs/releases/v$VERSION.md"
+NOTES_DIR="$ROOT/docs/releases"
+NOTES_MD="$NOTES_DIR/v$VERSION.md"
 GEN="$ROOT/.build/artifacts/sparkle/Sparkle/bin/generate_appcast"
 FULL_NOTES_LINK="${FULL_NOTES_LINK:-https://github.com/danbryan/attache/releases}"
+# How many recent versions' notes to inline, newest first. Sparkle shows only
+# the offered version's notes and does not concatenate skipped versions, so a
+# rolling window lets a user several versions behind still read the recent span
+# in the update prompt. The GitHub link remains the full cumulative changelog.
+ROLLING_NOTES_COUNT="${ROLLING_NOTES_COUNT:-6}"
 DL_PREFIX="https://github.com/danbryan/attache/releases/download/v$VERSION/"
 OUT="$ROOT/dist/appcast.xml"
 
@@ -32,5 +38,5 @@ trap 'rm -rf "$WORK"' EXIT
 cp "$DMG" "$WORK/"
 "$GEN" --download-url-prefix "$DL_PREFIX" --link "https://attache.fm" "$WORK/" >/dev/null
 
-python3 "$ROOT/scripts/release-notes-appcast.py" "$WORK/appcast.xml" "$NOTES_MD" "$FULL_NOTES_LINK" "$OUT"
-echo "Wrote $OUT with inline release notes and a full-changelog link."
+python3 "$ROOT/scripts/release-notes-appcast.py" "$WORK/appcast.xml" "$NOTES_DIR" "$VERSION" "$FULL_NOTES_LINK" "$OUT" "$ROLLING_NOTES_COUNT"
+echo "Wrote $OUT with rolling release notes (last $ROLLING_NOTES_COUNT versions) and a full-changelog link."
