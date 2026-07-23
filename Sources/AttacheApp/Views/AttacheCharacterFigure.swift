@@ -1,3 +1,4 @@
+import AttacheCore
 import SwiftUI
 
 /// One agent's transient reaction pose. Fleet motes carry persistent session
@@ -107,6 +108,13 @@ struct AttachePose: Equatable {
     var agentSignals: [AgentSignalPose] = [.init(), .init(), .init()]
     /// Emoji / flag props drawn beside the character for the current moment.
     var props: [AttacheProp] = []
+    /// The real analyzed per-band audio energy for the current frame
+    /// (`VisualizerRenderState.bars`), threaded in by the motor so the mouth
+    /// equalizer and Echo's voice bars draw the actual spoken spectrum instead
+    /// of a synthetic profile. Empty when no audio is playing, so `.neutral`
+    /// (and every silent frame) stays the resting geometry: the mouths render
+    /// their flat rest shape and Echo its static resting arch.
+    var audioBars: [Float] = []
 
     static let neutral = AttachePose()
 
@@ -632,16 +640,27 @@ struct AttacheCharacterFigure: View {
         }
     }
 
-    /// Echo's center artwork. The shared motor still supplies every semantic
-    /// reaction around it. Audio drives `mouthOpen`, so these bars act as the
-    /// character's mouth during speech and settle into a quiet waveform at rest.
+    /// The compact Echo presence draws the SAME real mirrored equalizer as the
+    /// full-screen surface (`EchoformRendererView.drawBars`), scaled into the
+    /// character-sized head region: the analyzed per-band spectrum
+    /// (`pose.audioBars`) folded through `EchoEqualizerBars` into mirrored bar
+    /// heights, identical in behavior to full screen, just fewer bars so it
+    /// reads at this size. When no audio is playing the bars settle into the
+    /// deterministic resting arch (`EchoEqualizerBars.restingProfile`), and a
+    /// playing-but-silent frame flattens them from the real all-zero spectrum,
+    /// so Echo never invents motion at rest.
+    private static let echoBarCount = 21
+
     private func drawEchoBars(
         in head: GraphicsContext,
         pose: AttachePose,
         p: (CGFloat, CGFloat) -> CGPoint,
         s: CGFloat
     ) {
-        let profile: [Double] = [0.34, 0.58, 0.78, 0.94, 0.72, 1, 0.72, 0.94, 0.78, 0.58, 0.34]
+        let count = Self.echoBarCount
+        let heights = pose.audioBars.isEmpty
+            ? EchoEqualizerBars.restingProfile(count: count)
+            : EchoEqualizerBars.barHeights(from: pose.audioBars, count: count)
         let energy = min(1, max(0, pose.mouthOpen))
         let errorFlicker = pose.dizzy > 0.01
             ? 0.45 + 0.55 * abs(sin(pose.overheadPhase * 8 * .pi))
@@ -657,13 +676,12 @@ struct AttacheCharacterFigure: View {
         ))
         head.fill(halo, with: .color(arcColor.opacity(0.05 + 0.10 * energy)))
 
-        for (index, base) in profile.enumerated() {
-            let phase = Double(index) * 0.82 + pose.arcPhase * 2.2
-            let liveWave = 0.42 + 0.58 * abs(sin(phase))
-            let normalizedHeight = base * (0.42 + energy * 0.72 * liveWave) * worryCompression
-            let height = max(8, 78 * normalizedHeight) * s
-            let width = 6.2 * s
-            let x = center.x + CGFloat(index - profile.count / 2) * 9.2 * s
+        let spacing = 96.0 / Double(count)
+        let width = CGFloat(spacing * 0.68) * s
+        for (index, band) in heights.enumerated() {
+            let normalizedHeight = band * worryCompression
+            let height = max(4, 78 * normalizedHeight) * s
+            let x = center.x + CGFloat(Double(index) - Double(count - 1) / 2) * CGFloat(spacing) * s
             let bar = Path(
                 roundedRect: CGRect(
                     x: x - width / 2,
@@ -675,7 +693,7 @@ struct AttacheCharacterFigure: View {
             )
             head.fill(
                 bar,
-                with: .color(arcColor.opacity((0.62 + 0.36 * base) * errorFlicker))
+                with: .color(arcColor.opacity((0.42 + 0.5 * band) * errorFlicker))
             )
         }
     }
@@ -769,10 +787,19 @@ struct AttacheCharacterFigure: View {
             )
             face.fill(mouth, with: .color(screen))
         } else {
-            for bar in 0..<5 {
+            // The mouth equalizer draws the REAL analyzed spectrum
+            // (`pose.audioBars`) folded through the shared `EchoEqualizerBars`
+            // mapping, at a legible mouth-sized band count (5 mirrored bars).
+            // `pose.mouthOpen` stays the overall loudness envelope so the mouth
+            // still opens and closes; the per-band shape is the actual audio.
+            // With no spectrum available (a paused frame) the bars fall back to
+            // a fixed symmetric rest shape, deterministic and clock-free. This
+            // branch is only reached above the neutral threshold, so the locked
+            // neutral pose (mouthOpen 0) is untouched.
+            let bands = EchoCharacterMouth.bandShapes(from: pose.audioBars)
+            for bar in 0..<EchoCharacterMouth.bandCount {
                 let x = 108.0 + Double(bar) * 6
-                let wave = 0.55 + 0.45 * sin(Double(bar) * 2.1 + pose.mouthOpen * 9)
-                let height = (3 + 10 * pose.mouthOpen * wave) * s
+                let height = (3 + 10 * pose.mouthOpen * bands[bar]) * s
                 let slot = Path(
                     roundedRect: CGRect(
                         x: p(CGFloat(x), 134).x, y: p(CGFloat(x), 134).y - height / 2,

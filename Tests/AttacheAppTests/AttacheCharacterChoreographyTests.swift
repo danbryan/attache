@@ -195,6 +195,53 @@ final class AttacheCharacterChoreographyTests: XCTestCase {
         XCTAssertEqual(AttachePose.neutral.sanitized(), AttachePose.neutral)
     }
 
+    // MARK: - Real analyzed audio threaded to the figure
+
+    private func speakingAudio() -> VisualizerRenderState {
+        var state = VisualizerRenderState()
+        var frame = AnalysisFrame()
+        frame.bands = (0..<56).map { Float(0.3 + 0.4 * Double($0 % 7) / 6) }
+        frame.rms = 0.5
+        // Envelope followers need a few applications to open up.
+        for _ in 0..<12 { state.apply(frame) }
+        return state
+    }
+
+    // The motor threads the published VisualizerRenderState.bars straight onto
+    // the pose the figure draws, so the mouth equalizer and Echo's bars render
+    // the real analyzed spectrum during playback rather than a synthetic wave.
+    func testMotorThreadsAnalyzedSpectrumToTheFigure() {
+        let motor = AttacheCharacterMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 11_000)
+        let audio = speakingAudio()
+        XCTAssertGreaterThan(audio.bars.max() ?? 0, 0, "the analyzer must publish nonzero bands")
+
+        var speaking = state(.speaking, agent: .codex)
+        speaking = speaking.with(audio: audio)
+
+        let pose = motor.pose(at: start, activity: speaking, reduceMotion: true)
+        XCTAssertEqual(pose.audioBars, audio.bars, "the figure must receive the published spectrum")
+        XCTAssertGreaterThan(pose.audioBars.max() ?? 0, 0)
+    }
+
+    // Idle (nothing playing, reset render state with no bars) leaves the pose's
+    // audioBars empty, so the drawn mouths keep their flat rest shape and Echo
+    // its resting arch: the geometry-locked neutral is preserved by construction.
+    func testMotorLeavesAudioBarsEmptyWhenNothingPlays() {
+        let motor = AttacheCharacterMotor()
+        let start = Date(timeIntervalSinceReferenceDate: 12_000)
+        let pose = motor.pose(at: start, activity: state(.idle), reduceMotion: true)
+        XCTAssertTrue(pose.audioBars.isEmpty, "no audio means no spectrum reaches the figure")
+    }
+
+    // The locked neutral pose carries no audio, so its geometry never depends on
+    // a spectrum: this is what keeps `--render-character-poses` pixel-identical
+    // to AttacheMascotMark after wiring the real equalizer in.
+    func testNeutralPoseCarriesNoAudio() {
+        XCTAssertTrue(AttachePose.neutral.audioBars.isEmpty)
+        XCTAssertEqual(AttachePose.neutral.sanitized().audioBars, [])
+    }
+
     // MARK: One-shot moments (INF-271)
 
     private func moment(

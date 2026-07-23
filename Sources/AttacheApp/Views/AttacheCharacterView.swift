@@ -387,6 +387,12 @@ final class AttacheCharacterMotor: ObservableObject {
         } else {
             pose.mouthOpen = drive(&mouthOpen, toward: targets.pose.mouthOpen, Self.standard)
         }
+        // Thread the real analyzed spectrum through to the figure so the mouth
+        // equalizer and Echo's voice bars draw the actual audio, not a synthetic
+        // profile. Empty when nothing is playing (`renderState.reset()`), so a
+        // silent frame keeps the resting geometry and the neutral pose is
+        // untouched.
+        pose.audioBars = activity.audio.bars
 
         applyLoops(to: &pose, targets: targets, now: now, reduceMotion: reduceMotion)
         applyDelights(
