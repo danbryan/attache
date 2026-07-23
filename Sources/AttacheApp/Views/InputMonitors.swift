@@ -1,4 +1,5 @@
 import AppKit
+import AttacheCore
 import SwiftUI
 
 struct KeyboardShortcutMonitor: NSViewRepresentable {
@@ -258,10 +259,15 @@ final class TypingActivityMonitor {
 // Scroll over the caption (mouse wheel / two-finger) to grow or shrink it.
 struct CaptionScrollMonitor: NSViewRepresentable {
     var enabled: Bool
+    /// Height of the stable scroll band, covering the tallest a caption can get.
+    /// The band is anchored at the caption's (stable) bottom edge and extended
+    /// upward to at least this height so repeated steps register from one fixed
+    /// hover position across the whole line-count range (BUG 2).
+    var maxBandHeight: CGFloat
     var onStep: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(enabled: enabled, onStep: onStep)
+        Coordinator(enabled: enabled, maxBandHeight: maxBandHeight, onStep: onStep)
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -272,6 +278,7 @@ struct CaptionScrollMonitor: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.enabled = enabled
+        context.coordinator.maxBandHeight = maxBandHeight
         context.coordinator.onStep = onStep
         context.coordinator.view = nsView
     }
@@ -282,13 +289,15 @@ struct CaptionScrollMonitor: NSViewRepresentable {
 
     final class Coordinator {
         var enabled: Bool
+        var maxBandHeight: CGFloat
         var onStep: (Int) -> Void
         weak var view: NSView?
         private var monitor: Any?
         private var accumulated: CGFloat = 0
 
-        init(enabled: Bool, onStep: @escaping (Int) -> Void) {
+        init(enabled: Bool, maxBandHeight: CGFloat, onStep: @escaping (Int) -> Void) {
             self.enabled = enabled
+            self.maxBandHeight = maxBandHeight
             self.onStep = onStep
         }
 
@@ -303,8 +312,16 @@ struct CaptionScrollMonitor: NSViewRepresentable {
                       event.window === window else {
                     return event
                 }
-                let location = view.convert(event.locationInWindow, from: nil)
-                guard view.bounds.contains(location) else { return event }
+                // Hit-test a STABLE band in window coordinates rather than the
+                // resizing caption box: anchored at the caption's fixed bottom
+                // edge, extended up to the tallest a caption can be. The pointer
+                // then stays inside it as the box grows and shrinks under it.
+                let captionFrame = view.convert(view.bounds, to: nil)
+                let region = CaptionScrollHitRegion.stableRegion(
+                    captionFrame: captionFrame,
+                    maxBandHeight: self.maxBandHeight
+                )
+                guard region.contains(event.locationInWindow) else { return event }
                 guard event.momentumPhase == [] else { return nil }
 
                 let vertical = event.scrollingDeltaY

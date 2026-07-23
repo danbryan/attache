@@ -44,6 +44,17 @@ private struct BottomOverlayHeightKey: PreferenceKey {
     }
 }
 
+/// The window's content height, so the caption can adapt its visible line count
+/// and font scale to the space actually available (BUG 1) instead of forcing the
+/// window taller. Reported once from the root container; unknown until the first
+/// layout pass, in which case the caption honors the chosen line count verbatim.
+private struct WindowContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 private extension View {
     func reportsBottomOverlayBand(clearance: CGFloat) -> some View {
         background(GeometryReader { proxy in
@@ -101,6 +112,9 @@ struct AttacheRootView: View {
     /// dock) this frame. The character renderer is inset by it so the character is
     /// never covered; the full-bleed visualizer modes ignore it by design.
     @State private var bottomOverlayHeight: CGFloat = 0
+    /// Window content height (see `WindowContentHeightKey`), driving caption
+    /// line-count/scale adaptation. 0 until the first layout pass.
+    @State private var windowContentHeight: CGFloat = 0
 
     /// The character's reserved bottom band. The floor stays constant whether the
     /// auto-hiding dock is showing or not, so waking the chrome by moving
@@ -375,6 +389,12 @@ struct AttacheRootView: View {
         .animation(.easeInOut(duration: 0.22), value: model.isPrivateConversation)
         .contentShape(Rectangle())
         .attacheTextScale(model.uiTextScale)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: WindowContentHeightKey.self, value: proxy.size.height)
+            }
+        )
+        .onPreferenceChange(WindowContentHeightKey.self) { windowContentHeight = $0 }
         .onPreferenceChange(BottomOverlayHeightKey.self) { bottomOverlayHeight = $0 }
         .animation(.easeInOut(duration: 0.18), value: inboxVisible)
         .animation(.easeInOut(duration: 0.18), value: personalitySwitcherVisible)
@@ -826,6 +846,20 @@ struct AttacheRootView: View {
     private var bottomResponseOverlay: some View {
         if model.captionsEnabled,
            playback.isPlaying || playback.isPaused {
+            // The chosen line count is a preference ceiling: adapt it (and, only
+            // if genuinely necessary, the font scale) to the space the window
+            // actually offers, so the caption never pins the window taller. At
+            // normal sizes the budget is generous and the chosen count wins as-is.
+            let captionFit = CaptionLineAdaptation.fit(
+                availableHeight: windowContentHeight > 0 ? windowContentHeight * 0.6 : .infinity,
+                chosenLineCount: model.captionLineCount,
+                fontSize: CGFloat(model.captionFontSize),
+                maxLineCount: AppModel.captionLineRange.upperBound
+            )
+            let captionBandHeight = CaptionScrollHitRegion.maxBandHeight(
+                fontSize: CGFloat(model.captionFontSize),
+                maxLineCount: AppModel.captionLineRange.upperBound
+            )
             ZStack {
                 ResponseCaptionLayer(
                     timeline: playback.clock,
@@ -838,15 +872,20 @@ struct AttacheRootView: View {
                         style: model.captionStyle,
                         provenance: playback.currentAlignment?.provenance ?? .estimated
                     ),
-                    fontSize: CGFloat(model.captionFontSize),
-                    lineCount: model.captionLineCount,
+                    fontSize: CGFloat(model.captionFontSize) * captionFit.scale,
+                    lineCount: captionFit.visibleLines,
                     onSeek: seekToCaptionTime,
                     onSeekAndResume: seekToCaptionTimeAndResume
                 )
                 .frame(maxWidth: 760)
                 .readingPlate(theme: model.theme, cornerRadius: 12, minimumOpacity: 0.65)
                 .background(
-                    CaptionScrollMonitor(enabled: true) { model.adjustCaptionLines(by: $0) }
+                    // Scroll capture is gated off while a palette/overlay is open
+                    // so browsing a list never adjusts caption lines by accident.
+                    CaptionScrollMonitor(
+                        enabled: !anyOverlayVisible,
+                        maxBandHeight: captionBandHeight
+                    ) { model.adjustCaptionLines(by: $0) }
                 )
                 .frame(maxWidth: .infinity, alignment: .bottom)
                 .accessibilityLabel(playback.isPaused ? "Playback paused" : "Assistant speaking")
