@@ -9606,6 +9606,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Permanently delete exactly the given history cards. Unlike
+    /// `deleteConversationHistory(containing:)`, this never expands a selection
+    /// to the rest of a card's saved conversation: History multi-select deletes
+    /// exactly the cards the user checked and nothing else. Refreshes the
+    /// published `cards` so History and every count that reads from it update
+    /// immediately.
+    func deleteHistoryCards(ids requestedIDs: [String]) {
+        let ids = Array(Set(requestedIDs))
+        guard !ids.isEmpty else { return }
+        do {
+            if let currentCardID = playback.currentCardID, ids.contains(currentCardID) {
+                playback.stop()
+            }
+            let removed = try store.deleteCards(ids: ids)
+            Task { @MainActor in
+                for id in ids {
+                    AttacheContextUIState.shared.removeReceipt(for: id)
+                }
+            }
+            reloadCards()
+            intakeStatus = "Deleted \(removed) history item\(removed == 1 ? "" : "s")."
+        } catch {
+            intakeStatus = "History deletion failed: \(error.localizedDescription)"
+        }
+    }
+
     func createFollowUpAnswer() {
         guard let card = selectedCard else { return }
         let trimmed = followUpText.trimmingCharacters(in: .whitespacesAndNewlines)

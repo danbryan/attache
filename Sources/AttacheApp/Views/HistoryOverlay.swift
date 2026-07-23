@@ -17,7 +17,11 @@ struct HistoryOverlay: View {
     @State private var hoveredID: String?
     @State private var collapsedGroups: Set<String> = []
     @State private var pendingDeletion: HistoryDeletionRequest?
+    @State private var pendingBulkDeletion: BulkHistoryDeletionRequest?
     @State private var pendingForgetSession: SessionForgetRequest?
+    // History card rows checked for permanent bulk delete. Scoped to card rows
+    // only; the Sent (instructions) view has no multi-select.
+    @State private var checkedIDs: Set<String> = []
     @FocusState private var fieldFocused: Bool
 
     /// All / Recaps / Sent filter over history. All and Recaps are heard
@@ -43,6 +47,13 @@ struct HistoryOverlay: View {
         let card: VoicemailCard
         let count: Int
         var id: String { card.id }
+    }
+
+    /// A confirmed permanent delete of an explicit set of checked history cards.
+    private struct BulkHistoryDeletionRequest: Identifiable {
+        let ids: [String]
+        var count: Int { ids.count }
+        var id: String { ids.sorted().joined(separator: ",") }
     }
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -170,6 +181,57 @@ struct HistoryOverlay: View {
             .padding(.horizontal, 16).padding(.vertical, 11)
             Divider()
 
+            if kindFilter != .sent && !visibleCards.isEmpty {
+                let checked = checkedCards
+                HStack(spacing: 10) {
+                    if checked.isEmpty {
+                        Text("Select items to delete")
+                            .typoCaption(.medium)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    } else {
+                        Text("\(checked.count) selected")
+                            .typoCaption(.bold)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .fixedSize()
+                        Button("Deselect") { checkedIDs.removeAll() }
+                            .buttonStyle(.plain)
+                            .typoCaption(.semibold)
+                            .foregroundStyle(model.theme.signatureColor)
+                            .accessibilityLabel("Deselect all")
+                    }
+                    Button("Select all") { checkedIDs.formUnion(visibleCards.map(\.id)) }
+                        .buttonStyle(.plain)
+                        .typoCaption(.semibold)
+                        .foregroundStyle(model.theme.signatureColor)
+                        .accessibilityLabel("Select all visible history")
+                    Spacer(minLength: 8)
+                    Button {
+                        requestBulkDeletion()
+                    } label: {
+                        Label("Delete selected (\(checked.count))", systemImage: "trash")
+                            .typoCaption(.semibold)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(checked.isEmpty ? Color.secondary.opacity(0.45) : Color.red)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(checked.isEmpty ? Color.clear : Color.red.opacity(0.12))
+                    )
+                    .disabled(checked.isEmpty)
+                    .help("Permanently delete the selected history items")
+                    .accessibilityLabel("Delete \(checked.count) selected history items")
+                }
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .background(Color.primary.opacity(0.04))
+                Divider()
+            }
+
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if kindFilter == .sent {
@@ -203,7 +265,7 @@ struct HistoryOverlay: View {
             .frame(maxHeight: 380)
 
             Divider()
-            Text(kindFilter == .sent ? "↑↓ move · ⏎ open reply · esc close" : "↑↓ move · ⏎ play · esc close")
+            Text(kindFilter == .sent ? "↑↓ move · ⏎ open reply · esc close" : "↑↓ move · ⏎ play · ⌘⌫ delete · esc close")
                 .typoCaption(.medium)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
@@ -220,6 +282,7 @@ struct HistoryOverlay: View {
         .background(PaletteKeyMonitor(
             onMove: moveSelection,
             onSelect: playSelection,
+            onCommandDelete: requestBulkDeletion,
             vimKeysEnabled: true,
             isFieldFocused: fieldFocused
         ))
@@ -236,7 +299,14 @@ struct HistoryOverlay: View {
             // pointing at an id from the other list.
             selectedID = nil
             hoveredID = nil
+            checkedIDs.removeAll()
         }
+        .onChange(of: scope) { _ in
+            // A different scope shows a different set of cards; drop checks so a
+            // permanent delete can never target something off screen.
+            checkedIDs.removeAll()
+        }
+        .onDisappear { checkedIDs.removeAll() }
         .confirmationDialog(
             pendingDeletion.map { $0.count > 1 ? "Delete conversation?" : "Delete history item?" } ?? "Delete history?",
             isPresented: Binding(
@@ -256,6 +326,25 @@ struct HistoryOverlay: View {
             Text(request.count > 1
                  ? "This permanently deletes all \(request.count) saved replies and alternate takes in this Attaché conversation."
                  : "This permanently deletes the selected saved reply. Legacy replies cannot always be grouped into a whole conversation.")
+        }
+        .confirmationDialog(
+            pendingBulkDeletion.map { "Permanently delete \($0.count) history item\($0.count == 1 ? "" : "s")?" } ?? "Delete history?",
+            isPresented: Binding(
+                get: { pendingBulkDeletion != nil },
+                set: { if !$0 { pendingBulkDeletion = nil } }
+            ),
+            presenting: pendingBulkDeletion
+        ) { request in
+            Button("Delete \(request.count) Item\(request.count == 1 ? "" : "s")", role: .destructive) {
+                model.deleteHistoryCards(ids: request.ids)
+                checkedIDs.subtract(request.ids)
+                selectedID = nil
+                hoveredID = nil
+                pendingBulkDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { pendingBulkDeletion = nil }
+        } message: { _ in
+            Text("This cannot be undone.")
         }
         .sessionForgetConfirmation(model: model, request: $pendingForgetSession)
     }
@@ -325,7 +414,20 @@ struct HistoryOverlay: View {
     private func row(_ card: VoicemailCard) -> some View {
         let active = hoveredID == card.id || selectedID == card.id
         let marker = model.personalityMarker(for: card)
+        let checked = checkedIDs.contains(card.id)
         return HStack(spacing: 10) {
+            Button {
+                checkedIDs = HistorySelection.toggle(card.id, in: checkedIDs)
+            } label: {
+                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                    .typoIcon(size: 15, checked ? .semibold : .regular)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(checked ? model.theme.signatureColor : Color.secondary.opacity(active ? 0.6 : 0.3))
+            .help(checked ? "Unselect" : "Select for delete")
+            .accessibilityLabel(checked ? "Selected" : "Select for delete")
             Image(systemName: "text.bubble")
                 .typoIcon(size: 12, .semibold)
                 .foregroundStyle(active ? model.theme.signatureColor : Color.secondary.opacity(0.7))
@@ -367,7 +469,7 @@ struct HistoryOverlay: View {
                 .foregroundStyle(active ? model.theme.signatureColor : Color.secondary.opacity(0.6))
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(active ? model.theme.signatureColor.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+        .background(active ? model.theme.signatureColor.opacity(0.14) : (checked ? model.theme.signatureColor.opacity(0.07) : Color.clear), in: RoundedRectangle(cornerRadius: 7))
         .contentShape(Rectangle())
         .onHover { hovering in
             if hovering { hoveredID = card.id } else if hoveredID == card.id { hoveredID = nil }
@@ -597,6 +699,28 @@ struct HistoryOverlay: View {
 
     private var navigableInstructions: [Instruction] {
         instructionGroups.filter { !collapsedGroups.contains($0.id) }.flatMap(\.instructions)
+    }
+
+    // MARK: Multi-select delete (card rows only)
+
+    /// Checked cards that are still visible in the current scope/filter/search.
+    private var checkedCards: [VoicemailCard] {
+        visibleCards.filter { checkedIDs.contains($0.id) }
+    }
+
+    /// Command-delete and the Delete-selected button both land here. Uses the
+    /// checked-and-visible cards, or the focused row alone when nothing is
+    /// checked, then routes through the confirmation dialog because History
+    /// deletion is permanent. No-op in the Sent view, which has no delete.
+    private func requestBulkDeletion() {
+        guard kindFilter != .sent else { return }
+        let ids = HistorySelection.deletionTargets(
+            checked: checkedIDs,
+            visible: visibleCards.map(\.id),
+            focused: selectedID
+        )
+        guard !ids.isEmpty else { return }
+        pendingBulkDeletion = BulkHistoryDeletionRequest(ids: ids)
     }
 
     private func moveSelection(_ delta: Int) {
