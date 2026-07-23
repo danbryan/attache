@@ -315,15 +315,33 @@ all three paths.
 - The appcast is generated + EdDSA-signed by Sparkle's `generate_appcast`
   (`.build/artifacts/sparkle/Sparkle/bin/generate_appcast`). The private key is
   in the login keychain; the first run per machine raises a one-time "Always
-  Allow" keychain prompt that needs a human click (do not bypass it). Regenerate:
-  ```bash
-  mkdir -p /tmp/ac && cp dist/Attache.dmg /tmp/ac/
-  .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
-    --download-url-prefix "https://github.com/danbryan/attache/releases/download/vX.Y.Z/" \
-    --link "https://attache.fm" /tmp/ac/
-  ```
-  Then copy `/tmp/ac/appcast.xml` into the bare-metal `attache` app dir and
-  publish it via the ConfigMap step in Landing Page.
+  Allow" keychain prompt that needs a human click (do not bypass it). Do NOT
+  call `generate_appcast` directly for a release; use the wrapper that also
+  attaches release notes (next bullet).
+- **Release notes in the update prompt (required every release).** Sparkle
+  shows an item's notes inside the "Version X is available" prompt before the
+  user clicks Install, so they can decide to update now or defer. Every release
+  MUST ship notes:
+  1. Write `docs/releases/vX.Y.Z.md` (you already do this for the GitHub
+     release body): a one-line lead, then a few bullets grouped as **New /
+     Changed / Fixed**. Describe the user-visible outcome, not the
+     implementation. Keep it clear and concise, not exhaustive; this is a
+     changelog for humans, not a commit log.
+  2. Generate the appcast with `VERSION=X.Y.Z scripts/generate-appcast.sh`. It
+     signs with `generate_appcast`, embeds that version's notes inline as the
+     item `<description>` (dropping the Install boilerplate), and adds a
+     `<sparkle:fullReleaseNotesLink>` to `github.com/danbryan/attache/releases`.
+     Output is `dist/appcast.xml`; publish it via the ConfigMap step in Landing
+     Page.
+  - Why the GitHub link matters: a user may be several versions behind, and
+    Sparkle shows only the OFFERED version's notes inline, not the notes of the
+    versions they skipped. The GitHub releases page is the cumulative,
+    newest-first changelog (every `docs/releases/vX.Y.Z.md` is posted there by
+    `create-github-release.sh`), so it covers "everything since you last
+    updated." Keep each release's notes self-contained so that page reads well.
+  - This repo is PUBLIC (see Repository History). Release notes, and everything
+    in this file, are world-readable: never put secrets, credentials, private
+    infrastructure detail, or internal-only ticket specifics in them.
 - `CFBundleVersion` must strictly increase (see Release And Distribution); it is
   what Sparkle compares between the installed app and the appcast. In-app, the
   menu-bar dropdown shows the version and a Check for Updates item; the app menu
