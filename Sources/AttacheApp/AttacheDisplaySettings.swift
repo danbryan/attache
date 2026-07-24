@@ -406,6 +406,9 @@ enum AttachePreferenceKey {
     /// Running-transcript side panel pinned open. Persists across turns and
     /// calls; default off (the panel is an on-demand peek otherwise).
     static let transcriptPanelPinned = "attache.transcriptPanelPinned"
+    /// User-chosen width of the running-transcript side panel, in points.
+    /// Persists across calls; clamped to `AppModel.transcriptPanelWidthRange`.
+    static let transcriptPanelWidth = "attache.transcriptPanelWidth"
     static let lowLatencyCaptions = "attache.lowLatencyCaptions"
     static let spokenLanguage = "attache.spokenLanguage"
     static let microphoneDeviceID = "attache.microphoneDeviceID"

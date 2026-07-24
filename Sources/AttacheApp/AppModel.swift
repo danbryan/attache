@@ -606,6 +606,29 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    /// Width bounds for the running-transcript side panel. The default (330)
+    /// matches the historical fixed width.
+    static let transcriptPanelWidthRange: ClosedRange<CGFloat> = 280...620
+    static let transcriptPanelDefaultWidth: CGFloat = 330
+
+    /// User-chosen width of the running-transcript side panel. Set through
+    /// `setTranscriptPanelWidth(_:)` (which clamps); persists across calls.
+    @Published private(set) var transcriptPanelWidth: CGFloat = AppModel.transcriptPanelDefaultWidth {
+        didSet {
+            defaults.set(Double(transcriptPanelWidth), forKey: AttachePreferenceKey.transcriptPanelWidth)
+        }
+    }
+
+    /// Set the transcript panel width, clamped to `transcriptPanelWidthRange`.
+    /// The panel is right-anchored, so a resize handle on its left edge maps a
+    /// leftward drag to a wider panel.
+    func setTranscriptPanelWidth(_ width: CGFloat) {
+        let clamped = min(max(width, Self.transcriptPanelWidthRange.lowerBound),
+                          Self.transcriptPanelWidthRange.upperBound)
+        guard clamped != transcriptPanelWidth else { return }
+        transcriptPanelWidth = clamped
+    }
+
     /// A brief post-hang-up note: "Saved to History" for a normal call,
     /// "Not recorded" for a private call. Cleared automatically after a moment.
     @Published private(set) var callHangUpNote: String?
@@ -3177,16 +3200,15 @@ final class AppModel: ObservableObject {
             return
         }
 
-        // INF-378: every recap feedback surface (the cost-preview banner, the
-        // preparing/writing progress chip, and any failure or recovery banner)
-        // lives in the voicemail inbox panel. The recap is launched from the
-        // ⌘I inbox palette and the dock, neither of which presents that panel,
-        // so a deferred (cost-preview) or failing recap used to leave the user
-        // with no visible feedback at all. Route to the voicemail surface first
-        // (the same channel `InboxOverlay.followUpSelection` uses) and enter a
-        // visible preparing state immediately, so every recap has a visible
-        // home before any decision, model call, or early return.
-        NotificationCenter.default.post(name: .attacheOpenVoicemailSurface, object: nil)
+        // Enter a visible preparing state immediately. A normal recap plays on
+        // the live media surface, so the happy path routes straight there and
+        // shows its "writing your recap" progress on that surface (the
+        // live-surface preparing toast keyed on `recapInProgress`), never the
+        // inbox split panel. Only the two feedback surfaces that actually need
+        // the inbox, the cost-preview Start/Not now banner and a failure's
+        // model-switch recovery banner, route to the voicemail surface, and
+        // they do so at their own branches below (INF-378, refined so a clean
+        // recap goes to the media player only).
         recapInProgress = true
         intakeStatus = "Preparing your recap…"
 
@@ -3214,6 +3236,9 @@ final class AppModel: ObservableObject {
         // whole-session-review pre-flight notice. Below both thresholds this
         // is a no-op and behavior is identical to before staging existed.
         guard !decision.needsCostPreview else {
+            // The cost-preview Start/Not now banner lives on the inbox split
+            // panel, so route there for this branch only.
+            NotificationCenter.default.post(name: .attacheOpenVoicemailSurface, object: nil)
             // The banner itself is the visible feedback while we wait on the
             // user's Start/Not now decision, so leave the preparing chip off.
             recapInProgress = false
@@ -3230,6 +3255,10 @@ final class AppModel: ObservableObject {
             return
         }
 
+        // Happy path: a normal single-pass recap plays on the live media
+        // surface, so go there now and show the "writing your recap" progress
+        // on that surface rather than the inbox.
+        NotificationCenter.default.post(name: .attacheShowLivePlaybackSurface, object: nil)
         executeRecapPlan(cards: summarized, plan: decision.plan, personality: personality)
     }
 
@@ -3374,6 +3403,10 @@ final class AppModel: ObservableObject {
                             isCLIProvider: self.recapEffectiveProvider.isCLI
                         )
                         if recovery.offersModelSwitch {
+                            // The recovery banner (pick another model, then
+                            // retry) lives on the inbox split panel, so bring
+                            // that surface forward for this failure case.
+                            NotificationCenter.default.post(name: .attacheOpenVoicemailSurface, object: nil)
                             self.recapRecovery = recovery
                             self.recapRetryCards = cards
                             self.loadPresentationModels(preserveCurrentSelection: true)
@@ -10365,6 +10398,9 @@ final class AppModel: ObservableObject {
             transcriptPanel = TranscriptPanelPresentation(
                 pinned: defaults.bool(forKey: AttachePreferenceKey.transcriptPanelPinned)
             )
+        }
+        if defaults.object(forKey: AttachePreferenceKey.transcriptPanelWidth) != nil {
+            setTranscriptPanelWidth(CGFloat(defaults.double(forKey: AttachePreferenceKey.transcriptPanelWidth)))
         }
         if defaults.object(forKey: AttachePreferenceKey.uiTextScale) != nil {
             uiTextScale = AttacheTypeScale.clamp(defaults.double(forKey: AttachePreferenceKey.uiTextScale))

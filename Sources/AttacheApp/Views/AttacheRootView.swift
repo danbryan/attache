@@ -290,6 +290,14 @@ struct AttacheRootView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
+            if surfaceMode == .live, model.recapInProgress, !playbackSurfaceActive {
+                recapPreparingToast
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 30)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
             if surfaceMode == .live {
                 liveModeOverlay
                     .transition(.opacity)
@@ -1018,6 +1026,26 @@ struct AttacheRootView: View {
     /// caption is not up and Attaché has spoken at least one turn.
     // A brief post-hang-up confirmation: "Saved to History" for a normal call,
     // "Not recorded" for a private call.
+    /// While a recap is being written on the live media surface (before any
+    /// audio), a small progress pill stands in for the inbox's preparing chip,
+    /// so a clean recap gives feedback without ever leaving the media player.
+    private var recapPreparingToast: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(model.intakeStatus.isEmpty ? "Writing your recap…" : model.intakeStatus)
+                .typoCaption(.semibold)
+                .foregroundStyle(.primary.opacity(0.85))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Color.primary.opacity(0.12)))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Recap in progress: \(model.intakeStatus.isEmpty ? "Writing your recap" : model.intakeStatus)")
+    }
+
     private func callHangUpNoteToast(_ note: String) -> some View {
         let isPrivate = note == "Not recorded"
         return Label(note, systemImage: isPrivate ? "eye.slash.fill" : "checkmark.circle.fill")

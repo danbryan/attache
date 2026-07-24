@@ -48,6 +48,10 @@ struct LiveTranscriptPanel: View {
     @ObservedObject var model: AppModel
     @ObservedObject var playback: SpeechPlaybackController
 
+    /// Panel width at the moment a resize drag began, so the drag maps
+    /// absolutely rather than accumulating per frame.
+    @State private var dragStartWidth: CGFloat?
+
     private var accent: Color { model.theme.signatureColor }
     private var transcript: LiveCallTranscript { model.liveCallTranscript }
 
@@ -66,13 +70,39 @@ struct LiveTranscriptPanel: View {
                 Divider()
                 thread
             }
-            .frame(width: 330)
+            .frame(width: model.transcriptPanelWidth)
             .frame(maxHeight: .infinity)
             .background(.regularMaterial)
-            .overlay(alignment: .leading) { Divider() }
+            .overlay(alignment: .leading) { resizeHandle }
         }
         .transition(.move(edge: .trailing).combined(with: .opacity))
         .accessibilityIdentifier("Live Transcript Panel")
+    }
+
+    /// A draggable grip on the panel's left edge. The panel is anchored to the
+    /// right, so dragging the edge left widens it and right narrows it. Width is
+    /// clamped and persisted by `AppModel.setTranscriptPanelWidth`.
+    private var resizeHandle: some View {
+        Divider()
+            .overlay(
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 12)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                let start = dragStartWidth ?? model.transcriptPanelWidth
+                                if dragStartWidth == nil { dragStartWidth = start }
+                                model.setTranscriptPanelWidth(start - value.translation.width)
+                            }
+                            .onEnded { _ in dragStartWidth = nil }
+                    )
+                    .accessibilityLabel("Resize conversation panel")
+            )
     }
 
     private var header: some View {
