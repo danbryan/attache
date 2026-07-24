@@ -746,29 +746,42 @@ struct AttacheCharacterFigure: View {
         let spacing = barSpan / CGFloat(count)
         let barWidth = spacing * 0.58
         let corner = barWidth / 2
-        let cy = center.y - mhv * 0.15
+        let cy = center.y - mhv * 0.12
         func barRect(_ i: Int) -> CGRect {
             let x = center.x - barSpan / 2 + spacing * (CGFloat(i) + 0.5)
-            let h = mhv * (0.30 + 2.5 * mouthOpen * CGFloat(bands[i]))
+            let h = mhv * (0.2 + 0.95 * mouthOpen * CGFloat(bands[i]))
             return CGRect(x: x - barWidth / 2, y: cy - h / 2, width: barWidth, height: h)
         }
 
-        // Brand under-glow behind the dark bars, identical to the robot mouth
-        // (a FIXED brand accent, deliberately not coupled to the eye color).
-        head.drawLayer { glow in
+        // Crop the mouth out of the photo and drop in the literal robot mouth:
+        // a navy screen panel (the robot's face-screen color) where the real
+        // mouth was, with the identical equalizer bars on it. Sized to the mouth
+        // (wide and short), so it reads as a robot mouth slot, not a big patch.
+        let panelW = mwv * 1.06
+        let panelH = mhv * 1.45
+        let panel = CGRect(x: center.x - panelW / 2, y: cy - panelH / 2, width: panelW, height: panelH)
+        let panelPath = Path(roundedRect: panel, cornerRadius: panelH * 0.48)
+        head.fill(panelPath, with: .color(AttacheMascotMark.faceColor))
+        // A soft inset rim so the panel reads as cut into the face.
+        head.stroke(panelPath, with: .color(.black.opacity(0.35)), lineWidth: max(0.6, mhv * 0.05))
+
+        var mouthCtx = head
+        mouthCtx.clip(to: panelPath)
+        // Brand under-glow behind the bars, identical to the robot mouth (a
+        // FIXED brand accent, deliberately not coupled to the eye color).
+        mouthCtx.drawLayer { glow in
             glow.addFilter(.blur(radius: max(1.2, mhv * 0.22)))
             for i in 0..<count {
                 let level = CGFloat(bands[i])
                 glow.fill(
                     Path(roundedRect: barRect(i), cornerRadius: corner),
-                    with: .color(EchoCharacterMouth.brandGlow.opacity(0.32 + 0.16 * level))
+                    with: .color(EchoCharacterMouth.brandGlow.opacity(0.35 + 0.15 * level))
                 )
             }
         }
-        // The dark equalizer bars.
-        let barColor = Color(red: 0.07, green: 0.15, blue: 0.25)
+        // The dark equalizer bars (the screen color, as on the robot).
         for i in 0..<count {
-            head.fill(Path(roundedRect: barRect(i), cornerRadius: corner), with: .color(barColor))
+            mouthCtx.fill(Path(roundedRect: barRect(i), cornerRadius: corner), with: .color(AttacheMascotMark.faceColor))
         }
     }
 
