@@ -312,6 +312,8 @@ enum CharacterPoseRenderer {
             ("gaze-upleft", pose { $0.gaze = CGSize(width: -2.2, height: -2.2) }, .head),
             ("half", pose { $0.eyeOpenness = 0.5 }, .head),
             ("blink", pose { $0.eyeOpenness = 0.06 }, .head),
+            // Sleeping with gaze set: the eyes must stay closed and NOT track.
+            ("sleep", pose { $0.overhead = .sleeping; $0.eyeOpenness = 0; $0.gaze = CGSize(width: 3, height: -1) }, .head),
             ("error", pose { $0.dizzy = 1 }, .head),
             ("speaking", pose { $0.mouthOpen = 0.7; $0.sway = 4 }, .head),
         ]

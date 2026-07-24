@@ -728,27 +728,60 @@ struct AttacheCharacterFigure: View {
             green: min(1, c0[1] * 1.8 + 0.14),
             blue: min(1, c0[2] * 1.7 + 0.12)
         )
+        // Skin tone (slightly darkened) to paint over the real eye when the
+        // synthetic eye is closed, so a shut eye reads as a lid, not the photo's
+        // open eye behind a line.
+        let sc = eyes.skinColor
+        let skin: Color = (sc?.count ?? 0) >= 3
+            ? Color(red: min(1, sc![0] * 0.99), green: min(1, sc![1] * 0.97), blue: min(1, sc![2] * 0.95))
+            : Color(red: 0.72, green: 0.52, blue: 0.40)
         func viewPoint(_ nx: Double, _ ny: Double) -> CGPoint {
             let dx = (centerX - canvasSpan / 2) + CGFloat(nx) * canvasSpan
             let dy = (centerY - canvasSpan / 2) + CGFloat(ny) * canvasSpan
             return p(dx, dy)
         }
-        let gazeX = max(-1, min(1, pose.gaze.width / 3))
-        let gazeY = max(-1, min(1, pose.gaze.height / 3))
-        let openness = max(0, min(1.2, pose.eyeOpenness))
+        // A sleeping person looks asleep: eyes fully closed and NOT tracking the
+        // mouse. The shared rig has a "sleepy peek + glance" delight that cracks
+        // an eye and follows the cursor, which is charming on the robot's LED
+        // eyes but uncanny on a real face, so suppress it here.
+        let sleeping = pose.overhead == .sleeping
+        let openness = sleeping ? 0 : max(0, min(1.2, pose.eyeOpenness))
+        let gazeX = sleeping ? 0 : max(-1, min(1, pose.gaze.width / 3))
+        let gazeY = sleeping ? 0 : max(-1, min(1, pose.gaze.height / 3))
         let dizzy = max(0, min(1, pose.dizzy))
 
         for eye in [eyes.left, eyes.right] {
-            // Anchors are ground-truth eye centers; size the synthetic eye a bit
-            // larger than the detected opening so it fully covers the real eye.
+            // Anchors are ground-truth eye centers. Sized to still cover the
+            // real eye but smaller than the first pass, which read too cartoony.
             let center = viewPoint(eye.x, eye.y + 0.004)
-            let ew = CGFloat(eye.w) * canvasSpan * s * 1.42
-            let eh = CGFloat(eye.h) * canvasSpan * s * 2.7
+            let ew = CGFloat(eye.w) * canvasSpan * s * 1.24
+            let eh = CGFloat(eye.h) * canvasSpan * s * 2.0
             drawOneEye(
-                in: head, center: center, ew: ew, eh: eh, iris: iris,
+                in: head, center: center, ew: ew, eh: eh, iris: iris, skin: skin,
                 gazeX: gazeX, gazeY: gazeY, openness: openness, dizzy: dizzy
             )
         }
+    }
+
+    /// A calm closed eyelid: a gentle downward-arcing lash line (no sclera), so
+    /// a shut eye reads as "asleep/blinking" rather than a slit of white with a
+    /// line through it.
+    private func drawClosedLid(in ctx: GraphicsContext, center c: CGPoint, ew: CGFloat, eh: CGFloat, skin: Color) {
+        // Paint over the real (open) eye in the photo with skin so the shut lid
+        // covers it, then draw the lash line where the lid meets.
+        let patch = CGRect(x: c.x - ew * 0.6, y: c.y - eh * 0.72, width: ew * 1.2, height: eh * 1.6)
+        ctx.fill(Path(ellipseIn: patch), with: .color(skin))
+        var lid = Path()
+        lid.move(to: CGPoint(x: c.x - ew * 0.5, y: c.y - eh * 0.04))
+        lid.addQuadCurve(
+            to: CGPoint(x: c.x + ew * 0.5, y: c.y - eh * 0.04),
+            control: CGPoint(x: c.x, y: c.y + eh * 0.22)
+        )
+        ctx.stroke(
+            lid,
+            with: .color(Color(red: 0.20, green: 0.14, blue: 0.13).opacity(0.85)),
+            lineWidth: max(1.0, eh * 0.12)
+        )
     }
 
     private func drawOneEye(
@@ -757,84 +790,75 @@ struct AttacheCharacterFigure: View {
         ew: CGFloat,
         eh: CGFloat,
         iris irisColor: Color,
+        skin: Color,
         gazeX: CGFloat,
         gazeY: CGFloat,
         openness: CGFloat,
         dizzy: CGFloat
     ) {
-        // Aperture: full when open, a thin slit when closed (blink).
-        let apertureH = max(eh * 0.10, eh * min(1, openness))
+        // Error: crossed-out eyes over a closed lid.
+        if dizzy > 0.5 {
+            drawClosedLid(in: ctx, center: c, ew: ew, eh: eh, skin: skin)
+            var x1 = Path()
+            x1.move(to: CGPoint(x: c.x - ew * 0.3, y: c.y - eh * 0.3))
+            x1.addLine(to: CGPoint(x: c.x + ew * 0.3, y: c.y + eh * 0.3))
+            var x2 = Path()
+            x2.move(to: CGPoint(x: c.x + ew * 0.3, y: c.y - eh * 0.3))
+            x2.addLine(to: CGPoint(x: c.x - ew * 0.3, y: c.y + eh * 0.3))
+            let w = max(1.4, eh * 0.2)
+            ctx.stroke(x1, with: .color(.black.opacity(0.9)), lineWidth: w)
+            ctx.stroke(x2, with: .color(.black.opacity(0.9)), lineWidth: w)
+            return
+        }
+
+        // Closed (asleep, or the closed part of a blink): a soft eyelid curve,
+        // no sclera or iris.
+        if openness < 0.16 {
+            drawClosedLid(in: ctx, center: c, ew: ew, eh: eh, skin: skin)
+            return
+        }
+
+        // Open eye. The aperture height scales with openness so a blink reads as
+        // a smooth close, not a pop.
+        let apertureH = eh * min(1, openness)
         let apertureRect = CGRect(x: c.x - ew / 2, y: c.y - apertureH / 2, width: ew, height: apertureH)
         let aperture = Path(ellipseIn: apertureRect)
 
-        if dizzy < 0.5 {
-            var eyeCtx = ctx
-            eyeCtx.clip(to: aperture)
-            // sclera
-            eyeCtx.fill(aperture, with: .color(Color(red: 0.96, green: 0.95, blue: 0.93)))
-            // iris, offset by gaze and clamped inside the eye
-            let irisR = eh * 0.55
-            let maxX = max(0, ew / 2 - irisR * 0.65)
-            // Eyes move mostly horizontally; keep vertical travel small so
-            // looking up/down doesn't expose a bug-eyed band of sclera.
-            let maxY = eh * 0.15
-            let ic = CGPoint(x: c.x + gazeX * maxX, y: c.y + gazeY * maxY)
-            eyeCtx.fill(
-                Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
-                with: .color(irisColor)
-            )
-            // iris rim + pupil + highlight
-            eyeCtx.stroke(
-                Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
-                with: .color(.black.opacity(0.35)), lineWidth: max(0.5, eh * 0.05)
-            )
-            let pr = irisR * 0.46
-            eyeCtx.fill(
-                Path(ellipseIn: CGRect(x: ic.x - pr, y: ic.y - pr, width: pr * 2, height: pr * 2)),
-                with: .color(Color(red: 0.06, green: 0.05, blue: 0.07))
-            )
-            let hr = max(0.8, pr * 0.5)
-            eyeCtx.fill(
-                Path(ellipseIn: CGRect(x: ic.x - pr * 0.4 - hr / 2, y: ic.y - pr * 0.5 - hr / 2, width: hr, height: hr)),
-                with: .color(.white.opacity(0.92))
-            )
-        }
+        var eyeCtx = ctx
+        eyeCtx.clip(to: aperture)
+        eyeCtx.fill(aperture, with: .color(Color(red: 0.96, green: 0.95, blue: 0.93)))
+        // iris, offset by gaze and clamped inside the eye
+        let irisR = eh * 0.5
+        let maxX = max(0, ew / 2 - irisR * 0.6)
+        let maxY = eh * 0.14
+        let ic = CGPoint(x: c.x + gazeX * maxX, y: c.y + gazeY * maxY)
+        eyeCtx.fill(
+            Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
+            with: .color(irisColor)
+        )
+        eyeCtx.stroke(
+            Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
+            with: .color(.black.opacity(0.35)), lineWidth: max(0.5, eh * 0.05)
+        )
+        let pr = irisR * 0.46
+        eyeCtx.fill(
+            Path(ellipseIn: CGRect(x: ic.x - pr, y: ic.y - pr, width: pr * 2, height: pr * 2)),
+            with: .color(Color(red: 0.06, green: 0.05, blue: 0.07))
+        )
+        let hr = max(0.8, pr * 0.5)
+        eyeCtx.fill(
+            Path(ellipseIn: CGRect(x: ic.x - pr * 0.4 - hr / 2, y: ic.y - pr * 0.5 - hr / 2, width: hr, height: hr)),
+            with: .color(.white.opacity(0.92))
+        )
 
-        // Upper lash line hugging the aperture top, so the eye sits in a lid.
-        if openness > 0.08 {
-            var lash = Path()
-            lash.move(to: CGPoint(x: c.x - ew / 2, y: c.y - apertureH / 2))
-            lash.addQuadCurve(
-                to: CGPoint(x: c.x + ew / 2, y: c.y - apertureH / 2),
-                control: CGPoint(x: c.x, y: c.y - apertureH / 2 - eh * 0.10)
-            )
-            ctx.stroke(lash, with: .color(Color(red: 0.16, green: 0.12, blue: 0.12).opacity(0.85)), lineWidth: max(0.8, eh * 0.10))
-        }
-
-        // Lower lid: a soft shadow seats the eye in its socket instead of
-        // floating on the skin.
-        if openness > 0.2 {
-            var lid = Path()
-            lid.move(to: CGPoint(x: c.x - ew / 2, y: c.y + apertureH / 2))
-            lid.addQuadCurve(
-                to: CGPoint(x: c.x + ew / 2, y: c.y + apertureH / 2),
-                control: CGPoint(x: c.x, y: c.y + apertureH / 2 + eh * 0.06)
-            )
-            ctx.stroke(lid, with: .color(Color(red: 0.30, green: 0.20, blue: 0.18).opacity(0.35)), lineWidth: max(0.6, eh * 0.06))
-        }
-
-        // Error: crossed-out eyes.
-        if dizzy > 0.5 {
-            var x1 = Path()
-            x1.move(to: CGPoint(x: c.x - ew * 0.32, y: c.y - eh * 0.32))
-            x1.addLine(to: CGPoint(x: c.x + ew * 0.32, y: c.y + eh * 0.32))
-            var x2 = Path()
-            x2.move(to: CGPoint(x: c.x + ew * 0.32, y: c.y - eh * 0.32))
-            x2.addLine(to: CGPoint(x: c.x - ew * 0.32, y: c.y + eh * 0.32))
-            let w = max(1.4, eh * 0.22)
-            ctx.stroke(x1, with: .color(.black.opacity(0.9)), lineWidth: w)
-            ctx.stroke(x2, with: .color(.black.opacity(0.9)), lineWidth: w)
-        }
+        // Upper lash line hugging the aperture top.
+        var lash = Path()
+        lash.move(to: CGPoint(x: c.x - ew / 2, y: c.y - apertureH / 2))
+        lash.addQuadCurve(
+            to: CGPoint(x: c.x + ew / 2, y: c.y - apertureH / 2),
+            control: CGPoint(x: c.x, y: c.y - apertureH / 2 - eh * 0.10)
+        )
+        ctx.stroke(lash, with: .color(Color(red: 0.16, green: 0.12, blue: 0.12).opacity(0.85)), lineWidth: max(0.8, eh * 0.10))
     }
 
     /// The compact Echo presence draws the SAME real mirrored equalizer as the

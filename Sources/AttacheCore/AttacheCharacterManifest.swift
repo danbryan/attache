@@ -47,8 +47,12 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
         public var right: Eye
         /// Sampled iris color, linear RGB in [0, 1].
         public var irisColor: [Double]
-        public init(left: Eye, right: Eye, irisColor: [Double]) {
+        /// Sampled skin tone near the eye, used to paint over the real eye when
+        /// the synthetic eye is closed (asleep/blink). Optional for back-compat.
+        public var skinColor: [Double]?
+        public init(left: Eye, right: Eye, irisColor: [Double], skinColor: [Double]? = nil) {
             self.left = left; self.right = right; self.irisColor = irisColor
+            self.skinColor = skinColor
         }
     }
 

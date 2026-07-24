@@ -147,6 +147,24 @@ let irisL = ring2(CGPoint(x:lBox.midX,y:lBox.midY), lBox.height)
 let irisR = ring2(CGPoint(x:rBox.midX,y:rBox.midY), rBox.height)
 let iris = [ (irisL[0]+irisR[0])/2, (irisL[1]+irisR[1])/2, (irisL[2]+irisR[2])/2 ]
 
+// Skin tone from the upper cheek just below each eye (reliable skin, no beard
+// at this height), for painting over the real eye when the synthetic eye is
+// closed (asleep/blink).
+func skinSample(_ c:CGPoint,_ eyeH:CGFloat)->[Double]{
+    var rs=[Int](),gs=[Int](),bs=[Int]()
+    let cy=c.y+eyeH*1.7
+    for dy in -3...3 { for dx in -8...8 {
+        let x=Int(c.x)+dx*2, y=Int(cy)+dy*2
+        guard x>=0,x<W,y>=0,y<H else{continue}
+        let i=y*bpr+x*4; rs.append(Int(obuf[i]));gs.append(Int(obuf[i+1]));bs.append(Int(obuf[i+2]))
+    }}
+    func med(_ a:[Int])->Double{a.isEmpty ?0.6:Double(a.sorted()[a.count/2])/255.0}
+    return [med(rs),med(gs),med(bs)]
+}
+let skinL=skinSample(CGPoint(x:lBox.midX,y:lBox.midY),lBox.height)
+let skinR=skinSample(CGPoint(x:rBox.midX,y:rBox.midY),rBox.height)
+let skin=[(skinL[0]+skinR[0])/2,(skinL[1]+skinR[1])/2,(skinL[2]+skinR[2])/2]
+
 // --- write package ---
 let fm = FileManager.default
 try? fm.createDirectory(atPath: "\(outDir)/frames", withIntermediateDirectories: true)
@@ -164,7 +182,8 @@ let manifest = """
   "eyes": {
     "left":  { "x": \(f(lx)), "y": \(f(ly)), "w": \(f(ew)), "h": \(f(eh)) },
     "right": { "x": \(f(rx)), "y": \(f(ry)), "w": \(f(ew)), "h": \(f(eh)) },
-    "irisColor": [\(f(iris[0])), \(f(iris[1])), \(f(iris[2]))]
+    "irisColor": [\(f(iris[0])), \(f(iris[1])), \(f(iris[2]))],
+    "skinColor": [\(f(skin[0])), \(f(skin[1])), \(f(skin[2]))]
   }
 }
 """
