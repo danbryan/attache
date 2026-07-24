@@ -118,6 +118,26 @@ final class AttacheCharacterManifestTests: XCTestCase {
         XCTAssertEqual(decoded, m)
     }
 
+    func testDecodesEyesAndRoundTrips() throws {
+        let json = """
+        {"format":3,"name":"Dan","canvas":252,"safeArea":240,
+         "frames":{"neutral":"frames/neutral.png"},
+         "eyes":{"left":{"x":0.43,"y":0.48,"w":0.07,"h":0.024},
+                 "right":{"x":0.59,"y":0.49,"w":0.07,"h":0.024},
+                 "irisColor":[0.22,0.20,0.16]}}
+        """
+        let m = try JSONDecoder().decode(AttacheCharacterManifest.self, from: Data(json.utf8))
+        let eyes = try XCTUnwrap(m.eyes)
+        XCTAssertEqual(eyes.left.x, 0.43, accuracy: 1e-9)
+        XCTAssertEqual(eyes.right.y, 0.49, accuracy: 1e-9)
+        XCTAssertEqual(eyes.irisColor, [0.22, 0.20, 0.16])
+        // Round-trips cleanly.
+        let data = try JSONEncoder().encode(m)
+        XCTAssertEqual(try JSONDecoder().decode(AttacheCharacterManifest.self, from: data), m)
+        // A neutral-only manifest with eyes still validates.
+        XCTAssertNoThrow(try m.validate())
+    }
+
     func testDecodesMinimalJSON() throws {
         let json = """
         {"format":1,"name":"Dan","canvas":252,"safeArea":240,"frames":{"neutral":"frames/neutral.png"}}
