@@ -31,6 +31,19 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
     /// continuous gaze, blink, worry, and error. Positions/sizes are normalized
     /// to the canvas [0, 1]. See docs/byo-presence.md.
     public var eyes: EyeAnchors?
+    /// Optional mouth anchor (format >= 3), normalized to the canvas [0, 1], so
+    /// the renderer can animate an open mouth over the photo during speech.
+    public var mouth: MouthAnchor?
+
+    public struct MouthAnchor: Codable, Equatable, Sendable {
+        public var x: Double
+        public var y: Double
+        public var w: Double
+        public var h: Double
+        public init(x: Double, y: Double, w: Double, h: Double) {
+            self.x = x; self.y = y; self.w = w; self.h = h
+        }
+    }
 
     public struct EyeAnchors: Codable, Equatable, Sendable {
         public struct Eye: Codable, Equatable, Sendable {
@@ -88,7 +101,8 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
         frames: [String: String],
         gaze: [GazeFrame]? = nil,
         visemes: [VisemeFrame]? = nil,
-        eyes: EyeAnchors? = nil
+        eyes: EyeAnchors? = nil,
+        mouth: MouthAnchor? = nil
     ) {
         self.format = format
         self.name = name
@@ -98,6 +112,7 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
         self.gaze = gaze
         self.visemes = visemes
         self.eyes = eyes
+        self.mouth = mouth
     }
 
     /// The relative path of the always-required neutral frame, if present.

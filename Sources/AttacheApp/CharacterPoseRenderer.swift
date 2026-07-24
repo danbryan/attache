@@ -315,7 +315,9 @@ enum CharacterPoseRenderer {
             // Sleeping with gaze set: the eyes must stay closed and NOT track.
             ("sleep", pose { $0.overhead = .sleeping; $0.eyeOpenness = 0; $0.gaze = CGSize(width: 3, height: -1) }, .head),
             ("error", pose { $0.dizzy = 1 }, .head),
+            ("mouth-mid", pose { $0.mouthOpen = 0.4 }, .head),
             ("speaking", pose { $0.mouthOpen = 0.7; $0.sway = 4 }, .head),
+            ("mouth-wide", pose { $0.mouthOpen = 1.0 }, .head),
         ]
         for (name, pose, anatomy) in poses {
             let figure = AttacheCharacterFigure(

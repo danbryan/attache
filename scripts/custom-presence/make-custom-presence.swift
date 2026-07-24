@@ -102,6 +102,10 @@ let lx = Double(lB.midX)/Double(upW), ly = Double(lB.midY)/Double(upW)
 let rx = Double(rB.midX)/Double(upW), ry = Double(rB.midY)/Double(upW)
 let ew = Double(lB.width)/Double(upW)
 let eh = Double(lB.height)/Double(upW)
+// Mouth anchor from the outer-lip landmarks on the final canvas image.
+let mB = box(pts2(lm2.outerLips))
+let mx = Double(mB.midX)/Double(upW), my = Double(mB.midY)/Double(upW)
+let mw = Double(mB.width)/Double(upW), mh = Double(mB.height)/Double(upW)
 
 // --- iris color: ring sample around each eye center (avoid pupil) ---
 func ringColor(_ c: CGPoint, eyeH: CGFloat) -> [Double] {
@@ -184,7 +188,8 @@ let manifest = """
     "right": { "x": \(f(rx)), "y": \(f(ry)), "w": \(f(ew)), "h": \(f(eh)) },
     "irisColor": [\(f(iris[0])), \(f(iris[1])), \(f(iris[2]))],
     "skinColor": [\(f(skin[0])), \(f(skin[1])), \(f(skin[2]))]
-  }
+  },
+  "mouth": { "x": \(f(mx)), "y": \(f(my)), "w": \(f(mw)), "h": \(f(mh)) }
 }
 """
 try manifest.write(toFile:"\(outDir)/manifest.json", atomically:true, encoding:.utf8)

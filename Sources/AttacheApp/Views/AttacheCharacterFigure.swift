@@ -709,6 +709,69 @@ struct AttacheCharacterFigure: View {
                 canvasSpan: canvasSpan, centerX: centerX, centerY: centerY
             )
         }
+        if let mouth = artwork.manifest.mouth {
+            drawProceduralMouth(
+                in: head, mouth: mouth, pose: pose, p: p, s: s,
+                canvasSpan: canvasSpan, centerX: centerX, centerY: centerY
+            )
+        }
+    }
+
+    /// Animate an open mouth over the photo during speech. At rest the photo's
+    /// own mouth shows; as `mouthOpen` rises, a mouth cavity (with an upper-teeth
+    /// band) grows over the lips, so a talking presence looks like it's talking.
+    private func drawProceduralMouth(
+        in head: GraphicsContext,
+        mouth: AttacheCharacterManifest.MouthAnchor,
+        pose: AttachePose,
+        p: (CGFloat, CGFloat) -> CGPoint,
+        s: CGFloat,
+        canvasSpan: CGFloat,
+        centerX: CGFloat,
+        centerY: CGFloat
+    ) {
+        // Sleeping or at rest: leave the real photo mouth alone.
+        guard pose.overhead != .sleeping else { return }
+        let openness = max(0, min(1, pose.mouthOpen))
+        guard openness > 0.10 else { return }
+
+        let dx = (centerX - canvasSpan / 2) + CGFloat(mouth.x) * canvasSpan
+        let dy = (centerY - canvasSpan / 2) + CGFloat(mouth.y) * canvasSpan
+        let center = p(dx, dy)
+        let mwv = CGFloat(mouth.w) * canvasSpan * s
+        let mhv = CGFloat(mouth.h) * canvasSpan * s
+
+        // The opening covers the real mouth and drops the jaw: its top stays at
+        // the upper lip and it grows downward with openness, like a real mouth.
+        let openW = mwv * 0.82
+        let openH = mhv * (0.9 + 1.5 * openness)
+        let topY = center.y - mhv * 0.42
+        let rect = CGRect(x: center.x - openW / 2, y: topY, width: openW, height: openH)
+        let cavity = Path(ellipseIn: rect)
+
+        var m = head
+        m.clip(to: cavity)
+        // Dark mouth interior.
+        m.fill(cavity, with: .color(Color(red: 0.24, green: 0.08, blue: 0.09)))
+        // Upper teeth band.
+        let teethH = openH * 0.30
+        m.fill(
+            Path(roundedRect: CGRect(x: rect.minX + openW * 0.06, y: rect.minY + openH * 0.03,
+                                     width: openW * 0.88, height: teethH),
+                 cornerRadius: teethH * 0.35),
+            with: .color(Color(red: 0.93, green: 0.91, blue: 0.87))
+        )
+        // A tongue hint at the bottom when wide open.
+        if openness > 0.55 {
+            let tongueH = openH * 0.34
+            m.fill(
+                Path(ellipseIn: CGRect(x: rect.minX + openW * 0.14, y: rect.maxY - tongueH,
+                                       width: openW * 0.72, height: tongueH * 1.2)),
+                with: .color(Color(red: 0.72, green: 0.34, blue: 0.36))
+            )
+        }
+        // Soften the top rim so the upper lip reads over the opening.
+        head.stroke(cavity, with: .color(Color(red: 0.28, green: 0.14, blue: 0.13).opacity(0.5)), lineWidth: max(0.6, mhv * 0.06))
     }
 
     private func drawProceduralEyes(
