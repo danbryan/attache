@@ -58,6 +58,33 @@ if let flagIndex = CommandLine.arguments.firstIndex(where: characterPoseFlags.co
     RunLoop.main.run()
 }
 
+// Custom-presence preview (bring your own presence): render a
+// `*.attache-character` package's live composition to PNGs for placement
+// review, then exit. Usage: --render-custom-presence <packageDir> [outDir]
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-custom-presence") {
+    guard CommandLine.arguments.indices.contains(flagIndex + 1) else {
+        fputs("usage: --render-custom-presence <packageDir> [outDir]\n", stderr)
+        exit(2)
+    }
+    let packagePath = CommandLine.arguments[flagIndex + 1]
+    let outputPath = CommandLine.arguments.indices.contains(flagIndex + 2)
+        ? CommandLine.arguments[flagIndex + 2]
+        : "design/custom-presence"
+    Task { @MainActor in
+        do {
+            try CharacterPoseRenderer.renderCustomPresence(
+                packageURL: URL(fileURLWithPath: packagePath),
+                to: URL(fileURLWithPath: outputPath)
+            )
+            exit(0)
+        } catch {
+            fputs("custom presence render failed: \(error)\n", stderr)
+            exit(1)
+        }
+    }
+    RunLoop.main.run()
+}
+
 // Brand pose exports (INF-274): the marketing pose set at 2048 px plus the
 // idle hero loop frames, same geometry lock.
 if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-brand-poses") {

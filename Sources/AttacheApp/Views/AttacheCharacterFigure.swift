@@ -188,13 +188,23 @@ enum AttacheCharacter: String, CaseIterable, Identifiable, Codable {
     /// The raw value stays `robot` so saved preferences survive.
     case robot
     case cowboy
+    /// A user-supplied image presence (the "bring your own presence" atlas,
+    /// docs/byo-presence.md). Mounts uploaded artwork into the same rig; which
+    /// package it draws is resolved from the personality's `customPresenceRef`.
+    case customAtlas
 
     var id: String { rawValue }
+
+    /// Only the built-in illustrated characters are offered in the picker's
+    /// fixed list; the custom presence is added dynamically when a package
+    /// exists, so it is excluded here to keep `allCases`-driven UI stable.
+    static var builtIns: [AttacheCharacter] { [.robot, .cowboy] }
 
     var title: String {
         switch self {
         case .robot: return "Attaché"
         case .cowboy: return "Colt"
+        case .customAtlas: return "Custom"
         }
     }
 
@@ -204,6 +214,7 @@ enum AttacheCharacter: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .robot: return "🤖"
         case .cowboy: return "🤠"
+        case .customAtlas: return "🙂"
         }
     }
 }
@@ -216,6 +227,9 @@ struct AttacheCharacterFigure: View {
     var anatomy: AttacheCharacterAnatomy = .full
     /// Live attache character; only consulted by `.head` anatomy.
     var character: AttacheCharacter = .robot
+    /// Resolved artwork for `.customAtlas`. When nil (e.g. a dangling
+    /// reference), `.customAtlas` falls back to the robot face.
+    var customArtwork: AtlasArtwork?
     /// Echo is not a third illustrated character. It replaces the center face
     /// with voice bars while keeping the same crown, fleet, props, and motion
     /// contract as Attaché and Colt.
@@ -636,8 +650,54 @@ struct AttacheCharacterFigure: View {
                 drawRobotFace(in: head, pose: pose, p: p, s: s)
             case .cowboy:
                 drawCowboyFace(in: head, pose: pose, p: p, s: s)
+            case .customAtlas:
+                if let artwork = customArtwork {
+                    drawCustomAtlasFace(in: head, pose: pose, p: p, s: s, artwork: artwork)
+                } else {
+                    drawRobotFace(in: head, pose: pose, p: p, s: s)
+                }
             }
         }
+    }
+
+    /// Draws a custom-artwork presence (bring your own presence). Maps the
+    /// pose's face fields to the nearest atlas frame and paints that bitmap over
+    /// the 252-unit design box. The outer figure already supplies breathing,
+    /// sway, hop, and tilt, and the crown and fleet ring draw around this, so
+    /// only the face bitmap is painted here; the frame's transparency keeps the
+    /// crown and motes visible. Gaze is normalized from the pose's ±3 units.
+    /// Tier 0 (neutral only) always resolves to neutral. See docs/byo-presence.md.
+    private func drawCustomAtlasFace(
+        in head: GraphicsContext,
+        pose: AttachePose,
+        p: (CGFloat, CGFloat) -> CGPoint,
+        s: CGFloat,
+        artwork: AtlasArtwork
+    ) {
+        let state = AtlasFaceState(
+            gazeX: Double(pose.gaze.width / 3),
+            gazeY: Double(pose.gaze.height / 3),
+            eyeOpenness: Double(pose.eyeOpenness),
+            mouthOpen: Double(pose.mouthOpen),
+            browWorry: Double(pose.browWorry),
+            dizzy: Double(pose.dizzy)
+        )
+        guard let cg = artwork.image(for: state) else {
+            drawRobotFace(in: head, pose: pose, p: p, s: s)
+            return
+        }
+        // The frame is a full 252 canvas, but the robot head occupies only the
+        // center of the design box, so draw the canvas scaled down to that
+        // footprint and centered on the head region. `canvasSpan` is the design
+        // width the whole frame spans (smaller = smaller head); `centerY` places
+        // it under the arcs with the fleet ring below. Tuned to match the robot
+        // head's size and spacing; these three constants are the placement dial.
+        let canvasSpan: CGFloat = 110
+        let centerX: CGFloat = 120
+        let centerY: CGFloat = 94
+        let topLeft = p(centerX - canvasSpan / 2, centerY - canvasSpan / 2)
+        let rect = CGRect(x: topLeft.x, y: topLeft.y, width: canvasSpan * s, height: canvasSpan * s)
+        head.draw(Image(decorative: cg, scale: 1, orientation: .up), in: rect)
     }
 
     /// The compact Echo presence draws the SAME real mirrored equalizer as the

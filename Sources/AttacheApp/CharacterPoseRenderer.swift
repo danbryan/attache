@@ -286,6 +286,50 @@ enum CharacterPoseRenderer {
         try write(view: strip, scale: 2, to: directory.appendingPathComponent("strip-32px.png"))
     }
 
+    /// Offline preview of a custom "bring your own presence" package: renders
+    /// the live `.head` composition (crown + fleet-less head) at a few poses so
+    /// placement and appearance can be checked without launching the app. No
+    /// geometry lock (that binds only the robot). See docs/byo-presence.md.
+    @MainActor
+    static func renderCustomPresence(packageURL: URL, to directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let artwork = AttacheCustomPresenceStore.load(packageURL) else {
+            throw PoseRenderError.renderFailed("could not load package \(packageURL.lastPathComponent)")
+        }
+
+        var speaking = AttachePose.neutral
+        speaking.mouthOpen = 0.7
+        speaking.sway = 4
+        var thinking = AttachePose.neutral
+        thinking.gaze = CGSize(width: 2, height: -1)
+        thinking.headTilt = -4
+
+        let poses: [(String, AttachePose, AttacheCharacterAnatomy)] = [
+            ("neutral-head", .neutral, .head),
+            ("neutral-full", .neutral, .full),
+            ("speaking-head", speaking, .head),
+            ("thinking-head", thinking, .head),
+        ]
+        for (name, pose, anatomy) in poses {
+            let figure = AttacheCharacterFigure(
+                pose: pose,
+                headroom: anatomy == .full ? 28 : 0,
+                anatomy: anatomy,
+                character: .customAtlas,
+                customArtwork: artwork
+            )
+            .frame(width: 480, height: 534)
+            try write(view: figure, scale: 2, to: directory.appendingPathComponent("custom-\(name).png"))
+        }
+
+        // The robot at the same .head composition, for a direct size/placement
+        // comparison while tuning the custom presence.
+        let robot = AttacheCharacterFigure(pose: .neutral, anatomy: .head, character: .robot)
+            .frame(width: 480, height: 534)
+        try write(view: robot, scale: 2, to: directory.appendingPathComponent("robot-neutral-head.png"))
+        print("wrote custom presence previews to \(directory.path)")
+    }
+
     /// The lock check: `AttacheCharacterFigure(.neutral)` and `AttacheMascotMark`
     /// must produce identical pixels at 240 px. A nonzero delta means the
     /// character's geometry drifted from the canonical mark; fail loudly.
