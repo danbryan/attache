@@ -135,6 +135,11 @@ struct Personality: Identifiable, Codable, Equatable {
     /// keeps the original abstract voice-bars presence with no character. `nil`
     /// is the migration-compatible "keep the current app visual" behavior.
     var visualMode: AttacheVisualMode?
+    /// For `character == .customAtlas`: the `<name>.attache-character` package
+    /// directory name under Application Support/Attache/Characters to draw. A
+    /// dangling reference (art missing) falls back to the robot. See
+    /// docs/byo-presence.md.
+    var customPresenceRef: String?
     /// The preferred main text model. Persistence migration fills a legacy `nil`.
     /// Its ordered fallback providers travel with the personality. Advanced
     /// per-task overrides remain separate recovery policy.
@@ -174,6 +179,7 @@ struct Personality: Identifiable, Codable, Equatable {
         voiceRef: PersonalityVoiceRef? = nil,
         character: AttacheCharacter? = nil,
         visualMode: AttacheVisualMode? = nil,
+        customPresenceRef: String? = nil,
         modelRef: PersonalityModelRef? = nil,
         playbackSpeed: Double? = nil,
         accentColorHex: String? = nil,
@@ -190,6 +196,7 @@ struct Personality: Identifiable, Codable, Equatable {
         self.voiceRef = voiceRef
         self.character = character
         self.visualMode = visualMode
+        self.customPresenceRef = customPresenceRef
         self.modelRef = modelRef
         self.playbackSpeed = playbackSpeed
         self.accentColorHex = accentColorHex
@@ -202,6 +209,7 @@ struct Personality: Identifiable, Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, prompt, isBuiltIn, voiceRef, character, visualMode
+        case customPresenceRef
         case modelRef, playbackSpeed, accentColorHex, contextStrategy
         case contextStrategyMigrationNotice, mcpToolGrants
         case auditionGreeting, auditionGreetingKey
@@ -216,6 +224,7 @@ struct Personality: Identifiable, Codable, Equatable {
         voiceRef = try container.decodeIfPresent(PersonalityVoiceRef.self, forKey: .voiceRef)
         character = try container.decodeIfPresent(AttacheCharacter.self, forKey: .character)
         visualMode = try container.decodeIfPresent(AttacheVisualMode.self, forKey: .visualMode)
+        customPresenceRef = try container.decodeIfPresent(String.self, forKey: .customPresenceRef)
         modelRef = try container.decodeIfPresent(PersonalityModelRef.self, forKey: .modelRef)
         playbackSpeed = try container.decodeIfPresent(Double.self, forKey: .playbackSpeed)
         accentColorHex = try container.decodeIfPresent(String.self, forKey: .accentColorHex)
@@ -249,6 +258,7 @@ struct Personality: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(voiceRef, forKey: .voiceRef)
         try container.encodeIfPresent(character, forKey: .character)
         try container.encodeIfPresent(visualMode, forKey: .visualMode)
+        try container.encodeIfPresent(customPresenceRef, forKey: .customPresenceRef)
         try container.encodeIfPresent(modelRef, forKey: .modelRef)
         try container.encodeIfPresent(playbackSpeed, forKey: .playbackSpeed)
         try container.encodeIfPresent(accentColorHex, forKey: .accentColorHex)
@@ -314,6 +324,7 @@ extension Personality {
             voiceRef: voiceRef,
             character: character,
             visualMode: visualMode,
+            customPresenceRef: customPresenceRef,
             modelRef: modelRef,
             playbackSpeed: playbackSpeed,
             accentColorHex: accentColorHex,

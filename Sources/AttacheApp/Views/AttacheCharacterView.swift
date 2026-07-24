@@ -1141,6 +1141,8 @@ struct AttacheCharacterView: View {
     var shiny = false
     /// The character in the middle of the ring (INF-283).
     var character: AttacheCharacter = .robot
+    /// Resolved artwork for `.customAtlas` (bring your own presence).
+    var customArtwork: AtlasArtwork?
     /// Replaces the illustrated face with Echo's voice bars while preserving
     /// this view's shared fleet and reaction machinery.
     var rendersEchoBars = false
@@ -1211,6 +1213,7 @@ struct AttacheCharacterView: View {
                         headroom: Self.headroom,
                         anatomy: .head,
                         character: character,
+                        customArtwork: customArtwork,
                         rendersEchoBars: rendersEchoBars,
                         fleetMotes: motor.fleet(activity: activity, reduceMotion: reduceMotion, notificationsOnly: fleetNotificationsOnly),
                         accentColor: colorScheme == .dark

@@ -210,6 +210,7 @@ struct MiniAttacheView: View {
                 model?.characterFocusAngle = angle
             },
             character: model.character,
+            customArtwork: model.activeCustomArtwork,
             fleetNotificationsOnly: true,
             isPrivate: model.isPrivateConversation
         )

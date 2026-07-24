@@ -38,6 +38,8 @@ struct EchoformRendererView: View {
     var onCharacterFocusAngleChanged: ((Double) -> Void)?
     /// The character in the middle of the ring (INF-283), character mode only.
     var character: AttacheCharacter = .robot
+    /// Resolved artwork for `.customAtlas` (bring your own presence).
+    var customArtwork: AtlasArtwork?
     /// Desktop mini attache: show only focus/needs-you/finished (INF-291).
     var fleetNotificationsOnly = false
     /// Echo defaults to a character-sized presence. The parent enters a real
@@ -88,6 +90,7 @@ struct EchoformRendererView: View {
                     delights: characterDelights,
                     shiny: characterShiny,
                     character: character,
+                    customArtwork: customArtwork,
                     fleetNotificationsOnly: fleetNotificationsOnly,
                     onFleetFocus: onFleetFocus,
                     onFleetSwitch: onFleetSwitch,

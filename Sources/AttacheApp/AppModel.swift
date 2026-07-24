@@ -525,6 +525,24 @@ final class AppModel: ObservableObject {
     @Published var character: AttacheCharacter = .robot {
         didSet { defaults.set(character.rawValue, forKey: AttachePreferenceKey.character) }
     }
+    /// The active custom-presence package name when `character == .customAtlas`
+    /// (bring your own presence). Mirrors the active personality's
+    /// `customPresenceRef`; persisted so it survives a relaunch.
+    @Published var customPresenceRef: String? = nil {
+        didSet {
+            if let ref = customPresenceRef {
+                defaults.set(ref, forKey: AttachePreferenceKey.customPresenceRef)
+            } else {
+                defaults.removeObject(forKey: AttachePreferenceKey.customPresenceRef)
+            }
+        }
+    }
+    /// The resolved artwork for the active custom presence, or nil (which makes
+    /// `.customAtlas` fall back to the robot). Cached by the store.
+    var activeCustomArtwork: AtlasArtwork? {
+        guard character == .customAtlas, let ref = customPresenceRef else { return nil }
+        return AttacheCustomPresenceStore.artwork(forRef: ref)
+    }
     /// The shiny easter egg (INF-273): a one-time random roll persisted per
     /// profile, so roughly 1 in 20 installs gets a golden-arc Attache. Zero
     /// configuration on purpose; discovery is the point.
@@ -7376,6 +7394,7 @@ final class AppModel: ObservableObject {
         if let active = activePersonality {
             if let visualMode = active.visualMode { self.visualMode = visualMode }
             character = active.character ?? .robot
+            customPresenceRef = active.customPresenceRef
             playbackSpeed = active.playbackSpeed ?? 1.0
             conversationFallbackChain = active.modelRef?.fallbackProviders ?? []
             conversationFallbackChainEnabled = !conversationFallbackChain.isEmpty
@@ -7887,6 +7906,7 @@ final class AppModel: ObservableObject {
             self.visualMode = visualMode
         }
         character = personality.character ?? .robot
+        customPresenceRef = personality.customPresenceRef
         playbackSpeed = personality.playbackSpeed ?? 1.0
 
         let voiceIssue = applyPersonalityVoice(personality)
@@ -10323,6 +10343,7 @@ final class AppModel: ObservableObject {
            let characterChoice = AttacheCharacter(rawValue: value) {
             character = characterChoice
         }
+        customPresenceRef = defaults.string(forKey: AttachePreferenceKey.customPresenceRef)
         // Custom themes load before the theme selection so a persisted
         // "custom" choice resolves its colors instead of the fallback.
         customThemes = CustomThemeStore.load()

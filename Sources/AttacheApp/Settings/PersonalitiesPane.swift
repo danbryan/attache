@@ -586,18 +586,53 @@ struct PersonalityStudioSheet: View {
         }
     }
 
+    /// Built-in presences plus any user-supplied custom-artwork packages found
+    /// in Application Support (bring your own presence).
+    private var presenceOptions: [PresenceOption] {
+        var options = CharacterChoice.allCases.map { choice in
+            PresenceOption(
+                id: choice.id,
+                title: choice.title,
+                detail: choice.detail,
+                preview: choice.personalityPreview,
+                matches: { choice.matches($0) },
+                apply: { choice.apply(to: &$0) }
+            )
+        }
+        for url in AttacheCustomPresenceStore.packageURLs() {
+            let ref = url.lastPathComponent
+            let name = AttacheCustomPresenceStore.load(url)?.displayName ?? ref
+            options.append(PresenceOption(
+                id: "custom.\(ref)",
+                title: name,
+                detail: "Your photo",
+                preview: Personality(
+                    id: "preview.custom.\(ref)", name: name, prompt: "",
+                    character: .customAtlas, visualMode: .character, customPresenceRef: ref
+                ),
+                matches: { $0.character == .customAtlas && $0.customPresenceRef == ref },
+                apply: { personality in
+                    personality.visualMode = .character
+                    personality.character = .customAtlas
+                    personality.customPresenceRef = ref
+                }
+            ))
+        }
+        return options
+    }
+
     private var presenceSection: some View {
         studioSection(title: "Presence", trailing: AnyView(artworkHelpLink)) {
             HStack(spacing: 10) {
-                ForEach(CharacterChoice.allCases) { choice in
+                ForEach(presenceOptions) { option in
                     Button {
-                        choice.apply(to: &draft)
+                        option.apply(&draft)
                     } label: {
                         VStack(spacing: 7) {
-                            PersonalityPresencePreview(personality: choice.personalityPreview, animatedBars: false)
+                            PersonalityPresencePreview(personality: option.preview, animatedBars: false)
                                 .frame(width: 100, height: 86)
-                            Text(choice.title).typoLabel(.semibold)
-                            Text(choice.detail)
+                            Text(option.title).typoLabel(.semibold).lineLimit(1)
+                            Text(option.detail)
                                 .typoCaption()
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -605,16 +640,16 @@ struct PersonalityStudioSheet: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 9)
                         .background(
-                            choice.matches(draft) ? model.theme.signatureColor.opacity(0.14) : Color.primary.opacity(0.045),
+                            option.matches(draft) ? model.theme.signatureColor.opacity(0.14) : Color.primary.opacity(0.045),
                             in: RoundedRectangle(cornerRadius: 11)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 11)
-                                .stroke(choice.matches(draft) ? model.theme.signatureColor.opacity(0.7) : Color.primary.opacity(0.08))
+                                .stroke(option.matches(draft) ? model.theme.signatureColor.opacity(0.7) : Color.primary.opacity(0.08))
                         )
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Choose \(choice.title) presence")
+                    .accessibilityLabel("Choose \(option.title) presence")
                 }
             }
             Text("Echo is the voice-bars presence with no figure. Imported personalities can reuse any compatible appearance.")
@@ -1515,6 +1550,17 @@ struct PersonalityStudioSheet: View {
     }
 }
 
+/// A selectable presence in the editor: a built-in `CharacterChoice` or a
+/// user-supplied custom-artwork package.
+private struct PresenceOption: Identifiable {
+    let id: String
+    let title: String
+    let detail: String
+    let preview: Personality
+    let matches: (Personality) -> Bool
+    let apply: (inout Personality) -> Void
+}
+
 private enum CharacterChoice: String, CaseIterable, Identifiable {
     case robot
     case cowboy
@@ -1590,6 +1636,9 @@ struct PersonalityPresencePreview: View {
                     bodyColor: Color(nsColor: .labelColor),
                     anatomy: .head,
                     character: personality.character ?? .robot,
+                    customArtwork: personality.character == .customAtlas
+                        ? personality.customPresenceRef.flatMap(AttacheCustomPresenceStore.artwork(forRef:))
+                        : nil,
                     accentColor: Color(nsColor: .labelColor),
                     accentIsLight: false
                 )

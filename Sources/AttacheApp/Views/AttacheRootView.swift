@@ -244,6 +244,7 @@ struct AttacheRootView: View {
                 characterFocusAngle: model.characterFocusAngle,
                 onCharacterFocusAngleChanged: { model.characterFocusAngle = $0 },
                 character: model.character,
+                customArtwork: model.activeCustomArtwork,
                 compactBars: model.visualMode == .bars && !echoExpanded,
                 fullScreenEqualizer: model.visualMode == .bars && echoExpanded,
                 onToggleBarsExpansion: {

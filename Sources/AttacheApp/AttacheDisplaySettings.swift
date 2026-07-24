@@ -373,6 +373,9 @@ enum AttachePreferenceKey {
     static let characterHoverReaction = "attache.petHoverReaction"
     static let characterFocusAngle = "attache.petFocusAngle"
     static let character = "attache.character"
+    /// Active custom-presence package name for `.customAtlas` (bring your own
+    /// presence). See docs/byo-presence.md.
+    static let customPresenceRef = "attache.customPresenceRef"
     static let characterShinySeed = "attache.petShinySeed"
     static let promptUpdateChecks = "attache.promptUpdateChecks"
     static let installClaudeHooks = "attache.installClaudeHooks"
