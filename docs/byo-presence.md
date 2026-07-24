@@ -179,19 +179,53 @@ express, so authors understand the format never caps them, not a bar to entry.
 
 ## Surfaces a presence must satisfy
 
-The same renderer must serve every place the character appears (to be confirmed
-against the code map, but per the animation spec's linked sources these are the
-mount points):
+Confirmed against the code. Three levels of support, by surface:
 
-- The main live surface presence (`AttacheCharacterView` phase choreography over
-  `AttacheCharacterFigure`).
-- The mini window (`MiniAttacheWindow.swift`).
-- Voicemail / history card thumbnails and the personality-editor preview.
-- The menu bar and app icon use the static `AttacheMascotMark` and are **out of
-  scope** for custom art (they remain the brand robot).
+- **Animated (the real presence)** — the main live surface (`AttacheRootView` →
+  `EchoformRendererView` → `AttacheCharacterView` → `AttacheCharacterFigure`) and
+  the desktop mini window (`MiniAttacheWindow`). Both render the full rig; a
+  custom face appears here automatically once the `drawHead` switch handles it.
+- **Static preview** — the personality editor preview and presence-picker chips
+  (`PersonalitiesPane`, `PersonalityPresencePreview`) draw `AttacheCharacterFigure`
+  at `.neutral`. These get the neutral frame.
+- **Emoji/thumbnail fallback** — voicemail and history card thumbnails, the
+  character-switcher palette, and onboarding render only
+  `Personality.characterAvatarEmoji` (a glyph), not the figure. A custom presence
+  supplies a fallback here (a chosen emoji now; a small neutral thumbnail later).
+- **Out of scope** — the menu bar glyph and app icon use the static
+  `AttacheMascotMark`/`AttacheAppIcon` and stay the brand robot.
 
-Because all of these already render through the shared character view, a custom
-presence that satisfies the face-field contract appears in each automatically.
+## Integration points (exact seams)
+
+- **Add the character case:** `AttacheCharacter` enum
+  (`Sources/AttacheApp/Views/AttacheCharacterFigure.swift:186`) gains
+  `case customAtlas` (keep a stable raw value for pref/JSON stability, as
+  `.robot` does).
+- **Add the face branch:** `AttacheCharacterFigure.drawHead`
+  (`AttacheCharacterFigure.swift:634`) gains
+  `case .customAtlas: drawCustomAtlasFace(in:pose:...)`. Inside, select the atlas
+  frame from the pose fields and draw the loaded bitmap. The outer figure
+  (`AttacheCharacterFigure.body`) already applies `breathe`, `headTilt`, `hop`,
+  `squash`, `sway` as whole-figure transforms, and the crown, fleet ring, and
+  props draw outside the head, so none of that needs custom handling. This
+  mirrors how `.cowboy` reuses the rig (`drawCowboyFace` restyles over the same
+  machinery).
+- **Pose → atlas-state:** the drive signals are already discretizable, gaze is
+  `pose.gaze: CGSize` clamped to ±3 in x/y (normalize to [-1,1] for the manifest),
+  blink is `pose.eyeOpenness` (< ~0.15 = closed), mouth is `pose.mouthOpen`
+  (0–1 envelope) with `pose.audioBars` (the 7-band spectrum) for viseme choice,
+  and `pose.browWorry` / `pose.dizzy` pick worried/error. `headTilt`, `breathe`,
+  `hop`, `squash`, `sway` are transforms, not frames.
+- **Loading:** read frames from `~/Library/Application Support/Attache/Characters/`
+  via `AttacheAppSupport.supportDirectory()` using the `Bundle.main`-or-path
+  fallback pattern in `SourceBadge.swift` (returns nil → falls back, never
+  crashes). Never `Bundle.module`.
+- **Persistence:** add `customPresenceRef: String?` (the package directory name)
+  to `Personality` (`Personality.swift`), threaded through `CodingKeys`,
+  `encode`, `decode`, and `duplicated(withID:)`. Extend `characterAvatarEmoji`
+  and `presenceSummary` for the custom case, and add a `PresenceChoice.customAtlas`
+  in `PersonalitiesPane`. An exported personality carries only the *reference*, so
+  a dangling ref (imported without its art) must fall back to `.robot`/emoji.
 
 ## Loading and safety
 
