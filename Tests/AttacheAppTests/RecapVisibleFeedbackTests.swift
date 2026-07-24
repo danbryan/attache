@@ -2,14 +2,13 @@ import AttacheCore
 import XCTest
 @testable import AttacheApp
 
-/// INF-378: a recap of a large selection used to do nothing the user could
-/// see. The recap is launched from the ⌘I inbox palette and the dock, but its
-/// only feedback surfaces (the cost-preview banner, the preparing/writing
-/// progress chip, and any failure/recovery banner) live in the voicemail
-/// inbox panel, which neither launch point presents. Above 40 items the recap
-/// deferred to the cost-preview banner and, with no visible host, silently did
-/// nothing. These tests pin the fix: every non-empty recap routes to the
-/// voicemail surface and enters a visible state, and an empty recap does not.
+/// INF-378: a recap must never be a silent no-op. Every non-empty recap routes
+/// to a visible surface and enters a visible state; an empty recap does not.
+/// The surface depends on the path: a normal recap and the deterministic-digest
+/// fallback play on the live media surface, while the cost-preview banner and a
+/// failure's recovery banner (which need the inbox split panel) route to the
+/// voicemail surface. This keeps a clean recap in the media player only while
+/// preserving visible feedback for every branch.
 ///
 /// They drive `AppModel.playInboxRecap(for:)` directly. The cost-preview
 /// branch and the empty guard both return before any model call or network,
@@ -124,11 +123,11 @@ final class RecapVisibleFeedbackTests: XCTestCase {
             let model = try AppModel(store: CardStore.inMemory())
             let cards = (0..<3).map(card)
 
-            let routed = observingRoute(.attacheOpenVoicemailSurface) {
+            let routed = observingRoute(.attacheShowLivePlaybackSurface) {
                 model.playInboxRecap(for: cards)
             }
 
-            XCTAssertTrue(routed)
+            XCTAssertTrue(routed, "a normal recap plays on the live media surface")
             XCTAssertTrue(
                 model.recapInProgress || model.recapCostPreview != nil,
                 "a recap must show progress or a cost preview, never nothing"
@@ -167,11 +166,11 @@ final class RecapVisibleFeedbackTests: XCTestCase {
             let model = try AppModel(store: CardStore.inMemory())
             let cards = (0..<3).map(card)
 
-            let routed = observingRoute(.attacheOpenVoicemailSurface) {
+            let routed = observingRoute(.attacheShowLivePlaybackSurface) {
                 model.playInboxRecap(for: cards)
             }
 
-            XCTAssertTrue(routed)
+            XCTAssertTrue(routed, "the digest fallback plays on the live media surface")
             XCTAssertFalse(model.recapInProgress)
             XCTAssertFalse(model.intakeStatus.isEmpty, "the digest fallback must still explain what happened")
         }

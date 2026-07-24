@@ -3213,10 +3213,12 @@ final class AppModel: ObservableObject {
         intakeStatus = "Preparing your recap…"
 
         guard presentationService.isPresentationConfigured(for: .recap) else {
-            // Deterministic fallback: speak the template digest, ephemeral, and
-            // leave the inbox untouched exactly as before.
+            // Deterministic fallback: speak the template digest on the live media
+            // surface (where it plays with captions), so the fallback is never a
+            // silent no-op even though there is no model-written recap.
             recapInProgress = false
             intakeStatus = "Recap needs a presentation model; played the quick digest instead."
+            NotificationCenter.default.post(name: .attacheShowLivePlaybackSurface, object: nil)
             playback.preview(inboxDigestText(for: summarized))
             return
         }
