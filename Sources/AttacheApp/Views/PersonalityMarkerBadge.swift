@@ -4,6 +4,9 @@ struct PersonalityMarkerBadge: View {
     var marker: CardPersonalityMarker
     var accent: Color
     var compact = false
+    // Used only to give the compact hover label the app's solid reading plate
+    // (fully opaque under High Contrast) so it matches the other popovers.
+    var theme: AttacheTheme = .macOS
     @State private var hovering = false
 
     var body: some View {
@@ -19,15 +22,23 @@ struct PersonalityMarkerBadge: View {
                 .overlay(Circle().stroke(Color.secondary.opacity(0.24), lineWidth: 1))
                 .overlay(alignment: .top) {
                     if hovering {
+                        // Styled to match the app's popover surface (material
+                        // over a solid reading plate, hairline stroke, soft
+                        // shadow, small rounded rectangle) rather than a bare
+                        // translucent pill, so it reads like the receipt
+                        // popover and the command palettes.
                         Text(marker.displayName)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                             .fixedSize()
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(.regularMaterial, in: Capsule())
-                            .overlay(Capsule().stroke(Color.primary.opacity(0.14), lineWidth: 1))
-                            .offset(y: -24)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                            .readingPlate(theme: theme, cornerRadius: 7, minimumOpacity: 0.9)
+                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+                            .offset(y: -28)
                             .transition(.opacity)
                             .allowsHitTesting(false)
                     }

@@ -402,7 +402,7 @@ struct InboxOverlay: View {
                         .stroke(model.theme.signatureColor.opacity(0.55), lineWidth: 1))
             }
             if let marker = model.personalityMarker(for: card) {
-                PersonalityMarkerBadge(marker: marker, accent: model.theme.signatureColor, compact: true)
+                PersonalityMarkerBadge(marker: marker, accent: model.theme.signatureColor, compact: true, theme: model.theme)
             }
             Text(Self.relativeFormatter.localizedString(for: card.createdAt, relativeTo: Date()))
                 .typoCaption().foregroundStyle(.tertiary)

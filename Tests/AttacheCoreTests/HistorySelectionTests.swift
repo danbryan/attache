@@ -67,4 +67,16 @@ final class HistorySelectionTests: XCTestCase {
         XCTAssertTrue(HistorySelection.deletionTargets(checked: [], visible: ["a"], focused: nil).isEmpty)
         XCTAssertTrue(HistorySelection.deletionTargets(checked: [], visible: ["a"], focused: "off-screen").isEmpty)
     }
+
+    func testRowTapSingleClickSelectsAndDoesNotPlay() {
+        XCTAssertEqual(HistorySelection.rowTapAction(tapCount: 1), .select)
+    }
+
+    func testRowTapDoubleClickPlays() {
+        XCTAssertEqual(HistorySelection.rowTapAction(tapCount: 2), .play)
+    }
+
+    func testRowTapExtraClicksStillPlay() {
+        XCTAssertEqual(HistorySelection.rowTapAction(tapCount: 3), .play)
+    }
 }

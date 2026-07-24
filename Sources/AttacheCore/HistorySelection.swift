@@ -25,6 +25,22 @@ public enum HistorySelection {
         selection.intersection(ids)
     }
 
+    /// What a click on a history card row means. A single click only selects
+    /// the row (no audio); a double click plays it. The play button is a
+    /// separate control that always plays on a single click, so it does not go
+    /// through this mapping.
+    public enum RowTapAction: Equatable {
+        case select
+        case play
+    }
+
+    /// Maps a tap count on a history card row to its intent: one tap selects,
+    /// two (or more) taps play. Kept pure so the "single tap selects, double
+    /// tap plays" rule can be unit-tested without a running app.
+    public static func rowTapAction(tapCount: Int) -> RowTapAction {
+        tapCount >= 2 ? .play : .select
+    }
+
     /// The delete target for a bulk action: the checked-and-visible ids, or, if
     /// nothing is checked, the focused row on its own (Command-delete
     /// ergonomics). Empty when neither applies.

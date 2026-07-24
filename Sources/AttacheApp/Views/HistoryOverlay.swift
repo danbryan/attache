@@ -15,6 +15,10 @@ struct HistoryOverlay: View {
     @State private var kindFilter: HistoryKindFilter = .all
     @State private var selectedID: String?
     @State private var hoveredID: String?
+    // Tighter, per-control hover for the another-take menu only (icon + its
+    // dropdown chevron lift together). Distinct from the row-level hoveredID so
+    // the receipt disclosure next to it gets no such lift.
+    @State private var hoveredAnotherTakeID: String?
     @State private var collapsedGroups: Set<String> = []
     @State private var pendingDeletion: HistoryDeletionRequest?
     @State private var pendingBulkDeletion: BulkHistoryDeletionRequest?
@@ -438,11 +442,9 @@ struct HistoryOverlay: View {
                         .typoBody(.semibold)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    SourceBadge(sourceKind: card.sourceKind,
-                                displayName: card.sourceDisplayName,
-                                localModelHint: model.localModelHint(forExternalSessionID: card.externalSessionID))
+                    rowSourceLabel(for: card)
                     if let marker {
-                        PersonalityMarkerBadge(marker: marker, accent: model.theme.signatureColor, compact: true)
+                        PersonalityMarkerBadge(marker: marker, accent: model.theme.signatureColor, compact: true, theme: model.theme)
                     }
                     if let externalSessionID = card.externalSessionID,
                        model.isSessionRecordingDisabled(sessionID: externalSessionID) {
@@ -465,8 +467,16 @@ struct HistoryOverlay: View {
             Spacer(minLength: 0)
             ContextReceiptDisclosure(responseID: card.id, style: .compact)
             anotherTakeMenu(for: card)
-            Image(systemName: "play.circle.fill").typoIcon(size: 16)
-                .foregroundStyle(active ? model.theme.signatureColor : Color.secondary.opacity(0.6))
+            Button {
+                play(card)
+            } label: {
+                Image(systemName: "play.circle.fill").typoIcon(size: 16)
+                    .foregroundStyle(active ? model.theme.signatureColor : Color.secondary.opacity(0.6))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Play")
+            .accessibilityLabel("Play \(rowTitle(for: card))")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(active ? model.theme.signatureColor.opacity(0.14) : (checked ? model.theme.signatureColor.opacity(0.07) : Color.clear), in: RoundedRectangle(cornerRadius: 7))
@@ -474,7 +484,11 @@ struct HistoryOverlay: View {
         .onHover { hovering in
             if hovering { hoveredID = card.id } else if hoveredID == card.id { hoveredID = nil }
         }
-        .onTapGesture { play(card) }
+        // A double click plays; a single click only selects the row (no audio).
+        // The count:2 gesture is declared before the count:1 one so SwiftUI
+        // recognizes the double click. Mirrors HistorySelection.rowTapAction.
+        .onTapGesture(count: 2) { play(card) }
+        .onTapGesture { selectedID = card.id }
         .contextMenu {
             Button { play(card) } label: {
                 Label("Play", systemImage: "play.fill")
@@ -521,16 +535,63 @@ struct HistoryOverlay: View {
         .accessibilityAction { play(card) }
     }
 
+    /// Source indicator for a card row. Agent-attached cards keep the real
+    /// SourceBadge (Codex / Claude / Grok / opencode) unchanged. A
+    /// generic-source card is an Attaché conversation reply not tied to an
+    /// agent session, so "Generic" says nothing useful: show the authoring
+    /// personality's name instead (from the card's attache_personality_name
+    /// metadata via `producedByPersonalityName`), styled like the row's other
+    /// quiet labels. If that name is missing, show no badge at all rather than
+    /// a meaningless "Generic".
+    @ViewBuilder
+    private func rowSourceLabel(for card: VoicemailCard) -> some View {
+        if card.sourceKind == SourceKind.generic.rawValue {
+            if let label = PersonalityNameDisplay.label(for: card.producedByPersonalityName) {
+                Text(label)
+                    .typoCaption(.heavy)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+                    .help(card.producedByPersonalityName ?? label)
+                    .accessibilityLabel(card.producedByPersonalityName ?? label)
+            }
+        } else {
+            SourceBadge(sourceKind: card.sourceKind,
+                        displayName: card.sourceDisplayName,
+                        localModelHint: model.localModelHint(forExternalSessionID: card.externalSessionID))
+        }
+    }
+
     private func anotherTakeMenu(for card: VoicemailCard) -> some View {
-        Menu {
+        let hovering = hoveredAnotherTakeID == card.id
+        return Menu {
             anotherTakeButtons(for: card)
         } label: {
             Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
                 .typoIcon(size: 16)
-                .foregroundStyle(Color.secondary.opacity(0.7))
+                .foregroundStyle(Color.secondary.opacity(hovering ? 0.95 : 0.7))
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+        // A single, tighter hover highlight wrapping BOTH the icon and its
+        // dropdown chevron (they lift together). The receipt disclosure beside
+        // it is deliberately left out of this affordance.
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(hovering ? 0.16 : 0))
+        )
+        .onHover { inside in
+            if inside {
+                hoveredAnotherTakeID = card.id
+            } else if hoveredAnotherTakeID == card.id {
+                hoveredAnotherTakeID = nil
+            }
+        }
         .help("Hear another personality's take")
         .accessibilityLabel("Another take on \(rowTitle(for: card))")
     }
