@@ -754,16 +754,15 @@ struct AttacheCharacterFigure: View {
         }
 
         // Crop the mouth out of the photo and drop in the literal robot mouth:
-        // a navy screen panel (the robot's face-screen color) where the real
-        // mouth was, with the identical equalizer bars on it. Sized to the mouth
-        // (wide and short), so it reads as a robot mouth slot, not a big patch.
-        let panelW = mwv * 1.06
-        let panelH = mhv * 1.45
+        // a dark mouth cavity (near-black, NOT navy blue, which reads as a blob
+        // on skin) where the real mouth was, with the identical equalizer bars
+        // lit by the brand under-glow. Sized to the mouth (wide and short).
+        let cavityColor = Color(red: 0.05, green: 0.06, blue: 0.08)
+        let panelW = mwv * 1.02
+        let panelH = mhv * 1.35
         let panel = CGRect(x: center.x - panelW / 2, y: cy - panelH / 2, width: panelW, height: panelH)
-        let panelPath = Path(roundedRect: panel, cornerRadius: panelH * 0.48)
-        head.fill(panelPath, with: .color(AttacheMascotMark.faceColor))
-        // A soft inset rim so the panel reads as cut into the face.
-        head.stroke(panelPath, with: .color(.black.opacity(0.35)), lineWidth: max(0.6, mhv * 0.05))
+        let panelPath = Path(roundedRect: panel, cornerRadius: panelH * 0.5)
+        head.fill(panelPath, with: .color(cavityColor))
 
         var mouthCtx = head
         mouthCtx.clip(to: panelPath)
@@ -775,13 +774,13 @@ struct AttacheCharacterFigure: View {
                 let level = CGFloat(bands[i])
                 glow.fill(
                     Path(roundedRect: barRect(i), cornerRadius: corner),
-                    with: .color(EchoCharacterMouth.brandGlow.opacity(0.35 + 0.15 * level))
+                    with: .color(EchoCharacterMouth.brandGlow.opacity(0.4 + 0.2 * level))
                 )
             }
         }
-        // The dark equalizer bars (the screen color, as on the robot).
+        // The equalizer bars, lit against the dark cavity (as on the robot).
         for i in 0..<count {
-            mouthCtx.fill(Path(roundedRect: barRect(i), cornerRadius: corner), with: .color(AttacheMascotMark.faceColor))
+            mouthCtx.fill(Path(roundedRect: barRect(i), cornerRadius: corner), with: .color(cavityColor))
         }
     }
 
