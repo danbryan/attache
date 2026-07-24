@@ -8,7 +8,22 @@ import SwiftUI
 /// `SettingsPaneView` so behavior and AX labels are preserved.
 struct SettingsOverlay: View {
     @ObservedObject var model: AppModel
+    var windowSize: CGSize = .zero
     @Environment(\.themeAccent) private var accent
+
+    /// The overlay scales with the window (like the personality editor) instead
+    /// of staying a fixed 940x660 card, so content-heavy panes (Personalities,
+    /// MCP Servers, Memory) get more room. Clamped to a min that keeps the
+    /// sidebar and pane legible and a max so it never stretches too wide.
+    private var overlayMaxWidth: CGFloat {
+        guard windowSize.width > 0 else { return 940 }
+        return min(max(windowSize.width - 48, 760), 1_240)
+    }
+
+    private var overlayMaxHeight: CGFloat {
+        guard windowSize.height > 0 else { return 660 }
+        return min(max(windowSize.height - 48, 520), 960)
+    }
 
     /// Section selection is model-backed so section deep-links (dock context
     /// menu, "Edit Attaché model…", "Change idle screen…") land on the right
@@ -21,7 +36,7 @@ struct SettingsOverlay: View {
             Divider()
             detail
         }
-        .frame(maxWidth: 940, maxHeight: 660)
+        .frame(maxWidth: overlayMaxWidth, maxHeight: overlayMaxHeight)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         .readingPlate(theme: model.theme, cornerRadius: 16, minimumOpacity: 0.72)
         .overlay(

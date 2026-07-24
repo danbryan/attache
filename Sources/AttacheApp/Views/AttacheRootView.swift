@@ -107,6 +107,7 @@ struct AttacheRootView: View {
     @State var pendingForgetSession: SessionForgetRequest?
     @State private var nearBottom = false
     @State private var windowHeight: CGFloat = 700
+    @State private var windowWidth: CGFloat = 1_100
     @State private var echoExpanded = false
     /// Tallest bottom-anchored overlay band (composer, captions, transport,
     /// dock) this frame. The character renderer is inset by it so the character is
@@ -387,7 +388,7 @@ struct AttacheRootView: View {
                 Color.black.opacity(0.34)
                     .ignoresSafeArea()
                     .onTapGesture { model.hideSettingsOverlay() }
-                SettingsOverlay(model: model)
+                SettingsOverlay(model: model, windowSize: CGSize(width: windowWidth, height: windowHeight))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
@@ -516,6 +517,7 @@ struct AttacheRootView: View {
             PersonalityStudioSheet(
                 model: model,
                 request: request,
+                windowSize: CGSize(width: windowWidth, height: windowHeight),
                 onClose: { model.closeCharacterStudio() }
             )
             .accessibilityIdentifier("Character Studio")
@@ -536,8 +538,9 @@ struct AttacheRootView: View {
         .background(
             GeometryReader { proxy in
                 Color.clear
-                    .onAppear { windowHeight = proxy.size.height }
+                    .onAppear { windowHeight = proxy.size.height; windowWidth = proxy.size.width }
                     .onChange(of: proxy.size.height) { windowHeight = $0 }
+                    .onChange(of: proxy.size.width) { windowWidth = $0 }
             }
         )
         .onExitCommand {

@@ -120,17 +120,19 @@ final class AttacheCharacterManifestTests: XCTestCase {
 
     func testDecodesEyesAndRoundTrips() throws {
         let json = """
-        {"format":3,"name":"Dan","canvas":252,"safeArea":240,
+        {"format":3,"name":"Panda","canvas":252,"safeArea":240,
          "frames":{"neutral":"frames/neutral.png"},
-         "eyes":{"left":{"x":0.43,"y":0.48,"w":0.07,"h":0.024},
-                 "right":{"x":0.59,"y":0.49,"w":0.07,"h":0.024},
-                 "irisColor":[0.22,0.20,0.16]}}
+         "eyes":{"left":{"x":0.413,"y":0.603,"eyeR":0.06,"pupilR":0.032},
+                 "right":{"x":0.587,"y":0.603,"eyeR":0.06,"pupilR":0.032},
+                 "pupilColor":[0.13,0.13,0.15],"lidColor":[0.13,0.13,0.15]}}
         """
         let m = try JSONDecoder().decode(AttacheCharacterManifest.self, from: Data(json.utf8))
         let eyes = try XCTUnwrap(m.eyes)
-        XCTAssertEqual(eyes.left.x, 0.43, accuracy: 1e-9)
-        XCTAssertEqual(eyes.right.y, 0.49, accuracy: 1e-9)
-        XCTAssertEqual(eyes.irisColor, [0.22, 0.20, 0.16])
+        XCTAssertEqual(eyes.left.x, 0.413, accuracy: 1e-9)
+        XCTAssertEqual(eyes.right.y, 0.603, accuracy: 1e-9)
+        XCTAssertEqual(eyes.left.pupilR, 0.032, accuracy: 1e-9)
+        XCTAssertEqual(eyes.pupilColor, [0.13, 0.13, 0.15])
+        XCTAssertEqual(eyes.lidColor, [0.13, 0.13, 0.15])
         // Round-trips cleanly.
         let data = try JSONEncoder().encode(m)
         XCTAssertEqual(try JSONDecoder().decode(AttacheCharacterManifest.self, from: data), m)

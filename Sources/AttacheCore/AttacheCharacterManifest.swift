@@ -26,13 +26,13 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
     public var gaze: [GazeFrame]?
     /// Optional mouth-open levels (format >= 2), each keyed by openness in [0, 1].
     public var visemes: [VisemeFrame]?
-    /// Optional eye anchors (format >= 3). A still photo can't move its own
-    /// eyes, so the renderer draws procedural eyes over these positions to get
-    /// continuous gaze, blink, worry, and error. Positions/sizes are normalized
-    /// to the canvas [0, 1]. See docs/byo-presence.md.
+    /// Optional eye anchors (format >= 3). The artwork draws the eye whites; the
+    /// renderer slides an engine-moved pupil inside each for continuous
+    /// 360-degree gaze and drops a lid to blink/sleep. Normalized to the canvas
+    /// [0, 1]. See docs/byo-presence.md.
     public var eyes: EyeAnchors?
-    /// Optional mouth anchor (format >= 3), normalized to the canvas [0, 1], so
-    /// the renderer can animate an open mouth over the photo during speech.
+    /// Optional mouth anchor (format >= 3), normalized to the canvas [0, 1],
+    /// where the renderer draws the shared equalizer mouth during speech.
     public var mouth: MouthAnchor?
 
     public struct MouthAnchor: Codable, Equatable, Sendable {
@@ -45,27 +45,38 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
         }
     }
 
+    /// Engine-moved pupils. The presence artwork supplies the eye WHITES/sockets;
+    /// the renderer slides a pupil inside each eye for full 360-degree gaze and
+    /// drops a lid (`lidColor`) to blink or sleep. This keeps the presence's own
+    /// eye style while giving every custom presence the same smooth, continuous
+    /// gaze the robot has. All coordinates are normalized to the canvas (0...1),
+    /// top-left origin.
     public struct EyeAnchors: Codable, Equatable, Sendable {
         public struct Eye: Codable, Equatable, Sendable {
+            /// Center of the eye white, normalized to the canvas.
             public var x: Double
             public var y: Double
-            public var w: Double
-            public var h: Double
-            public init(x: Double, y: Double, w: Double, h: Double) {
-                self.x = x; self.y = y; self.w = w; self.h = h
+            /// Radius of the eye white (the area the pupil travels within),
+            /// normalized to the canvas width.
+            public var eyeR: Double
+            /// Pupil radius, normalized to the canvas width.
+            public var pupilR: Double
+            public init(x: Double, y: Double, eyeR: Double, pupilR: Double) {
+                self.x = x; self.y = y; self.eyeR = eyeR; self.pupilR = pupilR
             }
         }
         /// The image-left eye (the subject's right) and image-right eye.
         public var left: Eye
         public var right: Eye
-        /// Sampled iris color, linear RGB in [0, 1].
-        public var irisColor: [Double]
-        /// Sampled skin tone near the eye, used to paint over the real eye when
-        /// the synthetic eye is closed (asleep/blink). Optional for back-compat.
-        public var skinColor: [Double]?
-        public init(left: Eye, right: Eye, irisColor: [Double], skinColor: [Double]? = nil) {
-            self.left = left; self.right = right; self.irisColor = irisColor
-            self.skinColor = skinColor
+        /// Pupil color, linear RGB in [0, 1].
+        public var pupilColor: [Double]
+        /// The color that covers the eye when it closes (blink/sleep), linear
+        /// RGB in [0, 1]. Usually the presence's eyelid or the skin/fur around
+        /// the eye so a closed eye reads naturally against the artwork.
+        public var lidColor: [Double]
+        public init(left: Eye, right: Eye, pupilColor: [Double], lidColor: [Double]) {
+            self.left = left; self.right = right
+            self.pupilColor = pupilColor; self.lidColor = lidColor
         }
     }
 

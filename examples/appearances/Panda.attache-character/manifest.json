@@ -1,0 +1,14 @@
+{
+  "format": 3,
+  "name": "Panda",
+  "canvas": 252,
+  "safeArea": 240,
+  "frames": { "neutral": "frames/neutral.png" },
+  "eyes": {
+    "left":  { "x": 0.413, "y": 0.603, "eyeR": 0.056, "pupilR": 0.032 },
+    "right": { "x": 0.587, "y": 0.603, "eyeR": 0.056, "pupilR": 0.032 },
+    "pupilColor": [0.09, 0.09, 0.11],
+    "lidColor": [0.13, 0.13, 0.15]
+  },
+  "mouth": { "x": 0.5, "y": 0.798, "w": 0.14, "h": 0.055 }
+}

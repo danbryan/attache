@@ -699,10 +699,10 @@ struct AttacheCharacterFigure: View {
         let rect = CGRect(x: topLeft.x, y: topLeft.y, width: canvasSpan * s, height: canvasSpan * s)
         head.draw(Image(decorative: cg, scale: 1, orientation: .up), in: rect)
 
-        // A still photo can't move its own eyes, so overdraw procedural eyes at
-        // the baked anchors: continuous gaze, blink, and error, fully driven by
-        // the pose. This is the "replace the eyes with something we can fully
-        // animate" path from docs/byo-presence.md.
+        // A still image can't move its own eyes, so the artwork draws the eye
+        // WHITES and the engine slides a pupil inside each one for the same
+        // continuous 360-degree gaze the robot has, plus blink/sleep/error,
+        // fully driven by the pose. See docs/byo-presence.md.
         if let eyes = artwork.manifest.eyes {
             drawProceduralEyes(
                 in: head, eyes: eyes, pose: pose, p: p, s: s,
@@ -720,8 +720,11 @@ struct AttacheCharacterFigure: View {
     /// The mouth is the SAME equalizer every built-in presence uses (the robot's
     /// `EchoCharacterMouth`): the analyzed spectrum (`pose.audioBars`) folded
     /// through the shared mapping into 7 mirrored bars whose height rides
-    /// `mouthOpen`, with the fixed brand under-glow, drawn at the photo's mouth
-    /// anchor instead of on the robot's steel plate.
+    /// `mouthOpen`. Drawn EXACTLY as the robot draws its mouth: dark navy bars
+    /// (`AttacheMascotMark.faceColor`) with the fixed brand under-glow, sitting
+    /// directly on the face, no dark cavity. The robot reads clearly because its
+    /// bars are dark-on-light-steel; a light-faced presence (the panda's white
+    /// muzzle) gets the identical legibility, which a dark cavity destroyed.
     private func drawProceduralMouth(
         in head: GraphicsContext,
         mouth: AttacheCharacterManifest.MouthAnchor,
@@ -738,52 +741,46 @@ struct AttacheCharacterFigure: View {
         let center = p(dx, dy)
         let mwv = CGFloat(mouth.w) * canvasSpan * s
         let mhv = CGFloat(mouth.h) * canvasSpan * s
-        let mouthOpen = CGFloat(max(0, min(1, pose.mouthOpen)))
+        let mouthOpen = max(0.0, min(1.0, pose.mouthOpen))
 
         let bands = EchoCharacterMouth.bandShapes(from: pose.audioBars)
         let count = EchoCharacterMouth.bandCount
-        let barSpan = mwv * 0.88
+        let barSpan = mwv * 0.9
         let spacing = barSpan / CGFloat(count)
-        let barWidth = spacing * 0.58
+        let barWidth = spacing * 0.5
         let corner = barWidth / 2
-        let cy = center.y - mhv * 0.12
+        // The bars grow from a shared baseline (the resting mouth line), exactly
+        // like the robot: a short stub at rest, rising with loudness per band.
+        let baseline = center.y
         func barRect(_ i: Int) -> CGRect {
             let x = center.x - barSpan / 2 + spacing * (CGFloat(i) + 0.5)
-            let h = mhv * (0.2 + 0.95 * mouthOpen * CGFloat(bands[i]))
-            return CGRect(x: x - barWidth / 2, y: cy - h / 2, width: barWidth, height: h)
+            let h = mhv * (0.32 + 1.5 * mouthOpen * bands[i])
+            return CGRect(x: x - barWidth / 2, y: baseline - h / 2, width: barWidth, height: h)
         }
 
-        // Crop the mouth out of the photo and drop in the literal robot mouth:
-        // a dark mouth cavity (near-black, NOT navy blue, which reads as a blob
-        // on skin) where the real mouth was, with the identical equalizer bars
-        // lit by the brand under-glow. Sized to the mouth (wide and short).
-        let cavityColor = Color(red: 0.05, green: 0.06, blue: 0.08)
-        let panelW = mwv * 1.02
-        let panelH = mhv * 1.35
-        let panel = CGRect(x: center.x - panelW / 2, y: cy - panelH / 2, width: panelW, height: panelH)
-        let panelPath = Path(roundedRect: panel, cornerRadius: panelH * 0.5)
-        head.fill(panelPath, with: .color(cavityColor))
-
-        var mouthCtx = head
-        mouthCtx.clip(to: panelPath)
-        // Brand under-glow behind the bars, identical to the robot mouth (a
-        // FIXED brand accent, deliberately not coupled to the eye color).
-        mouthCtx.drawLayer { glow in
-            glow.addFilter(.blur(radius: max(1.2, mhv * 0.22)))
+        // Faint brand under-glow behind the dark bars, identical to the robot
+        // mouth (a FIXED brand accent, deliberately not coupled to the eye color).
+        head.drawLayer { glow in
+            glow.addFilter(.blur(radius: max(1.2, mhv * 0.3)))
             for i in 0..<count {
                 let level = CGFloat(bands[i])
                 glow.fill(
                     Path(roundedRect: barRect(i), cornerRadius: corner),
-                    with: .color(EchoCharacterMouth.brandGlow.opacity(0.4 + 0.2 * level))
+                    with: .color(EchoCharacterMouth.brandGlow.opacity(0.35 + 0.15 * level))
                 )
             }
         }
-        // The equalizer bars, lit against the dark cavity (as on the robot).
+        // The dark navy bars themselves, the literal robot mouth color.
         for i in 0..<count {
-            mouthCtx.fill(Path(roundedRect: barRect(i), cornerRadius: corner), with: .color(cavityColor))
+            head.fill(Path(roundedRect: barRect(i), cornerRadius: corner), with: .color(AttacheMascotMark.faceColor))
         }
     }
 
+    /// Engine-moved pupils. The presence artwork draws its own eye WHITES/sockets;
+    /// this slides a pupil inside each eye for continuous 360-degree gaze (the
+    /// same full gaze the robot has, not a fixed set of directions) and drops a
+    /// lid (`lidColor`) to blink or sleep. The presence keeps its own eye style;
+    /// only the pupil and lid are ours.
     private func drawProceduralEyes(
         in head: GraphicsContext,
         eyes: AttacheCharacterManifest.EyeAnchors,
@@ -794,36 +791,34 @@ struct AttacheCharacterFigure: View {
         centerX: CGFloat,
         centerY: CGFloat
     ) {
-        // Brighten and lift the sampled iris a little so it reads at this size.
-        let c0 = eyes.irisColor.count >= 3 ? eyes.irisColor : [0.30, 0.36, 0.30]
-        let iris = Color(
-            red: min(1, c0[0] * 1.7 + 0.10),
-            green: min(1, c0[1] * 1.8 + 0.14),
-            blue: min(1, c0[2] * 1.7 + 0.12)
-        )
+        func color(_ c: [Double], _ fallback: Color) -> Color {
+            guard c.count >= 3 else { return fallback }
+            return Color(red: c[0], green: c[1], blue: c[2])
+        }
+        let pupilColor = color(eyes.pupilColor, Color(red: 0.08, green: 0.08, blue: 0.10))
+        let lidColor = color(eyes.lidColor, Color(red: 0.13, green: 0.13, blue: 0.15))
         func viewPoint(_ nx: Double, _ ny: Double) -> CGPoint {
             let dx = (centerX - canvasSpan / 2) + CGFloat(nx) * canvasSpan
             let dy = (centerY - canvasSpan / 2) + CGFloat(ny) * canvasSpan
             return p(dx, dy)
         }
-        // A sleeping person looks asleep: eyes fully closed and NOT tracking the
-        // mouse. The shared rig has a "sleepy peek + glance" delight that cracks
-        // an eye and follows the cursor, which is charming on the robot's LED
-        // eyes but uncanny on a real face, so suppress it here.
+        // A sleeping presence looks asleep: eyes fully closed and NOT tracking
+        // the mouse. The shared rig has a "sleepy peek + glance" delight that
+        // cracks an eye and follows the cursor, charming on the robot's LED eyes
+        // but uncanny on a still face, so suppress it here.
         let sleeping = pose.overhead == .sleeping
-        let openness = sleeping ? 0 : max(0, min(1.2, pose.eyeOpenness))
+        let openness = sleeping ? 0 : max(0, min(1, pose.eyeOpenness))
         let gazeX = sleeping ? 0 : max(-1, min(1, pose.gaze.width / 3))
         let gazeY = sleeping ? 0 : max(-1, min(1, pose.gaze.height / 3))
         let dizzy = max(0, min(1, pose.dizzy))
 
         for eye in [eyes.left, eyes.right] {
-            // Anchors are ground-truth eye centers. Sized to still cover the
-            // real eye but smaller than the first pass, which read too cartoony.
-            let center = viewPoint(eye.x, eye.y + 0.004)
-            let ew = CGFloat(eye.w) * canvasSpan * s * 1.24
-            let eh = CGFloat(eye.h) * canvasSpan * s * 2.0
+            let center = viewPoint(eye.x, eye.y)
+            let eyeR = CGFloat(eye.eyeR) * canvasSpan * s
+            let pupilR = CGFloat(eye.pupilR) * canvasSpan * s
             drawOneEye(
-                in: head, center: center, ew: ew, eh: eh, iris: iris,
+                in: head, center: center, eyeR: eyeR, pupilR: pupilR,
+                pupil: pupilColor, lid: lidColor,
                 gazeX: gazeX, gazeY: gazeY, openness: openness, dizzy: dizzy
             )
         }
@@ -832,80 +827,67 @@ struct AttacheCharacterFigure: View {
     private func drawOneEye(
         in ctx: GraphicsContext,
         center c: CGPoint,
-        ew: CGFloat,
-        eh: CGFloat,
-        iris irisColor: Color,
+        eyeR: CGFloat,
+        pupilR: CGFloat,
+        pupil pupilColor: Color,
+        lid lidColor: Color,
         gazeX: CGFloat,
         gazeY: CGFloat,
         openness: CGFloat,
         dizzy: CGFloat
     ) {
-        // Aperture: full when open, a thin slit when closed (blink/asleep).
-        let apertureH = max(eh * 0.10, eh * min(1, openness))
-        let apertureRect = CGRect(x: c.x - ew / 2, y: c.y - apertureH / 2, width: ew, height: apertureH)
-        let aperture = Path(ellipseIn: apertureRect)
+        let eyeRect = CGRect(x: c.x - eyeR, y: c.y - eyeR, width: eyeR * 2, height: eyeR * 2)
+        let eyeCircle = Path(ellipseIn: eyeRect)
 
-        if dizzy < 0.5 {
-            var eyeCtx = ctx
-            eyeCtx.clip(to: aperture)
-            eyeCtx.fill(aperture, with: .color(Color(red: 0.96, green: 0.95, blue: 0.93)))
-            let irisR = eh * 0.5
-            let maxX = max(0, ew / 2 - irisR * 0.6)
-            let maxY = eh * 0.14
-            let ic = CGPoint(x: c.x + gazeX * maxX, y: c.y + gazeY * maxY)
-            eyeCtx.fill(
-                Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
-                with: .color(irisColor)
-            )
-            eyeCtx.stroke(
-                Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
-                with: .color(.black.opacity(0.35)), lineWidth: max(0.5, eh * 0.05)
-            )
-            let pr = irisR * 0.46
-            eyeCtx.fill(
-                Path(ellipseIn: CGRect(x: ic.x - pr, y: ic.y - pr, width: pr * 2, height: pr * 2)),
-                with: .color(Color(red: 0.06, green: 0.05, blue: 0.07))
-            )
-            let hr = max(0.8, pr * 0.5)
-            eyeCtx.fill(
-                Path(ellipseIn: CGRect(x: ic.x - pr * 0.4 - hr / 2, y: ic.y - pr * 0.5 - hr / 2, width: hr, height: hr)),
-                with: .color(.white.opacity(0.92))
-            )
-        }
-
-        // Upper lash line hugging the aperture top, so the eye sits in a lid.
-        if openness > 0.08 {
-            var lash = Path()
-            lash.move(to: CGPoint(x: c.x - ew / 2, y: c.y - apertureH / 2))
-            lash.addQuadCurve(
-                to: CGPoint(x: c.x + ew / 2, y: c.y - apertureH / 2),
-                control: CGPoint(x: c.x, y: c.y - apertureH / 2 - eh * 0.10)
-            )
-            ctx.stroke(lash, with: .color(Color(red: 0.16, green: 0.12, blue: 0.12).opacity(0.85)), lineWidth: max(0.8, eh * 0.10))
-        }
-
-        // Lower lid: a soft shadow seats the eye in its socket.
-        if openness > 0.2 {
-            var lid = Path()
-            lid.move(to: CGPoint(x: c.x - ew / 2, y: c.y + apertureH / 2))
-            lid.addQuadCurve(
-                to: CGPoint(x: c.x + ew / 2, y: c.y + apertureH / 2),
-                control: CGPoint(x: c.x, y: c.y + apertureH / 2 + eh * 0.06)
-            )
-            ctx.stroke(lid, with: .color(Color(red: 0.30, green: 0.20, blue: 0.18).opacity(0.35)), lineWidth: max(0.6, eh * 0.06))
-        }
-
-        // Error: crossed-out eyes.
         if dizzy > 0.5 {
+            // Error: a crossed-out eye, drawn in the pupil color over the white.
+            let w = max(1.4, eyeR * 0.24)
             var x1 = Path()
-            x1.move(to: CGPoint(x: c.x - ew * 0.32, y: c.y - eh * 0.32))
-            x1.addLine(to: CGPoint(x: c.x + ew * 0.32, y: c.y + eh * 0.32))
+            x1.move(to: CGPoint(x: c.x - eyeR * 0.6, y: c.y - eyeR * 0.6))
+            x1.addLine(to: CGPoint(x: c.x + eyeR * 0.6, y: c.y + eyeR * 0.6))
             var x2 = Path()
-            x2.move(to: CGPoint(x: c.x + ew * 0.32, y: c.y - eh * 0.32))
-            x2.addLine(to: CGPoint(x: c.x - ew * 0.32, y: c.y + eh * 0.32))
-            let w = max(1.4, eh * 0.2)
-            ctx.stroke(x1, with: .color(.black.opacity(0.9)), lineWidth: w)
-            ctx.stroke(x2, with: .color(.black.opacity(0.9)), lineWidth: w)
+            x2.move(to: CGPoint(x: c.x + eyeR * 0.6, y: c.y - eyeR * 0.6))
+            x2.addLine(to: CGPoint(x: c.x - eyeR * 0.6, y: c.y + eyeR * 0.6))
+            ctx.stroke(x1, with: .color(pupilColor.opacity(0.92)), lineWidth: w)
+            ctx.stroke(x2, with: .color(pupilColor.opacity(0.92)), lineWidth: w)
+            return
+        }
+
+        // The pupil rides the gaze across the eye white, staying inside it. The
+        // travel radius is the eye white minus the pupil, so it never spills past
+        // the presence's own eye. Any gaze direction is honored, not a fixed set.
+        let travel = max(0, eyeR - pupilR)
+        let pc = CGPoint(x: c.x + gazeX * travel, y: c.y + gazeY * travel)
+        var pupilCtx = ctx
+        pupilCtx.clip(to: eyeCircle)
+        pupilCtx.fill(
+            Path(ellipseIn: CGRect(x: pc.x - pupilR, y: pc.y - pupilR, width: pupilR * 2, height: pupilR * 2)),
+            with: .color(pupilColor)
+        )
+        // A small catchlight gives the eye life.
+        let hr = max(0.8, pupilR * 0.34)
+        pupilCtx.fill(
+            Path(ellipseIn: CGRect(x: pc.x - pupilR * 0.36 - hr / 2, y: pc.y - pupilR * 0.44 - hr / 2, width: hr, height: hr)),
+            with: .color(.white.opacity(0.9))
+        )
+
+        // Blink/sleep: the lid descends from the top of the eye. Fully open
+        // draws nothing; fully closed covers the whole eye in the lid color so a
+        // closed eye reads naturally against the presence (fur, skin, or eyelid).
+        if openness < 0.985 {
+            let coverH = eyeR * 2 * (1 - openness)
+            var lidCtx = ctx
+            lidCtx.clip(to: eyeCircle)
+            lidCtx.fill(
+                Path(CGRect(x: c.x - eyeR, y: c.y - eyeR, width: eyeR * 2, height: coverH)),
+                with: .color(lidColor)
+            )
+            // A soft lash line at the lid's leading edge sells the closing lid.
+            let ly = c.y - eyeR + coverH
+            var lash = Path()
+            lash.move(to: CGPoint(x: c.x - eyeR * 0.9, y: ly))
+            lash.addLine(to: CGPoint(x: c.x + eyeR * 0.9, y: ly))
+            lidCtx.stroke(lash, with: .color(pupilColor.opacity(0.5)), lineWidth: max(0.6, eyeR * 0.08))
         }
     }
 
@@ -937,13 +919,26 @@ struct AttacheCharacterFigure: View {
         let worryCompression = 1 - pose.browWorry * 0.38
         let center = p(120, 112)
 
+        // Gaze lean. Echo has no eyes, so it shows attention to the focused
+        // session the same way the robot's gaze shifts its mouth: the whole bar
+        // cluster drifts and tilts a few degrees toward the gaze. Subtle by
+        // design, this is Echo's only face field beyond the audio it already
+        // reacts to. Clamped to the pose's ±3 gaze units.
+        let gx = max(-3, min(3, pose.gaze.width))
+        let gy = max(-3, min(3, pose.gaze.height))
+        var bars = head
+        bars.translateBy(x: center.x, y: center.y)
+        bars.rotate(by: .degrees(Double(gx) * 1.0))
+        bars.translateBy(x: -center.x, y: -center.y)
+        bars.translateBy(x: gx * s * 1.4, y: gy * s * 1.0)
+
         let halo = Path(ellipseIn: CGRect(
             x: center.x - 48 * s,
             y: center.y - 48 * s,
             width: 96 * s,
             height: 96 * s
         ))
-        head.fill(halo, with: .color(arcColor.opacity(0.05 + 0.10 * energy)))
+        bars.fill(halo, with: .color(arcColor.opacity(0.05 + 0.10 * energy)))
 
         let spacing = 96.0 / Double(count)
         let width = CGFloat(spacing * 0.68) * s
@@ -960,7 +955,7 @@ struct AttacheCharacterFigure: View {
                 ),
                 cornerRadius: width / 2
             )
-            head.fill(
+            bars.fill(
                 bar,
                 with: .color(arcColor.opacity((0.42 + 0.5 * band) * errorFlicker))
             )

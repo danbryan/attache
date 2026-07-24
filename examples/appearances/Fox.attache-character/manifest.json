@@ -1,0 +1,14 @@
+{
+  "format": 3,
+  "name": "Fox",
+  "canvas": 252,
+  "safeArea": 240,
+  "frames": { "neutral": "frames/neutral.png" },
+  "eyes": {
+    "left":  { "x": 0.401, "y": 0.595, "eyeR": 0.046, "pupilR": 0.028 },
+    "right": { "x": 0.599, "y": 0.595, "eyeR": 0.046, "pupilR": 0.028 },
+    "pupilColor": [0.10, 0.09, 0.10],
+    "lidColor":   [0.90, 0.45, 0.20]
+  },
+  "mouth": { "x": 0.5, "y": 0.786, "w": 0.10, "h": 0.05 }
+}

@@ -303,6 +303,7 @@ struct PersonalityStudioSheet: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var contextUI = AttacheContextUIState.shared
     let request: PersonalityStudioRequest
+    var windowSize: CGSize = .zero
     var onClose: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
@@ -321,10 +322,12 @@ struct PersonalityStudioSheet: View {
     @State private var personalityQuery = ""
     @State private var selectedTemplateID: String?
     @State private var toolsPickerPresented = false
+    @State private var importErrorMessage: String?
 
-    init(model: AppModel, request: PersonalityStudioRequest, onClose: (() -> Void)? = nil) {
+    init(model: AppModel, request: PersonalityStudioRequest, windowSize: CGSize = .zero, onClose: (() -> Void)? = nil) {
         self.model = model
         self.request = request
+        self.windowSize = windowSize
         self.onClose = onClose
 
         let initial = Self.initialDraft(
@@ -367,6 +370,27 @@ struct PersonalityStudioSheet: View {
         )
     }
 
+    /// The editor scales with the window instead of staying a fixed dialog: it is
+    /// content-heavy (a long prompt and several sections), so more room means less
+    /// scrolling. Clamped to a min that keeps the three columns legible and a max
+    /// so it never stretches to an unwieldy width. Falls back to a sensible fixed
+    /// size before the window size is known.
+    private var studioWidth: CGFloat {
+        guard windowSize.width > 0 else { return 1_160 }
+        return min(max(windowSize.width - 40, 1_000), 1_440)
+    }
+
+    private var studioHeight: CGFloat {
+        guard windowSize.height > 0 else { return 740 }
+        return min(max(windowSize.height - 40, 620), 1_200)
+    }
+
+    /// The prompt editor grows with the available height so a long personality
+    /// shows more at once on a taller window.
+    private var promptMinHeight: CGFloat {
+        max(200, studioHeight * 0.30)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             auditionStage
@@ -403,16 +427,9 @@ struct PersonalityStudioSheet: View {
                     .padding(.horizontal, 22)
                     .padding(.vertical, 14)
             }
-            .frame(minWidth: 850)
+            .frame(minWidth: 720)
         }
-        .frame(
-            minWidth: 1_100,
-            idealWidth: 1_160,
-            maxWidth: .infinity,
-            minHeight: 680,
-            idealHeight: 740,
-            maxHeight: .infinity
-        )
+        .frame(width: studioWidth, height: studioHeight)
         .attacheTextScale(model.uiTextScale)
         .onAppear {
             if let modelID = draft.modelRef?.model {
@@ -605,7 +622,7 @@ struct PersonalityStudioSheet: View {
             options.append(PresenceOption(
                 id: "custom.\(ref)",
                 title: name,
-                detail: "Your photo",
+                detail: "Custom",
                 preview: Personality(
                     id: "preview.custom.\(ref)", name: name, prompt: "",
                     character: .customAtlas, visualMode: .character, customPresenceRef: ref
@@ -622,8 +639,16 @@ struct PersonalityStudioSheet: View {
     }
 
     private var presenceSection: some View {
-        studioSection(title: "Presence", trailing: AnyView(artworkHelpLink)) {
-            HStack(spacing: 10) {
+        studioSection(title: "Appearance", trailing: AnyView(appearanceSectionControls)) {
+            // A wrapping grid, not a single row: the number of tiles grows with
+            // every imported custom presence, and an HStack of fixed tiles would
+            // widen this column and push the Voice/Model column off-screen. The
+            // grid wraps to more rows instead, keeping the editor width stable.
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 10)],
+                alignment: .leading,
+                spacing: 10
+            ) {
                 ForEach(presenceOptions) { option in
                     Button {
                         option.apply(&draft)
@@ -690,7 +715,7 @@ struct PersonalityStudioSheet: View {
 
             TextEditor(text: $draft.prompt)
                 .typoBody(design: .default)
-                .frame(minHeight: 170)
+                .frame(minHeight: promptMinHeight)
                 .padding(6)
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(nsColor: .separatorColor)))
@@ -802,6 +827,31 @@ struct PersonalityStudioSheet: View {
         personalityQuery = ""
     }
 
+    private var appearanceSectionControls: some View {
+        HStack(spacing: 14) {
+            Button(action: importAppearance) {
+                Label("Import…", systemImage: "square.and.arrow.down")
+                    .typoCaption(.medium)
+            }
+            .buttonStyle(.plain)
+            .help("Import a custom appearance package (a .attache-character folder) from disk")
+            .accessibilityLabel("Import a custom appearance")
+            artworkHelpLink
+        }
+        .alert(
+            "Import failed",
+            isPresented: Binding(
+                get: { importErrorMessage != nil },
+                set: { if !$0 { importErrorMessage = nil } }
+            ),
+            presenting: importErrorMessage
+        ) { _ in
+            Button("OK", role: .cancel) { importErrorMessage = nil }
+        } message: { message in
+            Text(message)
+        }
+    }
+
     private var artworkHelpLink: some View {
         Link(
             destination: AttacheDocumentationLinks.customArtwork
@@ -809,8 +859,30 @@ struct PersonalityStudioSheet: View {
             Label("Artwork format", systemImage: "questionmark.circle")
                 .typoCaption(.medium)
         }
-        .help("Learn about the custom artwork format and planned import support")
+        .help("Learn about the custom artwork format and how to make your own")
         .accessibilityLabel("Learn about custom artwork")
+    }
+
+    /// Import a `.attache-character` package the user picks from disk (downloaded,
+    /// cloned from GitHub, or hand-authored), then select it. Copies and validates
+    /// through `AttacheCustomPresenceStore.importPackage`; a bad package shows an
+    /// error and changes nothing.
+    private func importAppearance() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "Choose a custom appearance package (a .attache-character folder)."
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        do {
+            let ref = try AttacheCustomPresenceStore.importPackage(from: source)
+            draft.visualMode = .character
+            draft.character = .customAtlas
+            draft.customPresenceRef = ref
+        } catch {
+            importErrorMessage = error.localizedDescription
+        }
     }
 
     private var voiceSection: some View {
