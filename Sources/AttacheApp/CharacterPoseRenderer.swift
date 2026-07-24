@@ -297,18 +297,23 @@ enum CharacterPoseRenderer {
             throw PoseRenderError.renderFailed("could not load package \(packageURL.lastPathComponent)")
         }
 
-        var speaking = AttachePose.neutral
-        speaking.mouthOpen = 0.7
-        speaking.sway = 4
-        var thinking = AttachePose.neutral
-        thinking.gaze = CGSize(width: 2, height: -1)
-        thinking.headTilt = -4
-
+        func pose(_ build: (inout AttachePose) -> Void) -> AttachePose {
+            var p = AttachePose.neutral
+            build(&p)
+            return p
+        }
+        // gaze.height is positive-down, so up = negative.
         let poses: [(String, AttachePose, AttacheCharacterAnatomy)] = [
-            ("neutral-head", .neutral, .head),
-            ("neutral-full", .neutral, .full),
-            ("speaking-head", speaking, .head),
-            ("thinking-head", thinking, .head),
+            ("neutral", .neutral, .head),
+            ("gaze-left", pose { $0.gaze = CGSize(width: -3, height: 0) }, .head),
+            ("gaze-right", pose { $0.gaze = CGSize(width: 3, height: 0) }, .head),
+            ("gaze-up", pose { $0.gaze = CGSize(width: 0, height: -3) }, .head),
+            ("gaze-down", pose { $0.gaze = CGSize(width: 0, height: 3) }, .head),
+            ("gaze-upleft", pose { $0.gaze = CGSize(width: -2.2, height: -2.2) }, .head),
+            ("half", pose { $0.eyeOpenness = 0.5 }, .head),
+            ("blink", pose { $0.eyeOpenness = 0.06 }, .head),
+            ("error", pose { $0.dizzy = 1 }, .head),
+            ("speaking", pose { $0.mouthOpen = 0.7; $0.sway = 4 }, .head),
         ]
         for (name, pose, anatomy) in poses {
             let figure = AttacheCharacterFigure(

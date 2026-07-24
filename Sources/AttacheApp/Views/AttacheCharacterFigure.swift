@@ -698,6 +698,143 @@ struct AttacheCharacterFigure: View {
         let topLeft = p(centerX - canvasSpan / 2, centerY - canvasSpan / 2)
         let rect = CGRect(x: topLeft.x, y: topLeft.y, width: canvasSpan * s, height: canvasSpan * s)
         head.draw(Image(decorative: cg, scale: 1, orientation: .up), in: rect)
+
+        // A still photo can't move its own eyes, so overdraw procedural eyes at
+        // the baked anchors: continuous gaze, blink, and error, fully driven by
+        // the pose. This is the "replace the eyes with something we can fully
+        // animate" path from docs/byo-presence.md.
+        if let eyes = artwork.manifest.eyes {
+            drawProceduralEyes(
+                in: head, eyes: eyes, pose: pose, p: p, s: s,
+                canvasSpan: canvasSpan, centerX: centerX, centerY: centerY
+            )
+        }
+    }
+
+    private func drawProceduralEyes(
+        in head: GraphicsContext,
+        eyes: AttacheCharacterManifest.EyeAnchors,
+        pose: AttachePose,
+        p: (CGFloat, CGFloat) -> CGPoint,
+        s: CGFloat,
+        canvasSpan: CGFloat,
+        centerX: CGFloat,
+        centerY: CGFloat
+    ) {
+        // Brighten and lift the sampled iris a little so it reads at this size.
+        let c0 = eyes.irisColor.count >= 3 ? eyes.irisColor : [0.30, 0.36, 0.30]
+        let iris = Color(
+            red: min(1, c0[0] * 1.7 + 0.10),
+            green: min(1, c0[1] * 1.8 + 0.14),
+            blue: min(1, c0[2] * 1.7 + 0.12)
+        )
+        func viewPoint(_ nx: Double, _ ny: Double) -> CGPoint {
+            let dx = (centerX - canvasSpan / 2) + CGFloat(nx) * canvasSpan
+            let dy = (centerY - canvasSpan / 2) + CGFloat(ny) * canvasSpan
+            return p(dx, dy)
+        }
+        let gazeX = max(-1, min(1, pose.gaze.width / 3))
+        let gazeY = max(-1, min(1, pose.gaze.height / 3))
+        let openness = max(0, min(1.2, pose.eyeOpenness))
+        let dizzy = max(0, min(1, pose.dizzy))
+
+        for eye in [eyes.left, eyes.right] {
+            // Anchors are ground-truth eye centers; size the synthetic eye a bit
+            // larger than the detected opening so it fully covers the real eye.
+            let center = viewPoint(eye.x, eye.y + 0.004)
+            let ew = CGFloat(eye.w) * canvasSpan * s * 1.42
+            let eh = CGFloat(eye.h) * canvasSpan * s * 2.7
+            drawOneEye(
+                in: head, center: center, ew: ew, eh: eh, iris: iris,
+                gazeX: gazeX, gazeY: gazeY, openness: openness, dizzy: dizzy
+            )
+        }
+    }
+
+    private func drawOneEye(
+        in ctx: GraphicsContext,
+        center c: CGPoint,
+        ew: CGFloat,
+        eh: CGFloat,
+        iris irisColor: Color,
+        gazeX: CGFloat,
+        gazeY: CGFloat,
+        openness: CGFloat,
+        dizzy: CGFloat
+    ) {
+        // Aperture: full when open, a thin slit when closed (blink).
+        let apertureH = max(eh * 0.10, eh * min(1, openness))
+        let apertureRect = CGRect(x: c.x - ew / 2, y: c.y - apertureH / 2, width: ew, height: apertureH)
+        let aperture = Path(ellipseIn: apertureRect)
+
+        if dizzy < 0.5 {
+            var eyeCtx = ctx
+            eyeCtx.clip(to: aperture)
+            // sclera
+            eyeCtx.fill(aperture, with: .color(Color(red: 0.96, green: 0.95, blue: 0.93)))
+            // iris, offset by gaze and clamped inside the eye
+            let irisR = eh * 0.55
+            let maxX = max(0, ew / 2 - irisR * 0.65)
+            // Eyes move mostly horizontally; keep vertical travel small so
+            // looking up/down doesn't expose a bug-eyed band of sclera.
+            let maxY = eh * 0.15
+            let ic = CGPoint(x: c.x + gazeX * maxX, y: c.y + gazeY * maxY)
+            eyeCtx.fill(
+                Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
+                with: .color(irisColor)
+            )
+            // iris rim + pupil + highlight
+            eyeCtx.stroke(
+                Path(ellipseIn: CGRect(x: ic.x - irisR, y: ic.y - irisR, width: irisR * 2, height: irisR * 2)),
+                with: .color(.black.opacity(0.35)), lineWidth: max(0.5, eh * 0.05)
+            )
+            let pr = irisR * 0.46
+            eyeCtx.fill(
+                Path(ellipseIn: CGRect(x: ic.x - pr, y: ic.y - pr, width: pr * 2, height: pr * 2)),
+                with: .color(Color(red: 0.06, green: 0.05, blue: 0.07))
+            )
+            let hr = max(0.8, pr * 0.5)
+            eyeCtx.fill(
+                Path(ellipseIn: CGRect(x: ic.x - pr * 0.4 - hr / 2, y: ic.y - pr * 0.5 - hr / 2, width: hr, height: hr)),
+                with: .color(.white.opacity(0.92))
+            )
+        }
+
+        // Upper lash line hugging the aperture top, so the eye sits in a lid.
+        if openness > 0.08 {
+            var lash = Path()
+            lash.move(to: CGPoint(x: c.x - ew / 2, y: c.y - apertureH / 2))
+            lash.addQuadCurve(
+                to: CGPoint(x: c.x + ew / 2, y: c.y - apertureH / 2),
+                control: CGPoint(x: c.x, y: c.y - apertureH / 2 - eh * 0.10)
+            )
+            ctx.stroke(lash, with: .color(Color(red: 0.16, green: 0.12, blue: 0.12).opacity(0.85)), lineWidth: max(0.8, eh * 0.10))
+        }
+
+        // Lower lid: a soft shadow seats the eye in its socket instead of
+        // floating on the skin.
+        if openness > 0.2 {
+            var lid = Path()
+            lid.move(to: CGPoint(x: c.x - ew / 2, y: c.y + apertureH / 2))
+            lid.addQuadCurve(
+                to: CGPoint(x: c.x + ew / 2, y: c.y + apertureH / 2),
+                control: CGPoint(x: c.x, y: c.y + apertureH / 2 + eh * 0.06)
+            )
+            ctx.stroke(lid, with: .color(Color(red: 0.30, green: 0.20, blue: 0.18).opacity(0.35)), lineWidth: max(0.6, eh * 0.06))
+        }
+
+        // Error: crossed-out eyes.
+        if dizzy > 0.5 {
+            var x1 = Path()
+            x1.move(to: CGPoint(x: c.x - ew * 0.32, y: c.y - eh * 0.32))
+            x1.addLine(to: CGPoint(x: c.x + ew * 0.32, y: c.y + eh * 0.32))
+            var x2 = Path()
+            x2.move(to: CGPoint(x: c.x + ew * 0.32, y: c.y - eh * 0.32))
+            x2.addLine(to: CGPoint(x: c.x - ew * 0.32, y: c.y + eh * 0.32))
+            let w = max(1.4, eh * 0.22)
+            ctx.stroke(x1, with: .color(.black.opacity(0.9)), lineWidth: w)
+            ctx.stroke(x2, with: .color(.black.opacity(0.9)), lineWidth: w)
+        }
     }
 
     /// The compact Echo presence draws the SAME real mirrored equalizer as the

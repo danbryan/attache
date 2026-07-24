@@ -26,6 +26,31 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
     public var gaze: [GazeFrame]?
     /// Optional mouth-open levels (format >= 2), each keyed by openness in [0, 1].
     public var visemes: [VisemeFrame]?
+    /// Optional eye anchors (format >= 3). A still photo can't move its own
+    /// eyes, so the renderer draws procedural eyes over these positions to get
+    /// continuous gaze, blink, worry, and error. Positions/sizes are normalized
+    /// to the canvas [0, 1]. See docs/byo-presence.md.
+    public var eyes: EyeAnchors?
+
+    public struct EyeAnchors: Codable, Equatable, Sendable {
+        public struct Eye: Codable, Equatable, Sendable {
+            public var x: Double
+            public var y: Double
+            public var w: Double
+            public var h: Double
+            public init(x: Double, y: Double, w: Double, h: Double) {
+                self.x = x; self.y = y; self.w = w; self.h = h
+            }
+        }
+        /// The image-left eye (the subject's right) and image-right eye.
+        public var left: Eye
+        public var right: Eye
+        /// Sampled iris color, linear RGB in [0, 1].
+        public var irisColor: [Double]
+        public init(left: Eye, right: Eye, irisColor: [Double]) {
+            self.left = left; self.right = right; self.irisColor = irisColor
+        }
+    }
 
     public struct GazeFrame: Codable, Equatable, Sendable {
         public var x: Double
@@ -58,7 +83,8 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
         safeArea: Int = AttacheCharacterManifest.requiredSafeArea,
         frames: [String: String],
         gaze: [GazeFrame]? = nil,
-        visemes: [VisemeFrame]? = nil
+        visemes: [VisemeFrame]? = nil,
+        eyes: EyeAnchors? = nil
     ) {
         self.format = format
         self.name = name
@@ -67,6 +93,7 @@ public struct AttacheCharacterManifest: Codable, Equatable, Sendable {
         self.frames = frames
         self.gaze = gaze
         self.visemes = visemes
+        self.eyes = eyes
     }
 
     /// The relative path of the always-required neutral frame, if present.
